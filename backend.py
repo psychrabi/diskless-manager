@@ -3,6 +3,7 @@
 import subprocess
 import json
 from flask import Flask, request, jsonify, abort
+from flask_cors import CORS # Import Flask-Cors
 import shlex # Used for safer command splitting
 import re
 import os
@@ -39,6 +40,14 @@ if DHCP_CONFIG_METHOD == "include_files" and not os.path.exists(DHCP_INCLUDE_DIR
 
 app = Flask(__name__)
 
+# --- CORS Configuration ---
+# Configure CORS to allow requests from your frontend's origin.
+# Replace "http://localhost:3000" with the actual origin of your React app
+# (e.g., "http://<your-frontend-ip>:<port>" or your domain).
+# Using "*" allows all origins, which is less secure for production.
+CORS(app, resources={r"/api/*": {"origins": ["http://localhost:5173", "http://192.168.1.206:5173"]}}) # Example: Allow localhost:3000 and the server's IP if frontend is served there too
+
+
 # --- Helper Functions ---
 
 def run_command(command_list, check=True, capture_output=True, text=True, use_sudo=True):
@@ -72,15 +81,14 @@ def run_command(command_list, check=True, capture_output=True, text=True, use_su
 
     print(f"Running command: {' '.join(shlex.quote(c) for c in cmd)}") # Log command execution attempt
     try:
+        # Set a default timeout (e.g., 60 seconds) to prevent hanging
         result = subprocess.run(
             cmd,
             check=check,
             capture_output=capture_output,
             text=text,
-            # Consider adding a timeout
-            # timeout=30
+            timeout=60 # Add a timeout
         )
-        # Log output even on success for debugging, but maybe less verbosely
         if result.returncode != 0:
              print(f"Command failed with code {result.returncode}: {cmd}")
              if result.stderr:
@@ -95,6 +103,9 @@ def run_command(command_list, check=True, capture_output=True, text=True, use_su
 
 
         return result
+    except subprocess.TimeoutExpired as e:
+        print(f"Error: Command timed out after {e.timeout} seconds: {e.cmd}")
+        raise # Re-raise the exception
     except subprocess.CalledProcessError as e:
         print(f"Error running command: {e}")
         print(f"Stderr: {e.stderr}")
@@ -166,61 +177,65 @@ def parse_targetcli_ls(output):
 
 
 def get_client_status(client_ip):
-    """ Placeholder for checking client status (e.g., ping) """
-    # In a real system, check iSCSI connections, ping, etc.
-    # For now, simulate based on IP
-    # Example: Use ping command
+    """ Checks client status using ping. """
     if not client_ip or client_ip == "N/A":
         return "Unknown"
     try:
-        # Run ping command (adjust count/timeout as needed)
-        # Use check=False as ping might fail for offline clients
-        result = run_command(['ping', '-c', '1', '-W', '1', client_ip], check=False, use_sudo=False)
+        # Run ping command (1 packet, 1 second timeout)
+        # Use check=False as ping will fail for offline clients (return code != 0)
+        result = run_command(
+            ['ping', '-c', '1', '-W', '1', client_ip],
+            check=False,
+            use_sudo=False # Ping usually doesn't require sudo
+        )
         if result.returncode == 0:
             return "Online"
         else:
+            # Distinguish between timeout/unreachable and other errors if needed
+            # print(f"Ping failed for {client_ip}, code: {result.returncode}, stderr: {result.stderr}")
             return "Offline"
     except Exception as e:
+        # Catch potential errors from run_command itself (e.g., command not found)
         print(f"Error pinging client {client_ip}: {e}")
         return "Error"
 
 
 def get_client_dhcp_info():
-    """ Parses DHCP leases or config files to get client IPs/MACs """
-    # This is complex and depends heavily on your DHCP server setup.
-    # Option 1: Parse lease file (e.g., /var/lib/dhcp/dhcpd.leases) - format varies
-    # Option 2: Parse static host entries from dhcpd.conf or include files
+    """ Parses DHCP include files to get client IPs/MACs """
     clients = {}
-    if DHCP_CONFIG_METHOD == "include_files":
-        if not os.path.isdir(DHCP_INCLUDE_DIR):
-             print(f"DHCP include directory not found: {DHCP_INCLUDE_DIR}")
-             return {}
-        try:
-            for filename in os.listdir(DHCP_INCLUDE_DIR):
-                if filename.endswith(".conf"):
-                    filepath = os.path.join(DHCP_INCLUDE_DIR, filename)
-                    try:
-                        with open(filepath, 'r') as f:
-                            content = f.read()
-                            # Simple parsing - needs improvement for robustness
-                            host_match = re.search(r'host\s+([\w-]+)\s*{', content, re.IGNORECASE)
-                            mac_match = re.search(r'hardware\s+ethernet\s+([\w:]+);', content, re.IGNORECASE)
-                            ip_match = re.search(r'fixed-address\s+([\d.]+);', content, re.IGNORECASE)
-                            if host_match and mac_match and ip_match:
-                                hostname = host_match.group(1)
-                                mac = mac_match.group(1).upper()
-                                ip = ip_match.group(1)
-                                clients[hostname] = {"mac": mac, "ip": ip}
-                    except Exception as e:
-                         print(f"Error reading or parsing DHCP file {filepath}: {e}")
-        except Exception as e:
-            print(f"Error listing DHCP include directory {DHCP_INCLUDE_DIR}: {e}")
-    elif DHCP_CONFIG_METHOD == "main_config":
-         print("Parsing main dhcpd.conf is not implemented in this example.")
-         # Implement parsing logic for main config file if needed
-         pass
+    if DHCP_CONFIG_METHOD != "include_files":
+        print("Warning: DHCP parsing only implemented for 'include_files' method.")
+        return clients # Return empty if not using include files
 
-    # Add lease file parsing here if needed for dynamic clients
+    if not os.path.isdir(DHCP_INCLUDE_DIR):
+         print(f"DHCP include directory not found: {DHCP_INCLUDE_DIR}")
+         return clients # Return empty if dir doesn't exist
+
+    try:
+        for filename in os.listdir(DHCP_INCLUDE_DIR):
+            if filename.endswith(".conf"):
+                filepath = os.path.join(DHCP_INCLUDE_DIR, filename)
+                try:
+                    with open(filepath, 'r') as f:
+                        content = f.read()
+                        # Improved parsing to handle comments and varying whitespace
+                        host_match = re.search(r'^\s*host\s+([\w-]+)\s*{', content, re.MULTILINE | re.IGNORECASE)
+                        mac_match = re.search(r'^\s*hardware\s+ethernet\s+([\w:]+)\s*;', content, re.MULTILINE | re.IGNORECASE)
+                        ip_match = re.search(r'^\s*fixed-address\s+([\d.]+)\s*;', content, re.MULTILINE | re.IGNORECASE)
+
+                        if host_match and mac_match and ip_match:
+                            hostname = host_match.group(1)
+                            mac = mac_match.group(1).upper()
+                            # Normalize MAC format to use colons
+                            mac = re.sub(r'[-:]', ':', mac)
+                            ip = ip_match.group(1)
+                            clients[hostname] = {"mac": mac, "ip": ip}
+                        else:
+                            print(f"Warning: Could not parse host/mac/ip from {filepath}")
+                except Exception as e:
+                     print(f"Error reading or parsing DHCP file {filepath}: {e}")
+    except Exception as e:
+        print(f"Error listing DHCP include directory {DHCP_INCLUDE_DIR}: {e}")
 
     return clients
 
@@ -237,46 +252,54 @@ def get_services_status():
         'iscsi': 'target.service', # LIO target service name
         'dhcp': 'isc-dhcp-server.service', # Adjust if using a different DHCP server
         'tftp': 'tftpd-hpa.service',
-        # 'zfs': 'zfs-zed.service' # ZFS event daemon, 'active' doesn't guarantee pool health
     }
     statuses = {}
     for key, service_name in services_to_check.items():
         try:
-            # Use 'is-active' for a simple status check
-            result = run_command(['systemctl', 'is-active', service_name], check=False, use_sudo=False) # systemctl often runnable by user
-            status = result.stdout.strip() if result.returncode == 0 else 'inactive' # or 'failed' etc.
+            # Use 'systemctl is-active' for a simple status check
+            result = run_command(['systemctl', 'is-active', service_name], check=False, use_sudo=False)
+            status = result.stdout.strip() if result.returncode == 0 else 'inactive'
             statuses[key] = {"name": service_name.replace('.service', ''), "status": status}
         except Exception as e:
             print(f"Error checking service {service_name}: {e}")
             statuses[key] = {"name": service_name.replace('.service', ''), "status": "error"}
 
-    # Add a basic ZFS pool health check
+    # ZFS pool health check (Corrected)
     zfs_status = 'error' # Default status
     try:
          # Remove -H flag, parse standard output
-         result = run_command(['zpool', 'status', ZFS_POOL], use_sudo=True, check=False) # Use check=False to parse output even on non-ONLINE states
+         # Use check=False to parse output even on non-ONLINE states
+         result = run_command(['zpool', 'status', ZFS_POOL], use_sudo=True, check=False)
+
+         # Check command execution success before parsing output
          if result.returncode == 0:
              pool_state = 'unknown'
+             # Find the line starting with 'state:'
              for line in result.stdout.strip().split('\n'):
                  if line.strip().startswith('state:'):
                      pool_state = line.split(':')[1].strip()
                      break # Found the state line
+
+             # Determine status based on the parsed state
              if pool_state == 'ONLINE':
-                 zfs_status = 'active'
+                 zfs_status = 'active' # Treat ONLINE as active
              elif pool_state in ['DEGRADED', 'FAULTED', 'UNAVAIL', 'REMOVING']:
-                 zfs_status = 'degraded' # Or map specific states if needed
+                 zfs_status = 'degraded' # Use 'degraded' for non-optimal states
              else:
-                 zfs_status = 'unknown' # Or 'error' if state parsing failed
+                 zfs_status = 'unknown' # If state is something else or parsing failed
+             print(f"ZFS pool '{ZFS_POOL}' state: {pool_state} -> Status: {zfs_status}")
          else:
-             print(f"zpool status command failed with code {result.returncode}")
+             # If zpool status command itself failed (e.g., pool doesn't exist)
+             print(f"zpool status command failed for '{ZFS_POOL}' with code {result.returncode}")
              zfs_status = 'error'
 
     except FileNotFoundError:
         print(f"Error: 'zpool' command not found.")
-        zfs_status = 'error'
+        zfs_status = 'error' # Command not found is an error state
     except Exception as e:
+         # Catch any other exceptions during the process
          print(f"Error checking ZFS pool status for {ZFS_POOL}: {e}")
-         zfs_status = 'error' # Keep default error status
+         zfs_status = 'error' # Ensure status is 'error' on exception
 
     statuses['zfs'] = {"name": f"ZFS Pool ({ZFS_POOL})", "status": zfs_status}
 
@@ -287,31 +310,45 @@ def get_services_status():
 def get_masters():
     masters_data = []
     try:
-        # List ZVOLs in the pool - assuming masters are ZVOLs named *-master
-        # Also list filesystems which might be used as masters
-        result = run_command(['zfs', 'list', '-H', '-t', 'filesystem,volume', '-o', 'name,creation,used', '-r', ZFS_POOL], use_sudo=True)
+        # List ZFS filesystems and volumes that might be masters
+        result = run_command(
+            ['zfs', 'list', '-H', '-t', 'filesystem,volume', '-o', 'name,creation,used', '-r', ZFS_POOL],
+            use_sudo=True
+        )
         all_datasets = parse_zfs_list(result.stdout)
 
-        # Adjust the filtering logic if your master naming convention differs
-        master_names = [ds['name'] for ds in all_datasets if ds['name'].endswith('-master') and ds['name'].count('/') == 1] # Simple convention: pool/name-master
+        # Filter potential masters (adjust naming convention if needed)
+        # Example: pool/name-master (directly under the pool)
+        master_names = [
+            ds['name'] for ds in all_datasets
+            if ds['name'].endswith('-master') and ds['name'].count('/') == 1
+        ]
 
         for master_name in master_names:
-             # Get snapshots for this master
-             # Use check=False because a master might not have snapshots yet
-             snap_result = run_command(['zfs', 'list', '-H', '-t', 'snapshot', '-o', 'name,creation,used', '-r', master_name], use_sudo=True, check=False)
-             snapshots = []
-             if snap_result.returncode == 0: # Only parse if command succeeded
-                 snapshots = parse_zfs_list(snap_result.stdout)
+            snapshots = []
+            try:
+                # Get snapshots for this master; use check=False as it might have none
+                snap_result = run_command(
+                    ['zfs', 'list', '-H', '-t', 'snapshot', '-o', 'name,creation,used', '-r', master_name],
+                    use_sudo=True, check=False
+                )
+                if snap_result.returncode == 0: # Only parse if command succeeded
+                    snapshots = parse_zfs_list(snap_result.stdout)
+            except Exception as snap_e:
+                print(f"Error listing snapshots for {master_name}: {snap_e}")
+                # Continue processing other masters even if snapshots fail for one
 
-             masters_data.append({
+            masters_data.append({
                  "id": master_name,
                  "name": master_name,
                  "snapshots": sorted(snapshots, key=lambda s: s['created']) # Sort by creation time
-             })
+            })
 
     except Exception as e:
         print(f"Error getting masters: {e}")
-        return jsonify({"error": "Failed to retrieve master images"}), 500
+        # Return 500 error if the main listing fails
+        return jsonify({"error": f"Failed to retrieve master images: {e}"}), 500
+
     return jsonify(masters_data)
 
 
@@ -319,65 +356,64 @@ def get_masters():
 def get_clients():
     clients_data = []
     try:
-        # 1. Get ZFS clones (assuming naming convention like pool/clientname-disk)
-        # Only list volumes, assuming clones are always volumes
-        zfs_result = run_command(['zfs', 'list', '-H', '-t', 'volume', '-o', 'name,origin', '-r', ZFS_POOL], use_sudo=True)
+        # 1. Get ZFS clones (volumes originating from a snapshot, following naming convention)
         zfs_clones = {}
-        if zfs_result.returncode == 0:
-            for line in zfs_result.stdout.strip().split('\n'):
-                 if not line: continue
-                 name, origin = line.split('\t')
-                 # Check if it's a clone and follows the naming convention
-                 if origin != '-' and name.endswith('-disk'):
-                     # Extract client name from clone name (pool/client-disk)
-                     match = re.match(rf"^{ZFS_POOL}/([\w-]+)-disk$", name)
-                     if match:
-                         client_name = match.group(1)
-                         zfs_clones[client_name] = {"clone": name, "origin": origin}
+        try:
+            zfs_result = run_command(
+                ['zfs', 'list', '-H', '-t', 'volume', '-o', 'name,origin', '-r', ZFS_POOL],
+                use_sudo=True
+            )
+            if zfs_result.returncode == 0:
+                for line in zfs_result.stdout.strip().split('\n'):
+                    if not line: continue
+                    name, origin = line.split('\t')
+                    # Check if it's a clone and follows the naming convention pool/clientname-disk
+                    if origin != '-' and name.endswith('-disk'):
+                        match = re.match(rf"^{ZFS_POOL}/([\w-]+)-disk$", name)
+                        if match:
+                            client_name = match.group(1)
+                            zfs_clones[client_name] = {"clone": name, "origin": origin}
+        except Exception as zfs_e:
+            print(f"Error listing ZFS clones: {zfs_e}")
+            # Continue without ZFS clone info if listing fails
 
-        # 2. Get iSCSI target info (Placeholder - needs real implementation)
-        # This part is complex and requires parsing targetcli config or output reliably.
-        # For now, we construct a placeholder target IQN based on client name.
+        # 2. Get iSCSI target info (Placeholder)
+        # Needs real implementation (e.g., parsing /etc/target/saveconfig.json)
         iscsi_targets = {} # Placeholder
-        # Example of how you might populate this if parsing worked:
-        # for name in zfs_clones.keys():
-        #    iscsi_targets[name] = f"iqn.2025-04.mydomain.server:{name}" # Adjust domain/date
 
         # 3. Get DHCP info
         dhcp_info = get_client_dhcp_info()
 
-        # 4. Combine information
-        all_client_names = set(zfs_clones.keys()) | set(dhcp_info.keys()) # Get unique names from both sources
+        # 4. Combine information - Use names from DHCP and ZFS as potential clients
+        all_client_names = set(zfs_clones.keys()) | set(dhcp_info.keys())
 
-        for name in all_client_names:
+        for name in sorted(list(all_client_names)): # Process in alphabetical order
             clone_info = zfs_clones.get(name, {})
             dhcp_client_info = dhcp_info.get(name, {})
 
             # Placeholder for super client status - needs actual logic
-            # e.g., check a database flag or ZFS properties
-            is_super = False
+            # e.g., check a database flag or ZFS property `zfs get your_ns:superclient pool/client-disk`
+            is_super = False # Default to false
+
+            client_ip = dhcp_client_info.get("ip", "N/A")
 
             client = {
                 "id": name, # Use name as ID
                 "name": name,
                 "clone": clone_info.get("clone", "N/A"),
                 "mac": dhcp_client_info.get("mac", "N/A"),
-                "ip": dhcp_client_info.get("ip", "N/A"),
+                "ip": client_ip,
                 # Construct placeholder target name if available
                 "target": f"iqn.2025-04.mydomain.server:{name}" if name else "N/A", # Adjust domain/date
-                "status": "Unknown", # Will be updated below
+                "status": get_client_status(client_ip), # Check status based on IP
                 "isSuperClient": is_super
             }
-            client["status"] = get_client_status(client["ip"]) # Update status based on IP check
             clients_data.append(client)
 
     except Exception as e:
         print(f"Error getting clients: {e}")
-        # Avoid crashing the backend, return empty list or error
         return jsonify({"error": f"Failed to retrieve client list: {e}"}), 500
 
-    # Sort clients alphabetically by name
-    clients_data.sort(key=lambda c: c['name'])
     return jsonify(clients_data)
 
 @app.route('/api/clients', methods=['POST'])
@@ -401,7 +437,7 @@ def add_client():
     # Normalize MAC address format (e.g., to use colons)
     mac_address = re.sub(r'[-:]', ':', mac_address)
 
-    # Validate snapshot existence (optional but recommended)
+    # Validate snapshot existence
     try:
         run_command(['zfs', 'list', '-H', '-t', 'snapshot', snapshot_name], use_sudo=True)
     except subprocess.CalledProcessError:
@@ -411,15 +447,18 @@ def add_client():
          abort(500, description="Error validating snapshot existence.")
 
     # Check if client name (clone or DHCP entry) already exists
-    if os.path.exists(os.path.join(DHCP_INCLUDE_DIR, f"{client_name}.conf")):
+    dhcp_client_conf_path = os.path.join(DHCP_INCLUDE_DIR, f"{client_name}.conf")
+    if DHCP_CONFIG_METHOD == "include_files" and os.path.exists(dhcp_client_conf_path):
          abort(409, description=f"DHCP configuration for client '{client_name}' already exists.")
     try:
-        run_command(['zfs', 'list', '-H', clone_name], use_sudo=True, check=False)
-        # If previous command didn't raise error and returncode is 0, it exists
-        if run_command.returncode == 0:
+        # Use check=False, we only care if returncode is 0 (exists)
+        result = run_command(['zfs', 'list', '-H', clone_name], use_sudo=True, check=False)
+        if result.returncode == 0:
              abort(409, description=f"ZFS volume '{clone_name}' already exists.")
-    except Exception: # Catch potential errors from run_command itself if check=False
-        pass # Okay if it doesn't exist
+    except Exception as e:
+        print(f"Error checking ZFS volume existence for {clone_name}: {e}")
+        # Decide if this is critical - perhaps allow proceeding if check fails? For now, abort.
+        abort(500, description="Error checking if ZFS volume exists.")
 
 
     print(f"Received request to add client: {client_name}, MAC: {mac_address}, Snapshot: {snapshot_name}")
@@ -438,8 +477,6 @@ def add_client():
         # --- Step 2: Create iSCSI Target ---
         # !! Placeholder - Requires robust implementation !!
         target_iqn = f"iqn.2025-04.mydomain.server:{client_name}" # Adjust domain/date
-        # block_backstore_name = f"{client_name}_disk"
-        # dev_path = f"/dev/zvol/{clone_name}" # Path to the ZVOL device
         print(f"!!! Placeholder: iSCSI target configuration for {target_iqn} skipped !!!")
         # Add actual iSCSI configuration logic here (JSON or targetcli scripting)
         # If successful, set iscsi_configured = True
@@ -447,14 +484,13 @@ def add_client():
 
         # --- Step 3: Create DHCP Reservation ---
         print(f"Creating DHCP reservation for {client_name} ({mac_address})")
+        assigned_ip = None # Initialize assigned_ip
         if DHCP_CONFIG_METHOD == "include_files":
-            dhcp_client_conf_path = os.path.join(DHCP_INCLUDE_DIR, f"{client_name}.conf")
             # Determine next available IP (improved logic needed for production)
             existing_ips = get_client_dhcp_info().values()
             ip_prefix = "192.168.1." # !!! Adjust to your network !!!
             start_ip = 100
             end_ip = 200
-            assigned_ip = None
             used_ips_suffix = {int(info['ip'].split('.')[-1]) for info in existing_ips if info['ip'].startswith(ip_prefix)}
             for i in range(start_ip, end_ip + 1):
                  if i not in used_ips_suffix:
@@ -465,8 +501,7 @@ def add_client():
 
             # Ensure YOUR_ISCSI_SERVER_IP is defined or retrieved dynamically
             your_iscsi_server_ip = "192.168.1.10" # !!! Replace with actual server IP !!!
-            dhcp_entry = f"""
-# Configuration for {client_name}
+            dhcp_entry = f"""# Configuration for {client_name}
 host {client_name} {{
     hardware ethernet {mac_address};
     fixed-address {assigned_ip};
@@ -509,9 +544,10 @@ host {client_name} {{
             if created_dhcp_config:
                 print(f"Rolling back DHCP config: Removing {dhcp_client_conf_path}")
                 try:
-                    os.remove(dhcp_client_conf_path)
-                    # Attempt to restart DHCP again after removal
-                    run_command(['systemctl', 'restart', 'isc-dhcp-server.service'], use_sudo=True, check=False)
+                    if os.path.exists(dhcp_client_conf_path):
+                        os.remove(dhcp_client_conf_path)
+                        # Attempt to restart DHCP again after removal
+                        run_command(['systemctl', 'restart', 'isc-dhcp-server.service'], use_sudo=True, check=False)
                 except Exception as dhcp_rollback_e:
                     print(f"Error during DHCP rollback: {dhcp_rollback_e}")
                     error_message += f" (DHCP rollback failed: {dhcp_rollback_e})"
@@ -524,7 +560,10 @@ host {client_name} {{
             if created_zfs_clone:
                 print(f"Rolling back ZFS clone: Destroying {clone_name}")
                 try:
-                    run_command(['zfs', 'destroy', clone_name], check=False, use_sudo=True)
+                    # Check if clone still exists before destroying
+                    check_res = run_command(['zfs', 'list', '-H', clone_name], check=False, use_sudo=True)
+                    if check_res.returncode == 0:
+                        run_command(['zfs', 'destroy', clone_name], check=False, use_sudo=True)
                 except Exception as zfs_rollback_e:
                     print(f"Error during ZFS rollback: {zfs_rollback_e}")
                     error_message += f" (ZFS rollback failed: {zfs_rollback_e})"
@@ -549,24 +588,18 @@ def delete_client(client_id):
 
     print(f"Received request to delete client: {client_id}")
 
+    errors = [] # Collect non-critical errors
     try:
-        errors = []
         # --- Step 1: Delete DHCP Reservation ---
         print(f"Deleting DHCP config for {client_id}")
-        dhcp_restarted = False
+        dhcp_restarted_needed = False
         if DHCP_CONFIG_METHOD == "include_files":
             if os.path.exists(dhcp_client_conf_path):
                 try:
                     # Requires write permissions
                     os.remove(dhcp_client_conf_path)
                     print(f"Removed {dhcp_client_conf_path}")
-                    # Reload/Restart DHCP server (only once if multiple files deleted)
-                    try:
-                        run_command(['systemctl', 'restart', 'isc-dhcp-server.service'], use_sudo=True)
-                        dhcp_restarted = True
-                    except Exception as e:
-                         errors.append(f"Failed to restart DHCP service after removing config: {e}")
-                         print(errors[-1])
+                    dhcp_restarted_needed = True # Mark DHCP for restart
                 except Exception as e:
                     errors.append(f"Failed to remove DHCP config file {dhcp_client_conf_path}: {e}")
                     print(errors[-1])
@@ -574,21 +607,31 @@ def delete_client(client_id):
                  print("DHCP config file not found, skipping.")
         else:
             print("!!! Placeholder: Removing DHCP entry from main config skipped !!!")
-            # Add logic to remove from main config and restart DHCP if needed
+            # Add logic to remove from main config and mark for restart
+
+        # Restart DHCP if needed (do it once after potential file removal)
+        if dhcp_restarted_needed:
+            try:
+                print("Restarting DHCP service...")
+                run_command(['systemctl', 'restart', 'isc-dhcp-server.service'], use_sudo=True)
+            except Exception as e:
+                 errors.append(f"Failed to restart DHCP service after removing config: {e}")
+                 print(errors[-1])
+
 
         # --- Step 2: Delete iSCSI Target ---
         # !! Placeholder - Requires robust implementation !!
         print(f"Deleting iSCSI target for {client_id}")
         # Add actual iSCSI deletion logic here (JSON or targetcli scripting)
-        # Example conceptual commands:
+        print("!!! Placeholder: iSCSI target deletion skipped !!!")
         # try:
+        #     # Example conceptual commands:
         #     run_command(['targetcli', f'/iscsi delete {target_iqn}'], check=False, use_sudo=True)
         #     run_command(['targetcli', f'/backstores/block delete {client_id}_disk'], check=False, use_sudo=True)
         #     run_command(['targetcli', 'saveconfig'], check=False, use_sudo=True) # Save changes
         # except Exception as e:
         #     errors.append(f"Failed to delete iSCSI target {target_iqn}: {e}")
         #     print(errors[-1])
-        print("!!! Placeholder: iSCSI target deletion skipped !!!")
 
 
         # --- Step 3: Destroy ZFS Clone ---
@@ -602,25 +645,26 @@ def delete_client(client_id):
             else:
                  print(f"ZFS clone {clone_name} not found, skipping destroy.")
         except subprocess.CalledProcessError as e:
-             # Don't stop the whole process if destroy fails, just log it
-             errors.append(f"Failed to destroy ZFS clone {clone_name}: {e.stderr or e}")
-             print(errors[-1])
+             # Treat failure to destroy ZFS as a more significant error
+             print(f"Critical Error: Failed to destroy ZFS clone {clone_name}: {e.stderr or e}")
+             # Return 500 immediately if ZFS destroy fails critically
+             return jsonify({"error": f"Failed to destroy ZFS clone {clone_name}: {e.stderr or e}", "details": errors}), 500
         except Exception as e:
-             errors.append(f"Error destroying ZFS clone {clone_name}: {e}")
-             print(errors[-1])
+             print(f"Critical Error: Error destroying ZFS clone {clone_name}: {e}")
+             return jsonify({"error": f"Error destroying ZFS clone {clone_name}: {e}", "details": errors}), 500
 
 
         # --- Report Results ---
         if errors:
-            # Use 500 if critical parts failed, 207 if mostly successful with minor issues
-            status_code = 500 if "Failed to destroy ZFS clone" in str(errors) else 207
-            return jsonify({"message": f"Client {client_id} deletion attempted with errors", "errors": errors}), status_code
+            # Return 207 if only non-critical errors occurred (e.g., DHCP restart)
+            return jsonify({"message": f"Client {client_id} deleted, but some cleanup steps had issues.", "errors": errors}), 207 # Multi-Status
         else:
             return jsonify({"message": f"Client {client_id} deleted successfully"}), 200
 
     except Exception as e:
-        print(f"An unexpected error occurred during deletion: {e}")
-        return jsonify({"error": f"An unexpected error occurred: {e}"}), 500
+        # Catch any unexpected errors during the overall process
+        print(f"An unexpected error occurred during deletion of {client_id}: {e}")
+        return jsonify({"error": f"An unexpected error occurred during deletion: {e}"}), 500
 
 # --- Snapshot Actions ---
 @app.route('/api/snapshots', methods=['POST'])
@@ -631,9 +675,9 @@ def create_snapshot():
     snapshot_name = data['name']
 
     # Basic validation - Check format pool/master@snapname
-    # Ensure it contains '@' and starts with the pool name
     if '@' not in snapshot_name or not snapshot_name.startswith(ZFS_POOL + '/'):
          abort(400, description=f"Invalid snapshot name format. Expected {ZFS_POOL}/master@snapname")
+
     # Further validation: check if master dataset exists
     master_name = snapshot_name.split('@')[0]
     try:
@@ -645,6 +689,7 @@ def create_snapshot():
          abort(500, description="Error validating master dataset.")
 
     try:
+        print(f"Creating snapshot: {snapshot_name}")
         run_command(['zfs', 'snapshot', snapshot_name], use_sudo=True)
         return jsonify({"message": f"Snapshot {snapshot_name} created successfully"}), 201
     except subprocess.CalledProcessError as e:
@@ -661,9 +706,8 @@ def create_snapshot():
 @app.route('/api/snapshots/<path:snapshot_name_encoded>', methods=['DELETE'])
 def delete_snapshot(snapshot_name_encoded):
      # Decode the snapshot name from the URL path component
-     # Example: pool/fs@snap -> pool%2Ffs%40snap -> pool/fs@snap
      try:
-         snapshot_name = snapshot_name_encoded # Flask does URL decoding automatically for path converters
+         snapshot_name = snapshot_name_encoded # Flask handles URL decoding
      except Exception as e:
          abort(400, description=f"Invalid snapshot name encoding in URL: {e}")
 
@@ -676,7 +720,6 @@ def delete_snapshot(snapshot_name_encoded):
      try:
         # Attempt to destroy the snapshot.
         # ZFS will prevent deletion if there are dependent clones unless -R or -f is used.
-        # We avoid -R/-f for safety here. Frontend should handle the 409 error.
         run_command(['zfs', 'destroy', snapshot_name], use_sudo=True)
         return jsonify({"message": f"Snapshot {snapshot_name} deleted successfully"}), 200
      except subprocess.CalledProcessError as e:
@@ -731,16 +774,6 @@ def control_client(client_id):
     elif action == 'reboot':
         # Requires remote execution mechanism (SSH, agent, IPMI) - Placeholder
         print(f"!!! Placeholder: Reboot action for {client_id} requires external setup !!!")
-        # Example using SSH (requires key setup, known IP, user permissions):
-        # client_ip = dhcp_info.get(client_id, {}).get("ip", None)
-        # if client_ip and client_ip != "N/A":
-        #     try:
-        #         run_command(['ssh', f'user@{client_ip}', 'sudo reboot'], use_sudo=False, check=True)
-        #         return jsonify({"message": f"Reboot command sent via SSH to {client_id} ({client_ip})"}), 200
-        #     except Exception as e:
-        #         return jsonify({"error": f"Failed to send SSH reboot command: {e}"}), 500
-        # else:
-        #     return jsonify({"error": "Client IP not found for SSH reboot."}), 404
         return jsonify({"message": f"Placeholder: Reboot action for {client_id} not implemented in backend."}), 501 # Not Implemented
 
     elif action == 'shutdown':
@@ -753,43 +786,31 @@ def control_client(client_id):
          clone_name = f"{ZFS_POOL}/{client_id}-disk"
          print(f"Attempting to toggle Super Client for {client_id} ({clone_name}) to {is_super}")
          # Placeholder: Implement actual logic.
-         # Option 1 (Flag): Update a database or file flag (simple, doesn't affect ZFS behavior)
-         # Option 2 (ZFS Promote): If disabling super -> snapshot current state? If enabling -> zfs promote? Needs careful thought.
-         #   - Promoting makes the clone independent of its original snapshot.
-         #   - This is complex: What happens when you disable it again? Snapshot and re-clone from master?
          if is_super:
              # Example: Try to promote the clone (makes changes persistent directly)
              try:
                  run_command(['zfs', 'promote', clone_name], use_sudo=True)
                  print(f"Promoted ZFS clone {clone_name} for Super Client mode.")
-                 # You might want to store this state persistently (e.g., ZFS property or DB)
+                 # Store state persistently (e.g., ZFS property or DB)
                  # run_command(['zfs', 'set', 'your_namespace:superclient=on', clone_name], use_sudo=True)
                  return jsonify({"message": f"Super Client mode enabled for {client_id} by promoting clone."}), 200
              except Exception as e:
                  print(f"Error promoting clone {clone_name}: {e}")
                  return jsonify({"error": f"Failed to enable Super Client mode (promote failed): {e}"}), 500
          else:
-             # Disabling Super Client mode is harder if promotion was used.
-             # Simplest approach: Re-clone from a master snapshot (loses current changes).
-             # More complex: Snapshot current state, destroy, re-clone, potentially copy data back?
+             # Disabling Super Client mode after promotion requires re-cloning usually.
              print(f"!!! Placeholder: Disabling Super Client mode for {client_id} requires defined logic (e.g., re-clone) !!!")
              # You would need the frontend to ask which snapshot to re-clone from.
              return jsonify({"message": f"Placeholder: Disabling Super Client mode for {client_id} not fully implemented."}), 501
 
     elif action == 'edit':
          # Placeholder: Requires modal in frontend and backend logic
-         # Could update DHCP name, potentially rename ZFS/iSCSI (complex)
          print(f"!!! Placeholder: Edit Client action for {client_id} requires implementation !!!")
          return jsonify({"message": f"Placeholder: Edit Client for {client_id} not implemented."}), 501 # Not Implemented
 
     else:
         abort(400, description=f"Invalid action: {action}")
 
-
-# --- CORS Handling (Optional, adjust origin for security) ---
-# You might need this if frontend and backend are on different origins (ports/domains)
-# from flask_cors import CORS
-# CORS(app, resources={r"/api/*": {"origins": ["http://localhost:3000", "http://your-frontend-domain.com"]}})
 
 # --- Main Execution ---
 if __name__ == '__main__':
@@ -804,4 +825,4 @@ if __name__ == '__main__':
     # Example for production using Waitress (pip install waitress):
     # from waitress import serve
     # serve(app, host='0.0.0.0', port=5000)
-    app.run(host='0.0.0.0', port=5000) # Keep debug=True for development ONLY
+    app.run(host='0.0.0.0', port=5000, debug=True) # Keep debug=True for development ONLY
