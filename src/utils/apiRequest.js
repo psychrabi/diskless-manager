@@ -45,3 +45,18 @@ export const apiRequest = async (endpoint, method = 'GET', body = null, response
         throw error;
     }
 };
+
+
+  // --- Action Handlers ---
+  export const handleApiAction = async (actionFn, successMessage, errorMessagePrefix) => {
+    setActionStatus({ message: 'Processing...', type: 'info' });
+    try {
+        const result = await actionFn();
+        setActionStatus({ message: result?.message || successMessage, type: 'success' });
+        fetchData(false); // Refresh data in the background after successful action
+        return true; // Indicate success
+    } catch (error) {
+        setActionStatus({ message: `${errorMessagePrefix}: ${error.message || 'Unknown error'}`, type: 'error' });
+        return false; // Indicate failure
+    }
+};
