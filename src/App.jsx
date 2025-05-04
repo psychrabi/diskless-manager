@@ -7,23 +7,12 @@ import {
 const API_BASE_URL = 'http://192.168.1.206:5000/api'; // !!! IMPORTANT: Replace with your backend server IP/hostname and port !!!
 
 // --- Helper Functions & Hooks ---
-const useOnClickOutside = (ref, handler) => {
-  useEffect(() => {
-    const listener = (event) => {
-      if (!ref.current || ref.current.contains(event.target)) return;
-      handler(event);
-    };
-    document.addEventListener('mousedown', listener);
-    document.addEventListener('touchstart', listener);
-    return () => {
-      document.removeEventListener('mousedown', listener);
-      document.removeEventListener('touchstart', listener);
-    };
-  }, [ref, handler]);
-};
+
 
 // --- UI Components (Keep existing components: Card, Button, Table, Modal, Input, Select, ContextMenu) ---
-import { Card, Button, Modal, Input } from './components/ui/index.js';
+import { Card, Button, Modal, Input, ContextMenu } from './components/ui/index.js';
+import ServiceManagement from './components/ServiceManagement.jsx';
+import { apiRequest } from './utils/apiRequest.js';
 
 
 
@@ -34,26 +23,6 @@ const TableRow = ({ children, className = '', onContextMenu }) => <tr onContextM
 const TableHead = ({ children, className = '' }) => <th className={`h-12 px-4 text-left align-middle font-medium text-gray-500 dark:text-gray-400 ${className}`}>{children}</th>;
 const TableCell = ({ children, className = '' }) => <td className={`p-4 align-middle ${className}`}>{children}</td>;
 
-
-
-
-// const Input = ({ label, id, value, onChange, placeholder, type = "text", required = false, pattern, title }) => (
-//     <div className="mb-4">
-//         <label htmlFor={id} className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{label}</label>
-//         <input
-//             type={type}
-//             id={id}
-//             name={id}
-//             value={value}
-//             onChange={onChange}
-//             placeholder={placeholder}
-//             required={required}
-//             pattern={pattern}
-//             title={title}
-//             className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-//         />
-//     </div>
-// );
 
 const Select = ({ label, id, value, onChange, children, required = false }) => (
      <div className="mb-4">
@@ -71,89 +40,9 @@ const Select = ({ label, id, value, onChange, children, required = false }) => (
     </div>
 );
 
-const ContextMenu = ({ xPos, yPos, isOpen, onClose, targetClient, actions }) => {
-  const menuRef = useRef(null);
-  useOnClickOutside(menuRef, onClose);
 
-  if (!isOpen || !targetClient) return null;
 
-  const menuStyle = {
-    top: `${yPos}px`,
-    left: `${xPos}px`,
-  };
 
-  return (
-    <div
-      ref={menuRef}
-      style={menuStyle}
-      className="fixed z-[60] bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md shadow-lg py-2 min-w-[180px] animate-fade-in"
-    >
-      <ul>
-        <li><Button onClick={() => { actions.edit(targetClient); onClose(); }} variant="ghost" className="w-full justify-start px-3 py-1.5 text-sm" icon={Edit}>Edit Client</Button></li>
-        <li><Button onClick={() => { actions.toggleSuper(targetClient); onClose(); }} variant="ghost" className="w-full justify-start px-3 py-1.5 text-sm" icon={Zap}>{targetClient.isSuperClient ? 'Disable' : 'Enable'} Super Client</Button></li>
-        <hr className="my-1 border-gray-200 dark:border-gray-700" />
-        <li><Button onClick={() => { actions.reboot(targetClient); onClose(); }} variant="ghost" className="w-full justify-start px-3 py-1.5 text-sm" icon={RefreshCw}>Reboot</Button></li>
-        <li><Button onClick={() => { actions.shutdown(targetClient); onClose(); }} variant="ghost" className="w-full justify-start px-3 py-1.5 text-sm" icon={PowerSquare}>Shutdown</Button></li>
-        <li><Button onClick={() => { actions.wake(targetClient); onClose(); }} variant="ghost" className="w-full justify-start px-3 py-1.5 text-sm" icon={Sunrise}>Wake Up</Button></li>
-        <hr className="my-1 border-gray-200 dark:border-gray-700" />
-        <li><Button onClick={() => { actions.delete(targetClient); onClose(); }} variant="ghost" className="w-full justify-start px-3 py-1.5 text-sm text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/50" icon={Trash2}>Delete Client</Button></li>
-      </ul>
-       <style jsx>{`
-        @keyframes fade-in {
-          from { opacity: 0; }
-          to { opacity: 1; }
-        }
-        .animate-fade-in { animation: fade-in 0.1s ease-out forwards; }
-      `}</style>
-    </div>
-  );
-};
-
-// --- API Interaction Logic ---
-const apiRequest = async (endpoint, method = 'GET', body = null, responseType = 'json') => {
-    const url = `${API_BASE_URL}${endpoint}`;
-    const options = {
-        method,
-        headers: {
-            // Only set Content-Type if there's a body
-            ...(body && { 'Content-Type': 'application/json' }),
-            // Add Authorization headers if implementing auth
-        },
-    };
-    if (body) {
-        options.body = JSON.stringify(body);
-    }
-
-    console.log(`API Request: ${method} ${url}`, body || ''); // Log request
-
-    try {
-        const response = await fetch(url, options);
-
-        // Handle different response types
-        let responseData;
-        if (responseType === 'text') {
-            responseData = await response.text();
-        } else { // Default to json
-            responseData = await response.json();
-        }
-
-        console.log(`API Response: ${response.status} ${url}`, responseType === 'json' ? responseData : '(text response)'); // Log response
-
-        if (!response.ok) {
-            // Try to get error message from JSON body, otherwise use status text
-            const errorMsg = (responseType === 'json' && responseData?.error)
-                             || (responseType === 'json' && responseData?.message)
-                             || response.statusText
-                             || `HTTP error! status: ${response.status}`;
-            throw new Error(errorMsg);
-        }
-        return responseData; // Contains 'message' or actual data (JSON or text)
-    } catch (error) {
-        console.error(`API Error (${method} ${url}):`, error);
-        // Rethrow the error so calling function can handle it
-        throw error;
-    }
-};
 
 
 // --- Main Application Component ---
@@ -177,10 +66,7 @@ function App() {
   const [newMasterName, setNewMasterName] = useState('');
   const [newMasterSize, setNewMasterSize] = useState('50G'); // Default size
 
-  const [isViewConfigModalOpen, setIsViewConfigModalOpen] = useState(false); // New state for view config modal
-  const [configContent, setConfigContent] = useState('');
-  const [configTitle, setConfigTitle] = useState('');
-  const [configLoading, setConfigLoading] = useState(false);
+
 
   // Context Menu State
   const [contextMenu, setContextMenu] = useState({ isOpen: false, x: 0, y: 0, client: null });
@@ -449,30 +335,8 @@ function App() {
   };
 
 
-  // --- Service Actions ---
-  const handleServiceRestart = (serviceKey) => {
-       handleApiAction(
-            () => apiRequest(`/services/${serviceKey}/control`, 'POST', { action: 'restart' }),
-            `Restart command sent to service ${serviceKey}.`,
-            `Failed to send restart command to service ${serviceKey}`
-        );
-  };
 
-  const handleViewConfig = async (serviceKey, serviceName) => {
-      setConfigTitle(`Configuration: ${serviceName}`);
-      setConfigContent(''); // Clear previous content
-      setIsViewConfigModalOpen(true);
-      setConfigLoading(true);
-      try {
-          // Use responseType 'text' for config files
-          const configData = await apiRequest(`/services/${serviceKey}/config`, 'GET', null, 'text');
-          setConfigContent(configData);
-      } catch (error) {
-          setConfigContent(`Error loading configuration:\n${error.message}`);
-      } finally {
-          setConfigLoading(false);
-      }
-  };
+
 
 
   return (
@@ -509,30 +373,8 @@ function App() {
 
 
       {/* Service Status Cards */}
-       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6 md:mb-8">
-          {Object.entries(services).length > 0 ? Object.entries(services).map(([key, service]) => (
-              <Card key={key} title={service.name} className="flex-1" titleClassName="text-base md:text-lg">
-                  <div className="flex items-center justify-between">
-                       <span className={`px-2 py-0.5 rounded-full text-xs font-semibold capitalize ${
-                           service.status === 'active' || service.status === 'running' ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' :
-                           service.status === 'inactive' || service.status === 'stopped' ? 'bg-gray-200 text-gray-800 dark:bg-gray-700 dark:text-gray-300' :
-                           'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200' // error, failed, degraded etc.
-                       }`}>
-                          {service.status}
-                      </span>
-                      {/* Service Action Buttons */}
-                      <div className="flex space-x-1">
-                          <Button onClick={() => handleViewConfig(key, service.name)} variant="ghost" size="icon" className="h-7 w-7" title={`View Config for ${service.name}`}>
-                              <Eye className="h-4 w-4 text-gray-500" />
-                          </Button>
-                          <Button onClick={() => handleServiceRestart(key)} variant="ghost" size="icon" className="h-7 w-7" title={`Restart ${service.name}`}>
-                              <RefreshCw className="h-4 w-4 text-blue-500" />
-                          </Button>
-                      </div>
-                  </div>
-              </Card>
-          )) : !loading && <p className="text-gray-500 col-span-full">Could not load service status.</p> }
-       </div>
+      <ServiceManagement services={services} refresh={fetchData} loading={loading} />
+
 
 
       {/* Main Content Area */}
@@ -742,21 +584,7 @@ function App() {
           </form>
       </Modal>
 
-       {/* View Config Modal */}
-       <Modal isOpen={isViewConfigModalOpen} onClose={() => setIsViewConfigModalOpen(false)} title={configTitle} size="2xl">
-            {configLoading ? (
-                <div className="flex justify-center items-center h-40">
-                    <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-500"></div>
-                </div>
-            ) : (
-                <pre className="bg-gray-100 dark:bg-gray-900 p-4 rounded-md text-xs overflow-auto max-h-[70vh]">
-                    <code>{configContent}</code>
-                </pre>
-            )}
-             <div className="mt-4 flex justify-end">
-                  <Button variant="outline" onClick={() => setIsViewConfigModalOpen(false)}>Close</Button>
-              </div>
-       </Modal>
+
 
 
       {/* Client Context Menu */}
