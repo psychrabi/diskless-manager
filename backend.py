@@ -345,20 +345,20 @@ def get_masters():
     # ... (keep existing implementation) ...
     masters_data = []
     try:
-        print(f"ZFS Pool: {ZFS_POOL}")
-        print("Raw ZFS list output:")
+        # print(f"ZFS Pool: {ZFS_POOL}")
+        # print("Raw ZFS list output:")
         result = run_command(
             ['zfs', 'list', '-H', '-t', 'filesystem,volume', '-o', 'name,creation,used', '-r', ZFS_POOL],
             use_sudo=True
         )
-        print("=== Raw ZFS List Output ===")
-        print(result.stdout)
-        print("=== End Raw Output ===")
+        # print("=== Raw ZFS List Output ===")
+        # print(result.stdout)
+        # print("=== End Raw Output ===")
 
         all_datasets = parse_zfs_list(result.stdout)
-        print(f"Parsed {len(all_datasets)} datasets:")
-        for ds in all_datasets:
-            print(f"Dataset: {ds['name']}")
+        # print(f"Parsed {len(all_datasets)} datasets:")
+        # for ds in all_datasets:
+        #     print(f"Dataset: {ds['name']}")
 
         master_names = []
         # Look for master images in the root and any subdirectories
@@ -378,7 +378,7 @@ def get_masters():
                 if snap_result.returncode == 0:
                     print(f"Checking snapshots for {ds['name']}")
                     for snap in snap_result.stdout.splitlines():
-                        print(f"Checking snapshot: {snap}")
+                        # print(f"Checking snapshot: {snap}")
                         if snap.lower().endswith('-master'):
                             print(f"Found master snapshot: {snap}")
                             master_names.append(snap)
@@ -578,6 +578,24 @@ def add_client():
             target_iqn = f"iqn.2025-04.com.nsboot:{name.lower().replace('_', '')}" # Adjust to lowercase and remove underscores
             target_path = f"/dev/zvol/{master}"  # Remove ZFS_POOL prefix if present
             created_zfs_clone = False
+            
+            # Check if master volume is already in use by any block store
+            print(f"=== Checking if master volume {master} is in use ===")
+            result = run_command(['targetcli', 'backstores/block/ ls'], use_sudo=True, check=False)
+            
+            # Find all block stores using this master volume
+            block_stores_to_delete = []
+            for line in result.stdout.split('\n'):
+                if f"/dev/zvol/{master}" in line:
+                    # Extract block store name from line (format: o- block_name ...)
+                    if line.startswith('o- '):
+                        block_store_name = line.split(' ')[1]
+                        block_stores_to_delete.append(block_store_name)
+            
+            # Delete all block stores using this master volume
+            for block_store in block_stores_to_delete:
+                print(f"Deleting block store {block_store} that uses master volume {master}")
+                run_command(['targetcli', 'backstores/block/ delete', block_store], use_sudo=True)
         
         try:
             # Check if target exists by listing all iSCSI targets
@@ -596,9 +614,20 @@ def add_client():
             else:
                 print("Target already exists, skipping creation")
             
-            print(f"=== Setting up block store ===")
-            print(f"Block name: block_{name}")
-            print(f"Target path: {target_path}")
+            # print(f"=== Setting up block store ===")
+            # print(f"Block name: block_{name}")
+            # print(f"Target path: {target_path}")
+            
+            # First check if block store already exists and delete it
+            block_store_name = f"block_{name}"
+            result = run_command(['targetcli', 'backstores/block/ ls'], use_sudo=True, check=False)
+            if block_store_name in result.stdout:
+                print(f"Deleting existing block store {block_store_name}...")
+                run_command(['targetcli', 'backstores/block/ delete', block_store_name], use_sudo=True)
+            
+            # Create new block store
+            print(f"Creating new block store: {block_store_name}")
+            run_command(['targetcli', 'backstores/block create', block_store_name, target_path], use_sudo=True)
             
             # Check if block store exists
             result = run_command(['targetcli', 'backstores/block/ ls'], use_sudo=True, check=False)
@@ -755,7 +784,7 @@ def delete_client(client_id):
 
 
 # --- Client Management ---
-@app.route('/api/clients/<client_id>/edit', methods=['POST'])
+@app.route('/api/clients/edit/<client_id>', methods=['POST'])
 def edit_client(client_id):
     """
     Edit client details (name, MAC address, IP address)
@@ -891,8 +920,39 @@ def control_client(client_id):
         try: run_command(['wakeonlan', mac_address], use_sudo=False); return jsonify({"message": f"Wake-on-LAN sent to {mac_address}"}), 200
         except FileNotFoundError: return jsonify({"error": "'wakeonlan' not found. Install it."}), 501
         except Exception as e: return jsonify({"error": f"Wake-on-LAN failed: {e}"}), 500
-    elif action == 'reboot': return jsonify({"message": f"Placeholder: Reboot {client_id} not implemented."}), 501
-    elif action == 'shutdown': return jsonify({"message": f"Placeholder: Shutdown {client_id} not implemented."}), 501
+    elif action == 'reboot':
+        if not mac_address or mac_address == "N/A": return jsonify({"error": f"MAC address not found for '{client_id}'"}), 404
+        try:
+            # Get client IP from DHCP info
+            client_ip = dhcp_info.get(client_id, {}).get("ip")
+            if not client_ip:
+                return jsonify({"error": f"IP address not found for '{client_id}'"}), 404
+            
+            # Use samba net rpc to reboot Windows client
+            # Requires Samba tools and proper Windows credentials
+            #net rpc shutdown -r -I 192.168.1.100 -U diskless%1
+            net_command = ['net', 'rpc', 'shutdown', '-r', '-I', client_ip, '-U', 'diskless%1', '-f', '-t', '0']
+            run_command(net_command, use_sudo=False)
+            return jsonify({"message": f"Reboot command sent to {client_id} ({client_ip})"}), 200
+        except Exception as e:
+            return jsonify({"error": f"Failed to reboot client: {str(e)}"}), 500
+
+    elif action == 'shutdown':
+        if not mac_address or mac_address == "N/A": return jsonify({"error": f"MAC address not found for '{client_id}'"}), 404
+        try:
+            # Get client IP from DHCP info
+            client_ip = dhcp_info.get(client_id, {}).get("ip")
+            if not client_ip:
+                return jsonify({"error": f"IP address not found for '{client_id}'"}), 404
+            
+            # Use samba net rpc to shutdown Windows client
+            # Requires Samba tools and proper Windows credentials
+            net_command = ['net', 'rpc', 'shutdown', '-S', '-I', client_ip, '-U', 'diskless%1', '-f' ]
+            run_command(net_command, use_sudo=False)
+            return jsonify({"message": f"Shutdown command sent to {client_id} ({client_ip})"}), 200
+        except Exception as e:
+            return jsonify({"error": f"Failed to shutdown client: {str(e)}"}), 500
+
     elif action == 'toggleSuper':
          is_super = data.get('makeSuper', False); clone_name = f"{ZFS_POOL}/{client_id}-disk"
          print(f"Toggle Super Client for {client_id} ({clone_name}) to {is_super}")
