@@ -257,9 +257,9 @@ function App() {
 
   // --- Client Actions ---
   const handleOpenAddClientModal = () => {
-    setNewClientName('pc_01');
+    setNewClientName('pc001');
     setNewClientMac('d8:43:ae:a7:8e:a7');
-    setNewClientIp('192.168.1.1');
+    setNewClientIp('192.168.1.100');
     setSelectedMaster('');
     setSelectedSnapshot('');
     // Set default master selection if available
@@ -337,9 +337,24 @@ function App() {
 
   const clientContextMenuActions = {
     edit: (client) => {
-        setActionStatus({ message: `Edit Client ${client.name}: Not implemented.`, type: 'info' });
-   
-
+        // Log the client object to debug its structure
+        console.log('Client object:', client);
+        
+        // Open the add client modal with current client data
+        setNewClientName(client.name);
+        setNewClientMac(client.mac);
+        setNewClientIp(client.ip);
+        
+        // Try to get master and snapshot information
+        const masterInfo = client.master ? client.master.split('/') : [];
+        const snapshotInfo = client.snapshot ? client.snapshot.split('@') : [];
+        
+        setSelectedMaster(masterInfo[1] || ''); // Extract master name from path if exists
+        setSelectedSnapshot(snapshotInfo[1] || ''); // Extract snapshot name if exists
+        setIsAddClientModalOpen(true);
+        
+        // Close the context menu
+        closeContextMenu();
     },
     toggleSuper: (client) => {
         const makeSuper = !client.isSuperClient;
