@@ -754,6 +754,96 @@ def delete_client(client_id):
     except Exception as e: return jsonify({"error": f"Unexpected error during deletion: {e}"}), 500
 
 
+# --- Client Management ---
+@app.route('/api/clients/<client_id>/edit', methods=['POST'])
+def edit_client(client_id):
+    """
+    Edit client details (name, MAC address, IP address)
+    """
+    if not re.match(r'^[\w-]+$', client_id):
+        abort(400, description="Invalid client ID")
+    
+    data = request.get_json()
+    if not data:
+        abort(400, description="No update data provided")
+
+    try:
+        # Get current client info
+        dhcp_info = get_client_dhcp_info()
+        if client_id not in dhcp_info:
+            return jsonify({"error": f"Client {client_id} not found"}), 404
+
+        # Update MAC address if provided
+        if 'mac' in data:
+            new_mac = data['mac'].strip()
+            if not re.match(r'^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$', new_mac):
+                return jsonify({"error": "Invalid MAC address format"}), 400
+            
+            # Update DHCP configuration
+            dhcp_config_path = f"/etc/dhcp/dhcpd.conf"
+            with open(dhcp_config_path, 'r') as f:
+                dhcp_config = f.read()
+            
+            # Replace MAC address in configuration
+            old_mac = dhcp_info[client_id]['mac']
+            dhcp_config = dhcp_config.replace(old_mac, new_mac)
+            
+            with open(dhcp_config_path, 'w') as f:
+                f.write(dhcp_config)
+            
+            # Restart DHCP service
+            run_command(['systemctl', 'restart', 'isc-dhcp-server'], use_sudo=True)
+
+        # Update IP address if provided
+        if 'ip' in data:
+            new_ip = data['ip'].strip()
+            if not re.match(r'^([\d]{1,3}\.){3}\d{1,3}$', new_ip):
+                return jsonify({"error": "Invalid IP address format"}), 400
+            
+            # Update DHCP configuration
+            dhcp_config_path = f"/etc/dhcp/dhcpd.conf"
+            with open(dhcp_config_path, 'r') as f:
+                dhcp_config = f.read()
+            
+            # Replace IP address in configuration
+            old_ip = dhcp_info[client_id]['ip']
+            dhcp_config = dhcp_config.replace(old_ip, new_ip)
+            
+            with open(dhcp_config_path, 'w') as f:
+                f.write(dhcp_config)
+            
+            # Restart DHCP service
+            run_command(['systemctl', 'restart', 'isc-dhcp-server'], use_sudo=True)
+
+        # Update client name if provided
+        if 'name' in data:
+            new_name = data['name'].strip()
+            if not re.match(r'^[\w-]+$', new_name):
+                return jsonify({"error": "Invalid client name format"}), 400
+            
+            # Rename ZFS volume
+            old_volume = f"{ZFS_POOL}/{client_id}-disk"
+            new_volume = f"{ZFS_POOL}/{new_name}-disk"
+            run_command(['zfs', 'rename', old_volume, new_volume], use_sudo=True)
+            
+            # Update DHCP configuration
+            dhcp_config_path = f"/etc/dhcp/dhcpd.conf"
+            with open(dhcp_config_path, 'r') as f:
+                dhcp_config = f.read()
+            
+            dhcp_config = dhcp_config.replace(client_id, new_name)
+            with open(dhcp_config_path, 'w') as f:
+                f.write(dhcp_config)
+            
+            # Restart DHCP service
+            run_command(['systemctl', 'restart', 'isc-dhcp-server'], use_sudo=True)
+
+        return jsonify({"message": f"Client {client_id} updated successfully"}), 200
+
+    except Exception as e:
+        return jsonify({"error": f"Failed to update client: {str(e)}"}), 500
+
+
 # --- Snapshot Actions ---
 @app.route('/api/snapshots', methods=['POST'])
 def create_snapshot():
