@@ -23,53 +23,9 @@ const useOnClickOutside = (ref, handler) => {
 };
 
 // --- UI Components (Keep existing components: Card, Button, Table, Modal, Input, Select, ContextMenu) ---
-const Card = ({ title, icon, children, className = '', titleClassName = '', actions }) => ( // Added actions prop
-  <div className={`bg-white dark:bg-gray-800 shadow-lg rounded-lg p-4 md:p-6 border border-gray-200 dark:border-gray-700 flex flex-col ${className}`}>
-    {title && (
-      <div className="flex justify-between items-center mb-4">
-        <div className="flex items-center min-w-0"> {/* Ensure title area doesn't overflow */}
-            {icon && React.createElement(icon, { className: "h-5 w-5 md:h-6 md:w-6 mr-3 text-blue-600 dark:text-blue-400 flex-shrink-0" })}
-            <h3 className={`text-lg md:text-xl font-semibold text-gray-800 dark:text-gray-200 truncate ${titleClassName}`}>{title}</h3>
-        </div>
-        {actions && <div className="flex space-x-2 flex-shrink-0">{actions}</div>} {/* Render actions if provided */}
-      </div>
-    )}
-    <div className="flex-grow">{children}</div> {/* Allow content to grow */}
-  </div>
-);
+import { Card, Button, Modal, Input } from './components/ui/index.js';
 
 
-const Button = React.forwardRef(({ children, onClick, variant = 'default', size = 'default', className = '', icon: Icon, disabled = false, title = '', type = 'button' }, ref) => {
-  const baseStyle = "inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none ring-offset-background";
-  const variantStyles = {
-    default: "bg-blue-600 text-white hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600",
-    destructive: "bg-red-600 text-white hover:bg-red-700 dark:bg-red-500 dark:hover:bg-red-600",
-    outline: "border border-gray-300 dark:border-gray-600 bg-transparent hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-800 dark:text-gray-200",
-    ghost: "hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-800 dark:text-gray-200",
-    link: "text-blue-600 dark:text-blue-400 underline-offset-4 hover:underline",
-  };
-  const sizeStyles = {
-    default: "h-10 py-2 px-4",
-    sm: "h-9 px-3 rounded-md",
-    lg: "h-11 px-8 rounded-md",
-    icon: "h-9 w-9 md:h-10 md:w-10",
-  };
-
-  return (
-    <button
-      ref={ref}
-      type={type}
-      onClick={onClick}
-      className={`${baseStyle} ${variantStyles[variant]} ${sizeStyles[size]} ${className}`}
-      disabled={disabled}
-      title={title || (typeof children === 'string' ? children : '')}
-    >
-      {Icon && <Icon className={`flex-shrink-0 h-4 w-4 ${size !== 'icon' && children ? 'mr-2' : ''}`} />}
-      {size !== 'icon' && children}
-    </button>
-  );
-});
-Button.displayName = 'Button';
 
 const Table = ({ children, className = '' }) => <div className={`w-full overflow-x-auto ${className}`}><table className="min-w-full caption-bottom text-sm">{children}</table></div>;
 const TableHeader = ({ children, className = '' }) => <thead className={`[&_tr]:border-b border-gray-200 dark:border-gray-700 ${className}`}>{children}</thead>;
@@ -78,58 +34,26 @@ const TableRow = ({ children, className = '', onContextMenu }) => <tr onContextM
 const TableHead = ({ children, className = '' }) => <th className={`h-12 px-4 text-left align-middle font-medium text-gray-500 dark:text-gray-400 ${className}`}>{children}</th>;
 const TableCell = ({ children, className = '' }) => <td className={`p-4 align-middle ${className}`}>{children}</td>;
 
-const Modal = ({ isOpen, onClose, title, children, size = 'md' }) => { // Added size prop
-  if (!isOpen) return null;
-
-  const sizeClasses = {
-      sm: 'max-w-sm',
-      md: 'max-w-md',
-      lg: 'max-w-lg',
-      xl: 'max-w-xl',
-      '2xl': 'max-w-2xl',
-      full: 'max-w-full h-full m-0 rounded-none', // Example for full screen
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 backdrop-blur-sm transition-opacity duration-300 ease-in-out">
-      <div className={`bg-white dark:bg-gray-800 rounded-lg shadow-xl p-6 w-full m-4 border border-gray-200 dark:border-gray-700 transform transition-all duration-300 ease-in-out scale-95 opacity-0 animate-fade-in-scale ${sizeClasses[size]}`}>
-        <div className="flex justify-between items-center mb-4 border-b border-gray-200 dark:border-gray-700 pb-3">
-          <h2 className="text-xl font-semibold">{title}</h2>
-          <Button onClick={onClose} variant="ghost" size="icon" className="h-8 w-8">
-            <X className="h-5 w-5" />
-          </Button>
-        </div>
-        <div className={size === 'full' ? 'overflow-auto h-[calc(100%-80px)]' : ''}>{children}</div> {/* Adjust height for full size */}
-      </div>
-      <style jsx>{`
-        @keyframes fade-in-scale {
-          from { opacity: 0; transform: scale(0.95); }
-          to { opacity: 1; transform: scale(1); }
-        }
-        .animate-fade-in-scale { animation: fade-in-scale 0.2s ease-out forwards; }
-      `}</style>
-    </div>
-  );
-};
 
 
-const Input = ({ label, id, value, onChange, placeholder, type = "text", required = false, pattern, title }) => (
-    <div className="mb-4">
-        <label htmlFor={id} className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{label}</label>
-        <input
-            type={type}
-            id={id}
-            name={id}
-            value={value}
-            onChange={onChange}
-            placeholder={placeholder}
-            required={required}
-            pattern={pattern}
-            title={title}
-            className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-        />
-    </div>
-);
+
+// const Input = ({ label, id, value, onChange, placeholder, type = "text", required = false, pattern, title }) => (
+//     <div className="mb-4">
+//         <label htmlFor={id} className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{label}</label>
+//         <input
+//             type={type}
+//             id={id}
+//             name={id}
+//             value={value}
+//             onChange={onChange}
+//             placeholder={placeholder}
+//             required={required}
+//             pattern={pattern}
+//             title={title}
+//             className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+//         />
+//     </div>
+// );
 
 const Select = ({ label, id, value, onChange, children, required = false }) => (
      <div className="mb-4">
@@ -414,12 +338,8 @@ function App() {
   const clientContextMenuActions = {
     edit: (client) => {
         setActionStatus({ message: `Edit Client ${client.name}: Not implemented.`, type: 'info' });
-        // Placeholder API call if endpoint exists
-        // handleApiAction(
-        //     () => apiRequest(`/clients/${client.id}/control`, 'POST', { action: 'edit' }),
-        //     `Edit action triggered for ${client.name}.`,
-        //     `Failed to trigger edit for ${client.name}`
-        // );
+   
+
     },
     toggleSuper: (client) => {
         const makeSuper = !client.isSuperClient;
