@@ -1,19 +1,21 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
-  HardDrive, Server, Network, Users, Copy, Trash2, PlusCircle, RefreshCw, Power, PowerOff, Edit, Zap, PowerSquare, Sunrise, X, Save, Merge, GitBranchPlus, AlertCircle, FileText, Eye // Added icons
+  RefreshCw,
+  X
 } from 'lucide-react';
+import React, { useCallback, useEffect, useState } from 'react';
 
 // --- Configuration ---
-const API_BASE_URL = 'http://192.168.1.206:5000/api'; // !!! IMPORTANT: Replace with your backend server IP/hostname and port !!!
+const API_BASE_URL = 'http://192.168.1.209:5000/api'; // !!! IMPORTANT: Replace with your backend server IP/hostname and port !!!
 
 // --- Helper Functions & Hooks ---
 
 
 // --- UI Components (Keep existing components: Card, Button, Table, Modal, Input, Select, ContextMenu) ---
-import { Card, Button, Modal, Input, ContextMenu } from './components/ui/index.js';
-import ServiceManagement from './components/ServiceManagement.jsx';
-import { apiRequest } from './utils/apiRequest.js';
 import ClientManagement from './components/ClientManagement.jsx';
+import ImageManagement from './components/ImageManagement.jsx';
+import ServiceManagement from './components/ServiceManagement.jsx';
+import { Button } from './components/ui/index.js';
+import { apiRequest } from './utils/apiRequest.js';
 
 
 
@@ -50,21 +52,10 @@ function App() {
   const [selectedSnapshot, setSelectedSnapshot] = useState('');
 
 
-
-  const [isCreateMasterModalOpen, setIsCreateMasterModalOpen] = useState(false); // New state for create master modal
-  const [newMasterName, setNewMasterName] = useState('');
-  const [newMasterSize, setNewMasterSize] = useState('50G'); // Default size
-
-
-
-  // Context Menu State
-  const [contextMenu, setContextMenu] = useState({ isOpen: false, x: 0, y: 0, client: null });
-
   // --- Data Fetching ---
   const fetchData = useCallback(async (showLoading = true) => {
     if (showLoading) setLoading(true);
     setError(null); // Clear previous errors
-    setContextMenu({ isOpen: false, x: 0, y: 0, client: null });
     try {
       console.log("Fetching data...");
       const [clientsRes, mastersRes, servicesRes] = await Promise.all([
@@ -110,21 +101,6 @@ function App() {
       }
   }, [actionStatus]);
 
-
-  // --- Action Handlers ---
-  const handleApiAction = async (actionFn, successMessage, errorMessagePrefix) => {
-      setActionStatus({ message: 'Processing...', type: 'info' });
-      try {
-          const result = await actionFn();
-          setActionStatus({ message: result?.message || successMessage, type: 'success' });
-          fetchData(false); // Refresh data in the background after successful action
-          return true; // Indicate success
-      } catch (error) {
-          setActionStatus({ message: `${errorMessagePrefix}: ${error.message || 'Unknown error'}`, type: 'error' });
-          return false; // Indicate failure
-      }
-  };
-
   const handleRefresh = () => {
     console.log("Manual refresh triggered.");
     fetchData();
@@ -149,128 +125,6 @@ function App() {
   };
 
   
-  const handleClientContextMenu = (event, client) => {
-    event.preventDefault();
-    setContextMenu({ isOpen: true, x: event.clientX, y: event.clientY, client: client });
-  };
-
-  const closeContextMenu = useCallback(() => {
-      setContextMenu(prev => ({ ...prev, isOpen: false }));
-  }, []);
-
-
-  const clientContextMenuActions = {
-    edit: (client) => {
-        // Log the client object to debug its structure
-        console.log('Client object:', client);
-        
-        // Open the add client modal with current client data
-        setNewClientName(client.name);
-        setNewClientMac(client.mac);
-        setNewClientIp(client.ip);
-        
-        // Try to get master and snapshot information
-        const masterInfo = client.master ? client.master.split('/') : [];
-        const snapshotInfo = client.snapshot ? client.snapshot.split('@') : [];
-        
-        setSelectedMaster(masterInfo[1] || ''); // Extract master name from path if exists
-        setSelectedSnapshot(snapshotInfo[1] || ''); // Extract snapshot name if exists
-        setIsAddClientModalOpen(true);
-        
-        // Close the context menu
-        closeContextMenu();
-    },
-    toggleSuper: (client) => {
-        const makeSuper = !client.isSuperClient;
-        handleApiAction(
-            () => apiRequest(`/clients/${client.id}/control`, 'POST', { action: 'toggleSuper', makeSuper: makeSuper }),
-            `Super Client mode ${makeSuper ? 'enabled' : 'disabled'} for ${client.name}.`,
-            `Failed to toggle Super Client mode for ${client.name}`
-        );
-    },
-    reboot: (client) => {
-        handleApiAction(
-            () => apiRequest(`/clients/${client.id}/control`, 'POST', { action: 'reboot' }),
-            `Reboot command sent to ${client.name}.`,
-            `Failed to send reboot command to ${client.name}`
-        );
-    },
-    shutdown: (client) => {
-         handleApiAction(
-            () => apiRequest(`/clients/${client.id}/control`, 'POST', { action: 'shutdown' }),
-            `Shutdown command sent to ${client.name}.`,
-            `Failed to send shutdown command to ${client.name}`
-        );
-    },
-    wake: (client) => {
-        handleApiAction(
-            () => apiRequest(`/clients/${client.id}/control`, 'POST', { action: 'wake' }),
-            `Wake-on-LAN command sent for ${client.name}.`,
-            `Failed to send Wake-on-LAN for ${client.name}`
-        );
-    },
-    delete: (client) => {
-      if (confirm(`Are you sure you want to delete client "${client.name}"? This will destroy their ZFS clone and remove configurations.`)) {
-         handleApiAction(
-            () => apiRequest(`/clients/${client.id}`, 'DELETE'),
-            `Client ${client.name} deleted successfully.`,
-            `Failed to delete client ${client.name}`
-        );
-      }
-    },
-  };
-
-  // --- Master/Snapshot Actions ---
-   const handleOpenCreateMasterModal = () => {
-        setNewMasterName('');
-        setNewMasterSize('50G'); // Reset to default
-        setIsCreateMasterModalOpen(true);
-    };
-
-   const handleCreateMasterSubmit = async (event) => {
-        event.preventDefault();
-        setIsCreateMasterModalOpen(false); // Close modal
-        await handleApiAction(
-            () => apiRequest('/masters', 'POST', { name: newMasterName, size: newMasterSize }),
-            `Master ZVOL ${newMasterName}-master created successfully.`,
-            `Failed to create master ZVOL ${newMasterName}-master`
-        );
-    };
-
-  const handleCreateSnapshot = (masterName) => {
-      const snapSuffix = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
-      const defaultSnapshotName = `${masterName}@auto-${snapSuffix}`;
-      const snapshotName = prompt(`Enter name for new snapshot of ${masterName}:`, defaultSnapshotName);
-      if (snapshotName) {
-          handleApiAction(
-              () => apiRequest('/snapshots', 'POST', { name: snapshotName }),
-              `Snapshot ${snapshotName} created successfully.`,
-              `Failed to create snapshot ${snapshotName}`
-          );
-      }
-  };
-
-  const handleDeleteSnapshot = (snapshotName) => {
-       const encodedSnapshotName = encodeURIComponent(snapshotName);
-       if (confirm(`Are you sure you want to delete snapshot "${snapshotName}"? This cannot be undone and might affect clones.`)) {
-           handleApiAction(
-              () => apiRequest(`/snapshots/${encodedSnapshotName}`, 'DELETE'),
-              `Snapshot ${snapshotName} deleted successfully.`,
-              `Failed to delete snapshot ${snapshotName}`
-          );
-      }
-  };
-
-   const handleCloneSnapshot = (snapshotName) => {
-      const baseMaster = snapshotName.split('@')[0].split('/')[1];
-      const defaultCloneName = `tank/${baseMaster}-clone-${Date.now().toString().slice(-4)}`;
-      const newMasterName = prompt(`Enter name for the new master ZVOL to be cloned from ${snapshotName}:`, defaultCloneName);
-       if (newMasterName) {
-          setActionStatus({ message: `Clone Snapshot: Not implemented in backend. Name: ${newMasterName}`, type: 'info' });
-          // Placeholder for API call if implemented
-          // handleApiAction( ... );
-      }
-  };
 
 
 
@@ -278,9 +132,9 @@ function App() {
 
 
   return (
-    <div className="min-h-screen bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 p-4 md:p-8 font-sans">
+    <div className="min-h-screen bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 p-2 md:p-4 font-sans">
       {/* Header */}
-      <header className="mb-6 md:mb-8 flex flex-wrap justify-between items-center gap-4">
+      <header className="mb-2 md:mb-4 flex flex-wrap justify-between items-center gap-4">
         <h1 className="text-2xl md:text-3xl font-bold text-gray-800 dark:text-gray-200">Diskless Boot Manager</h1>
         <Button onClick={handleRefresh} variant="outline" size="sm" icon={RefreshCw} disabled={loading}>
           {loading ? 'Refreshing...' : 'Refresh Data'}
@@ -323,44 +177,7 @@ function App() {
          <ClientManagement clients={clients} masters={masters} fetchData={fetchData} />
 
           {/* Master Image Management */}
-          <Card title="Master Images & Snapshots" icon={HardDrive} actions={ // Add button to card actions
-                <Button onClick={handleOpenCreateMasterModal} icon={PlusCircle}>Create Master</Button>
-          }>
-            <div className="space-y-6">
-              {masters.map((master) => (
-                <div key={master.id} className="p-4 border border-gray-200 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-700/50">
-                  <div className="flex flex-wrap justify-between items-center mb-3 gap-2">
-                    <h4 className="text-lg font-medium break-all">{master.name}</h4>
-                    <Button onClick={() => handleCreateSnapshot(master.name)} size="sm" icon={PlusCircle}>Create Snapshot</Button>
-                  </div>
-                  <h5 className="text-sm font-semibold mb-2 text-gray-600 dark:text-gray-400">Available Snapshots:</h5>
-                  {master.snapshots && master.snapshots.length > 0 ? ( // Check if snapshots exist
-                    <ul className="space-y-2 text-sm">
-                      {master.snapshots.map((snap) => (
-                        <li key={snap.id || snap.name} className="flex flex-wrap justify-between items-center gap-2 p-2 rounded hover:bg-gray-100 dark:hover:bg-gray-600/50">
-                          <div className="flex-1 min-w-0">
-                            <span className="font-mono text-xs break-all">{snap.name}</span>
-                            <span className="text-gray-500 dark:text-gray-400 text-xs ml-2 whitespace-nowrap">({snap.created}, {snap.size})</span>
-                          </div>
-                           <div className="flex space-x-1 flex-shrink-0">
-                               <Button onClick={() => handleCloneSnapshot(snap.name)} variant="outline" size="icon" className="h-7 w-7" title={`Clone ${snap.name} to new master`}>
-                                  <GitBranchPlus className="h-4 w-4" />
-                               </Button>
-                               <Button onClick={() => handleDeleteSnapshot(snap.name)} variant="ghost" size="icon" className="h-7 w-7 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/50" title={`Delete ${snap.name}`}>
-                                  <Trash2 className="h-4 w-4" />
-                               </Button>
-                           </div>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="text-sm text-gray-500 dark:text-gray-400">No snapshots found for this master.</p>
-                  )}
-                </div>
-              ))}
-               {masters.length === 0 && !loading && <p className="text-center py-4 text-gray-500">No master images found.</p>}
-            </div>
-          </Card>
+          <ImageManagement masters={masters} refresh={fetchData} />
         </div>
       )}
 
@@ -375,44 +192,7 @@ function App() {
       
 
        {/* Create Master Modal */}
-      <Modal isOpen={isCreateMasterModalOpen} onClose={() => setIsCreateMasterModalOpen(false)} title="Create New Master ZVOL">
-          <form onSubmit={handleCreateMasterSubmit}>
-              <Input
-                  label="Master Base Name:" id="masterName" value={newMasterName}
-                  onChange={(e) => setNewMasterName(e.target.value)}
-                  placeholder="e.g., win11-enterprise (will create pool/name-master)"
-                  pattern="^[\w-]+$" title="Use only letters, numbers, underscore, or hyphen" required
-              />
-              <Input
-                  label="Size:" id="masterSize" value={newMasterSize}
-                  onChange={(e) => setNewMasterSize(e.target.value)}
-                  placeholder="e.g., 50G, 1T"
-                  title="Enter size (e.g., 50G, 100G, 1T)" required
-              />
-               <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 mb-4">
-                  This will create a ZFS volume named '{newMasterName ? `${newMasterName}-master` : '...-master'}' in the '{API_BASE_URL.includes('localhost') ? 'tank' : 'configured'}' pool.
-               </p>
-              <div className="mt-6 flex justify-end space-x-3">
-                  <Button type="button" variant="outline" onClick={() => setIsCreateMasterModalOpen(false)}>Cancel</Button>
-                  <Button type="submit" icon={Save}>Create Master</Button>
-              </div>
-          </form>
-      </Modal>
-
-
-
-
-      {/* Client Context Menu */}
-      <ContextMenu
-        isOpen={contextMenu.isOpen}
-        xPos={contextMenu.x}
-        yPos={contextMenu.y}
-        targetClient={contextMenu.client}
-        onClose={closeContextMenu}
-        actions={clientContextMenuActions}
-      />
-
-
+      
       <footer className="mt-12 text-center text-sm text-gray-500 dark:text-gray-400">
         Diskless Boot Manager GUI
       </footer>
