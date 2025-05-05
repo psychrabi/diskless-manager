@@ -5,67 +5,95 @@ export const useMasterManager = (masters, refresh) => {
   const [isCreateSnapshotModalOpen, setIsCreateSnapshotModalOpen] = useState(false);
   const [selectedMaster, setSelectedMaster] = useState(null);
   const [newSnapshotName, setNewSnapshotName] = useState('');
+  const [isCreateMasterModalOpen, setIsCreateMasterModalOpen] = useState(false);
+  const [newMasterName, setNewMasterName] = useState('');
+  const [newMasterSize, setNewMasterSize] = useState('50G');
 
-  const handleCreateSnapshot = useCallback(async (masterName) => {
-    try {
-      // TODO: Replace with actual API call
-      console.log('Creating snapshot for master:', masterName);
-      // Simulate API response
-      await new Promise(resolve => setTimeout(resolve, 500));
-      refresh();
-      setIsCreateSnapshotModalOpen(false);
-    } catch (error) {
-      console.error('Failed to create snapshot:', error);
-      throw error;
-    }
-  }, [refresh]);
+// --- Master/Snapshot Actions ---
+  const handleOpenCreateMasterModal = () => {
+    setNewMasterName('');
+    setNewMasterSize('50G'); // Reset to default
+    setIsCreateMasterModalOpen(true);
+};
+
+const handleCreateMasterSubmit = async (event) => {
+    event.preventDefault();
+    setIsCreateMasterModalOpen(false); // Close modal
+    await handleApiAction(
+        () => apiRequest('/masters', 'POST', { name: newMasterName, size: newMasterSize }),
+        `Master ZVOL ${newMasterName}-master created successfully.`,
+        `Failed to create master ZVOL ${newMasterName}-master`
+    );
+};
+
+const handleCreateSnapshot = (masterName) => {
+  const snapSuffix = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+  const defaultSnapshotName = `${masterName}@auto-${snapSuffix}`;
+  const snapshotName = prompt(`Enter name for new snapshot of ${masterName}:`, defaultSnapshotName);
+  if (snapshotName) {
+      handleApiAction(
+          () => apiRequest('/snapshots', 'POST', { name: snapshotName }),
+          `Snapshot ${snapshotName} created successfully.`,
+          `Failed to create snapshot ${snapshotName}`
+      );
+  }
+};
+
+
+
+const handleDeleteSnapshot = (snapshotName) => {
+   const encodedSnapshotName = encodeURIComponent(snapshotName);
+   if (confirm(`Are you sure you want to delete snapshot "${snapshotName}"? This cannot be undone and might affect clones.`)) {
+       handleApiAction(
+          () => apiRequest(`/snapshots/${encodedSnapshotName}`, 'DELETE'),
+          `Snapshot ${snapshotName} deleted successfully.`,
+          `Failed to delete snapshot ${snapshotName}`
+      );
+  }
+};
+
+
 
   const handleOpenCreateSnapshotModal = useCallback((master) => {
     setSelectedMaster(master);
-    setNewSnapshotName(`${master.name}@${new Date().toISOString().slice(0,10)}`);
+    setNewSnapshotName(`${master}@${new Date().toISOString().slice(0,10)}`);
     setIsCreateSnapshotModalOpen(true);
   }, []);
 
-  const handleDeleteSnapshot = useCallback(async (snapshotName) => {
-    try {
-      if (!window.confirm(`Are you sure you want to delete snapshot "${snapshotName}"?`)) return;
-      // TODO: Replace with actual API call
-      console.log('Deleting snapshot:', snapshotName);
-      // Simulate API response
-      await new Promise(resolve => setTimeout(resolve, 500));
-      refresh();
-    } catch (error) {
-      console.error('Failed to delete snapshot:', error);
-      throw error;
-    }
-  }, [refresh]);
+ 
 
-  const handleCloneSnapshot = useCallback(async (snapshotName) => {
-    try {
-      const newMasterName = prompt(`Enter name for the new master ZVOL to be cloned from ${snapshotName}:`, `tank/${snapshotName.split('@')[0].split('/')[1]}-clone`);
-      if (!newMasterName) return;
-      
-      // TODO: Replace with actual API call
-      console.log('Cloning snapshot:', snapshotName, 'to:', newMasterName);
-      // Simulate API response
-      await new Promise(resolve => setTimeout(resolve, 500));
-      refresh();
-    } catch (error) {
-      console.error('Failed to clone snapshot:', error);
-      throw error;
+  const handleCloneSnapshot = (snapshotName) => {
+    const baseMaster = snapshotName.split('@')[0].split('/')[1];
+    const defaultCloneName = `tank/${baseMaster}-clone-${Date.now().toString().slice(-4)}`;
+    const newMasterName = prompt(`Enter name for the new master ZVOL to be cloned from ${snapshotName}:`, defaultCloneName);
+     if (newMasterName) {
+        setActionStatus({ message: `Clone Snapshot: Not implemented in backend. Name: ${newMasterName}`, type: 'info' });
+        // Placeholder for API call if implemented
+        // handleApiAction( ... );
     }
-  }, [refresh]);
+  };
+
+  
 
   return {
     isCreateSnapshotModalOpen,
-    setIsCreateSnapshotModalOpen,
+    isCreateMasterModalOpen,
     selectedMaster,
     newSnapshotName,
+    setIsCreateSnapshotModalOpen,
+
+    setIsCreateMasterModalOpen,
     setNewSnapshotName,
     handleCreateSnapshot,
     handleDeleteSnapshot,
     handleCloneSnapshot,
     handleOpenCreateSnapshotModal,
+    handleCreateMasterSubmit,
+    handleOpenCreateMasterModal,
+    newMasterName,
+    newMasterSize,
+    setNewMasterName,
+    setNewMasterSize,
     formatBytes,
     formatDate
   };
