@@ -1,6 +1,5 @@
 import {
-  RefreshCw,
-  X
+  RefreshCw
 } from 'lucide-react';
 import React, { useCallback, useEffect, useState } from 'react';
 
@@ -15,6 +14,7 @@ import ClientManagement from './components/ClientManagement.jsx';
 import ImageManagement from './components/ImageManagement.jsx';
 import ServiceManagement from './components/ServiceManagement.jsx';
 import { Button } from './components/ui/index.js';
+import Notification from './components/ui/Notification.jsx';
 import { apiRequest } from './utils/apiRequest.js';
 
 
@@ -47,11 +47,9 @@ function App() {
   const [masters, setMasters] = useState([]);
   const [services, setServices] = useState({});
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [actionStatus, setActionStatus] = useState({ message: '', type: 'info' }); // For user feedback
+  const [error, setError] = useState(null);  
   const [selectedSnapshot, setSelectedSnapshot] = useState('');
-
-
+  
   // --- Data Fetching ---
   const fetchData = useCallback(async (showLoading = true) => {
     if (showLoading) setLoading(true);
@@ -91,45 +89,12 @@ function App() {
     fetchData();
   }, [fetchData]); // Run once on mount
 
-  // Clear action status message after a delay
-  useEffect(() => {
-      if (actionStatus.message) {
-          const timer = setTimeout(() => {
-              setActionStatus({ message: '', type: 'info' });
-          }, 5000); // Clear after 5 seconds
-          return () => clearTimeout(timer);
-      }
-  }, [actionStatus]);
+
 
   const handleRefresh = () => {
     console.log("Manual refresh triggered.");
     fetchData();
   };
-
-  // --- Client Actions ---
-  const handleOpenAddClientModal = () => {
-    setNewClientName('pc001');
-    setNewClientMac('d8:43:ae:a7:8e:a7');
-    setNewClientIp('192.168.1.100');
-    setSelectedMaster('');
-    setSelectedSnapshot('');
-    // Set default master selection if available
-    if (masters.length > 0) {
-        setSelectedMaster(masters[0].name);
-        // Set default snapshot if available
-        if (masters[0].snapshots?.length > 0) {
-            setSelectedSnapshot(masters[0].snapshots[masters[0].snapshots.length - 1].name);
-        }
-    }
-    setIsAddClientModalOpen(true);
-  };
-
-  
-
-
-
-
-
 
   return (
     <div className="min-h-screen bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 p-2 md:p-4 font-sans">
@@ -140,7 +105,7 @@ function App() {
           {loading ? 'Refreshing...' : 'Refresh Data'}
         </Button>
       </header>
-
+      <Button onClick={handleClick} variant="outline" size="sm" icon={RefreshCw}>Update Profile</Button>
       {/* Global Error Display */}
       {error && (
           <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative mb-6 dark:bg-red-900 dark:border-red-700 dark:text-red-200" role="alert">
@@ -149,32 +114,16 @@ function App() {
           </div>
       )}
 
-       {/* Action Status Display */}
-       {actionStatus.message && (
-           <div className={`px-4 py-3 rounded relative mb-6 border transition-opacity duration-300 ${
-               actionStatus.type === 'error' ? 'bg-red-100 border-red-400 text-red-700 dark:bg-red-900 dark:border-red-700 dark:text-red-200' :
-               actionStatus.type === 'success' ? 'bg-green-100 border-green-400 text-green-700 dark:bg-green-900 dark:border-green-700 dark:text-green-200' :
-               'bg-blue-100 border-blue-400 text-blue-700 dark:bg-blue-900 dark:border-blue-700 dark:text-blue-200'
-           }`} role="alert">
-               <span className="block sm:inline">{actionStatus.message}</span>
-                <button onClick={() => setActionStatus({ message: '', type: 'info' })} className="absolute top-0 bottom-0 right-0 px-4 py-3">
-                  <X className={`h-5 w-5 ${actionStatus.type === 'error' ? 'text-red-500' : actionStatus.type === 'success' ? 'text-green-500': 'text-blue-500'}`}/>
-                </button>
-           </div>
-       )}
-
-
-
+      <Notification />
 
       {/* Main Content Area */}
       {!loading && !error && (
         <div className="space-y-6 md:space-y-8">
-
-      {/* Service Status Cards */}
-      <ServiceManagement services={services} refresh={fetchData} loading={loading} />
+          {/* Service Status Cards */}
+          <ServiceManagement services={services} refresh={fetchData} loading={loading} />
 
           {/* Client Management */}
-         <ClientManagement clients={clients} masters={masters} fetchData={fetchData} />
+          <ClientManagement clients={clients} masters={masters} fetchData={fetchData} />
 
           {/* Master Image Management */}
           <ImageManagement masters={masters} refresh={fetchData} />
@@ -183,15 +132,10 @@ function App() {
 
       {/* Loading Indicator */}
       {loading && (
-          <div className="fixed inset-0 bg-gray-500 bg-opacity-50 flex items-center justify-center z-[70]">
-              <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-blue-500"></div>
-          </div>
+        <div className="fixed inset-0 bg-gray-500 bg-opacity-50 flex items-center justify-center z-[70]">
+            <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-blue-500"></div>
+        </div>
       )}
-
-
-      
-
-       {/* Create Master Modal */}
       
       <footer className="mt-12 text-center text-sm text-gray-500 dark:text-gray-400">
         Diskless Boot Manager GUI
