@@ -2,6 +2,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 import React, { useCallback, useEffect, useState } from 'react';
+import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
 
 // --- Configuration ---
 const API_BASE_URL = 'http://192.168.1.209:5000/api'; // !!! IMPORTANT: Replace with your backend server IP/hostname and port !!!
@@ -62,9 +63,9 @@ function App() {
           apiRequest('/services')
       ]);
 
-      console.log("Clients:", clientsRes);
-      console.log("Masters:", mastersRes);
-      console.log("Services:", servicesRes);
+      // console.log("Clients:", clientsRes);
+      // console.log("Masters:", mastersRes);
+      // console.log("Services:", servicesRes);
 
       setClients(clientsRes || []);
       setMasters(mastersRes || []);
@@ -83,11 +84,11 @@ function App() {
     } finally {
       if (showLoading) setLoading(false);
     }
-  }, [selectedSnapshot]); // Include selectedSnapshot dependency
+  }, []); // Include selectedSnapshot dependency
 
   useEffect(() => {
     fetchData();
-  }, [fetchData]); // Run once on mount
+  }, []); // Run once on mount
 
 
 
@@ -97,49 +98,63 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 p-2 md:p-4 font-sans">
-      {/* Header */}
-      <header className="mb-2 md:mb-4 flex flex-wrap justify-between items-center gap-4">
-        <h1 className="text-2xl md:text-3xl font-bold text-gray-800 dark:text-gray-200">Diskless Boot Manager</h1>
-        <Button onClick={handleRefresh} variant="outline" size="sm" icon={RefreshCw} disabled={loading}>
-          {loading ? 'Refreshing...' : 'Refresh Data'}
-        </Button>
-      </header>
-      {/* Global Error Display */}
-      {error && (
-          <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative mb-6 dark:bg-red-900 dark:border-red-700 dark:text-red-200" role="alert">
-              <strong className="font-bold mr-2">Error:</strong>
-              <span className="block sm:inline">{error}</span>
+    <Router>
+      <div className="min-h-screen bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 p-2 md:p-4 font-sans">
+        {/* Header */}
+        <header className="mb-2 md:mb-4 flex flex-wrap justify-between items-center gap-4">
+          <div className="flex items-center gap-4">
+            <h1 className="text-2xl md:text-3xl font-bold text-gray-800 dark:text-gray-200">Diskless Boot Manager</h1>
+            <nav className="hidden md:flex gap-4">
+              <Link to="/" className="text-gray-600 hover:text-gray-900 dark:text-gray-300 dark:hover:text-gray-100">Dashboard</Link>
+              <Link to="/images" className="text-gray-600 hover:text-gray-900 dark:text-gray-300 dark:hover:text-gray-100">Master Images</Link>
+            </nav>
           </div>
-      )}
+          <Button onClick={handleRefresh} variant="outline" size="sm" icon={RefreshCw} disabled={loading}>
+            {loading ? 'Refreshing...' : 'Refresh Data'}
+          </Button>
+        </header>
+        
+        {/* Navigation on mobile */}
+        <nav className="md:hidden flex justify-center gap-2 mb-4">
+          <Link to="/" className="text-gray-600 hover:text-gray-900 dark:text-gray-300 dark:hover:text-gray-100">Dashboard</Link>
+          <Link to="/images" className="text-gray-600 hover:text-gray-900 dark:text-gray-300 dark:hover:text-gray-100">Master Images</Link>
+        </nav>
 
-      <Notification />
+        {/* Global Error Display */}
+        {error && (
+            <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative mb-6 dark:bg-red-900 dark:border-red-700 dark:text-red-200" role="alert">
+                <strong className="font-bold mr-2">Error:</strong>
+                <span className="block sm:inline">{error}</span>
+            </div>
+        )}
 
-      {/* Main Content Area */}
-      {!loading && !error && (
-        <div className="space-y-6 md:space-y-8">
-          {/* Service Status Cards */}
-          <ServiceManagement services={services} refresh={fetchData} loading={loading} />
+        <Notification />
+  {/* Service Status Cards */}
+  <ServiceManagement services={services} refresh={fetchData} loading={loading} />
+        <Routes>
+          <Route path="/" element={
+            <div className="space-y-6 md:space-y-8">
+            
 
-          {/* Client Management */}
-          <ClientManagement clients={clients} masters={masters} fetchData={fetchData} />
+              {/* Client Management */}
+              <ClientManagement clients={clients} masters={masters} fetchData={fetchData} />
+            </div>
+          } />
+          <Route path="/images" element={<ImageManagement masters={masters} fetchData={fetchData} />} />
+        </Routes>
 
-          {/* Master Image Management */}
-          <ImageManagement masters={masters} refresh={fetchData} />
-        </div>
-      )}
-
-      {/* Loading Indicator */}
-      {loading && (
-        <div className="fixed inset-0 bg-gray-500 bg-opacity-50 flex items-center justify-center z-[70]">
-            <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-blue-500"></div>
-        </div>
-      )}
-      
-      <footer className="mt-12 text-center text-sm text-gray-500 dark:text-gray-400">
-        Diskless Boot Manager GUI
-      </footer>
-    </div>
+        {/* Loading Indicator */}
+        {loading && (
+          <div className="fixed inset-0 bg-gray-500 bg-opacity-50 flex items-center justify-center z-[70]">
+              <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-blue-500"></div>
+          </div>
+        )}
+        
+        <footer className="mt-12 text-center text-sm text-gray-500 dark:text-gray-400">
+          Diskless Boot Manager GUI
+        </footer>
+      </div>
+    </Router>
   );
 }
 
