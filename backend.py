@@ -21,15 +21,19 @@ SUDO_CMD = "/usr/bin/sudo" # Adjust path if needed
 ZFS_POOL = "nsboot0" # !!! IMPORTANT: Change this to your actual ZFS pool name !!!
 
 # DHCP Configuration - Choose ONE method:
-DHCP_CONFIG_METHOD = "include_files" # or "main_config"
+DHCP_CONFIG_METHOD = "main_config"
 DHCP_CONFIG_PATH = "/etc/dhcp/dhcpd.conf"
-DHCP_INCLUDE_DIR = "/etc/dhcp/clients.d" # Used if method is "include_files"
+DHCP_INCLUDE_DIR = "/etc/dhcp/clients.d"  # Used if method is "include_files"
+
+# Ensure DHCP_INCLUDE_DIR exists if using include_files method
+if DHCP_CONFIG_METHOD == "include_files":
+    os.makedirs(DHCP_INCLUDE_DIR, exist_ok=True)
 
 # TFTP Configuration Path (usually defaults file)
 TFTP_CONFIG_PATH = "/etc/default/tftpd-hpa"
 
 # iSCSI Target Configuration Path (LIO JSON config)
-ISCSI_CONFIG_PATH = "/etc/target/saveconfig.json"
+ISCSI_CONFIG_PATH = "/etc/rtslib-fb-target/saveconfig.json"
 
 # Service name mapping for systemctl
 SERVICE_MAP = {
@@ -45,21 +49,6 @@ CONFIG_FILE_MAP = {
     'iscsi': ISCSI_CONFIG_PATH,
     # Add other relevant configs if needed
 }
-
-
-# Ensure include directory exists if using that method
-if DHCP_CONFIG_METHOD == "include_files" and not os.path.exists(DHCP_INCLUDE_DIR):
-    try:
-        # Requires appropriate permissions or running as root/sudo
-        os.makedirs(DHCP_INCLUDE_DIR)
-        print(f"Created DHCP include directory: {DHCP_INCLUDE_DIR}")
-        # Make sure dhcpd.conf includes this directory, e.g.:
-        # include "/etc/dhcp/clients.d/*.conf";
-    except OSError as e:
-        print(f"Error creating DHCP include directory {DHCP_INCLUDE_DIR}: {e}")
-        # Consider aborting startup if directory creation fails
-        # exit(1)
-
 
 app = Flask(__name__)
 
@@ -194,41 +183,42 @@ def get_client_status(client_ip):
 
 
 def get_client_dhcp_info():
-    """ Parses DHCP include files to get client IPs/MACs """
+    """Parses DHCP host entries from the main dhcpd.conf file."""
     clients = {}
-    if DHCP_CONFIG_METHOD != "include_files":
-        print("Warning: DHCP parsing only implemented for 'include_files' method.")
+    if DHCP_CONFIG_METHOD != "main_config":
+        print("Warning: get_client_dhcp_info only implemented for 'main_config' method.")
         return clients
 
-    if not os.path.isdir(DHCP_INCLUDE_DIR):
-         print(f"DHCP include directory not found: {DHCP_INCLUDE_DIR}")
-         return clients
-
     try:
-        for filename in os.listdir(DHCP_INCLUDE_DIR):
-            if filename.endswith(".conf"):
-                filepath = os.path.join(DHCP_INCLUDE_DIR, filename)
-                try:
-                    with open(filepath, 'r') as f:
-                        content = f.read()
-                        # Improved parsing to handle comments and varying whitespace
-                        host_match = re.search(r'^\s*host\s+([\w-]+)\s*{', content, re.MULTILINE | re.IGNORECASE)
-                        mac_match = re.search(r'^\s*hardware\s+ethernet\s+([\w:]+)\s*;', content, re.MULTILINE | re.IGNORECASE)
-                        ip_match = re.search(r'^\s*fixed-address\s+([\d.]+)\s*;', content, re.MULTILINE | re.IGNORECASE)
-
-                        if host_match and mac_match and ip_match:
-                            hostname = host_match.group(1)
-                            mac = mac_match.group(1).upper()
-                            mac = re.sub(r'[-:]', ':', mac) # Normalize MAC
-                            ip = ip_match.group(1)
-                            clients[hostname] = {"mac": mac, "ip": ip}
-                        else:
-                            print(f"Warning: Could not parse host/mac/ip from {filepath}")
-                except Exception as e:
-                     print(f"Error reading or parsing DHCP file {filepath}: {e}")
+        with open(DHCP_CONFIG_PATH, 'r') as f:
+            content = f.read()
+        
+        # Parse host entries using regex
+        host_blocks = re.finditer(
+            r'^\s*host\s+([\w-]+)\s*{([^}]*)}',
+            content,
+            re.MULTILINE | re.DOTALL
+        )
+        
+        for host_block in host_blocks:
+            hostname = host_block.group(1)
+            block_content = host_block.group(2)
+            
+            # Extract MAC address
+            mac_match = re.search(r'^\s*hardware\s+ethernet\s+([\w:]+)\s*;', block_content, re.MULTILINE | re.IGNORECASE)
+            ip_match = re.search(r'^\s*fixed-address\s+([\d.]+)\s*;', block_content, re.MULTILINE | re.IGNORECASE)
+            
+            if mac_match and ip_match:
+                mac = mac_match.group(1).upper()
+                mac = re.sub(r'[-:]', ':', mac)  # Normalize MAC
+                ip = ip_match.group(1)
+                clients[hostname] = {"mac": mac, "ip": ip}
+            else:
+                print(f"Warning: Could not parse host/mac/ip for host {hostname}")
+                
     except Exception as e:
-        print(f"Error listing DHCP include directory {DHCP_INCLUDE_DIR}: {e}")
-
+        print(f"Error reading or parsing DHCP config {DHCP_CONFIG_PATH}: {e}")
+    
     return clients
 
 
@@ -557,16 +547,12 @@ def add_client():
     # Create ZFS clone from snapshot or master
     try:
         print(f"=== Checking base snapshot ===")
-        print(f"Looking for snapshot: {ZFS_POOL}/{master}@base")
-        base_snapshot = f"{ZFS_POOL}/{master}@base"
-        result = run_command(['zfs', 'list', '-H', '-t', 'snapshot', base_snapshot], use_sudo=True, check=False)
+        print(f"Looking for snapshot: {snapshot}")
         
-        if result.returncode == 0:
-            # Base snapshot exists, create clone as before            
-            snapshot_name = f"{ZFS_POOL}/{master}@{name}_base"
-            run_command(['zfs', 'snapshot', snapshot_name], use_sudo=True)
-            
-            # Create ZFS clone from the snapshot
+        # If a specific snapshot is provided, use that instead of base
+        if snapshot:
+            print(f"=== Using provided snapshot: {snapshot}")
+            snapshot_name = snapshot
             clone_name = f"{ZFS_POOL}/{name}-disk"
             run_command(['zfs', 'clone', snapshot_name, clone_name], use_sudo=True)
             created_zfs_clone = True
@@ -574,28 +560,44 @@ def add_client():
             target_iqn = f"iqn.2025-04.com.nsboot:{name.lower().replace('_', '')}" # Adjust to lowercase and remove underscores
             target_path = f"/dev/zvol/{clone_name}"  # Remove ZFS_POOL prefix if present
         else:
-            # No base snapshot exists, use master volume directly
-            target_iqn = f"iqn.2025-04.com.nsboot:{name.lower().replace('_', '')}" # Adjust to lowercase and remove underscores
-            target_path = f"/dev/zvol/{master}"  # Remove ZFS_POOL prefix if present
-            created_zfs_clone = False
+            # Check if base snapshot exists
+            base_snapshot = f"{ZFS_POOL}/{master}@base"
+            result = run_command(['zfs', 'list', '-H', '-t', 'snapshot', base_snapshot], use_sudo=True, check=False)
             
-            # Check if master volume is already in use by any block store
-            print(f"=== Checking if master volume {master} is in use ===")
-            result = run_command(['targetcli', 'backstores/block/ ls'], use_sudo=True, check=False)
-            
-            # Find all block stores using this master volume
-            block_stores_to_delete = []
-            for line in result.stdout.split('\n'):
-                if f"/dev/zvol/{master}" in line:
-                    # Extract block store name from line (format: o- block_name ...)
-                    if line.startswith('o- '):
-                        block_store_name = line.split(' ')[1]
-                        block_stores_to_delete.append(block_store_name)
-            
-            # Delete all block stores using this master volume
-            for block_store in block_stores_to_delete:
-                print(f"Deleting block store {block_store} that uses master volume {master}")
-                run_command(['targetcli', 'backstores/block/ delete', block_store], use_sudo=True)
+            if result.returncode == 0:
+                # Base snapshot exists, create clone from it
+                snapshot_name = f"{ZFS_POOL}/{master}@{name}_base"
+                run_command(['zfs', 'snapshot', snapshot_name], use_sudo=True)
+                
+                clone_name = f"{ZFS_POOL}/{name}-disk"
+                run_command(['zfs', 'clone', snapshot_name, clone_name], use_sudo=True)
+                created_zfs_clone = True
+                
+                target_iqn = f"iqn.2025-04.com.nsboot:{name.lower().replace('_', '')}" # Adjust to lowercase and remove underscores
+                target_path = f"/dev/zvol/{clone_name}"  # Remove ZFS_POOL prefix if present
+            else:
+                # No base snapshot exists, use master volume directly
+                target_iqn = f"iqn.2025-04.com.nsboot:{name.lower().replace('_', '')}" # Adjust to lowercase and remove underscores
+                target_path = f"/dev/zvol/{master}"  # Remove ZFS_POOL prefix if present
+                created_zfs_clone = False
+                
+                # Check if master volume is already in use by any block store
+                print(f"=== Checking if master volume {master} is in use ===")
+                result = run_command(['targetcli', 'backstores/block/ ls'], use_sudo=True, check=False)
+                
+                # Find all block stores using this master volume
+                block_stores_to_delete = []
+                for line in result.stdout.split('\n'):
+                    if f"/dev/zvol/{master}" in line:
+                        # Extract block store name from line (format: o- block_name ...)
+                        if line.startswith('o- '):
+                            block_store_name = line.split(' ')[1]
+                            block_stores_to_delete.append(block_store_name)
+                
+                # Delete all block stores using this master volume
+                for block_store in block_stores_to_delete:
+                    print(f"Deleting block store {block_store} that uses master volume {master}")
+                    run_command(['targetcli', 'backstores/block/ delete', block_store], use_sudo=True)
         
         try:
             # Check if target exists by listing all iSCSI targets
@@ -680,46 +682,88 @@ def add_client():
 
         print(f"Creating DHCP reservation for {name} ({mac})")
         assigned_ip = None
-        if DHCP_CONFIG_METHOD == "include_files":
-            existing_ips = get_client_dhcp_info().values()
-            ip_prefix = "192.168.1." # !!! Adjust network !!!
-            start_ip, end_ip = 100, 200
-            used_ips_suffix = {int(info['ip'].split('.')[-1]) for info in existing_ips if info['ip'].startswith(ip_prefix)}
-            for i in range(start_ip, end_ip + 1):
-                 if i not in used_ips_suffix: assigned_ip = f"{ip_prefix}{i}"; break
-            if not assigned_ip: raise Exception("No available IP address in range.")
+        
+        # Get existing DHCP configurations
+        existing_ips = get_client_dhcp_info().values()
+        ip_prefix = "192.168.1." # !!! Adjust network !!!
+        start_ip, end_ip = 100, 200
+        used_ips_suffix = {int(info['ip'].split('.')[-1]) for info in existing_ips if info['ip'].startswith(ip_prefix)}
+        
+        # Find available IP
+        for i in range(start_ip, end_ip + 1):
+            if i not in used_ips_suffix: 
+                assigned_ip = f"{ip_prefix}{i}"; 
+                break
+        
+        if not assigned_ip: 
+            raise Exception("No available IP address in range.")
 
-            # Format name as PCXXX
-            formatted_name = f"PC{int(name.split('_')[1]):03d}" if '_' in name else name.upper()
-            
-            # Get iSCSI target name and details
-            iscsi_target = f"iqn.2025-04.com.nsboot:{name}"
-            # Assuming server IP is 192.168.1.206 (from the logs)
-            server_ip = "192.168.1.206"           
-            
-            dhcp_entry = f"host {formatted_name} {{\n    hardware ethernet {mac};\n    fixed-address {assigned_ip};\n    option host-name \"{formatted_name}\";\n    if substring (option vendor-class-identifier, 15, 5) = \"00000\" {{\n        filename \"ipxe.kpxe\";\n    }}\n    elsif substring (option vendor-class-identifier, 15, 5) = \"00006\" {{\n        filename \"ipxe32.efi\";\n    }}\n    else {{\n        filename \"ipxe.efi\";\n    }}\n    option root-path \"iscsi:{server_ip}::::{iscsi_target}\";\n}}"
-            try:
+        # Format name as PCXXX
+        formatted_name = f"PC{int(name.split('_')[1]):03d}" if '_' in name else name.upper()
+        
+        # Get iSCSI target name and details
+        iscsi_target = f"iqn.2025-04.com.nsboot:{name}"
+        # Assuming server IP is 192.168.1.206 (from the logs)
+        server_ip = "192.168.1.206"            
+        
+        dhcp_entry = f"host {formatted_name} {{\n    hardware ethernet {mac};\n    fixed-address {assigned_ip};\n    option host-name \"{formatted_name}\";\n    if substring (option vendor-class-identifier, 15, 5) = \"00000\" {{\n        filename \"ipxe.kpxe\";\n    }}\n    elsif substring (option vendor-class-identifier, 15, 5) = \"00006\" {{\n        filename \"ipxe32.efi\";\n    }}\n    else {{\n        filename \"ipxe.efi\";\n    }}\n    option root-path \"iscsi:{server_ip}::::{iscsi_target}\";\n}}"
+        
+        try:
+            if DHCP_CONFIG_METHOD == "include_files":
+                # For include_files method, write to individual config file
                 dhcp_client_conf_path = os.path.join(DHCP_INCLUDE_DIR, f"{name}.conf")
                 with open(dhcp_client_conf_path, 'w') as f:
                     f.write(dhcp_entry)
                 print(f"Wrote DHCP config: {dhcp_client_conf_path}")
                 created_dhcp_config = True
-            except Exception as e: 
-                raise Exception(f"Failed writing DHCP config: {e}")
-            try: 
-                run_command(['systemctl', 'restart', 'isc-dhcp-server.service'], use_sudo=True)
-            except Exception as e: 
-                raise Exception(f"Failed restarting DHCP: {e}")
+            else:  # main_config method
+                # Read existing config
+                with open(DHCP_CONFIG_PATH, 'r') as f:
+                    content = f.read()
+                
+                # Find existing host entries
+                host_entries = re.findall(r'host\s+([\w-]+)\s*{([^}]*)}', content, re.MULTILINE | re.DOTALL)
+                
+                # Check if host already exists
+                host_exists = any(host[0] == name for host in host_entries)
+                
+                # If host exists, remove it first
+                if host_exists:
+                    new_content = re.sub(
+                        rf'host\s+{re.escape(name)}\s*{{[^}}]*}}\s*\n*',
+                        '',
+                        content,
+                        flags=re.MULTILINE | re.DOTALL
+                    )
+                else:
+                    new_content = content
+                
+                # Add new host entry
+                new_content += f"\n{dhcp_entry}\n"
+                
+                # Write updated config
+                with open(DHCP_CONFIG_PATH, 'w') as f:
+                    f.write(new_content)
+                
+                print(f"Updated DHCP config: {DHCP_CONFIG_PATH}")
+                created_dhcp_config = True
+            
+            # Restart DHCP service
+            run_command(['systemctl', 'restart', 'isc-dhcp-server.service'], use_sudo=True)
             
             # Verify DHCP configuration
-            try:
+            if DHCP_CONFIG_METHOD == "include_files":
                 with open(dhcp_client_conf_path, 'r') as f:
                     content = f.read()
-                if assigned_ip not in content or mac not in content:
-                    raise Exception("DHCP configuration format validation failed")
-            except Exception as e:
-                raise Exception(f"DHCP configuration validation failed: {e}")
-        else: raise NotImplementedError("DHCP main_config method not implemented.")
+            else:
+                with open(DHCP_CONFIG_PATH, 'r') as f:
+                    content = f.read()
+            
+            if assigned_ip not in content or mac not in content:
+                raise Exception("DHCP configuration format validation failed")
+            
+        except Exception as e:
+            raise Exception(f"Failed updating DHCP config: {e}")
 
         return jsonify({"message": f"Client {name} added", "assigned_ip": assigned_ip}), 201
 
@@ -767,14 +811,53 @@ def delete_client(client_id):
             try: print("Restarting DHCP..."); run_command(['systemctl', 'restart', 'isc-dhcp-server.service'], use_sudo=True)
             except Exception as e: errors.append(f"Failed restarting DHCP: {e}"); print(errors[-1])
 
-        print(f"Deleting iSCSI target for {client_id} (Placeholder)...") # Placeholder
-        # Add iSCSI deletion logic here
+        print(f"Deleting iSCSI target for {client_id}")
+        try:
+            # Get iSCSI target name
+            target_iqn = f"iqn.2025-04.com.nsboot:{client_id.lower().replace('_', '')}"
+            
+            # Check if target exists
+            result = run_command(['targetcli', 'iscsi/ ls'], use_sudo=True, check=False)
+            if target_iqn in result.stdout:
+                print(f"Found iSCSI target: {target_iqn}")
+                
+                # Delete LUNs
+                result = run_command(['targetcli', f'iscsi/{target_iqn}/tpg1/luns ls'], use_sudo=True, check=False)
+                for line in result.stdout.split('\n'):
+                    if 'block_' in line:
+                        lun_name = line.split()[1]
+                        print(f"Deleting LUN: {lun_name}")
+                        run_command(['targetcli', f'iscsi/{target_iqn}/tpg1/luns delete', lun_name], use_sudo=True)
+                
+                # Delete block store
+                block_store_name = f"block_{client_id}"
+                result = run_command(['targetcli', 'backstores/block/ ls'], use_sudo=True, check=False)
+                if block_store_name in result.stdout:
+                    print(f"Deleting block store: {block_store_name}")
+                    run_command(['targetcli', 'backstores/block/ delete', block_store_name], use_sudo=True)
+                
+                # Delete target
+                print(f"Deleting iSCSI target: {target_iqn}")
+                run_command(['targetcli', 'iscsi/ delete', target_iqn], use_sudo=True)
+            else:
+                print(f"iSCSI target {target_iqn} not found")
+        except Exception as e:
+            errors.append(f"Failed cleaning up iSCSI resources: {e}")
+            print(errors[-1])
 
         print(f"Destroying ZFS clone: {clone_name}")
         try:
+            # Check if clone exists
             check_result = run_command(['zfs', 'list', '-H', clone_name], check=False, use_sudo=True)
-            if check_result.returncode == 0: run_command(['zfs', 'destroy', clone_name], use_sudo=True); print(f"Destroyed {clone_name}")
-            else: print(f"ZFS clone {clone_name} not found.")
+            if check_result.returncode == 0:
+                # First try to force unmount any mounted filesystems
+                run_command(['zfs', 'umount', '-f', clone_name], use_sudo=True, check=False)
+                
+                # Then destroy the clone
+                run_command(['zfs', 'destroy', '-f', clone_name], use_sudo=True)
+                print(f"Destroyed {clone_name}")
+            else:
+                print(f"ZFS clone {clone_name} not found.")
         except subprocess.CalledProcessError as e: return jsonify({"error": f"Failed destroying ZFS clone: {e.stderr or e}", "details": errors}), 500
         except Exception as e: return jsonify({"error": f"Error destroying ZFS clone: {e}", "details": errors}), 500
 
@@ -787,7 +870,7 @@ def delete_client(client_id):
 @app.route('/api/clients/edit/<client_id>', methods=['POST'])
 def edit_client(client_id):
     """
-    Edit client details (name, MAC address, IP address)
+    Edit client details (name, MAC address, IP address) in the main DHCP config file.
     """
     if not re.match(r'^[\w-]+$', client_id):
         abort(400, description="Invalid client ID")
@@ -802,76 +885,117 @@ def edit_client(client_id):
         if client_id not in dhcp_info:
             return jsonify({"error": f"Client {client_id} not found"}), 404
 
-        # Update MAC address if provided
-        if 'mac' in data:
-            new_mac = data['mac'].strip()
-            if not re.match(r'^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$', new_mac):
-                return jsonify({"error": "Invalid MAC address format"}), 400
-            
-            # Update DHCP configuration
-            dhcp_config_path = f"/etc/dhcp/dhcpd.conf"
+        new_name = data.get('name', client_id).strip()
+        new_mac = data.get('mac', dhcp_info[client_id]['mac']).strip().upper()
+        new_ip = data.get('ip', dhcp_info[client_id]['ip']).strip()
+
+        # Validate inputs
+        if not re.match(r'^[\w-]+$', new_name):
+            return jsonify({"error": "Invalid client name format"}), 400
+        if not re.match(r'^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$', new_mac):
+            return jsonify({"error": "Invalid MAC address format"}), 400
+        if not re.match(r'^([\d]{1,3}\.){3}\d{1,3}$', new_ip):
+            return jsonify({"error": "Invalid IP address format"}), 400
+
+        # Prepare new DHCP host entry
+        formatted_name = f"PC{int(new_name.split('_')[1]):03d}" if '_' in new_name else new_name.upper()
+        iscsi_target = f"iqn.2025-04.com.nsboot:{new_name.lower().replace('_', '')}"
+        server_ip = "192.168.1.209"  # Adjust to your server's IP
+        dhcp_entry = f"""host {formatted_name} {{
+    hardware ethernet {new_mac};
+    fixed-address {new_ip};
+    option host-name "{formatted_name}";
+    if substring (option vendor-class-identifier, 15, 5) = "00000" {{
+        filename "ipxe.kpxe";
+    }}
+    elsif substring (option vendor-class-identifier, 15, 5) = "00006" {{
+        filename "ipxe32.efi";
+    }}
+    else {{
+        filename "ipxe.efi";
+    }}
+    option root-path "iscsi:{server_ip}::::{iscsi_target}";
+}}
+"""
+
+        # Read and update the main DHCP config
+        dhcp_config_path = DHCP_CONFIG_PATH
+        try:
             with open(dhcp_config_path, 'r') as f:
                 dhcp_config = f.read()
-            
-            # Replace MAC address in configuration
-            old_mac = dhcp_info[client_id]['mac']
-            dhcp_config = dhcp_config.replace(old_mac, new_mac)
-            
+        except Exception as e:
+            return jsonify({"error": f"Failed to read DHCP config: {e}"}), 500
+
+        # Backup the current DHCP config
+        dhcp_backup_path = f"{dhcp_config_path}.bak"
+        try:
+            with open(dhcp_backup_path, 'w') as bf:
+                bf.write(dhcp_config)
+        except Exception as e:
+            return jsonify({"error": f"Failed to create DHCP config backup: {e}"}), 500
+
+        # Replace or update the host entry
+        host_pattern = rf'host\s+{client_id}\s*{{[^}}]*}}'
+        if re.search(host_pattern, dhcp_config, re.MULTILINE):
+            dhcp_config = re.sub(host_pattern, dhcp_entry, dhcp_config, count=1, flags=re.MULTILINE)
+        else:
+            # If the host entry doesn't exist, append it
+            dhcp_config = dhcp_config.rstrip() + '\n\n' + dhcp_entry
+
+        # Write the updated DHCP config
+        try:
             with open(dhcp_config_path, 'w') as f:
                 f.write(dhcp_config)
-            
-            # Restart DHCP service
-            run_command(['systemctl', 'restart', 'isc-dhcp-server'], use_sudo=True)
+        except Exception as e:
+            return jsonify({"error": f"Failed to write DHCP config: {e}"}), 500
 
-        # Update IP address if provided
-        if 'ip' in data:
-            new_ip = data['ip'].strip()
-            if not re.match(r'^([\d]{1,3}\.){3}\d{1,3}$', new_ip):
-                return jsonify({"error": "Invalid IP address format"}), 400
-            
-            # Update DHCP configuration
-            dhcp_config_path = f"/etc/dhcp/dhcpd.conf"
-            with open(dhcp_config_path, 'r') as f:
-                dhcp_config = f.read()
-            
-            # Replace IP address in configuration
-            old_ip = dhcp_info[client_id]['ip']
-            dhcp_config = dhcp_config.replace(old_ip, new_ip)
-            
-            with open(dhcp_config_path, 'w') as f:
-                f.write(dhcp_config)
-            
-            # Restart DHCP service
-            run_command(['systemctl', 'restart', 'isc-dhcp-server'], use_sudo=True)
-
-        # Update client name if provided
-        if 'name' in data:
-            new_name = data['name'].strip()
-            if not re.match(r'^[\w-]+$', new_name):
-                return jsonify({"error": "Invalid client name format"}), 400
-            
-            # Rename ZFS volume
+        # Update ZFS volume and iSCSI target if name changed
+        if new_name != client_id:
             old_volume = f"{ZFS_POOL}/{client_id}-disk"
             new_volume = f"{ZFS_POOL}/{new_name}-disk"
-            run_command(['zfs', 'rename', old_volume, new_volume], use_sudo=True)
-            
-            # Update DHCP configuration
-            dhcp_config_path = f"/etc/dhcp/dhcpd.conf"
-            with open(dhcp_config_path, 'r') as f:
-                dhcp_config = f.read()
-            
-            dhcp_config = dhcp_config.replace(client_id, new_name)
-            with open(dhcp_config_path, 'w') as f:
-                f.write(dhcp_config)
-            
-            # Restart DHCP service
-            run_command(['systemctl', 'restart', 'isc-dhcp-server'], use_sudo=True)
+            old_target_iqn = f"iqn.2025-04.com.nsboot:{client_id.lower().replace('_', '')}"
+            new_target_iqn = iscsi_target
+            block_store_name = f"block_{new_name}"
 
-        return jsonify({"message": f"Client {client_id} updated successfully"}), 200
+            try:
+                # Rename ZFS volume
+                run_command(['zfs', 'rename', old_volume, new_volume], use_sudo=True)
+
+                # Update iSCSI target
+                run_command(['targetcli', f'iscsi/ delete {old_target_iqn}'], use_sudo=True, check=False)
+                run_command(['targetcli', f'iscsi/ create {new_target_iqn}'], use_sudo=True)
+                run_command(['targetcli', f'backstores/block create {block_store_name} /dev/zvol/{new_volume}'], use_sudo=True)
+                run_command(['targetcli', f'iscsi/{new_target_iqn}/tpg1/luns create /backstores/block/{block_store_name}'], use_sudo=True)
+                
+                # Ensure portal exists
+                result = run_command(['targetcli', f'iscsi/{new_target_iqn}/tpg1/portals/ ls'], use_sudo=True, check=False)
+                if '0.0.0.0' not in result.stdout:
+                    run_command(['targetcli', f'iscsi/{new_target_iqn}/tpg1/portals/ create 0.0.0.0 3260'], use_sudo=True)
+            except Exception as e:
+                # Rollback DHCP config
+                with open(dhcp_backup_path, 'r') as bf:
+                    with open(dhcp_config_path, 'w') as f:
+                        f.write(bf.read())
+                return jsonify({"error": f"Failed to update ZFS or iSCSI: {e}"}), 500
+
+        # Restart DHCP service
+        try:
+            run_command(['systemctl', 'restart', 'isc-dhcp-server.service'], use_sudo=True)
+        except Exception as e:
+            # Rollback DHCP config
+            with open(dhcp_backup_path, 'r') as bf:
+                with open(dhcp_config_path, 'w') as f:
+                    f.write(bf.read())
+            return jsonify({"error": f"Failed to restart DHCP service: {e}"}), 500
+
+        # Clean up backup
+        if os.path.exists(dhcp_backup_path):
+            os.remove(dhcp_backup_path)
+
+        return jsonify({"message": f"Client {client_id} updated successfully to {new_name}"}), 200
 
     except Exception as e:
         return jsonify({"error": f"Failed to update client: {str(e)}"}), 500
-
 
 # --- Snapshot Actions ---
 @app.route('/api/snapshots', methods=['POST'])
@@ -917,9 +1041,18 @@ def control_client(client_id):
 
     if action == 'wake':
         if not mac_address or mac_address == "N/A": return jsonify({"error": f"MAC address not found for '{client_id}'"}), 404
-        try: run_command(['wakeonlan', mac_address], use_sudo=False); return jsonify({"message": f"Wake-on-LAN sent to {mac_address}"}), 200
-        except FileNotFoundError: return jsonify({"error": "'wakeonlan' not found. Install it."}), 501
-        except Exception as e: return jsonify({"error": f"Wake-on-LAN failed: {e}"}), 500
+        try: 
+            result = run_command(['wakeonlan', mac_address], use_sudo=False, check=False)
+            if result.returncode != 0:
+                return jsonify({"error": f"Wake-on-LAN failed: {result.stderr or result.stdout}"}), 500
+            return jsonify({"message": f"Wake-on-LAN sent to {mac_address}"}), 200
+        except FileNotFoundError:
+            return jsonify({"error": "'wakeonlan' not found. Install it."}), 501
+        except subprocess.CalledProcessError as e:
+            return jsonify({"error": f"Wake-on-LAN failed: {e.stderr or e}"}), 500
+        except Exception as e:
+            return jsonify({"error": f"Wake-on-LAN failed: {str(e)}"}), 500
+
     elif action == 'reboot':
         if not mac_address or mac_address == "N/A": return jsonify({"error": f"MAC address not found for '{client_id}'"}), 404
         try:
@@ -930,10 +1063,14 @@ def control_client(client_id):
             
             # Use samba net rpc to reboot Windows client
             # Requires Samba tools and proper Windows credentials
-            #net rpc shutdown -r -I 192.168.1.100 -U diskless%1
+            # Format: net rpc shutdown -r -I <IP> -U <username%password> -f -t 0
             net_command = ['net', 'rpc', 'shutdown', '-r', '-I', client_ip, '-U', 'diskless%1', '-f', '-t', '0']
-            run_command(net_command, use_sudo=False)
+            result = run_command(net_command, use_sudo=False, check=False)
+            if result.returncode != 0:
+                return jsonify({"error": f"Failed to reboot client: {result.stderr or result.stdout}"}), 500
             return jsonify({"message": f"Reboot command sent to {client_id} ({client_ip})"}), 200
+        except subprocess.CalledProcessError as e:
+            return jsonify({"error": f"Failed to reboot client: {e.stderr or e}"}), 500
         except Exception as e:
             return jsonify({"error": f"Failed to reboot client: {str(e)}"}), 500
 
@@ -947,19 +1084,73 @@ def control_client(client_id):
             
             # Use samba net rpc to shutdown Windows client
             # Requires Samba tools and proper Windows credentials
-            net_command = ['net', 'rpc', 'shutdown', '-S', '-I', client_ip, '-U', 'diskless%1', '-f' ]
-            run_command(net_command, use_sudo=False)
+            # Format: net rpc shutdown -S -I <IP> -U <username%password> -f
+            net_command = ['net', 'rpc', 'shutdown', '-S', client_ip, '-U', 'diskless%1']
+            result = run_command(net_command, use_sudo=False, check=False)
+            if result.returncode != 0:
+                return jsonify({"error": f"Failed to shutdown client: {result.stderr or result.stdout}"}), 500
             return jsonify({"message": f"Shutdown command sent to {client_id} ({client_ip})"}), 200
+        except subprocess.CalledProcessError as e:
+            return jsonify({"error": f"Failed to shutdown client: {e.stderr or e}"}), 500
         except Exception as e:
             return jsonify({"error": f"Failed to shutdown client: {str(e)}"}), 500
 
     elif action == 'toggleSuper':
-         is_super = data.get('makeSuper', False); clone_name = f"{ZFS_POOL}/{client_id}-disk"
+         is_super = data.get('makeSuper', False)
+         clone_name = f"{ZFS_POOL}/{client_id}-disk"
          print(f"Toggle Super Client for {client_id} ({clone_name}) to {is_super}")
+         
+         # Check if clone exists
+         try:
+             result = run_command(['zfs', 'list', '-H', clone_name], check=False, use_sudo=True)
+             if result.returncode != 0:
+                 return jsonify({"error": f"ZFS clone {clone_name} not found"}), 404
+         except Exception as e:
+             return jsonify({"error": f"Failed to check ZFS clone: {e}"}), 500
+         
          if is_super:
-             try: run_command(['zfs', 'promote', clone_name], use_sudo=True); return jsonify({"message": f"Super Client enabled for {client_id} (promoted)."}), 200
-             except Exception as e: return jsonify({"error": f"Failed enabling Super Client (promote failed): {e}"}), 500
-         else: return jsonify({"message": f"Placeholder: Disabling Super Client {client_id} not implemented."}), 501
+             try:
+                 # First check if clone is already independent
+                 result = run_command(['zfs', 'get', '-H', 'origin', clone_name], use_sudo=True)
+                 origin = result.stdout.strip().split('\t')[2]
+                 if origin == '-':
+                     return jsonify({"message": f"Client {client_id} is already a Super Client"}), 200
+                 
+                 # Promote the clone
+                 result = run_command(['zfs', 'promote', clone_name], use_sudo=True, check=False)
+                 if result.returncode != 0:
+                     return jsonify({"error": f"Failed enabling Super Client (promote failed): {result.stderr or result.stdout}"}), 500
+                 return jsonify({"message": f"Super Client enabled for {client_id} (promoted)."}), 200
+             except subprocess.CalledProcessError as e:
+                 return jsonify({"error": f"Failed enabling Super Client (promote failed): {e.stderr or e}"}), 500
+             except Exception as e:
+                 return jsonify({"error": f"Failed enabling Super Client: {str(e)}"}), 500
+         else:
+             # For disabling Super Client, we need to find the original master and create a new clone
+             try:
+                 # Get the original master from the origin property
+                 result = run_command(['zfs', 'get', '-H', 'origin', clone_name], use_sudo=True)
+                 origin = result.stdout.strip().split('\t')[2]
+                 
+                 if origin == '-':
+                     return jsonify({"error": f"Client {client_id} is not a Super Client"}), 400
+                 
+                 # Create a new clone from the original master
+                 new_clone_name = f"{ZFS_POOL}/{client_id}-disk-temp"
+                 result = run_command(['zfs', 'clone', origin, new_clone_name], use_sudo=True, check=False)
+                 if result.returncode != 0:
+                     return jsonify({"error": f"Failed disabling Super Client (clone failed): {result.stderr or result.stdout}"}), 500
+                 
+                 # Rename the temporary clone to the original name
+                 result = run_command(['zfs', 'rename', new_clone_name, clone_name], use_sudo=True, check=False)
+                 if result.returncode != 0:
+                     return jsonify({"error": f"Failed disabling Super Client (rename failed): {result.stderr or result.stdout}"}), 500
+                 
+                 return jsonify({"message": f"Super Client disabled for {client_id} (reverted to clone)."}), 200
+             except subprocess.CalledProcessError as e:
+                 return jsonify({"error": f"Failed disabling Super Client: {e.stderr or e}"}), 500
+             except Exception as e:
+                 return jsonify({"error": f"Failed disabling Super Client: {str(e)}"}), 500
     elif action == 'edit': return jsonify({"message": f"Placeholder: Edit Client {client_id} not implemented."}), 501
     else: abort(400, description=f"Invalid action: {action}")
 
