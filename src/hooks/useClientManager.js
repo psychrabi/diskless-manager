@@ -1,12 +1,14 @@
 import { useState, useCallback } from 'react';
 import { validateMacAddress, validateIpAddress } from '../utils/helpers';
+import { apiRequest, handleApiAction } from '../utils/apiRequest';
 
-export const useClientManager = (clients, masters, fetchData) => {
+export const useClientManager = (clients, masters, fetchData, showNotification) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [newClient, setNewClient] = useState({
     name: '',
     mac: '',
     ip: '',
+    master: '',
     snapshot: ''
   });
   
@@ -33,53 +35,54 @@ export const useClientManager = (clients, masters, fetchData) => {
 
   const handleAddNewClientSubmit = async (event) => {
       event.preventDefault();
-      
       // Input validation
-      if (!newClientName.trim()) {
-        setActionStatus({ message: 'Client name is required.', type: 'error' });
+      if (!newClient.name.trim()) {
+        showNotification('Client name is required.', 'error');
         return;
       }
       
-      if (!newClientMac.trim()) {
-        setActionStatus({ message: 'MAC address is required.', type: 'error' });
+      if (!newClient.mac.trim()) {
+        showNotification('MAC address is required.', 'error');
         return;
       }
       
-      if (!newClientIp.trim()) {
-        setActionStatus({ message: 'IP address is required.', type: 'error' });
+      if (!newClient.ip.trim()) {
+        showNotification('IP address is required.', 'error');
         return;
       }
       
-      if (!selectedMaster) {
-        setActionStatus({ message: 'Please select a master image.', type: 'error' });
+      if (!newClient.master) {
+        showNotification('Please select a master image.', 'error');
         return;
       }
       
       // Validate MAC address format
       const macRegex = /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/;
-      if (!macRegex.test(newClientMac)) {
-        setActionStatus({ message: 'Invalid MAC address format. Use XX:XX:XX:XX:XX:XX or XX-XX-XX-XX-XX-XX', type: 'error' });
+      if (!macRegex.test(newClient.mac)) {
+        showNotification('Invalid MAC address format. Use XX:XX:XX:XX:XX:XX or XX-XX-XX-XX-XX-XX', 'error');
         return;
       }
       
       // Validate IP address format
       const ipRegex = /^([\d]{1,3}\.){3}\d{1,3}$/;
-      if (!ipRegex.test(newClientIp)) {
-        setActionStatus({ message: 'Invalid IP address format. Use X.X.X.X', type: 'error' });
+      if (!ipRegex.test(newClient.ip)) {
+        showNotification('Invalid IP address format. Use X.X.X.X', 'error');
         return;
       }
-      
-      setIsAddClientModalOpen(false);
+      console.log(newClient)
+
+      setIsModalOpen(false);
       await handleApiAction(
           () => apiRequest('/clients', 'POST', { 
-              name: newClientName, 
-              mac: newClientMac, 
-              ip: newClientIp, 
-              master: selectedMaster,
-              snapshot: selectedSnapshot ? `${selectedMaster}@${selectedSnapshot}` : null
+              name: newClient.name, 
+              mac: newClient.mac, 
+              ip: newClient.ip, 
+              master: newClient.master,
+              snapshot: newClient.snapshot ? `${newClient.snapshot}` : null
           }),
-          `Client ${newClientName} added successfully.`,
-          `Failed to add client ${newClientName}`
+          `Client ${newClient.name} added successfully.`,
+          `Failed to add client ${newClient.name}`,
+          showNotification
       );
     };
   

@@ -8,6 +8,8 @@ import { apiRequest, handleApiAction } from '../utils/apiRequest';
 import { useNotification } from '../contexts/NotificationContext';
 
 export const ClientManagement = ({ clients, masters, fetchData }) => {
+  const {showNotification} = useNotification();
+
   const {
     isModalOpen,
     newClient,
@@ -18,21 +20,19 @@ export const ClientManagement = ({ clients, masters, fetchData }) => {
     handleEditClient,
     handleDeleteClient,
     handleToggleSuperClient
-  } = useClientManager(clients, masters, fetchData);
-const {showNotification} = useNotification();
+  } = useClientManager(clients, masters, fetchData, showNotification);
       
-  const [newClientName, setNewClientName] = useState('');
-  const [newClientMac, setNewClientMac] = useState('');
-  const [newClientIp, setNewClientIp] = useState('');
   const [selectedMaster, setSelectedMaster] = useState('');
   const [selectedSnapshot, setSelectedSnapshot] = useState('');
 
   const handleOpenAddClientModal = () => {        
-    setNewClientName('pc001');
-    setNewClientMac('d8:43:ae:a7:8e:a7');
-    setNewClientIp('192.168.1.100');
-    setSelectedMaster('');
-    setSelectedSnapshot('');
+    setNewClient({
+      name: 'pc002',
+      mac: 'd8:43:ae:a7:8e:a8',
+      ip: '192.168.1.101',
+      master: '',
+      snapshot: ''
+    });
     // Set default master selection if available
     if (masters.length > 0) {
         setSelectedMaster(masters[0].name);
@@ -77,6 +77,9 @@ const {showNotification} = useNotification();
         // Try to get master and snapshot information
         const masterInfo = client.master ? client.master.split('/') : [];
         const snapshotInfo = client.snapshot ? client.snapshot.split('@') : [];
+
+        console.log(masterInfo)
+        console.log(snapshotInfo)
         
         setSelectedMaster(masterInfo[1] || ''); // Extract master name from path if exists
         setSelectedSnapshot(snapshotInfo[1] || ''); // Extract snapshot name if exists
@@ -176,7 +179,7 @@ const {showNotification} = useNotification();
             ))}
           </TableBody>
         </Table>
-        {clients.length === 0 && !loading && <p className="text-center py-4 text-gray-500">No clients configured.</p>}
+        {clients.length === 0 && <p className="text-center py-4 text-gray-500">No clients configured.</p>}
         
         {/* Client Context Menu */}
         <ContextMenu
@@ -195,8 +198,8 @@ const {showNotification} = useNotification();
             <label className="block text-sm font-medium mb-1">Client Name</label>
             <input
               type="text"
-              value={newClientName}
-              onChange={(e) => setNewClientName(e.target.value)}
+              value={newClient.name}
+              onChange={(e) => setNewClient({ ...newClient, name: e.target.value })}
               className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
               placeholder="Enter client name"
             />
@@ -206,8 +209,8 @@ const {showNotification} = useNotification();
             <label className="block text-sm font-medium mb-1">MAC Address</label>
             <input
               type="text"
-              value={newClientMac}
-              onChange={(e) => setNewClientMac(e.target.value)}
+              value={newClient.mac}
+              onChange={(e) => setNewClient({ ...newClient, mac: e.target.value })}
               className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
               placeholder="XX:XX:XX:XX:XX:XX"
             />
@@ -217,8 +220,8 @@ const {showNotification} = useNotification();
             <label className="block text-sm font-medium mb-1">IP Address</label>
             <input
               type="text"
-              value={newClientIp}
-              onChange={(e) => setNewClientIp(e.target.value)}
+              value={newClient.ip}
+              onChange={(e) => setNewClient({ ...newClient, ip: e.target.value })}
               className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
               placeholder="X.X.X.X"
             />
@@ -227,12 +230,8 @@ const {showNotification} = useNotification();
           <div>
             <label className="block text-sm font-medium mb-1">Master Image</label>
             <select
-              value={selectedMaster}
-              onChange={(e) => {
-                setSelectedMaster(e.target.value);
-                // Clear snapshot selection when master changes
-                setSelectedSnapshot('');
-              }}
+              value={newClient.master}
+              onChange={(e) => setNewClient({ ...newClient, master: e.target.value, snapshot: '' })}
               className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
             >
               <option value="">Select a master image...</option>
@@ -247,8 +246,8 @@ const {showNotification} = useNotification();
           <div>
             <label className="block text-sm font-medium mb-1">Snapshot (Optional)</label>
             <select
-              value={selectedSnapshot}
-              onChange={(e) => setSelectedSnapshot(e.target.value)}
+              value={newClient.snapshot}
+              onChange={(e) => setNewClient({ ...newClient, snapshot: e.target.value })}
               className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
             >
               <option value="">Use master directly</option>
