@@ -4,7 +4,8 @@ import {
 } from 'lucide-react';
 import { useClientManager } from '../hooks/useClientManager';
 import { Card, Button, Modal, Input, Select, Table, ContextMenu } from '../components/ui';
-import { handleApiAction } from '../utils/apiRequest';
+import { apiRequest, handleApiAction } from '../utils/apiRequest';
+import { useNotification } from '../contexts/NotificationContext';
 
 export const ClientManagement = ({ clients, masters, fetchData }) => {
   const {
@@ -18,7 +19,7 @@ export const ClientManagement = ({ clients, masters, fetchData }) => {
     handleDeleteClient,
     handleToggleSuperClient
   } = useClientManager(clients, masters, fetchData);
-
+const {showNotification} = useNotification();
       
   const [newClientName, setNewClientName] = useState('');
   const [newClientMac, setNewClientMac] = useState('');
@@ -89,28 +90,32 @@ export const ClientManagement = ({ clients, masters, fetchData }) => {
         handleApiAction(
             () => apiRequest(`/clients/${client.id}/control`, 'POST', { action: 'toggleSuper', makeSuper: makeSuper }),
             `Super Client mode ${makeSuper ? 'enabled' : 'disabled'} for ${client.name}.`,
-            `Failed to toggle Super Client mode for ${client.name}`
+            `Failed to toggle Super Client mode for ${client.name}`,
+            showNotification
         );
     },
     reboot: (client) => {
         handleApiAction(
             () => apiRequest(`/clients/${client.id}/control`, 'POST', { action: 'reboot' }),
             `Reboot command sent to ${client.name}.`,
-            `Failed to send reboot command to ${client.name}`
+            `Failed to send reboot command to ${client.name}`,
+            showNotification
         );
     },
     shutdown: (client) => {
          handleApiAction(
             () => apiRequest(`/clients/${client.id}/control`, 'POST', { action: 'shutdown' }),
             `Shutdown command sent to ${client.name}.`,
-            `Failed to send shutdown command to ${client.name}`
+            `Failed to send shutdown command to ${client.name}`,
+            showNotification
         );
     },
     wake: (client) => {
         handleApiAction(
             () => apiRequest(`/clients/${client.id}/control`, 'POST', { action: 'wake' }),
             `Wake-on-LAN command sent for ${client.name}.`,
-            `Failed to send Wake-on-LAN for ${client.name}`
+            `Failed to send Wake-on-LAN for ${client.name}`,
+            showNotification
         );
     },
     delete: (client) => {
@@ -118,7 +123,8 @@ export const ClientManagement = ({ clients, masters, fetchData }) => {
          handleApiAction(
             () => apiRequest(`/clients/${client.id}`, 'DELETE'),
             `Client ${client.name} deleted successfully.`,
-            `Failed to delete client ${client.name}`
+            `Failed to delete client ${client.name}`,
+            showNotification
         );
       }
     },

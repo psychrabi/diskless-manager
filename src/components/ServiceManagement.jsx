@@ -3,6 +3,7 @@ import { RefreshCw, Eye } from 'lucide-react';
 import { useServiceManager } from '../hooks/useServiceManager';
 import { Card, Button, Modal } from '../components/ui';
 import { apiRequest, handleApiAction } from '../utils/apiRequest';
+import { useNotification } from '../contexts/NotificationContext';
 
 export const ServiceManagement = ({ services, refresh, loading, setActionStatus }) => {
   const { handleServiceAction } = useServiceManager(services, refresh);
@@ -10,6 +11,7 @@ export const ServiceManagement = ({ services, refresh, loading, setActionStatus 
   const [configContent, setConfigContent] = useState('');
   const [configTitle, setConfigTitle] = useState('');
   const [configLoading, setConfigLoading] = useState(false);
+  const { showNotification } = useNotification();
 
 
     // --- Service Actions ---
@@ -17,7 +19,8 @@ export const ServiceManagement = ({ services, refresh, loading, setActionStatus 
       handleApiAction(
            () => apiRequest(`/services/${serviceKey}/control`, 'POST', { action: 'restart' }),
            `Restart command sent to service ${serviceKey}.`,
-           `Failed to send restart command to service ${serviceKey}`
+           `Failed to send restart command to service ${serviceKey}`,
+           showNotification
        );
  };
 

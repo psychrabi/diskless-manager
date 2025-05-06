@@ -47,16 +47,17 @@ export const apiRequest = async (endpoint, method = 'GET', body = null, response
 };
 
 
-  // --- Action Handlers ---
-  export const handleApiAction = async (actionFn, successMessage, errorMessagePrefix) => {
-    setActionStatus({ message: 'Processing...', type: 'info' });
+
+// --- Action Handlers ---
+export const handleApiAction = async (actionFn, successMessage, errorMessagePrefix, showNotification) => {
+    showNotification('Processing...', 'info');
     try {
         const result = await actionFn();
-        setActionStatus({ message: result?.message || successMessage, type: 'success' });
-        fetchData(false); // Refresh data in the background after successful action
+        showNotification(result?.message || successMessage, 'success');
+        // fetchData(false); // Refresh data in the background after successful action
         return true; // Indicate success
     } catch (error) {
-        setActionStatus({ message: `${errorMessagePrefix}: ${error.message || 'Unknown error'}`, type: 'error' });
+        showNotification(`${errorMessagePrefix}: ${error.message || 'Unknown error'}`, 'error');
         return false; // Indicate failure
     }
 };

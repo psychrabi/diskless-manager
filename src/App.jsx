@@ -105,7 +105,6 @@ function App() {
           {loading ? 'Refreshing...' : 'Refresh Data'}
         </Button>
       </header>
-      <Button onClick={handleClick} variant="outline" size="sm" icon={RefreshCw}>Update Profile</Button>
       {/* Global Error Display */}
       {error && (
           <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative mb-6 dark:bg-red-900 dark:border-red-700 dark:text-red-200" role="alert">
