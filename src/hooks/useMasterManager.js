@@ -1,7 +1,8 @@
 import { useState, useCallback } from 'react';
 import { formatBytes, formatDate } from '../utils/helpers';
+import { apiRequest, handleApiAction } from '../utils/apiRequest';
 
-export const useMasterManager = (masters, refresh) => {
+export const useMasterManager = (masters, refresh, showNotification) => {
   const [isCreateSnapshotModalOpen, setIsCreateSnapshotModalOpen] = useState(false);
   const [selectedMaster, setSelectedMaster] = useState(null);
   const [newSnapshotName, setNewSnapshotName] = useState('');
@@ -22,7 +23,8 @@ const handleCreateMasterSubmit = async (event) => {
     await handleApiAction(
         () => apiRequest('/masters', 'POST', { name: newMasterName, size: newMasterSize }),
         `Master ZVOL ${newMasterName}-master created successfully.`,
-        `Failed to create master ZVOL ${newMasterName}-master`
+        `Failed to create master ZVOL ${newMasterName}-master`,
+        showNotification
     );
 };
 
@@ -34,7 +36,8 @@ const handleCreateSnapshot = (masterName) => {
       handleApiAction(
           () => apiRequest('/snapshots', 'POST', { name: snapshotName }),
           `Snapshot ${snapshotName} created successfully.`,
-          `Failed to create snapshot ${snapshotName}`
+          `Failed to create snapshot ${snapshotName}`,
+          showNotification  
       );
   }
 };
@@ -47,7 +50,8 @@ const handleDeleteSnapshot = (snapshotName) => {
        handleApiAction(
           () => apiRequest(`/snapshots/${encodedSnapshotName}`, 'DELETE'),
           `Snapshot ${snapshotName} deleted successfully.`,
-          `Failed to delete snapshot ${snapshotName}`
+          `Failed to delete snapshot ${snapshotName}`,
+          showNotification
       );
   }
 };
@@ -67,9 +71,12 @@ const handleDeleteSnapshot = (snapshotName) => {
     const defaultCloneName = `tank/${baseMaster}-clone-${Date.now().toString().slice(-4)}`;
     const newMasterName = prompt(`Enter name for the new master ZVOL to be cloned from ${snapshotName}:`, defaultCloneName);
      if (newMasterName) {
-        setActionStatus({ message: `Clone Snapshot: Not implemented in backend. Name: ${newMasterName}`, type: 'info' });
-        // Placeholder for API call if implemented
-        // handleApiAction( ... );
+        handleApiAction(
+          () => apiRequest('/masters', 'POST', { name: newMasterName, size: newMasterSize }),
+          `Master ZVOL ${newMasterName}-master created successfully.`,
+          `Failed to create master ZVOL ${newMasterName}-master`,
+          showNotification
+      );
     }
   };
 

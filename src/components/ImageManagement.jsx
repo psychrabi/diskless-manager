@@ -4,9 +4,12 @@ import {
 } from 'lucide-react';
 import { useMasterManager } from '../hooks/useMasterManager';
 import { Card, Button, Modal, Input, Select } from '../components/ui';
+import { useNotification } from '../contexts/NotificationContext';
 const API_BASE_URL = 'http://192.168.1.209:5000/api'; // !!! IMPORTANT: Replace with your backend server IP/hostname and port !!!
 
 export const ImageManagement = ({ masters, refresh }) => {
+    const {showNotification} = useNotification();
+  
   const {
     handleCreateSnapshot,
     handleDeleteSnapshot,
@@ -27,12 +30,12 @@ export const ImageManagement = ({ masters, refresh }) => {
     setNewMasterSize,
     formatBytes,
     formatDate
-  } = useMasterManager(masters, refresh);
+  } = useMasterManager(masters, refresh, showNotification);
 
   return (
     <div className="space-y-6">
-      <Card title="Master Images & Snapshots" icon={HardDrive} actions={ // Add button to card actions
-        <Button onClick={handleOpenCreateMasterModal} icon={PlusCircle}>Create Master</Button>
+      <Card title="Image Management" icon={HardDrive} actions={ // Add button to card actions
+        <Button onClick={handleOpenCreateMasterModal} icon={PlusCircle}>Create Image</Button>
       }>
           <div className="space-y-6">
           {masters.map((master) => (
@@ -66,7 +69,7 @@ export const ImageManagement = ({ masters, refresh }) => {
               )}
             </div>
           ))}
-          {masters.length === 0 && !loading && <p className="text-center py-4 text-gray-500">No master images found.</p>}
+          {masters.length === 0 && <p className="text-center py-4 text-gray-500">No master images found.</p>}
         </div>
       </Card>
       <Modal isOpen={isCreateMasterModalOpen} onClose={() => setIsCreateMasterModalOpen(false)} title="Create New Master ZVOL">
