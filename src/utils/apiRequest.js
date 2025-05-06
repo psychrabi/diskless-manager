@@ -15,7 +15,7 @@ export const apiRequest = async (endpoint, method = 'GET', body = null, response
         options.body = JSON.stringify(body);
     }
 
-    console.log(`API Request: ${method} ${url}`, body || ''); // Log request
+    // console.log(`API Request: ${method} ${url}`, body || ''); // Log request
 
     try {
         const response = await fetch(url, options);
@@ -28,7 +28,7 @@ export const apiRequest = async (endpoint, method = 'GET', body = null, response
             responseData = await response.json();
         }
 
-        console.log(`API Response: ${response.status} ${url}`, responseType === 'json' ? responseData : '(text response)'); // Log response
+        // console.log(`API Response: ${response.status} ${url}`, responseType === 'json' ? responseData : '(text response)'); // Log response
 
         if (!response.ok) {
             // Try to get error message from JSON body, otherwise use status text
