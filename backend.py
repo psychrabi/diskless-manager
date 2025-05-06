@@ -116,6 +116,34 @@ def run_command(command_list, check=True, capture_output=True, text=True, use_su
     except Exception as e:
         print(f"An unexpected error occurred running command: {e}")
         raise
+    
+    
+    
+def get_server_ip():
+    """Detects the server's IP address."""
+    try:
+        # Get the IP address of the network interface
+        result = run_command(['ip', 'route', 'get', '1'], check=False)
+        if result.returncode != 0:
+            raise Exception(f"Failed to get server IP: {result.stderr or result.stdout}")
+            
+        # Extract the IP address from the output
+        for line in result.stdout.split('\n'):
+            if 'src' in line:
+                ip = line.split('src')[1].strip().split()[0]
+                if ip.startswith('192.168.') or ip.startswith('10.'):
+                    return ip
+    
+        raise Exception("Could not find valid server IP address")
+    
+    except Exception as e:
+        print(f"Warning: Failed to detect server IP: {e}")
+        # Fallback to hardcoded IP if detection fails
+        return "192.168.1.200"  
+
+# Get server IP at startup
+SERVER_IP = get_server_ip()
+print(f"Using server IP: {SERVER_IP}")
 
 def parse_zfs_list(output):
     """ Parses output of 'zfs list -H -o name,creation,used' """
@@ -692,7 +720,7 @@ def add_client():
         # Find available IP
         for i in range(start_ip, end_ip + 1):
             if i not in used_ips_suffix: 
-                assigned_ip = f"{ip_prefix}{i}"; 
+                assigned_ip = f"{ip_prefix}{i}" 
                 break
         
         if not assigned_ip: 
@@ -704,9 +732,8 @@ def add_client():
         # Get iSCSI target name and details
         iscsi_target = f"iqn.2025-04.com.nsboot:{name}"
         # Assuming server IP is 192.168.1.206 (from the logs)
-        server_ip = "192.168.1.206"            
         
-        dhcp_entry = f"host {formatted_name} {{\n    hardware ethernet {mac};\n    fixed-address {assigned_ip};\n    option host-name \"{formatted_name}\";\n    if substring (option vendor-class-identifier, 15, 5) = \"00000\" {{\n        filename \"ipxe.kpxe\";\n    }}\n    elsif substring (option vendor-class-identifier, 15, 5) = \"00006\" {{\n        filename \"ipxe32.efi\";\n    }}\n    else {{\n        filename \"ipxe.efi\";\n    }}\n    option root-path \"iscsi:{server_ip}::::{iscsi_target}\";\n}}"
+        dhcp_entry = f"host {formatted_name} {{\n    hardware ethernet {mac};\n    fixed-address {assigned_ip};\n    option host-name \"{formatted_name}\";\n    if substring (option vendor-class-identifier, 15, 5) = \"00000\" {{\n        filename \"ipxe.kpxe\";\n    }}\n    elsif substring (option vendor-class-identifier, 15, 5) = \"00006\" {{\n        filename \"ipxe32.efi\";\n    }}\n    else {{\n        filename \"ipxe.efi\";\n    }}\n    option root-path \"iscsi:{SERVER_IP}::::{iscsi_target}\";\n}}"
         
         try:
             if DHCP_CONFIG_METHOD == "include_files":
@@ -900,7 +927,7 @@ def edit_client(client_id):
         # Prepare new DHCP host entry
         formatted_name = f"PC{int(new_name.split('_')[1]):03d}" if '_' in new_name else new_name.upper()
         iscsi_target = f"iqn.2025-04.com.nsboot:{new_name.lower().replace('_', '')}"
-        server_ip = "192.168.1.209"  # Adjust to your server's IP
+        
         dhcp_entry = f"""host {formatted_name} {{
     hardware ethernet {new_mac};
     fixed-address {new_ip};
@@ -914,7 +941,7 @@ def edit_client(client_id):
     else {{
         filename "ipxe.efi";
     }}
-    option root-path "iscsi:{server_ip}::::{iscsi_target}";
+    option root-path "iscsi:{SERVER_IP}::::{iscsi_target}";
 }}
 """
 
@@ -1065,6 +1092,7 @@ def control_client(client_id):
             # Requires Samba tools and proper Windows credentials
             # Format: net rpc shutdown -r -I <IP> -U <username%password> -f -t 0
             net_command = ['net', 'rpc', 'shutdown', '-r', '-I', client_ip, '-U', 'diskless%1', '-f', '-t', '0']
+            print(f"Using server IP: {SERVER_IP}")
             result = run_command(net_command, use_sudo=False, check=False)
             if result.returncode != 0:
                 return jsonify({"error": f"Failed to reboot client: {result.stderr or result.stdout}"}), 500
@@ -1086,6 +1114,7 @@ def control_client(client_id):
             # Requires Samba tools and proper Windows credentials
             # Format: net rpc shutdown -S -I <IP> -U <username%password> -f
             net_command = ['net', 'rpc', 'shutdown', '-S', client_ip, '-U', 'diskless%1']
+            print(f"Using server IP: {SERVER_IP}")
             result = run_command(net_command, use_sudo=False, check=False)
             if result.returncode != 0:
                 return jsonify({"error": f"Failed to shutdown client: {result.stderr or result.stdout}"}), 500
