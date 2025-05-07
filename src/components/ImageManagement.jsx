@@ -78,7 +78,7 @@ export const ImageManagement = ({ masters, refresh }) => {
                   label="Master Base Name:" id="masterName" value={newMasterName}
                   onChange={(e) => setNewMasterName(e.target.value)}
                   placeholder="e.g., win11-enterprise (will create pool/name-master)"
-                  pattern="^[\w-]+$" title="Use only letters, numbers, underscore, or hyphen" required
+                  required
               />
               <Input
                   label="Size:" id="masterSize" value={newMasterSize}
