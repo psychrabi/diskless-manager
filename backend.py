@@ -523,6 +523,20 @@ def get_clients():
             dhcp_client_info = dhcp_info.get(name, {})
             is_super = False # Placeholder
             client_ip = dhcp_client_info.get("ip", "N/A")
+            # Extract master and snapshot from ZFS origin
+            origin = clone_info.get("origin", "")
+            master = ""
+            snapshot = ""
+            
+            if origin:
+                # Origin format: tank/win10-master@2025-05-01
+                parts = origin.split('@')
+                if len(parts) == 2:
+                    master = parts[0]
+                    snapshot = origin
+                else:
+                    master = origin
+            
             client = {
                 "id": name, "name": name,
                 "clone": clone_info.get("clone", "N/A"),
@@ -530,7 +544,9 @@ def get_clients():
                 "ip": client_ip,
                 "target": f"iqn.2025-04.com.nsboot:{name}" if name else "N/A", # Adjust domain/date
                 "status": get_client_status(client_ip),
-                "isSuperClient": is_super
+                "isSuperClient": is_super,
+                "master": master,
+                "snapshot": snapshot
             }
             clients_data.append(client)
     except Exception as e:
@@ -582,8 +598,26 @@ def add_client():
             print(f"=== Using provided snapshot: {snapshot}")
             snapshot_name = snapshot
             clone_name = f"{ZFS_POOL}/{name}-disk"
+            
+            # Create clone from snapshot
             run_command(['zfs', 'clone', snapshot_name, clone_name], use_sudo=True)
             created_zfs_clone = True
+            
+            # Update registry for this client
+            print(f"=== Updating registry for client {name} ===")
+            
+            # 1. Update computer name in registry
+            run_command(['zfs', 'set', f'org.zfsbootmenu:regkey\\SOFTWARE\\Microsoft\\Windows\ NT\\CurrentVersion\\RegisteredOrganization=Diskless Boot Manager', clone_name], use_sudo=True)
+            run_command(['zfs', 'set', f'org.zfsbootmenu:regkey\\SOFTWARE\\Microsoft\\Windows\ NT\\CurrentVersion\\RegisteredOwner=Diskless Boot Manager', clone_name], use_sudo=True)
+            run_command(['zfs', 'set', f'org.zfsbootmenu:regkey\\SOFTWARE\\Microsoft\\Windows\ NT\\CurrentVersion\\ProductName=Diskless Boot Manager', clone_name], use_sudo=True)
+            run_command(['zfs', 'set', f'org.zfsbootmenu:regkey\\SOFTWARE\\Microsoft\\Windows\ NT\\CurrentVersion\\ComputerName={name}', clone_name], use_sudo=True)
+            
+            # 2. Update network settings
+            run_command(['zfs', 'set', f'org.zfsbootmenu:regkey\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\{mac.lower().replace(":", "")}=Enable', clone_name], use_sudo=True)
+            run_command(['zfs', 'set', f'org.zfsbootmenu:regkey\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\{mac.lower().replace(":", "")}=Enable', clone_name], use_sudo=True)
+            
+            # 3. Update iSCSI settings
+            run_command(['zfs', 'set', f'org.zfsbootmenu:regkey\\SOFTWARE\\Microsoft\\Windows\ NT\\CurrentVersion\\iSCSI\\{target_iqn}=Enable', clone_name], use_sudo=True)
             
             target_iqn = f"iqn.2025-04.com.nsboot:{name.lower().replace('_', '')}" # Adjust to lowercase and remove underscores
             target_path = f"/dev/zvol/{clone_name}"  # Remove ZFS_POOL prefix if present
@@ -641,6 +675,13 @@ def add_client():
             if not target_exists:
                 print("Creating new target...")
                 run_command(['targetcli', 'iscsi/ create', target_iqn], use_sudo=True)
+                
+                # Set TPG1 attributes
+                print("Setting TPG1 attributes...")
+                run_command(['targetcli', f'iscsi/{target_iqn}/tpg1 set attribute generate_node_acls=1'], use_sudo=True)
+                run_command(['targetcli', f'iscsi/{target_iqn}/tpg1 set attribute cache_dynamic_acls=1'], use_sudo=True)
+                run_command(['targetcli', f'iscsi/{target_iqn}/tpg1 set attribute demo_mode_write_protect=0'], use_sudo=True)
+                run_command(['targetcli', f'iscsi/{target_iqn}/tpg1 set attribute authentication=0'], use_sudo=True)
             else:
                 print("Target already exists, skipping creation")
             
@@ -730,8 +771,8 @@ def add_client():
         formatted_name = f"PC{int(name.split('_')[1]):03d}" if '_' in name else name.upper()
         
         # Get iSCSI target name and details
-        iscsi_target = f"iqn.2025-04.com.nsboot:{name}"
-        # Assuming server IP is 192.168.1.206 (from the logs)
+        iscsi_target = f"iqn.2025-04.com.nsboot:{name.lower().replace('_', '')}"
+        # Using server IP from configuration
         
         dhcp_entry = f"host {formatted_name} {{\n    hardware ethernet {mac};\n    fixed-address {assigned_ip};\n    option host-name \"{formatted_name}\";\n    if substring (option vendor-class-identifier, 15, 5) = \"00000\" {{\n        filename \"ipxe.kpxe\";\n    }}\n    elsif substring (option vendor-class-identifier, 15, 5) = \"00006\" {{\n        filename \"ipxe32.efi\";\n    }}\n    else {{\n        filename \"ipxe.efi\";\n    }}\n    option root-path \"iscsi:{SERVER_IP}::::{iscsi_target}\";\n}}"
         
@@ -831,12 +872,47 @@ def delete_client(client_id):
     errors = []
     try:
         dhcp_restarted_needed = False
-        if DHCP_CONFIG_METHOD == "include_files" and os.path.exists(dhcp_client_conf_path):
-            try: os.remove(dhcp_client_conf_path); print(f"Removed {dhcp_client_conf_path}"); dhcp_restarted_needed = True
-            except Exception as e: errors.append(f"Failed removing DHCP config: {e}"); print(errors[-1])
+        if DHCP_CONFIG_METHOD == "include_files":
+            if os.path.exists(dhcp_client_conf_path):
+                try: 
+                    os.remove(dhcp_client_conf_path)
+                    print(f"Removed {dhcp_client_conf_path}")
+                    dhcp_restarted_needed = True
+                except Exception as e: 
+                    errors.append(f"Failed removing DHCP config: {e}")
+                    print(errors[-1])
+        else:  # main_config method
+            try:
+                # Read the main DHCP config
+                with open(DHCP_CONFIG_PATH, 'r') as f:
+                    dhcp_config = f.read()
+                
+                # Backup the current DHCP config
+                dhcp_backup_path = f"{DHCP_CONFIG_PATH}.bak"
+                with open(dhcp_backup_path, 'w') as bf:
+                    bf.write(dhcp_config)
+                
+                # Remove the client's host entry
+                formatted_name = f"PC{int(client_id.split('_')[1]):03d}" if '_' in client_id else client_id.upper()
+                host_pattern = rf'host\s+{formatted_name}\s*{{[^}}]*}}'
+                dhcp_config = re.sub(host_pattern, '', dhcp_config, count=1, flags=re.MULTILINE)
+                
+                # Write the updated DHCP config
+                with open(DHCP_CONFIG_PATH, 'w') as f:
+                    f.write(dhcp_config)
+                
+                dhcp_restarted_needed = True
+            except Exception as e:
+                errors.append(f"Failed updating DHCP config: {e}")
+                print(errors[-1])
+                
         if dhcp_restarted_needed:
-            try: print("Restarting DHCP..."); run_command(['systemctl', 'restart', 'isc-dhcp-server.service'], use_sudo=True)
-            except Exception as e: errors.append(f"Failed restarting DHCP: {e}"); print(errors[-1])
+            try: 
+                print("Restarting DHCP...")
+                run_command(['systemctl', 'restart', 'isc-dhcp-server.service'], use_sudo=True)
+            except Exception as e: 
+                errors.append(f"Failed restarting DHCP: {e}")
+                print(errors[-1])
 
         print(f"Deleting iSCSI target for {client_id}")
         try:
@@ -868,6 +944,7 @@ def delete_client(client_id):
                 run_command(['targetcli', 'iscsi/ delete', target_iqn], use_sudo=True)
             else:
                 print(f"iSCSI target {target_iqn} not found")
+                errors.append(f"iSCSI target {target_iqn} not found")
         except Exception as e:
             errors.append(f"Failed cleaning up iSCSI resources: {e}")
             print(errors[-1])
@@ -885,6 +962,7 @@ def delete_client(client_id):
                 print(f"Destroyed {clone_name}")
             else:
                 print(f"ZFS clone {clone_name} not found.")
+                errors.append(f"ZFS clone {clone_name} not found")
         except subprocess.CalledProcessError as e: return jsonify({"error": f"Failed destroying ZFS clone: {e.stderr or e}", "details": errors}), 500
         except Exception as e: return jsonify({"error": f"Error destroying ZFS clone: {e}", "details": errors}), 500
 
@@ -912,9 +990,96 @@ def edit_client(client_id):
         if client_id not in dhcp_info:
             return jsonify({"error": f"Client {client_id} not found"}), 404
 
+        # Get current ZFS clone info
+        current_clone = f"{ZFS_POOL}/{client_id}-disk"
+        current_target_iqn = f"iqn.2025-04.com.nsboot:{client_id.lower().replace('_', '')}"
+        current_block_store = f"block_{client_id}"
+
+        # Check if current block device exists
+        current_block_exists = False
+        try:
+            result = run_command(['targetcli', f'backstores/block/ ls'], use_sudo=True)
+            current_block_exists = current_block_store in result.stdout
+        except Exception as e:
+            print(f"Warning: Failed to check block store: {e}")
+
+        # Get new client details
         new_name = data.get('name', client_id).strip()
         new_mac = data.get('mac', dhcp_info[client_id]['mac']).strip().upper()
         new_ip = data.get('ip', dhcp_info[client_id]['ip']).strip()
+        new_master = data.get('master', '')
+        new_snapshot = data.get('snapshot', '')
+
+        # Validate inputs
+        if not re.match(r'^[\w-]+$', new_name):
+            return jsonify({"error": "Invalid client name format"}), 400
+        if not re.match(r'^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$', new_mac):
+            return jsonify({"error": "Invalid MAC address format"}), 400
+        if not re.match(r'^([\d]{1,3}\.){3}\d{1,3}$', new_ip):
+            return jsonify({"error": "Invalid IP address format"}), 400
+
+        # If master or snapshot changed, we need to update the ZFS clone
+        needs_clone_update = False
+        if new_master or new_snapshot:
+            try:
+                # Get current origin
+                result = run_command(['zfs', 'get', '-H', 'origin', current_clone], use_sudo=True)
+                current_origin = result.stdout.strip().split('\t')[2]
+
+                # Construct new origin path
+                new_origin = new_snapshot if new_snapshot else new_master
+                
+                # Check if origin changed
+                if current_origin != new_origin:
+                    needs_clone_update = True
+
+                    # Check if new origin exists
+                    try:
+                        run_command(['zfs', 'list', '-H', new_origin], use_sudo=True)
+                    except Exception as e:
+                        return jsonify({"error": f"New origin {new_origin} not found: {e}"}), 400
+
+                    # Update registry for the new clone
+                    print(f"=== Updating registry for client {new_name} ===")
+                    
+                    # 1. Update computer name in registry
+                    run_command(['zfs', 'set', f'org.zfsbootmenu:regkey\\SOFTWARE\\Microsoft\\Windows\ NT\\CurrentVersion\\RegisteredOrganization=Diskless Boot Manager', current_clone], use_sudo=True)
+                    run_command(['zfs', 'set', f'org.zfsbootmenu:regkey\\SOFTWARE\\Microsoft\\Windows\ NT\\CurrentVersion\\RegisteredOwner=Diskless Boot Manager', current_clone], use_sudo=True)
+                    run_command(['zfs', 'set', f'org.zfsbootmenu:regkey\\SOFTWARE\\Microsoft\\Windows\ NT\\CurrentVersion\\ProductName=Diskless Boot Manager', current_clone], use_sudo=True)
+                    run_command(['zfs', 'set', f'org.zfsbootmenu:regkey\\SOFTWARE\\Microsoft\\Windows\ NT\\CurrentVersion\\ComputerName={new_name}', current_clone], use_sudo=True)
+                    
+                    # 2. Update network settings
+                    run_command(['zfs', 'set', f'org.zfsbootmenu:regkey\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\{new_mac.lower().replace(":", "")}=Enable', current_clone], use_sudo=True)
+                    run_command(['zfs', 'set', f'org.zfsbootmenu:regkey\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\{new_mac.lower().replace(":", "")}=Enable', current_clone], use_sudo=True)
+                    
+                    # 3. Update iSCSI settings
+                    new_target_iqn = f"iqn.2025-04.com.nsboot:{new_name.lower().replace('_', '')}"
+                    run_command(['zfs', 'set', f'org.zfsbootmenu:regkey\\SOFTWARE\\Microsoft\\Windows\ NT\\CurrentVersion\\iSCSI\\{new_target_iqn}=Enable', current_clone], use_sudo=True)
+
+            except Exception as e:
+                return jsonify({"error": f"Failed to check current origin: {e}"}), 500
+
+        # Prepare new DHCP host entry
+        formatted_name = f"PC{int(new_name.split('_')[1]):03d}" if '_' in new_name else new_name.upper()
+        new_target_iqn = f"iqn.2025-04.com.nsboot:{new_name.lower().replace('_', '')}"
+        new_block_store = f"block_{new_name}"
+
+        dhcp_entry = f"""host {formatted_name} {{
+    hardware ethernet {new_mac};
+    fixed-address {new_ip};
+    option host-name "{formatted_name}";
+    if substring (option vendor-class-identifier, 15, 5) = "00000" {{
+        filename "ipxe.kpxe";
+    }}
+    elsif substring (option vendor-class-identifier, 15, 5) = "00006" {{
+        filename "ipxe32.efi";
+    }}
+    else {{
+        filename "ipxe.efi";
+    }}
+    option root-path "iscsi:{SERVER_IP}::::{new_target_iqn}";
+}}
+"""
 
         # Validate inputs
         if not re.match(r'^[\w-]+$', new_name):
@@ -962,12 +1127,20 @@ def edit_client(client_id):
             return jsonify({"error": f"Failed to create DHCP config backup: {e}"}), 500
 
         # Replace or update the host entry
-        host_pattern = rf'host\s+{client_id}\s*{{[^}}]*}}'
-        if re.search(host_pattern, dhcp_config, re.MULTILINE):
-            dhcp_config = re.sub(host_pattern, dhcp_entry, dhcp_config, count=1, flags=re.MULTILINE)
-        else:
-            # If the host entry doesn't exist, append it
-            dhcp_config = dhcp_config.rstrip() + '\n\n' + dhcp_entry
+        # Match the formatted name instead of client ID to handle duplicates
+        formatted_name = f"PC{int(new_name.split('_')[1]):03d}" if '_' in new_name else new_name.upper()
+        host_pattern = rf'host\s+{formatted_name}\s*{{[^}}]*}}'
+        
+        # Find and remove any existing entries with the same formatted name
+        matches = list(re.finditer(host_pattern, dhcp_config, re.MULTILINE))
+        if matches:
+            # Remove all matches
+            for match in reversed(matches):
+                start, end = match.span()
+                dhcp_config = dhcp_config[:start] + dhcp_config[end:]
+            
+        # Add the new entry
+        dhcp_config = dhcp_config.rstrip() + '\n\n' + dhcp_entry
 
         # Write the updated DHCP config
         try:
@@ -976,34 +1149,50 @@ def edit_client(client_id):
         except Exception as e:
             return jsonify({"error": f"Failed to write DHCP config: {e}"}), 500
 
-        # Update ZFS volume and iSCSI target if name changed
-        if new_name != client_id:
-            old_volume = f"{ZFS_POOL}/{client_id}-disk"
-            new_volume = f"{ZFS_POOL}/{new_name}-disk"
-            old_target_iqn = f"iqn.2025-04.com.nsboot:{client_id.lower().replace('_', '')}"
-            new_target_iqn = iscsi_target
-            block_store_name = f"block_{new_name}"
+        # Update ZFS volume and iSCSI target if needed
+        try:
+            # If clone needs update (master/snapshot changed)
+            if needs_clone_update:
+                # Destroy current clone
+                run_command(['zfs', 'destroy', current_clone], use_sudo=True)
+                
+                # Create new clone
+                run_command(['zfs', 'clone', new_origin, current_clone], use_sudo=True)
 
-            try:
+            # If name changed
+            if new_name != client_id:
+                old_volume = f"{ZFS_POOL}/{client_id}-disk"
+                new_volume = f"{ZFS_POOL}/{new_name}-disk"
+                old_target_iqn = current_target_iqn
+                
                 # Rename ZFS volume
                 run_command(['zfs', 'rename', old_volume, new_volume], use_sudo=True)
 
                 # Update iSCSI target
                 run_command(['targetcli', f'iscsi/ delete {old_target_iqn}'], use_sudo=True, check=False)
                 run_command(['targetcli', f'iscsi/ create {new_target_iqn}'], use_sudo=True)
-                run_command(['targetcli', f'backstores/block create {block_store_name} /dev/zvol/{new_volume}'], use_sudo=True)
-                run_command(['targetcli', f'iscsi/{new_target_iqn}/tpg1/luns create /backstores/block/{block_store_name}'], use_sudo=True)
+                
+                # Update block store if it exists
+                if current_block_exists:
+                    run_command(['targetcli', f'backstores/block delete {current_block_store}'], use_sudo=True, check=False)
+                    run_command(['targetcli', f'backstores/block create {new_block_store} /dev/zvol/{new_volume}'], use_sudo=True)
+                    run_command(['targetcli', f'iscsi/{new_target_iqn}/tpg1/luns create /backstores/block/{new_block_store}'], use_sudo=True)
+                else:
+                    # Create new block store
+                    run_command(['targetcli', f'backstores/block create {new_block_store} /dev/zvol/{new_volume}'], use_sudo=True)
+                    run_command(['targetcli', f'iscsi/{new_target_iqn}/tpg1/luns create /backstores/block/{new_block_store}'], use_sudo=True)
                 
                 # Ensure portal exists
                 result = run_command(['targetcli', f'iscsi/{new_target_iqn}/tpg1/portals/ ls'], use_sudo=True, check=False)
                 if '0.0.0.0' not in result.stdout:
                     run_command(['targetcli', f'iscsi/{new_target_iqn}/tpg1/portals/ create 0.0.0.0 3260'], use_sudo=True)
-            except Exception as e:
-                # Rollback DHCP config
-                with open(dhcp_backup_path, 'r') as bf:
-                    with open(dhcp_config_path, 'w') as f:
-                        f.write(bf.read())
-                return jsonify({"error": f"Failed to update ZFS or iSCSI: {e}"}), 500
+
+        except Exception as e:
+            # Rollback DHCP config
+            with open(dhcp_backup_path, 'r') as bf:
+                with open(dhcp_config_path, 'w') as f:
+                    f.write(bf.read())
+            return jsonify({"error": f"Failed to update ZFS or iSCSI: {e}"}), 500
 
         # Restart DHCP service
         try:

@@ -66,23 +66,30 @@ export const ClientManagement = ({ clients, masters, fetchData }) => {
 
   const clientContextMenuActions = {
     edit: (client) => {
-        // Log the client object to debug its structure
+        // Open the add client modal with current client data
         console.log('Client object:', client);
         
-        // Open the add client modal with current client data
-        setNewClientName(client.name);
-        setNewClientMac(client.mac);
-        setNewClientIp(client.ip);
+        // Set the client data with current master and snapshot
+        setNewClient({
+            ...client,
+            master: client.master || '',
+            snapshot: client.snapshot || ''
+        });
         
-        // Try to get master and snapshot information
-        const masterInfo = client.master ? client.master.split('/') : [];
-        const snapshotInfo = client.snapshot ? client.snapshot.split('@') : [];
-
-        console.log(masterInfo)
-        console.log(snapshotInfo)
+        // Extract master and snapshot information from paths
+        const masterPath = client.master || '';
+        const snapshotPath = client.snapshot || '';
         
-        setSelectedMaster(masterInfo[1] || ''); // Extract master name from path if exists
-        setSelectedSnapshot(snapshotInfo[1] || ''); // Extract snapshot name if exists
+        // Extract master name from path (e.g., tank/win10-master -> win10-master)
+        const masterName = masterPath.split('/').pop() || '';
+        
+        // Extract snapshot name from path (e.g., tank/win10-master@2025-05-01 -> 2025-05-01)
+        const snapshotName = snapshotPath.includes('@') 
+          ? snapshotPath.split('@')[1] 
+          : '';
+        
+        setSelectedMaster(masterName);
+        setSelectedSnapshot(snapshotName);
         setIsModalOpen(true);
         
         // Close the context menu
@@ -248,10 +255,11 @@ export const ClientManagement = ({ clients, masters, fetchData }) => {
             <select
               value={newClient.snapshot}
               onChange={(e) => setNewClient({ ...newClient, snapshot: e.target.value })}
+              disabled={!newClient.master}
               className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
             >
               <option value="">Use master directly</option>
-              {masters.find(m => m.name === selectedMaster)?.snapshots?.map((snap) => (
+              {masters.find(m => m.name === (newClient.id ? newClient.master : selectedMaster))?.snapshots?.map((snap) => (
                 <option key={snap.name} value={snap.name}>
                   {snap.name} ({snap.created}, {snap.size})
                 </option>
@@ -261,7 +269,7 @@ export const ClientManagement = ({ clients, masters, fetchData }) => {
 
           <div className="flex justify-end space-x-3">
             <Button type="button" onClick={() => setIsModalOpen(false)} variant="outline">Cancel</Button>
-            <Button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white">Add Client</Button>
+            <Button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white">{newClient.id ? 'Edit Client' : 'Add Client'}</Button>
           </div>
         </form>
       </Modal>
