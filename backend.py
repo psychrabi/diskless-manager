@@ -58,7 +58,7 @@ app = Flask(__name__)
 # (e.g., "http://<your-frontend-ip>:<port>" or your domain).
 # Using "*" allows all origins, which is less secure for production.
 # Allow specific methods and headers if needed
-CORS(app, resources={r"/api/*": {"origins": ["http://localhost:5173", "http://192.168.1.206:5173"]}}) # Example
+CORS(app, resources={r"/api/*": {"origins": ["http://localhost:5173", "http://192.168.1.250:5173"]}}) # Example
 
 
 # --- Helper Functions ---
@@ -328,32 +328,45 @@ def control_service(service_key):
 @app.route('/api/services/<service_key>/config', methods=['GET'])
 def get_service_config(service_key):
     """ Retrieves the content of a service's configuration file. """
-    if service_key not in CONFIG_FILE_MAP:
-        abort(404, description=f"Configuration file mapping not found for service key: {service_key}")
+    if service_key == 'zfs':
+        try:
+            # Get ZFS pool information
+            result = run_command(['zpool', 'status'], use_sudo=True)
+            zpool_status = result.stdout
+            
+            # Get ZFS dataset information
+            result = run_command(['zfs', 'list', '-H', '-t', 'all', '-o', 'name,type,used,avail,refer,mountpoint'], use_sudo=True)
+            zfs_list = result.stdout
+            
+            content = f"=== ZFS Pool Status ===\n{zpool_status}\n\n=== ZFS Datasets ===\n{zfs_list}"
+            return Response(content, mimetype='text/plain')
+        except Exception as e:
+            print(f"Error getting ZFS information: {e}")
+            abort(500, description=f"Error getting ZFS information: {str(e)}")
+    else:
+        config_path = CONFIG_FILE_MAP[service_key]
+        print(f"Attempting to read config file for {service_key}: {config_path}")
 
-    config_path = CONFIG_FILE_MAP[service_key]
-    print(f"Attempting to read config file for {service_key}: {config_path}")
+        # SECURITY NOTE: Reading arbitrary files based on user input is dangerous.
+        # This implementation relies on a predefined map (CONFIG_FILE_MAP) for safety.
+        # Ensure the user running Flask has read permissions for these files.
 
-    # SECURITY NOTE: Reading arbitrary files based on user input is dangerous.
-    # This implementation relies on a predefined map (CONFIG_FILE_MAP) for safety.
-    # Ensure the user running Flask has read permissions for these files.
+        if not os.path.exists(config_path):
+            abort(404, description=f"Configuration file not found: {config_path}")
+        if not os.path.isfile(config_path):
+            abort(400, description=f"Configuration path is not a file: {config_path}")
 
-    if not os.path.exists(config_path):
-         abort(404, description=f"Configuration file not found: {config_path}")
-    if not os.path.isfile(config_path):
-         abort(400, description=f"Configuration path is not a file: {config_path}")
-
-    try:
-        with open(config_path, 'r') as f:
-            content = f.read()
-        # Return as plain text
-        return Response(content, mimetype='text/plain')
-    except PermissionError:
-         print(f"Permission denied reading config file: {config_path}")
-         abort(403, description=f"Permission denied reading configuration file for {service_key}.")
-    except Exception as e:
-        print(f"Error reading config file {config_path}: {e}")
-        abort(500, description=f"Error reading configuration file for {service_key}.")
+        try:
+            with open(config_path, 'r') as f:
+                content = f.read()
+            # Return as plain text
+            return Response(content, mimetype='text/plain')
+        except PermissionError:
+            print(f"Permission denied reading config file: {config_path}")
+            abort(403, description=f"Permission denied reading configuration file for {service_key}.")
+        except Exception as e:
+            print(f"Error reading config file {config_path}: {e}")
+            abort(500, description=f"Error reading configuration file for {service_key}.")
 
 
 # --- Master Image Management ---
@@ -597,28 +610,11 @@ def add_client():
         if snapshot:
             print(f"=== Using provided snapshot: {snapshot}")
             snapshot_name = snapshot
-            clone_name = f"{ZFS_POOL}/{name}-disk"
+            clone_name = f"{ZFS_POOL}/{name.lower()}-disk"
             
             # Create clone from snapshot
             run_command(['zfs', 'clone', snapshot_name, clone_name], use_sudo=True)
             created_zfs_clone = True
-            
-            # Update registry for this client
-            print(f"=== Updating registry for client {name} ===")
-            
-            # 1. Update computer name in registry
-            run_command(['zfs', 'set', f'org.zfsbootmenu:regkey\\SOFTWARE\\Microsoft\\Windows\ NT\\CurrentVersion\\RegisteredOrganization=Diskless Boot Manager', clone_name], use_sudo=True)
-            run_command(['zfs', 'set', f'org.zfsbootmenu:regkey\\SOFTWARE\\Microsoft\\Windows\ NT\\CurrentVersion\\RegisteredOwner=Diskless Boot Manager', clone_name], use_sudo=True)
-            run_command(['zfs', 'set', f'org.zfsbootmenu:regkey\\SOFTWARE\\Microsoft\\Windows\ NT\\CurrentVersion\\ProductName=Diskless Boot Manager', clone_name], use_sudo=True)
-            run_command(['zfs', 'set', f'org.zfsbootmenu:regkey\\SOFTWARE\\Microsoft\\Windows\ NT\\CurrentVersion\\ComputerName={name}', clone_name], use_sudo=True)
-            
-            # 2. Update network settings
-            run_command(['zfs', 'set', f'org.zfsbootmenu:regkey\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\{mac.lower().replace(":", "")}=Enable', clone_name], use_sudo=True)
-            run_command(['zfs', 'set', f'org.zfsbootmenu:regkey\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\{mac.lower().replace(":", "")}=Enable', clone_name], use_sudo=True)
-            
-            # 3. Update iSCSI settings
-            run_command(['zfs', 'set', f'org.zfsbootmenu:regkey\\SOFTWARE\\Microsoft\\Windows\ NT\\CurrentVersion\\iSCSI\\{target_iqn}=Enable', clone_name], use_sudo=True)
-            
             target_iqn = f"iqn.2025-04.com.nsboot:{name.lower().replace('_', '')}" # Adjust to lowercase and remove underscores
             target_path = f"/dev/zvol/{clone_name}"  # Remove ZFS_POOL prefix if present
         else:
@@ -631,7 +627,7 @@ def add_client():
                 snapshot_name = f"{ZFS_POOL}/{master}@{name}_base"
                 run_command(['zfs', 'snapshot', snapshot_name], use_sudo=True)
                 
-                clone_name = f"{ZFS_POOL}/{name}-disk"
+                clone_name = f"{ZFS_POOL}/{name.lower()}-disk"
                 run_command(['zfs', 'clone', snapshot_name, clone_name], use_sudo=True)
                 created_zfs_clone = True
                 
@@ -894,8 +890,12 @@ def delete_client(client_id):
                 
                 # Remove the client's host entry
                 formatted_name = f"PC{int(client_id.split('_')[1]):03d}" if '_' in client_id else client_id.upper()
-                host_pattern = rf'host\s+{formatted_name}\s*{{[^}}]*}}'
-                dhcp_config = re.sub(host_pattern, '', dhcp_config, count=1, flags=re.MULTILINE)
+                # Pattern to match the entire host block including newlines
+                host_pattern = rf'host\s+{formatted_name}\s*\{{[\s\S]*?\}}\s*'
+                # Remove the host block and any trailing whitespace
+                dhcp_config = re.sub(host_pattern, '', dhcp_config, count=1, flags=re.DOTALL)
+                # Remove any extra blank lines that might be left
+                dhcp_config = re.sub(r'\n\s*\n{2,}', '\n\n', dhcp_config)
                 
                 # Write the updated DHCP config
                 with open(DHCP_CONFIG_PATH, 'w') as f:
@@ -1004,7 +1004,7 @@ def edit_client(client_id):
             print(f"Warning: Failed to check block store: {e}")
 
         # Get new client details
-        new_name = data.get('name', client_id).strip()
+        new_name = data.get('name', client_id).strip().lower()
         new_mac = data.get('mac', dhcp_info[client_id]['mac']).strip().upper()
         new_ip = data.get('ip', dhcp_info[client_id]['ip']).strip()
         new_master = data.get('master', '')
@@ -1038,23 +1038,6 @@ def edit_client(client_id):
                         run_command(['zfs', 'list', '-H', new_origin], use_sudo=True)
                     except Exception as e:
                         return jsonify({"error": f"New origin {new_origin} not found: {e}"}), 400
-
-                    # Update registry for the new clone
-                    print(f"=== Updating registry for client {new_name} ===")
-                    
-                    # 1. Update computer name in registry
-                    run_command(['zfs', 'set', f'org.zfsbootmenu:regkey\\SOFTWARE\\Microsoft\\Windows\ NT\\CurrentVersion\\RegisteredOrganization=Diskless Boot Manager', current_clone], use_sudo=True)
-                    run_command(['zfs', 'set', f'org.zfsbootmenu:regkey\\SOFTWARE\\Microsoft\\Windows\ NT\\CurrentVersion\\RegisteredOwner=Diskless Boot Manager', current_clone], use_sudo=True)
-                    run_command(['zfs', 'set', f'org.zfsbootmenu:regkey\\SOFTWARE\\Microsoft\\Windows\ NT\\CurrentVersion\\ProductName=Diskless Boot Manager', current_clone], use_sudo=True)
-                    run_command(['zfs', 'set', f'org.zfsbootmenu:regkey\\SOFTWARE\\Microsoft\\Windows\ NT\\CurrentVersion\\ComputerName={new_name}', current_clone], use_sudo=True)
-                    
-                    # 2. Update network settings
-                    run_command(['zfs', 'set', f'org.zfsbootmenu:regkey\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\{new_mac.lower().replace(":", "")}=Enable', current_clone], use_sudo=True)
-                    run_command(['zfs', 'set', f'org.zfsbootmenu:regkey\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\{new_mac.lower().replace(":", "")}=Enable', current_clone], use_sudo=True)
-                    
-                    # 3. Update iSCSI settings
-                    new_target_iqn = f"iqn.2025-04.com.nsboot:{new_name.lower().replace('_', '')}"
-                    run_command(['zfs', 'set', f'org.zfsbootmenu:regkey\\SOFTWARE\\Microsoft\\Windows\ NT\\CurrentVersion\\iSCSI\\{new_target_iqn}=Enable', current_clone], use_sudo=True)
 
             except Exception as e:
                 return jsonify({"error": f"Failed to check current origin: {e}"}), 500
