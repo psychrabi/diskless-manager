@@ -5,7 +5,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
 
 // --- Configuration ---
-const API_BASE_URL = 'http://192.168.1.209:5000/api'; // !!! IMPORTANT: Replace with your backend server IP/hostname and port !!!
+const API_BASE_URL = 'http://192.168.1.250:5000/api'; // !!! IMPORTANT: Replace with your backend server IP/hostname and port !!!
 
 // --- Helper Functions & Hooks ---
 

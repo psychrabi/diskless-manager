@@ -1,4 +1,4 @@
-const API_BASE_URL = 'http://192.168.1.209:5000/api'; // !!! IMPORTANT: Replace with your backend server IP/hostname and port !!!
+const API_BASE_URL = 'http://192.168.1.250:5000/api'; // !!! IMPORTANT: Replace with your backend server IP/hostname and port !!!
 
 // --- API Interaction Logic ---
 export const apiRequest = async (endpoint, method = 'GET', body = null, responseType = 'json') => {

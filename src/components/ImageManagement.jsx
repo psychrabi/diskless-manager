@@ -5,7 +5,7 @@ import {
 import { useMasterManager } from '../hooks/useMasterManager';
 import { Card, Button, Modal, Input, Select } from '../components/ui';
 import { useNotification } from '../contexts/NotificationContext';
-const API_BASE_URL = 'http://192.168.1.209:5000/api'; // !!! IMPORTANT: Replace with your backend server IP/hostname and port !!!
+const API_BASE_URL = 'http://192.168.1.250:5000/api'; // !!! IMPORTANT: Replace with your backend server IP/hostname and port !!!
 
 export const ImageManagement = ({ masters, refresh }) => {
     const {showNotification} = useNotification();
