@@ -324,6 +324,51 @@ def control_service(service_key):
     else:
         abort(400, description=f"Unsupported action '{action}' for service '{service_key}'")
 
+@app.route('/api/system/ram', methods=['GET'])
+def get_ram_usage():
+    """Get current RAM usage statistics."""
+    try:
+        # Get memory usage using free command
+        result = run_command(['free', '-h'], use_sudo=True)
+        lines = result.stdout.splitlines()
+        
+        # Parse the output
+        mem_line = lines[1].split()
+        swap_line = lines[2].split()
+        
+        return jsonify({
+            'memory': {
+                'total': mem_line[1],
+                'used': mem_line[2],
+                'free': mem_line[3],
+                'shared': mem_line[4],
+                'buff/cache': mem_line[5],
+                'available': mem_line[6]
+            },
+            'swap': {
+                'total': swap_line[1],
+                'used': swap_line[2],
+                'free': swap_line[3]
+            }
+        }), 200
+    except Exception as e:
+        return jsonify({"error": f"Failed to get RAM usage: {str(e)}"}), 500
+
+@app.route('/api/system/ram/clear', methods=['POST'])
+def clear_ram_cache():
+    """Clear RAM cache (sync and drop caches)."""
+    try:
+        # First sync to ensure all data is written to disk
+        run_command(['sync'], use_sudo=True)
+        
+        # Drop caches (1=pagecache, 2=inodes/dentries, 3=all)
+        run_command(['echo', '3', '>', '/proc/sys/vm/drop_caches'], use_sudo=True)
+        
+        return jsonify({"message": "RAM cache cleared successfully"}), 200
+    except Exception as e:
+        return jsonify({"error": f"Failed to clear RAM cache: {str(e)}"}), 500
+    
+    
 
 @app.route('/api/services/<service_key>/config', methods=['GET'])
 def get_service_config(service_key):
@@ -913,6 +958,25 @@ def delete_client(client_id):
             except Exception as e: 
                 errors.append(f"Failed restarting DHCP: {e}")
                 print(errors[-1])
+                
+                
+                
+        print(f"Destroying ZFS clone: {clone_name}")
+        try:
+            # Check if clone exists
+            check_result = run_command(['zfs', 'list', '-H', clone_name], check=False, use_sudo=True)
+            if check_result.returncode == 0:
+                # First try to force unmount any mounted filesystems
+                run_command(['zfs', 'umount', '-f', clone_name], use_sudo=True, check=False)
+                
+                # Then destroy the clone
+                run_command(['zfs', 'destroy', '-f', clone_name], use_sudo=True)
+                print(f"Destroyed {clone_name}")
+            else:
+                print(f"ZFS clone {clone_name} not found.")
+                errors.append(f"ZFS clone {clone_name} not found")
+        except subprocess.CalledProcessError as e: return jsonify({"error": f"Failed destroying ZFS clone: {e.stderr or e}", "details": errors}), 500
+        except Exception as e: return jsonify({"error": f"Error destroying ZFS clone: {e}", "details": errors}), 500
 
         print(f"Deleting iSCSI target for {client_id}")
         try:
@@ -949,22 +1013,6 @@ def delete_client(client_id):
             errors.append(f"Failed cleaning up iSCSI resources: {e}")
             print(errors[-1])
 
-        print(f"Destroying ZFS clone: {clone_name}")
-        try:
-            # Check if clone exists
-            check_result = run_command(['zfs', 'list', '-H', clone_name], check=False, use_sudo=True)
-            if check_result.returncode == 0:
-                # First try to force unmount any mounted filesystems
-                run_command(['zfs', 'umount', '-f', clone_name], use_sudo=True, check=False)
-                
-                # Then destroy the clone
-                run_command(['zfs', 'destroy', '-f', clone_name], use_sudo=True)
-                print(f"Destroyed {clone_name}")
-            else:
-                print(f"ZFS clone {clone_name} not found.")
-                errors.append(f"ZFS clone {clone_name} not found")
-        except subprocess.CalledProcessError as e: return jsonify({"error": f"Failed destroying ZFS clone: {e.stderr or e}", "details": errors}), 500
-        except Exception as e: return jsonify({"error": f"Error destroying ZFS clone: {e}", "details": errors}), 500
 
         if errors: return jsonify({"message": f"Client {client_id} deleted with issues.", "errors": errors}), 207
         else: return jsonify({"message": f"Client {client_id} deleted successfully"}), 200

@@ -28,18 +28,13 @@ const handleCreateMasterSubmit = async (event) => {
     );
 };
 
-const handleCreateSnapshot = (masterName) => {
-  const snapSuffix = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
-  const defaultSnapshotName = `${masterName}@auto-${snapSuffix}`;
-  const snapshotName = prompt(`Enter name for new snapshot of ${masterName}:`, defaultSnapshotName);
-  if (snapshotName) {
+const handleCreateSnapshot = (snapshotName) => {  
       handleApiAction(
           () => apiRequest('/snapshots', 'POST', { name: snapshotName }),
           `Snapshot ${snapshotName} created successfully.`,
           `Failed to create snapshot ${snapshotName}`,
           showNotification  
       );
-  }
 };
 
 
