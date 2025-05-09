@@ -551,9 +551,16 @@ def create_master():
 
 @app.route('/api/clients', methods=['GET'])
 def get_clients():
-    # ... (keep existing implementation) ...
+    """
+    Get a list of all clients with their configuration details.
+    First gets DHCP hosts, then looks up their ZFS and iSCSI details.
+    """
     clients_data = []
     try:
+        # First get DHCP information as source of truth
+        dhcp_info = get_client_dhcp_info()
+        
+        # Get ZFS clone information
         zfs_clones = {}
         try:
             zfs_result = run_command(
@@ -567,49 +574,54 @@ def get_clients():
                     if origin != '-' and name.endswith('-disk'):
                         match = re.match(rf"^{ZFS_POOL}/([\w-]+)-disk$", name)
                         if match:
-                            client_name = match.group(1)
-                            zfs_clones[client_name] = {"clone": name, "origin": origin}
+                            client_name = match.group(1).lower()  # Convert to lowercase for matching
+                            zfs_clones[client_name] = {
+                                "clone": name,
+                                "origin": origin,
+                                "master": origin.split('@')[0] if '@' in origin else origin,
+                                "snapshot": origin if '@' in origin else ""
+                            }
         except Exception as zfs_e:
             print(f"Error listing ZFS clones: {zfs_e}")
 
-        iscsi_targets = {} # Placeholder
-        dhcp_info = get_client_dhcp_info()
-        all_client_names = set(zfs_clones.keys()) | set(dhcp_info.keys())
+        # Get iSCSI target information
+        iscsi_targets = {}
+        try:
+            result = run_command(['targetcli', 'iscsi/ ls'], use_sudo=True, check=False)
+            if result.returncode == 0:
+                for line in result.stdout.split('\n'):
+                    if 'iqn.2025-04.com.nsboot:' in line:
+                        target_name = line.strip()
+                        client_name = target_name.split(':')[-1].lower()  # Convert to lowercase for matching
+                        iscsi_targets[client_name] = target_name
+        except Exception as iscsi_e:
+            print(f"Error listing iSCSI targets: {iscsi_e}")
 
-        for name in sorted(list(all_client_names)):
-            clone_info = zfs_clones.get(name, {})
-            dhcp_client_info = dhcp_info.get(name, {})
-            is_super = False # Placeholder
+        # Process each DHCP host
+        for name, dhcp_client_info in dhcp_info.items():
+            name_lower = name.lower()  # Convert to lowercase for matching
+            clone_info = zfs_clones.get(name_lower, {})
+            iscsi_target = iscsi_targets.get(name_lower, "N/A")
             client_ip = dhcp_client_info.get("ip", "N/A")
-            # Extract master and snapshot from ZFS origin
-            origin = clone_info.get("origin", "")
-            master = ""
-            snapshot = ""
-            
-            if origin:
-                # Origin format: tank/win10-master@2025-05-01
-                parts = origin.split('@')
-                if len(parts) == 2:
-                    master = parts[0]
-                    snapshot = origin
-                else:
-                    master = origin
             
             client = {
-                "id": name, "name": name,
+                "id": name,
+                "name": name,
                 "clone": clone_info.get("clone", "N/A"),
                 "mac": dhcp_client_info.get("mac", "N/A"),
                 "ip": client_ip,
-                "target": f"iqn.2025-04.com.nsboot:{name}" if name else "N/A", # Adjust domain/date
+                "target": iscsi_target,
                 "status": get_client_status(client_ip),
-                "isSuperClient": is_super,
-                "master": master,
-                "snapshot": snapshot
+                "isSuperClient": clone_info.get("origin", "") == "-",
+                "master": clone_info.get("master", "N/A"),
+                "snapshot": clone_info.get("snapshot", "N/A")
             }
             clients_data.append(client)
+
     except Exception as e:
         print(f"Error getting clients: {e}")
         return jsonify({"error": f"Failed to retrieve client list: {e}"}), 500
+
     return jsonify(clients_data)
 
 
@@ -907,7 +919,7 @@ def add_client():
 @app.route('/api/clients/<client_id>', methods=['DELETE'])
 def delete_client(client_id):
     # ... (keep existing implementation) ...
-    clone_name = f"{ZFS_POOL}/{client_id}-disk"
+    clone_name = f"{ZFS_POOL}/{client_id.lower()}-disk"
     dhcp_client_conf_path = os.path.join(DHCP_INCLUDE_DIR, f"{client_id}.conf")
     print(f"Deleting client: {client_id}")
     errors = []
@@ -936,7 +948,7 @@ def delete_client(client_id):
                 # Remove the client's host entry
                 formatted_name = f"PC{int(client_id.split('_')[1]):03d}" if '_' in client_id else client_id.upper()
                 # Pattern to match the entire host block including newlines
-                host_pattern = rf'host\s+{formatted_name}\s*\{{[\s\S]*?\}}\s*'
+                host_pattern = rf'host\s+{formatted_name}\s*\{{(?:[^{{}}]|(?:\{{[^{{}}]*\}}))*\}}\s*'
                 # Remove the host block and any trailing whitespace
                 dhcp_config = re.sub(host_pattern, '', dhcp_config, count=1, flags=re.DOTALL)
                 # Remove any extra blank lines that might be left
@@ -1039,7 +1051,7 @@ def edit_client(client_id):
             return jsonify({"error": f"Client {client_id} not found"}), 404
 
         # Get current ZFS clone info
-        current_clone = f"{ZFS_POOL}/{client_id}-disk"
+        current_clone = f"{ZFS_POOL}/{client_id.lower()}-disk"
         current_target_iqn = f"iqn.2025-04.com.nsboot:{client_id.lower().replace('_', '')}"
         current_block_store = f"block_{client_id}"
 
@@ -1160,7 +1172,7 @@ def edit_client(client_id):
         # Replace or update the host entry
         # Match the formatted name instead of client ID to handle duplicates
         formatted_name = f"PC{int(new_name.split('_')[1]):03d}" if '_' in new_name else new_name.upper()
-        host_pattern = rf'host\s+{formatted_name}\s*{{[^}}]*}}'
+        host_pattern = rf'host\s+{formatted_name}\s*\{{(?:[^{{}}]|(?:\{{[^{{}}]*\}}))*\}}\s*'
         
         # Find and remove any existing entries with the same formatted name
         matches = list(re.finditer(host_pattern, dhcp_config, re.MULTILINE))
@@ -1192,8 +1204,8 @@ def edit_client(client_id):
 
             # If name changed
             if new_name != client_id:
-                old_volume = f"{ZFS_POOL}/{client_id}-disk"
-                new_volume = f"{ZFS_POOL}/{new_name}-disk"
+                old_volume = f"{ZFS_POOL}/{client_id.lower()}-disk"
+                new_volume = f"{ZFS_POOL}/{new_name.lower()}-disk"
                 old_target_iqn = current_target_iqn
                 
                 # Rename ZFS volume
@@ -1346,7 +1358,7 @@ def control_client(client_id):
 
     elif action == 'toggleSuper':
          is_super = data.get('makeSuper', False)
-         clone_name = f"{ZFS_POOL}/{client_id}-disk"
+         clone_name = f"{ZFS_POOL}/{client_id.lower()}-disk"
          print(f"Toggle Super Client for {client_id} ({clone_name}) to {is_super}")
          
          # Check if clone exists
@@ -1385,7 +1397,7 @@ def control_client(client_id):
                      return jsonify({"error": f"Client {client_id} is not a Super Client"}), 400
                  
                  # Create a new clone from the original master
-                 new_clone_name = f"{ZFS_POOL}/{client_id}-disk-temp"
+                 new_clone_name = f"{ZFS_POOL}/{client_id.lower()}-disk-temp"
                  result = run_command(['zfs', 'clone', origin, new_clone_name], use_sudo=True, check=False)
                  if result.returncode != 0:
                      return jsonify({"error": f"Failed disabling Super Client (clone failed): {result.stderr or result.stdout}"}), 500
