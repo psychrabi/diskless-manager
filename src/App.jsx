@@ -1,7 +1,7 @@
 import {
   RefreshCw
 } from 'lucide-react';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { lazy, useCallback, useEffect, useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
 
 // --- Configuration ---
@@ -11,33 +11,13 @@ const API_BASE_URL = 'http://192.168.1.250:5000/api'; // !!! IMPORTANT: Replace 
 
 
 // --- UI Components (Keep existing components: Card, Button, Table, Modal, Input, Select, ContextMenu) ---
-import ClientManagement from './components/ClientManagement.jsx';
-import ImageManagement from './components/ImageManagement.jsx';
-import ServiceManagement from './components/ServiceManagement.jsx';
+const ClientManagement = lazy(() => import('./components/ClientManagement.jsx'));
+const ImageManagement = lazy(() => import('./components/ImageManagement.jsx'));
+const ServiceManagement = lazy(() => import('./components/ServiceManagement.jsx'));
+const Notification = lazy(() => import('./components/ui/Notification.jsx'));
+
 import { Button } from './components/ui/index.js';
-import Notification from './components/ui/Notification.jsx';
 import { apiRequest } from './utils/apiRequest.js';
-
-
-
-
-const Select = ({ label, id, value, onChange, children, required = false }) => (
-     <div className="mb-4">
-        <label htmlFor={id} className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{label}</label>
-        <select
-            id={id}
-            name={id}
-            value={value}
-            onChange={onChange}
-            required={required}
-            className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-        >
-            {children}
-        </select>
-    </div>
-);
-
-
 
 
 
