@@ -154,7 +154,10 @@ export const ClientManagement = ({ clients, masters, fetchData }) => {
               <TableHead>Name</TableHead>
               <TableHead className="hidden md:table-cell">MAC Address</TableHead>
               <TableHead>IP Address</TableHead>
-              <TableHead className="hidden xl:table-cell">ZFS Clone</TableHead>
+              <TableHead className="hidden xl:table-cell">Master</TableHead>
+              <TableHead className="hidden xl:table-cell">Snapshot</TableHead>
+
+              <TableHead className="hidden xl:table-cell">Writeback</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Mode</TableHead>
             </TableRow>
@@ -165,6 +168,8 @@ export const ClientManagement = ({ clients, masters, fetchData }) => {
                 <TableCell className="font-medium">{client.name}</TableCell>
                 <TableCell className="hidden md:table-cell text-xs font-mono">{client.mac}</TableCell>
                 <TableCell>{client.ip}</TableCell>
+                <TableCell className="hidden xl:table-cell text-xs font-mono break-all">{client.master}</TableCell>
+                <TableCell className="hidden xl:table-cell text-xs font-mono break-all">{client.snapshot}</TableCell>
                 <TableCell className="hidden xl:table-cell text-xs font-mono break-all">{client.clone}</TableCell>
                 <TableCell>
                   <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${client.status === 'Online' ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'}`}>
@@ -238,7 +243,17 @@ export const ClientManagement = ({ clients, masters, fetchData }) => {
             <label className="block text-sm font-medium mb-1">Master Image</label>
             <select
               value={newClient.master}
-              onChange={(e) => setNewClient({ ...newClient, master: e.target.value, snapshot: '' })}
+              onChange={(e) => {
+                const selectedMaster = e.target.value;
+                // Update both the client state and selected master
+                setNewClient({ 
+                  ...newClient, 
+                  master: selectedMaster,
+                  snapshot: '' // Reset snapshot when master changes
+                });
+                setSelectedMaster(selectedMaster);
+                setSelectedSnapshot(''); // Reset selected snapshot
+              }}
               className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
             >
               <option value="">Select a master image...</option>
@@ -254,12 +269,15 @@ export const ClientManagement = ({ clients, masters, fetchData }) => {
             <label className="block text-sm font-medium mb-1">Snapshot (Optional)</label>
             <select
               value={newClient.snapshot}
-              onChange={(e) => setNewClient({ ...newClient, snapshot: e.target.value })}
+              onChange={(e) => {
+                setNewClient({ ...newClient, snapshot: e.target.value });
+                setSelectedSnapshot(e.target.value);
+              }}
               disabled={!newClient.master}
               className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
             >
               <option value="">Use master directly</option>
-              {masters.find(m => m.name === (newClient.id ? newClient.master : selectedMaster))?.snapshots?.map((snap) => (
+              {masters.find(m => m.name === newClient.master)?.snapshots?.map((snap) => (
                 <option key={snap.name} value={snap.name}>
                   {snap.name} ({snap.created}, {snap.size})
                 </option>

@@ -12,11 +12,11 @@ const LoadingFallback = () => (
 )
 
 ReactDOM.createRoot(document.getElementById('root')).render(
-  <React.StrictMode>
+  
     <Suspense fallback={<LoadingFallback />}>
       <NotificationProvider>
         <App />
       </NotificationProvider>
     </Suspense>
-  </React.StrictMode>
+  
 )
