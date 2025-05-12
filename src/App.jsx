@@ -47,7 +47,7 @@ function App() {
       // console.log("Masters:", mastersRes);
       // console.log("Services:", servicesRes);
 
-      setClients(clientsRes || []);
+      setClients(clientsRes ? Object.values(clientsRes) : []);
       setMasters(mastersRes || []);
       setServices(servicesRes || {});
 

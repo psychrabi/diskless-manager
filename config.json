@@ -1,0 +1,31 @@
+{
+  "clients": [
+    {
+      "id": "pc001",
+      "name": "PC001",
+      "mac": "D8:43:AE:A7:8E:A7",
+      "ip": "192.168.1.101",
+      "master": "nsboot0/Windows11-24h2-master",
+      "snapshot": "",
+      "block_store": "block_pc001",
+      "target_iqn": "iqn.2025-04.com.nsboot:pc001",
+      "writeback": "nsboot0/Windows11-24h2-master",
+      "created_at": "2025-05-12 14:59:07",
+      "last_modified": "2025-05-12 14:59:07"
+    },
+    {
+      "id": "pc002",
+      "name": "PC002",
+      "mac": "D8:43:AE:A7:8E:A8",
+      "ip": "192.168.1.101",
+      "master": "nsboot0/Windows11-master",
+      "snapshot": "",
+      "block_store": "block_pc002",
+      "target_iqn": "iqn.2025-04.com.nsboot:pc002",
+      "writeback": "nsboot0/Windows11-master",
+      "created_at": "2025-05-12 15:23:01",
+      "last_modified": "2025-05-12 15:23:01"
+    }
+  ],
+  "masters": {}
+}

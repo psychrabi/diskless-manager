@@ -135,6 +135,8 @@ def setup_iscsi_target(target_iqn, block_store, volume_path):
     result = run_command(['targetcli', f'iscsi/{target_iqn}/tpg1/portals/ ls'], use_sudo=True, check=False)
     if '0.0.0.0' not in result.stdout:
         run_command(['targetcli', f'iscsi/{target_iqn}/tpg1/portals/ create 0.0.0.0 3260'], use_sudo=True)
+    run_command(['targetcli', 'saveconfig'], use_sudo=True)
+
 
 def cleanup_iscsi_target(target_iqn, block_store):
     """Clean up iSCSI target and associated resources."""
@@ -156,6 +158,7 @@ def cleanup_iscsi_target(target_iqn, block_store):
             
             # Delete target
             run_command(['targetcli', 'iscsi/ delete', target_iqn], use_sudo=True)
+            run_command(['targetcli', 'saveconfig'], use_sudo=True)
             return True
     except Exception as e:
         print(f"Warning: Failed to clean up iSCSI target {target_iqn}: {e}")
@@ -171,6 +174,12 @@ SUDO_CMD = "/usr/bin/sudo" # Adjust path if needed
 
 # Base path for ZFS operations (e.g., your main pool)
 ZFS_POOL = "nsboot0" # !!! IMPORTANT: Change this to your actual ZFS pool name !!!
+
+# Client configuration file path
+CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+
+# Ensure clients config directory exists
+os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
 
 # DHCP Configuration - Choose ONE method:
 DHCP_CONFIG_METHOD = "main_config"
@@ -362,11 +371,11 @@ def get_client_status(client_ip):
         return "Error"
 
 
-def get_client_dhcp_info():
+def get_client_info():
     """Parses DHCP host entries from the main dhcpd.conf file."""
     clients = {}
     if DHCP_CONFIG_METHOD != "main_config":
-        print("Warning: get_client_dhcp_info only implemented for 'main_config' method.")
+        print("Warning: get_client_info only implemented for 'main_config' method.")
         return clients
 
     try:
@@ -400,6 +409,119 @@ def get_client_dhcp_info():
         print(f"Error reading or parsing DHCP config {DHCP_CONFIG_PATH}: {e}")
     
     return clients
+
+def save_client_config(client_data):
+    """Save client configuration to JSON file (clients as a list)."""
+    try:
+        # Read existing config if it exists
+        if os.path.exists(CONFIG_PATH):
+            with open(CONFIG_PATH, 'r') as f:
+                config = json.load(f)
+        else:
+            config = {
+                'clients': [],
+                'masters': {},              
+            }
+        
+        # Ensure clients is a list
+        if not isinstance(config.get('clients'), list):
+            config['clients'] = []
+        
+        # Update or add client data
+        updated = False
+        for idx, c in enumerate(config['clients']):
+            if c.get('id') == client_data['id']:
+                config['clients'][idx] = client_data
+                updated = True
+                break
+        if not updated:
+            config['clients'].append(client_data)
+        
+        # Write updated config
+        with open(CONFIG_PATH, 'w') as f:
+            json.dump(config, f, indent=2)
+        
+        return True
+    except Exception as e:
+        print(f"Error saving client config: {e}")
+        return False
+
+def delete_client_config(client_id):
+    """Delete client configuration from JSON file (list version)."""
+    print(f"Deleting client config: {client_id}")
+    try:
+        if not os.path.exists(CONFIG_PATH):
+            return True
+        
+        with open(CONFIG_PATH, 'r') as f:
+            config = json.load(f)
+        
+        clients = config.get('clients', [])
+        if not isinstance(clients, list):
+            return True
+        
+        # Remove client by id (case-insensitive)
+        new_clients = [c for c in clients if c.get('id', '').lower() != client_id.lower()]
+        config['clients'] = new_clients
+        
+        with open(CONFIG_PATH, 'w') as f:
+            json.dump(config, f, indent=2)
+        
+        return True
+    except Exception as e:
+        print(f"Error deleting client config: {e}")
+        return False
+
+def save_master_config(master_data):
+    """Save master image configuration to JSON file."""
+    try:
+        # Read existing config if it exists
+        if os.path.exists(CONFIG_PATH):
+            with open(CONFIG_PATH, 'r') as f:
+                config = json.load(f)
+        else:
+            config = {
+                'clients': {},
+                'masters': {},              
+            }
+        
+        # Update or add master data
+        config['masters'][master_data['name']] = {
+            'name': master_data['name'],
+            'size': master_data.get('size', ''),
+            'snapshots': master_data.get('snapshots', []),
+            'created_at': master_data.get('created_at'),
+            'last_modified': master_data.get('last_modified', '')
+        }
+        
+        # Write updated config
+        with open(CONFIG_PATH, 'w') as f:
+            json.dump(config, f, indent=2)
+        
+        return True
+    except Exception as e:
+        print(f"Error saving master config: {e}")
+        return False
+
+def delete_master_config(master_name):
+    """Delete master image configuration from JSON file."""
+    try:
+        if not os.path.exists(CONFIG_PATH):
+            return True
+            
+        with open(CONFIG_PATH, 'r') as f:
+            config = json.load(f)
+        
+        if 'masters' in config and master_name in config['masters']:
+            del config['masters'][master_name]
+            
+            with open(CONFIG_PATH, 'w') as f:
+                json.dump(config, f, indent=2)
+        
+        return True
+    except Exception as e:
+        print(f"Error deleting master config: {e}")
+        return False
 
 
 # --- API Endpoints ---
@@ -698,93 +820,35 @@ def create_master():
         print(f"Unexpected error creating ZVOL {master_zvol_name}: {e}")
         return jsonify({"error": f"An unexpected error occurred: {e}"}), 500
 
-
 # --- Client Management ---
 
 @app.route('/api/clients', methods=['GET'])
-def get_clients():
-    """
-    Get a list of all clients with their configuration details.
-    First gets DHCP hosts, then looks up their ZFS and iSCSI details.
-    """
-    clients_data = []
+def get_clients(client_id=None):
+    """Retrieve client configuration from JSON file (list version)."""
     try:
-        # First get DHCP information as source of truth
-        dhcp_info = get_client_dhcp_info()
+        if not os.path.exists(CONFIG_PATH):
+            return None
         
-        # Get ZFS clone information
-        zfs_clones = {}
-        try:
-            zfs_result = run_command(
-                ['zfs', 'list', '-H', '-t', 'volume', '-o', 'name,origin', '-r', ZFS_POOL],
-                use_sudo=True
-            )
-            if zfs_result.returncode == 0:
-                for line in zfs_result.stdout.strip().split('\n'):
-                    if not line: continue
-                    name, origin = line.split('\t')
-                    if origin != '-' and name.endswith('-disk'):
-                        match = re.match(rf"^{ZFS_POOL}/([\w-]+)-disk$", name)
-                        if match:
-                            client_name = match.group(1).lower()  # Convert to lowercase for matching
-                            zfs_clones[client_name] = {
-                                "clone": name,
-                                "origin": origin,
-                                "master": origin.split('@')[0] if '@' in origin else origin,
-                                "snapshot": origin if '@' in origin else ""
-                            }
-                    elif name.endswith('-disk'):  # Handle direct master usage
-                        match = re.match(rf"^{ZFS_POOL}/([\w-]+)-disk$", name)
-                        if match:
-                            client_name = match.group(1).lower()
-                            zfs_clones[client_name] = {
-                                "clone": name,
-                                "origin": "-",
-                                "master": name,  # Use the clone name as master when using directly
-                                "snapshot": ""
-                            }
-        except Exception as zfs_e:
-            print(f"Error listing ZFS clones: {zfs_e}")
-
-        # Get iSCSI target information
-        iscsi_targets = {}
-        try:
-            result = run_command(['targetcli', 'iscsi/ ls'], use_sudo=True, check=False)
-            if result.returncode == 0:
-                for line in result.stdout.split('\n'):
-                    if 'iqn.2025-04.com.nsboot:' in line:
-                        target_name = line.strip()
-                        client_name = target_name.split(':')[-1].lower()  # Convert to lowercase for matching
-                        iscsi_targets[client_name] = target_name
-        except Exception as iscsi_e:
-            print(f"Error listing iSCSI targets: {iscsi_e}")
-
-        # Process each DHCP host
-        for name, dhcp_client_info in dhcp_info.items():
-            name_lower = name.lower()  # Convert to lowercase for matching
-            clone_info = zfs_clones.get(name_lower, {})
-            iscsi_target = iscsi_targets.get(name_lower, "N/A")
-            client_ip = dhcp_client_info.get("ip", "N/A")
-            
-            client = {
-                "id": name,
-                "name": name,
-                "clone": clone_info.get("clone", "N/A"),
-                "mac": dhcp_client_info.get("mac", "N/A"),
-                "ip": client_ip,
-                "target": iscsi_target,
-                "status": get_client_status(client_ip),
-                "isSuperClient": clone_info.get("origin", "") == "-",
-                "master": clone_info.get("master", "N/A"),
-                "snapshot": clone_info.get("snapshot", "N/A")
-            }
-            clients_data.append(client)
-
+        with open(CONFIG_PATH, 'r') as f:
+            config = json.load(f)
+        
+        clients = config.get('clients', [])
+        if not isinstance(clients, list):
+            return None
+        
+        if client_id is None:
+            return clients
+        # Find client by id (case-insensitive)
+        for c in clients:
+            if c.get('id', '').lower() == client_id.lower():
+                return c
+        return None
     except Exception as e:
-        print(f"Error getting clients: {e}")
-        return jsonify({"error": f"Failed to retrieve client list: {e}"}), 500
+        print(f"Error retrieving client config: {e}")
+        return None
 
-    return jsonify(clients_data)
+
+
 
 
 @app.route('/api/clients', methods=['POST'])
@@ -801,6 +865,7 @@ def add_client():
         ip = data.get('ip', '').strip()
         master = data.get('master', '').strip()
         snapshot = data.get('snapshot', '').strip() if data.get('snapshot') is not None else ''
+        
         
         # Validate inputs
         validate_client_inputs(name, mac, ip)
@@ -837,6 +902,23 @@ def add_client():
             
         # Update DHCP configuration
         update_dhcp_config(name, dhcp_entry, is_new=True)
+            
+        # Save client configuration to JSON file
+        client_data = {
+            'id': name,
+            'name': name.upper(),
+            'mac': mac,
+            'ip': ip,
+            'master': master,
+            'snapshot': snapshot,
+            'block_store': paths['block_store'],
+            'target_iqn': paths['target_iqn'],
+            'writeback': paths['clone'],
+            'created_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+            'last_modified': time.strftime('%Y-%m-%d %H:%M:%S')
+        }
+        if not save_client_config(client_data):
+            print(f"Warning: Failed to save client configuration for {name}")
             
             # Restart DHCP service
         run_command(['systemctl', 'restart', 'isc-dhcp-server.service'], use_sudo=True)
@@ -883,6 +965,10 @@ def delete_client(client_id):
         # Clean up iSCSI target
         if not cleanup_iscsi_target(paths['target_iqn'], paths['block_store']):
             errors.append(f"Failed to clean up iSCSI target")
+            
+        # Delete client configuration from JSON file
+        if not delete_client_config(client_id):
+            errors.append("Failed to delete client configuration file")
         
         if errors:
             return jsonify({
@@ -896,6 +982,7 @@ def delete_client(client_id):
 
 @app.route('/api/clients/edit/<client_id>', methods=['POST'])
 def edit_client(client_id):
+
     """Edit client details and update associated resources."""
     print(f"\n=== Starting edit_client for {client_id} ===")
     
@@ -911,9 +998,10 @@ def edit_client(client_id):
     try:
         # Get current client info
         print("Getting current client info...")
-        dhcp_info = get_client_dhcp_info()
-        if client_id not in dhcp_info:
-            print(f"Error: Client {client_id} not found in DHCP info")
+        client_info = get_clients(client_id)
+        print(client_info)
+        if client_info is None:
+            print(f"Error: Client {client_id} not found in config")
             return jsonify({"error": f"Client {client_id} not found"}), 404
 
         # Get current paths
@@ -924,10 +1012,10 @@ def edit_client(client_id):
         # Get new client details
         print("Extracting new client details...")
         new_name = data.get('name', client_id).strip().lower()
-        new_mac = data.get('mac', dhcp_info[client_id]['mac']).strip().upper()
-        new_ip = data.get('ip', dhcp_info[client_id]['ip']).strip()
+        new_mac = data.get('mac', client_info['mac']).strip().upper()
+        new_ip = data.get('ip', client_info['ip']).strip()
         new_master = data.get('master', '').strip()
-        new_snapshot = data.get('snapshot', '').strip()
+        new_snapshot = data.get('snapshot', '').strip() if data.get('snapshot') is not None else ''
         
         print(f"New details:")
         print(f"  Name: {new_name}")
@@ -1063,7 +1151,9 @@ def control_client(client_id):
     data = request.get_json(); action = data.get('action')
     if not action: abort(400, description="Missing action")
     if not re.match(r'^[\w-]+$', client_id): abort(400, description="Invalid client ID")
-    dhcp_info = get_client_dhcp_info(); mac_address = dhcp_info.get(client_id, {}).get("mac")
+    client_info = get_clients(client_id); 
+    
+    mac_address = client_info.get("mac")
     print(f"Control action '{action}' for client: {client_id}")
 
     if action == 'wake':
@@ -1084,7 +1174,7 @@ def control_client(client_id):
         if not mac_address or mac_address == "N/A": return jsonify({"error": f"MAC address not found for '{client_id}'"}), 404
         try:
             # Get client IP from DHCP info
-            client_ip = dhcp_info.get(client_id, {}).get("ip")
+            client_ip = client_info.get(client_id, {}).get("ip")
             if not client_ip:
                 return jsonify({"error": f"IP address not found for '{client_id}'"}), 404
             
@@ -1106,7 +1196,7 @@ def control_client(client_id):
         if not mac_address or mac_address == "N/A": return jsonify({"error": f"MAC address not found for '{client_id}'"}), 404
         try:
             # Get client IP from DHCP info
-            client_ip = dhcp_info.get(client_id, {}).get("ip")
+            client_ip = client_info.get(client_id, {}).get("ip")
             if not client_ip:
                 return jsonify({"error": f"IP address not found for '{client_id}'"}), 404
             

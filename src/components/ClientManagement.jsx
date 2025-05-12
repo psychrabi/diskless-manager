@@ -130,11 +130,7 @@ export const ClientManagement = ({ clients, masters, fetchData }) => {
         console.log('Client object:', client);
         
         // Set the client data with current master and snapshot
-        setClient({
-            ...client,
-            master: client.master || '',
-            snapshot: client.snapshot || ''
-        });
+        setClient(client);
         
         // Extract master and snapshot information from paths
         const masterPath = client.master || '';
@@ -187,9 +183,10 @@ export const ClientManagement = ({ clients, masters, fetchData }) => {
         );
     },
     delete: (client) => {
+      console.log(client)
       if (confirm(`Are you sure you want to delete client "${client.name}"? This will destroy their ZFS clone and remove configurations.`)) {
          handleApiAction(
-            () => apiRequest(`/clients/${client.id}`, 'DELETE'),
+            () => apiRequest(`/clients/${client.name}`, 'DELETE'),
             `Client ${client.name} deleted successfully.`,
             `Failed to delete client ${client.name}`,
             showNotification
