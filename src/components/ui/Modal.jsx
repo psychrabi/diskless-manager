@@ -11,6 +11,7 @@ export const Modal = ({ isOpen, onClose, title, children, size = 'md' }) => { //
       lg: 'max-w-lg',
       xl: 'max-w-xl',
       '2xl': 'max-w-2xl',
+      '3xl': 'max-w-3xl',
       full: 'max-w-full h-full m-0 rounded-none', // Example for full screen
   };
 
@@ -25,7 +26,7 @@ export const Modal = ({ isOpen, onClose, title, children, size = 'md' }) => { //
         </div>
         <div className={size === 'full' ? 'overflow-auto h-[calc(100%-80px)]' : ''}>{children}</div> {/* Adjust height for full size */}
       </div>
-      <style jsx>{`
+      <style jsx="true">{`
         @keyframes fade-in-scale {
           from { opacity: 0; transform: scale(0.95); }
           to { opacity: 1; transform: scale(1); }

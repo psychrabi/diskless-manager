@@ -117,10 +117,10 @@ function App() {
             
 
               {/* Client Management */}
-              <ClientManagement clients={clients} masters={masters} fetchData={fetchData} />
+              <ClientManagement clients={clients} masters={masters} refresh={fetchData} />
             </div>
           } />
-          <Route path="/images" element={<ImageManagement masters={masters} fetchData={fetchData} />} />
+          <Route path="/images" element={<ImageManagement masters={masters} refresh={fetchData} />} />
         </Routes>
 
         {/* Loading Indicator */}

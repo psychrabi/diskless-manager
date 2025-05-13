@@ -26,6 +26,7 @@ const handleCreateMasterSubmit = async (event) => {
         `Failed to create master ZVOL ${newMasterName}-master`,
         showNotification
     );
+    refresh();
 };
 
 const handleCreateSnapshot = (snapshotName) => {  
@@ -35,6 +36,8 @@ const handleCreateSnapshot = (snapshotName) => {
           `Failed to create snapshot ${snapshotName}`,
           showNotification  
       );
+      setIsCreateSnapshotModalOpen(false);
+      refresh();
 };
 
 
@@ -49,13 +52,13 @@ const handleDeleteSnapshot = (snapshotName) => {
           showNotification
       );
   }
+  refresh();
 };
 
 
 
   const handleOpenCreateSnapshotModal = useCallback((master) => {
-    setSelectedMaster(master);
-    setNewSnapshotName(`${master}@${new Date().toISOString().slice(0,10)}`);
+    setSelectedMaster(master);    
     setIsCreateSnapshotModalOpen(true);
   }, []);
 
@@ -73,6 +76,7 @@ const handleDeleteSnapshot = (snapshotName) => {
           showNotification
       );
     }
+    refresh();
   };
 
   

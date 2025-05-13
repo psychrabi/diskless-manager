@@ -72,10 +72,10 @@ export const ImageManagement = ({ masters, refresh }) => {
           {masters.length === 0 && <p className="text-center py-4 text-gray-500">No master images found.</p>}
         </div>
       </Card>
-      <Modal isOpen={isCreateMasterModalOpen} onClose={() => setIsCreateMasterModalOpen(false)} title="Create New Master ZVOL">
+      <Modal isOpen={isCreateMasterModalOpen} onClose={() => setIsCreateMasterModalOpen(false)} title="Create Master Image" size='xl'>
           <form onSubmit={handleCreateMasterSubmit}>
               <Input
-                  label="Master Base Name:" id="masterName" value={newMasterName}
+                  label="Master Name:" id="masterName" value={newMasterName}
                   onChange={(e) => setNewMasterName(e.target.value)}
                   placeholder="e.g., win11-enterprise (will create pool/name-master)"
                   required
@@ -85,6 +85,7 @@ export const ImageManagement = ({ masters, refresh }) => {
                   onChange={(e) => setNewMasterSize(e.target.value)}
                   placeholder="e.g., 50G, 1T"
                   title="Enter size (e.g., 50G, 100G, 1T)" required
+                  className='mt-4'
               />
                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 mb-4">
                   This will create a ZFS volume named '{newMasterName ? `${newMasterName}-master` : '...-master'}' in the '{API_BASE_URL.includes('localhost') ? 'tank' : 'configured'}' pool.
@@ -96,21 +97,23 @@ export const ImageManagement = ({ masters, refresh }) => {
           </form>
       </Modal>
       {/* Create Snapshot Modal */}
-      <Modal isOpen={isCreateSnapshotModalOpen} onClose={() => setIsCreateSnapshotModalOpen(false)} title="Create Snapshot">
+      <Modal isOpen={isCreateSnapshotModalOpen} onClose={() => setIsCreateSnapshotModalOpen(false)} title={`Create Snapshot for ${selectedMaster}`} size='3xl'>
         <form onSubmit={(e) => {
           e.preventDefault();
-          handleCreateSnapshot(newSnapshotName);
-        }}>
+          // Construct the full snapshot name: selectedMaster.name + '@' + newSnapshotName
+          const fullSnapshotName = `${selectedMaster}@${newSnapshotName}`;
+          handleCreateSnapshot(fullSnapshotName); // Pass the constructed full name
+        }}>         
           <Input
-            label="Snapshot Name:"
+            label="Snapshot Name (e.g., base-install, pre-updates):"
             id="snapshotName"
             value={newSnapshotName}
-            onChange={(e) => setNewSnapshotName(e.target.value)}
-            placeholder="e.g., tank/win10-master@2025-05-01"
+            onChange={(e) => setNewSnapshotName(e.target.value)} // Only the snapshot name, not the full path
+            placeholder="Enter snapshot name (e.g., my-snapshot-name)"
             required
           />
           <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
-            Creating a snapshot will capture the current state of {selectedMaster?.name}.
+            This operation will capture the current state of <strong className="font-semibold">{selectedMaster}</strong>.
             This operation cannot be undone.
           </p>
           <div className="mt-6 flex justify-end space-x-3">
