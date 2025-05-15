@@ -701,10 +701,52 @@ def get_service_config(service_key):
 
 # --- Master Image Management ---
 
+@app.route('/api/masters/default', methods=['POST'])
+def set_default_master():
+    """Set the default master image."""
+    data = request.get_json()
+    if not data or 'name' not in data:
+        abort(400, description="Missing required field: name")
+    
+    master_name = data['name']
+    
+    try:
+        # Load existing config
+        config = {}
+        if os.path.exists(CONFIG_PATH):
+            with open(CONFIG_PATH, 'r') as f:
+                config = json.load(f)
+        
+        # Update default master
+        if 'settings' not in config:
+            config['settings'] = {}
+        config['settings']['default_master'] = master_name
+        
+        # Save config
+        with open(CONFIG_PATH, 'w') as f:
+            json.dump(config, f, indent=2)
+            
+        return jsonify({"message": f"Default master set to {master_name}"})
+        
+    except Exception as e:
+        print(f"Error setting default master: {e}")
+        abort(500, description=f"Failed to set default master: {e}")
+
+
 @app.route('/api/masters', methods=['GET'])
 def get_masters():
     # ... (keep existing implementation) ...
     masters_data = []
+    
+    # Get default master from config
+    default_master = None
+    try:
+        if os.path.exists(CONFIG_PATH):
+            with open(CONFIG_PATH, 'r') as f:
+                config = json.load(f)
+                default_master = config.get('settings', {}).get('default_master')
+    except Exception as e:
+        print(f"Error reading default master: {e}")
     try:
         # print(f"ZFS Pool: {ZFS_POOL}")
         # print("Raw ZFS list output:")
@@ -767,6 +809,7 @@ def get_masters():
             masters_data.append({
                  "id": master_name,
                  "name": master_name,
+                 "is_default": master_name == default_master,
                  "snapshots": sorted(snapshots, key=lambda s: s['created'])
             })
     except Exception as e:
@@ -858,10 +901,6 @@ def get_clients(client_id=None):
         print(f"Error retrieving client config: {e}")
         return None
 
-
-
-
-
 @app.route('/api/clients', methods=['POST'])
 def add_client():
     """Add a new client with ZFS clone, iSCSI target, and DHCP configuration."""
@@ -946,51 +985,6 @@ def add_client():
     except Exception as e:
         return jsonify({"error": f"An unexpected error occurred: {e}"}), 500
 
-
-@app.route('/api/clients/<client_id>', methods=['DELETE'])
-def delete_client(client_id):
-    """Delete a client and all associated resources."""
-    if not re.match(r'^[\w-]+$', client_id):
-        abort(400, description="Invalid client ID")
-    
-    errors = []
-    paths = get_client_paths(client_id)
-    
-    try:
-        # Clean up DHCP configuration
-        try:            
-            update_dhcp_config(client_id, "", is_new=False)
-            
-            # Restart DHCP service
-            run_command(['systemctl', 'restart', 'isc-dhcp-server.service'], use_sudo=True)
-        except Exception as e:
-            errors.append(f"Failed to clean up DHCP config: {e}")
-                
-        # Clean up ZFS clone
-        try: 
-            result = run_command(['zfs', 'list', '-H', paths['clone']], check=False, use_sudo=True)
-            if result.returncode == 0:
-                run_command(['zfs', 'destroy', paths['clone']], use_sudo=True)
-        except Exception as e: 
-            errors.append(f"Failed to destroy ZFS clone: {e}")
-        
-        # Clean up iSCSI target
-        if not cleanup_iscsi_target(paths['target_iqn'], paths['block_store']):
-            errors.append(f"Failed to clean up iSCSI target")
-            
-        # Delete client configuration from JSON file
-        if not delete_client_config(client_id):
-            errors.append("Failed to delete client configuration file")
-        
-        if errors:
-            return jsonify({
-                "message": f"Client {client_id} deleted with issues",
-                "errors": errors
-            }), 207
-        return jsonify({"message": f"Client {client_id} deleted successfully"}), 200
-            
-    except Exception as e:
-        return jsonify({"error": f"Unexpected error during deletion: {str(e)}"}), 500
 
 @app.route('/api/clients/edit/<client_id>', methods=['POST'])
 def edit_client(client_id):
@@ -1187,6 +1181,54 @@ def edit_client(client_id):
     except Exception as e:
         print(f"Unexpected error: {e}")
         return jsonify({"error": f"Failed to update client: {str(e)}"}), 500
+
+
+
+@app.route('/api/clients/<client_id>', methods=['DELETE'])
+def delete_client(client_id):
+    """Delete a client and all associated resources."""
+    if not re.match(r'^[\w-]+$', client_id):
+        abort(400, description="Invalid client ID")
+    
+    errors = []
+    paths = get_client_paths(client_id)
+    
+    try:
+        # Clean up DHCP configuration
+        try:            
+            update_dhcp_config(client_id, "", is_new=False)
+            
+            # Restart DHCP service
+            run_command(['systemctl', 'restart', 'isc-dhcp-server.service'], use_sudo=True)
+        except Exception as e:
+            errors.append(f"Failed to clean up DHCP config: {e}")
+                
+        # Clean up ZFS clone
+        try: 
+            result = run_command(['zfs', 'list', '-H', paths['clone']], check=False, use_sudo=True)
+            if result.returncode == 0:
+                run_command(['zfs', 'destroy', paths['clone']], use_sudo=True)
+        except Exception as e: 
+            errors.append(f"Failed to destroy ZFS clone: {e}")
+        
+        # Clean up iSCSI target
+        if not cleanup_iscsi_target(paths['target_iqn'], paths['block_store']):
+            errors.append(f"Failed to clean up iSCSI target")
+            
+        # Delete client configuration from JSON file
+        if not delete_client_config(client_id):
+            errors.append("Failed to delete client configuration file")
+        
+        if errors:
+            return jsonify({
+                "message": f"Client {client_id} deleted with issues",
+                "errors": errors
+            }), 207
+        return jsonify({"message": f"Client {client_id} deleted successfully"}), 200
+            
+    except Exception as e:
+        return jsonify({"error": f"Unexpected error during deletion: {str(e)}"}), 500
+
 
 # --- Snapshot Actions ---
 @app.route('/api/snapshots', methods=['POST'])

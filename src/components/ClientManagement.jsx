@@ -100,6 +100,8 @@ export const ClientManagement = ({ clients, masters, fetchData }) => {
       name: 'pc002',
       mac: 'd8:43:ae:a7:8e:a8',
       ip: '192.168.1.101',
+      master: 'nsboot0/Windows11-24h2-master',
+      snapshot: ''
     });  
     setIsModalOpen(true);
   };
