@@ -3,7 +3,8 @@ import {
   Power, PowerOff,
   Users,
   Zap,
-  Monitor
+  Monitor,
+  Layers
 } from 'lucide-react';
 import { useCallback, useState } from 'react';
 import { Button, Card, ContextMenu, Modal } from '../components/ui';
@@ -230,7 +231,7 @@ export const ClientManagement = ({ clients, masters, fetchData }) => {
                 <TableCell>{client.ip}</TableCell>
                 <TableCell className="hidden md:table-cell text-xs font-mono break-all">{client.master}</TableCell>
                 <TableCell className="hidden xl:table-cell text-xs font-mono break-all">{client.snapshot}</TableCell>
-                <TableCell className="hidden xl:table-cell text-xs font-mono break-all">{client.clone}</TableCell>
+                <TableCell className="hidden xl:table-cell text-xs font-mono break-all">{client.block_device}</TableCell>
                 <TableCell>
                   <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${client.status === 'Online' ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'}`}>
                     {client.status === 'Online' ? <Power className="h-3 w-3 mr-1 text-green-500"/> : <PowerOff className="h-3 w-3 mr-1 text-gray-500"/>}
@@ -238,13 +239,15 @@ export const ClientManagement = ({ clients, masters, fetchData }) => {
                   </span>
                 </TableCell>
                 <TableCell>
-                  {client.isSuperClient && (
+                  {!client.snapshot && (
                     <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200" title="Changes persist directly to the clone">
-                      <Zap className="h-3 w-3 mr-1 text-yellow-500"/> Super
+                      <Zap className="h-3 w-3 mr-1 text-yellow-500"/> Master
                     </span>
                   )}
-                  {!client.isSuperClient && (
-                    <span className="text-xs text-gray-500 dark:text-gray-400">Normal</span>
+                  {client.snapshot && (
+                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200" title="Changes persist directly to the clone">
+                      <Layers className="h-3 w-3 mr-1"/>Clone
+                    </span>
                   )}
                 </TableCell>
               </TableRow>

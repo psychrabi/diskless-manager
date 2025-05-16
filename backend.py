@@ -735,7 +735,6 @@ def set_default_master():
 
 @app.route('/api/masters', methods=['GET'])
 def get_masters():
-    # ... (keep existing implementation) ...
     masters_data = []
     
     # Get default master from config
@@ -878,7 +877,7 @@ def create_master():
 
 @app.route('/api/clients', methods=['GET'])
 def get_clients(client_id=None):
-    """Retrieve client configuration from JSON file (list version)."""
+    """Retrieve client configuration from JSON file (list version), including status."""
     try:
         if not os.path.exists(CONFIG_PATH):
             return None
@@ -889,6 +888,11 @@ def get_clients(client_id=None):
         clients = config.get('clients', [])
         if not isinstance(clients, list):
             return None
+        
+        # Add status to each client
+        for client in clients:
+            client['status'] = get_client_status(client.get('ip', ''))
+            print(f"Client {client['id']} status: {client['status']}")
         
         if client_id is None:
             return clients
@@ -1101,17 +1105,19 @@ def edit_client(client_id):
                     try:
                         # Clean up old clone if it exists
                         old_clone = current_paths.get('clone')
-                        if old_clone:
+                        # Check if old clone exists
+                        result = run_command(['zfs', 'list', '-H', old_clone], use_sudo=True, check=False)
+                        if result.returncode == 0:
+                            print(f"Old ZFS clone exists: {old_clone}")
+                            # Destroy old clone
                             print(f"Destroying old ZFS clone: {old_clone}")
                             run_command(['zfs', 'destroy', old_clone], use_sudo=True)
                         
                         # Create new clone
-                        pool = current_master.split('/')[0]
-                        new_clone = f"{pool}/{new_name}-disk"
-                        snapshot_path = f"{current_master}@{current_snapshot}"
+                        new_clone = f"{ZFS_POOL}/{new_name}-disk"
                         
-                        print(f"Creating new ZFS clone from {snapshot_path} to {new_clone}")
-                        run_command(['zfs', 'clone', snapshot_path, new_clone], use_sudo=True)
+                        print(f"Creating new ZFS clone from {current_snapshot} to {new_clone}")
+                        run_command(['zfs', 'clone', current_snapshot, new_clone], use_sudo=True)
                         block_device = f"/dev/zvol/{new_clone}"
                     except Exception as e:
                         print(f"Error creating ZFS clone: {e}")
