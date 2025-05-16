@@ -185,6 +185,23 @@ export const ClientManagement = ({ clients, masters, fetchData }) => {
             showNotification
         );
     },
+    remote: (client) => {
+        if (client.status !== 'Online') {
+            showNotification('Client must be online to connect remotely', 'error');
+            return;
+        }
+        
+        handleApiAction(
+            () => apiRequest(`/clients/${client.id}/remote`, 'POST'),
+            'Connecting to remote desktop...',
+            'Failed to connect to remote desktop',
+            showNotification
+        ).then(response => {
+            if (response?.url) {
+                window.open(response.url, '_blank', 'noopener,noreferrer');
+            }
+        });        
+    },
     delete: (client) => {
       console.log(client)
       if (confirm(`Are you sure you want to delete client "${client.name}"? This will destroy their ZFS clone and remove configurations.`)) {

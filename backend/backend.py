@@ -385,7 +385,87 @@ def get_client_status(client_ip):
         print(f"Error pinging client {client_ip}: {e}")
         return "Error"
 
-
+def launch_remote_desktop(client_ip, username="diskless"):
+    """Launch remote desktop connection to client with improved settings."""
+    try:
+        # Enhanced FreeRDP command with better resolution and control options
+        rdp_command = [
+                    'xfreerdp',
+                    '/v:' + client_ip,
+                    '/u:' + username,
+                    '/p:1',
+                    '/cert-ignore',
+                    '/w:1920',                    # Width
+                    '/h:1080',                    # Height
+                    '/dynamic-resolution',
+                    '+clipboard',
+                    '/gdi:sw',                    # Hardware GDI rendering
+                    '/network:auto',              # Auto-detect network
+                    '/bpp:32',                    # 32-bit color depth
+                    '/sec:nla',           # Try NLA security
+                    '/timeout:20000'
+                ]
+        
+        print(f"Launching enhanced RDP connection to {client_ip}")
+        
+        # Launch FreeRDP
+        process = subprocess.Popen(
+            rdp_command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True
+        )
+        
+        # Wait briefly to check for immediate failures
+        try:
+            process.wait(timeout=5)
+            if process.returncode != 0:
+                stdout = process.stdout.read().decode()
+                stderr = process.stderr.read().decode()
+                
+                # Try fallback options if first attempt fails
+                fallback_command = [
+                    'xfreerdp',
+                    '/v:' + client_ip,
+                    '/u:' + username,
+                    '/p:1',
+                    '/cert-ignore',
+                    '/w:1366',            # Lower resolution
+                    '/h:768',
+                    '/dynamic-resolution',
+                    '+clipboard',
+                    '/gdi:sw',            # Software GDI
+                    '/network:auto',
+                    '/bpp:24',            # 24-bit color
+                    '/sec:nla',           # Try NLA security
+                    '/timeout:20000'
+                ]
+                
+                print("First attempt failed, trying fallback options...")
+                process = subprocess.Popen(
+                    fallback_command,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    start_new_session=True
+                )
+                
+                process.wait(timeout=5)
+                if process.returncode != 0:
+                    stdout2 = process.stdout.read().decode()
+                    stderr2 = process.stderr.read().decode()
+                    raise Exception(f"Both RDP attempts failed.\nFirst attempt: {stderr}\nFallback attempt: {stderr2}")
+                    
+        except subprocess.TimeoutExpired:
+            # Process didn't exit immediately - good
+            print(f"RDP connection initiated successfully to {client_ip}")
+            return True
+            
+        return True
+    except Exception as e:
+        print(f"Error launching remote desktop: {e}")
+        raise
+   
+    
 def get_client_info():
     """Parses DHCP host entries from the main dhcpd.conf file."""
     clients = {}
@@ -1235,6 +1315,37 @@ def delete_client(client_id):
     except Exception as e:
         return jsonify({"error": f"Unexpected error during deletion: {str(e)}"}), 500
 
+@app.route('/api/clients/<client_id>/remote', methods=['POST'])
+def remote_client(client_id):
+    """Connect to client via Remote Desktop."""
+    try:
+        # Get client info
+        client_info = get_clients(client_id)
+        if not client_info:
+            return jsonify({"error": "Client not found"}), 404
+
+        # Get client IP
+        client_ip = client_info.get('ip')
+        if not client_ip:
+            return jsonify({"error": "Client IP not found"}), 404
+
+        # Check if client is online
+        status = get_client_status(client_ip)
+        if status != "Online":
+            return jsonify({"error": "Client is not online"}), 400
+
+        # Launch remote desktop
+        launch_remote_desktop(client_ip)
+        
+        return jsonify({
+            "message": f"Remote desktop connection initiated to {client_id}",
+            "ip": client_ip
+        })
+
+    except Exception as e:
+        return jsonify({
+            "error": f"Failed to launch remote desktop: {str(e)}"
+        }), 500
 
 # --- Snapshot Actions ---
 @app.route('/api/snapshots', methods=['POST'])
