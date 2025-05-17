@@ -32,7 +32,7 @@ export const ContextMenu = ({ isOpen, xPos, yPos, targetClient, onClose, actions
         <hr className="my-1 border-gray-200 dark:border-gray-700" />
         <li><Button onClick={() => { actions.delete(targetClient); onClose(); }} variant="ghost" className="w-full justify-start px-3 py-1.5 text-sm text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/50" icon={Trash2}>Delete Client</Button></li>
       </ul>
-       <style jsx>{`
+       <style jsx="true">{`
         @keyframes fade-in {
           from { opacity: 0; }
           to { opacity: 1; }
