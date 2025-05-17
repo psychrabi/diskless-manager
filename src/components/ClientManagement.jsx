@@ -202,6 +202,19 @@ export const ClientManagement = ({ clients, masters, fetchData }) => {
             }
         });        
     },
+    reset: (client) => {
+        if (client.status !== 'Offline') {
+            showNotification('Client must be offline before you can reset', 'error');
+            return;
+        }
+        
+        handleApiAction(
+            () => apiRequest(`/clients/reset/${client.id}`, 'POST'),
+            'Resetting the client...',
+            'Failed to reset the client',
+            showNotification
+        )
+    },
     delete: (client) => {
       console.log(client)
       if (confirm(`Are you sure you want to delete client "${client.name}"? This will destroy their ZFS clone and remove configurations.`)) {

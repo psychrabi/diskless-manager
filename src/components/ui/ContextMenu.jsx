@@ -1,7 +1,7 @@
 import { useOnClickOutside } from "../../hooks/useOnClickOutside";
 import { useRef } from "react";
 import { Button } from "../ui/index.js";
-import { Edit, Zap, RefreshCw, PowerSquare, Sunrise, Trash2, ScreenShare } from "lucide-react";
+import { Edit, Zap, RefreshCw, PowerSquare, Sunrise, Trash2, ScreenShare, RotateCcw } from "lucide-react";
 
 export const ContextMenu = ({ isOpen, xPos, yPos, targetClient, onClose, actions }) => {
   const menuRef = useRef(null);
@@ -30,6 +30,7 @@ export const ContextMenu = ({ isOpen, xPos, yPos, targetClient, onClose, actions
         <li><Button onClick={() => { actions.remote(targetClient); onClose(); }} variant="ghost" className="w-full justify-start px-3 py-1.5 text-sm" icon={ScreenShare}>Remote Control</Button></li>
         <hr className="my-1 border-gray-200 dark:border-gray-700" />
         <li><Button onClick={() => { actions.delete(targetClient); onClose(); }} variant="ghost" className="w-full justify-start px-3 py-1.5 text-sm text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/50" icon={Trash2}>Delete Client</Button></li>
+        <li><Button onClick={() => { actions.reset(targetClient); onClose(); }} variant="ghost" className="w-full justify-start px-3 py-1.5 text-sm text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/50" icon={RotateCcw}>Reset Client</Button></li>
       </ul>
        <style jsx>{`
         @keyframes fade-in {

@@ -1268,6 +1268,58 @@ def edit_client(client_id):
         print(f"Unexpected error: {e}")
         return jsonify({"error": f"Failed to update client: {str(e)}"}), 500
 
+@app.route('/api/clients/reset/<client_id>', methods=['POST'])
+def reset_client(client_id):
+    """Reset a client by deleting its ZFS clone and iSCSI target and create it again."""
+    if not re.match(r'^[\w-]+$', client_id):
+        abort(400, description="Invalid client ID")
+
+    print("Getting current client info...")
+    client_info = get_clients(client_id)
+    if client_info is None:
+        print(f"Error: Client {client_id} not found in config")
+        return jsonify({"error": f"Client {client_id} not found"}), 404
+
+    current_paths = get_client_paths(client_id)
+    # Cleanup iSCSI Target and delete block store
+    try:
+        # Clean up old target and block store if they exist
+        target_iqn = current_paths.get('target_iqn')
+        block_store = current_paths.get('block_store')
+        
+        if target_iqn or block_store:
+            print(f"Cleaning up old iSCSI target and block store: {target_iqn}, {block_store}")
+            try:
+                cleanup_iscsi_target(target_iqn, block_store)
+            except Exception as cleanup_error:
+                print(f"Warning: Error during cleanup of old target/block store: {cleanup_error}")
+        
+        # Now create the new target and block store
+        print(f"Creating new iSCSI target: {target_iqn} with block store: {block_store}")
+             
+    
+        # Clone name
+        clone = f"{ZFS_POOL}/{client_id.upper()}-disk"
+        
+        # Clean up old clone if it exists
+        # Check if old clone exists
+        result = run_command(['zfs', 'list', '-H', clone], use_sudo=True, check=False)
+        if result.returncode == 0:
+            print(f"Old ZFS clone exists: {clone}")
+            # Destroy old clone
+            print(f"Destroying old ZFS clone: {clone}")
+            run_command(['zfs', 'destroy', clone], use_sudo=True)
+                                
+        print(f"Creating new ZFS clone from {client_info['snapshot']} to {clone}")
+        run_command(['zfs', 'clone', client_info['snapshot'], clone], use_sudo=True)
+        block_device = f"/dev/zvol/{clone}"
+    
+        # Setup updated iSCSI Target
+        setup_iscsi_target(target_iqn, block_store, block_device)
+
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        return jsonify({"error": f"Failed to reset client: {str(e)}"}), 500
 
 
 @app.route('/api/clients/<client_id>', methods=['DELETE'])
