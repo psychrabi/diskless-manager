@@ -953,6 +953,56 @@ def create_master():
         print(f"Unexpected error creating ZVOL {master_zvol_name}: {e}")
         return jsonify({"error": f"An unexpected error occurred: {e}"}), 500
 
+@app.route('/api/masters/<path:master_name_encoded>', methods=['DELETE'])
+def delete_master(master_name_encoded):
+    """Delete a ZFS snapshot after checking for dependent clients."""
+    try:
+        master_name = master_name_encoded
+        # Check for clients using this master
+        try:
+            # Get all clients
+            clients = get_clients()
+            if clients:
+                dependent_clients = []
+                for client in clients:
+                    if client.get('master') == master_name:
+                        dependent_clients.append(client['name'])
+                
+                if dependent_clients:
+                    return jsonify({
+                        "error": "Master has dependent clients",
+                        "message": f"Cannot delete master: It is being used by the following clients: {', '.join(dependent_clients)}",
+                        "dependent_clients": dependent_clients
+                    }), 409
+        except Exception as e:
+            print(f"Error checking for dependent clients: {e}")
+            return jsonify({"error": f"Failed to check for dependent clients: {str(e)}"}), 500
+
+        print(f"Deleting master: {master_name}")
+        
+        # If no dependent clients found, proceed with deletion
+        try:
+            run_command(['zfs', 'destroy', master_name], use_sudo=True)
+            return jsonify({
+                "message": f"Master {master_name} deleted successfully"
+            }), 200
+        except subprocess.CalledProcessError as e:
+            if 'has dependent clones' in (e.stderr or ''):
+                return jsonify({
+                    "error": "Master has dependent clones",
+                    "message": f"Cannot delete master '{master_name}': It has dependent clones."
+                }), 409
+            else:
+                return jsonify({
+                    "error": f"Failed to delete master: {e.stderr or e}"
+                }), 500
+                
+    except Exception as e:
+        print(f"Unexpected error deleting master: {e}")
+        return jsonify({
+            "error": f"Unexpected error: {str(e)}"
+        }), 500
+
 # --- Client Management ---
 
 @app.route('/api/clients', methods=['GET'])
@@ -1417,7 +1467,6 @@ def create_snapshot():
         else: return jsonify({"error": f"Failed creating snapshot: {e.stderr or e}"}), 500
     except Exception as e: return jsonify({"error": f"Unexpected error: {e}"}), 500
 
-@app.route('/api/snapshots/<path:snapshot_name_encoded>', methods=['DELETE'])
 @app.route('/api/snapshots/<path:snapshot_name_encoded>', methods=['DELETE'])
 def delete_snapshot(snapshot_name_encoded):
     """Delete a ZFS snapshot after checking for dependent clients."""
