@@ -1,6 +1,7 @@
 import React from 'react';
 import {
-  PlusCircle, Trash2, Save, GitBranchPlus, HardDrive, Star, StarIcon
+  PlusCircle, Trash2, Save, GitBranchPlus, HardDrive, Star, StarIcon,
+  Plus
 } from 'lucide-react';
 import { useMasterManager } from '../hooks/useMasterManager';
 import { Card, Button, Modal, Input, Select } from '../components/ui';
@@ -8,12 +9,10 @@ import { useNotification } from '../contexts/NotificationContext';
 const API_BASE_URL = 'http://192.168.1.250:5000/api'; // !!! IMPORTANT: Replace with your backend server IP/hostname and port !!!
 
 export const ImageManagement = ({ masters, refresh }) => {
-    const {showNotification} = useNotification();
   
   const {
     handleCreateSnapshot,
     handleDeleteSnapshot,
-    handleCloneSnapshot,
     handleOpenCreateSnapshotModal,
     isCreateSnapshotModalOpen,
     setIsCreateSnapshotModalOpen,
@@ -29,35 +28,19 @@ export const ImageManagement = ({ masters, refresh }) => {
     newMasterSize,
     setNewMasterSize,
     isDeleteSnapshotModalOpen,
-    snapshotToDelete,
+    snapshotToDelete,    
     confirmDeleteSnapshot,
     cancelDeleteSnapshot,
+    handleOpenDeleteMasterModal,
+    cancelDeleteMaster,
+    confirmDeleteMaster,
+    setDefaultMaster,
+    isDeleteMasterModalOpen,
     formatBytes,
     formatDate
-  } = useMasterManager(masters, refresh, showNotification);
+  } = useMasterManager(refresh);
 
-  const setDefaultMaster = async (masterName) => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/masters/default`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ name: masterName }),
-      });
 
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to set default master');
-      }
-
-      showNotification(`Default master set to ${masterName}`, 'success');
-      refresh(); // Refresh the list to update the UI
-    } catch (error) {
-      console.error('Error setting default master:', error);
-      showNotification(error.message || 'Failed to set default master', 'error');
-    }
-  };
 
   return (
     <div className="space-y-6">
@@ -79,7 +62,8 @@ export const ImageManagement = ({ masters, refresh }) => {
                     variant={master.is_default ? 'outline' : 'ghost'} 
                     size="sm" 
                     onClick={() => setDefaultMaster(master.name)}
-                    className={master.is_default ? 'text-yellow-500 border-yellow-500' : ''}
+                    className={master.is_default ? 'text-green-500 border-green-500' : ''}
+                    disabled={master.is_default} 
                   >
                     {master.is_default ? (
                       <span className="flex items-center gap-1">
@@ -88,6 +72,7 @@ export const ImageManagement = ({ masters, refresh }) => {
                     ) : 'Set as Default'}
                   </Button>
                   <Button onClick={() => handleOpenCreateSnapshotModal(master.name)} size="sm" icon={PlusCircle}>Create Snapshot</Button>
+                  <Button variant="destructive" onClick={() => handleOpenDeleteMasterModal(master.name)} size="sm" icon={Trash2}>Delete Master</Button>
                 </div>
               </div>
               <h5 className="text-sm font-semibold mb-2 text-gray-600 dark:text-gray-400">Available Snapshots:</h5>
@@ -100,10 +85,7 @@ export const ImageManagement = ({ masters, refresh }) => {
                         <span className="text-gray-500 dark:text-gray-400 text-xs ml-2 whitespace-nowrap">({snap.created}, {snap.size})</span>
                       </div>
                       <div className="flex space-x-1 flex-shrink-0">
-                          <Button onClick={() => handleCloneSnapshot(snap.name)} variant="outline" size="icon" className="h-7 w-7" title={`Clone ${snap.name} to new master`}>
-                              <GitBranchPlus className="h-4 w-4" />
-                          </Button>
-                          <Button onClick={() => handleDeleteSnapshot(snap.name)} variant="ghost" size="icon" className="h-7 w-7 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/50" title={`Delete ${snap.name}`}>
+                          <Button onClick={() => handleDeleteSnapshot(snap.name)} variant="destructive" size="icon" className="h-7 w-7 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/50" title={`Delete ${snap.name}`}>
                               <Trash2 className="h-4 w-4" />
                           </Button>
                       </div>
@@ -191,6 +173,33 @@ export const ImageManagement = ({ masters, refresh }) => {
                       onClick={confirmDeleteSnapshot}
                   >
                       Delete Snapshot
+                  </Button>
+              </div>
+          </div>
+      </Modal>
+      <Modal 
+          isOpen={isDeleteMasterModalOpen} 
+          onClose={cancelDeleteMaster}
+          title="Delete Snapshot"
+      >
+          <div className="space-y-4">
+              <p>
+                  Are you sure you want to delete Master "{selectedMaster}"?
+                  This action cannot be undone and might affect clones.
+              </p>
+              
+              <div className="flex justify-end space-x-3">
+                  <Button
+                      variant="outline"
+                      onClick={cancelDeleteMaster}
+                  >
+                      Cancel
+                  </Button>
+                  <Button
+                      variant="destructive"
+                      onClick={confirmDeleteMaster}
+                  >
+                      Delete Master
                   </Button>
               </div>
           </div>

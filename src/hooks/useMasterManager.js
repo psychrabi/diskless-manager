@@ -1,23 +1,28 @@
 import { useState, useCallback } from 'react';
 import { formatBytes, formatDate } from '../utils/helpers';
 import { apiRequest, handleApiAction } from '../utils/apiRequest';
+import { useNotification } from '../contexts/NotificationContext';
 
-export const useMasterManager = (masters, refresh, showNotification) => {
+export const useMasterManager = (refresh) => {
   const [isCreateSnapshotModalOpen, setIsCreateSnapshotModalOpen] = useState(false);
   const [selectedMaster, setSelectedMaster] = useState(null);
   const [newSnapshotName, setNewSnapshotName] = useState('');
   const [isCreateMasterModalOpen, setIsCreateMasterModalOpen] = useState(false);
+  const [isDeleteMasterModalOpen, setIsDeleteMasterModalOpen] = useState(false);
   const [newMasterName, setNewMasterName] = useState('');
   const [newMasterSize, setNewMasterSize] = useState('50G');
   const [isDeleteSnapshotModalOpen, setIsDeleteSnapshotModalOpen] = useState(false);
   const [snapshotToDelete, setSnapshotToDelete] = useState(null);
+  const {showNotification} = useNotification();
+  
 
 // --- Master/Snapshot Actions ---
   const handleOpenCreateMasterModal = () => {
     setNewMasterName('');
     setNewMasterSize('50G'); // Reset to default
     setIsCreateMasterModalOpen(true);
-};
+  };
+
 
 const handleCreateMasterSubmit = async (event) => {
     event.preventDefault();
@@ -63,10 +68,45 @@ const handleCreateSnapshot = (snapshotName) => {
     setSnapshotToDelete(null);
   };
 
+  const setDefaultMaster = async (masterName) => {    
+     await handleApiAction(
+        () => apiRequest('/masters/default', 'POST', { name: masterName }),
+        `ZVOL ${masterName} has been set as default.`,
+        `Failed to set ZVOL ${masterName} as default`,
+        showNotification
+    )
+  };
+
+  const confirmDeleteMaster = () => {
+    if (!selectedMaster) return;
+    
+    const encodedMasterName = encodeURIComponent(selectedMaster);
+    handleApiAction(
+        () => apiRequest(`/masters/${encodedMasterName}`, 'DELETE'),
+        `Master ${selectedMaster} deleted successfully.`,
+        `Failed to delete master ${selectedMaster}`,
+        showNotification
+    ).then(() => {
+        refresh(); // Refresh data after creating master
+    });
+    setIsDeleteMasterModalOpen(false);
+    setSelectedMaster(null);
+  };
+
+  const handleOpenDeleteMasterModal = useCallback((master) => {
+    setSelectedMaster(master);    
+    setIsDeleteMasterModalOpen(true);
+  }, []);
+
+  const cancelDeleteMaster = () => {
+    setIsDeleteMasterModalOpen(false);
+    setSelectedMaster(null);
+  };
+
   const cancelDeleteSnapshot = () => {
     setIsDeleteSnapshotModalOpen(false);
     setSnapshotToDelete(null);
-  };
+  };    
 
   const handleOpenCreateSnapshotModal = useCallback((master) => {
     setSelectedMaster(master);    
@@ -74,23 +114,6 @@ const handleCreateSnapshot = (snapshotName) => {
   }, []);
 
  
-
-  const handleCloneSnapshot = (snapshotName) => {
-    const baseMaster = snapshotName.split('@')[0].split('/')[1];
-    const defaultCloneName = `tank/${baseMaster}-clone-${Date.now().toString().slice(-4)}`;
-    const newMasterName = prompt(`Enter name for the new master ZVOL to be cloned from ${snapshotName}:`, defaultCloneName);
-     if (newMasterName) {
-        handleApiAction(
-          () => apiRequest('/masters', 'POST', { name: newMasterName, size: newMasterSize }),
-          `Master ZVOL ${newMasterName}-master created successfully.`,
-          `Failed to create master ZVOL ${newMasterName}-master`,
-          showNotification
-      );
-    }
-    refresh();
-  };
-
-  
 
   return {
     isCreateSnapshotModalOpen,
@@ -103,7 +126,6 @@ const handleCreateSnapshot = (snapshotName) => {
     setNewSnapshotName,
     handleCreateSnapshot,
     handleDeleteSnapshot,
-    handleCloneSnapshot,
     handleOpenCreateSnapshotModal,
     handleCreateMasterSubmit,
     handleOpenCreateMasterModal,
@@ -116,6 +138,10 @@ const handleCreateSnapshot = (snapshotName) => {
     isDeleteSnapshotModalOpen,
     snapshotToDelete,
     confirmDeleteSnapshot,
-    cancelDeleteSnapshot
+    cancelDeleteSnapshot,
+    cancelDeleteMaster,
+    setDefaultMaster,
+    handleOpenDeleteMasterModal,
+    isDeleteMasterModalOpen
   };
 };

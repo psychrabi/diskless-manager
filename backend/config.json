@@ -35,6 +35,6 @@
   ],
   "masters": {},
   "settings": {
-    "default_master": "nsboot0/Windows11-24h2-master"
+    "default_master": "nsboot0/Windows11-master"
   }
 }
