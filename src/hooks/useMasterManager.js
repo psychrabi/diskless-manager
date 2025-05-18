@@ -110,7 +110,7 @@ export const useMasterManager = (refresh) => {
     setIsDeleteSnapshotModalOpen(false);
     setSnapshotToDelete(null);
   };    
-  };    
+  
 
   const handleOpenCreateSnapshotModal = useCallback((master) => {
     setSelectedMaster(master);    
