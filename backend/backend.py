@@ -112,11 +112,11 @@ def format_client_name(name):
 
 def get_client_paths(client_id):
     """Get all relevant paths for a client."""
-    client_id = client_id.lower()
+
     return {
-        'clone': f"{ZFS_POOL}/{client_id}-disk",        
-        'target_iqn': f"iqn.2025-04.com.nsboot:{client_id.replace('_', '')}",
-        'block_store': f"block_{client_id}"
+        'clone': f"{ZFS_POOL}/{client_id.upper()}-disk",        
+        'target_iqn': f"iqn.2025-04.com.nsboot:{client_id.lower().replace('_', '')}",
+        'block_store': f"block_{client_id.lower()}"
     }
 
 def create_dhcp_entry(name, mac, ip, target_iqn):
@@ -1091,7 +1091,8 @@ def add_client():
             
         # Update DHCP configuration
         update_dhcp_config(name, dhcp_entry, is_new=True)
-            
+        block_device = f"/dev/zvol/{paths['clone']}"
+    
         # Save client configuration to JSON file
         client_data = {
             'id': name,
@@ -1099,9 +1100,10 @@ def add_client():
             'mac': mac,
             'ip': ip,
             'master': master,
-            'snapshot': snapshot,
-            'block_store': paths['block_store'],
+            'snapshot': snapshot,           
             'target_iqn': paths['target_iqn'],
+            'block_device': block_device,
+            'block_store': paths['block_store'],
             'writeback': paths['clone'],
             'created_at': time.strftime('%Y-%m-%d %H:%M:%S'),
             'last_modified': time.strftime('%Y-%m-%d %H:%M:%S')
@@ -1112,7 +1114,7 @@ def add_client():
             # Restart DHCP service
         run_command(['systemctl', 'restart', 'isc-dhcp-server.service'], use_sudo=True)
             
-        return jsonify({"message": f"Client {name} added successfully", "assigned_ip": ip}), 201
+        return jsonify({"message": f"Client {name} added successfully"}), 201
         
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
@@ -1268,6 +1270,7 @@ def edit_client(client_id):
                 'target_iqn': new_target_iqn,
                 'block_store': new_block_store,
                 'block_device': block_device,
+                'writeback': f"{ZFS_POOL}/{new_name}-disk",
                 'last_modified': time.strftime("%Y-%m-%d %H:%M:%S")
             })
             
@@ -1391,6 +1394,10 @@ def delete_client(client_id):
         except Exception as e:
             errors.append(f"Failed to clean up DHCP config: {e}")
                 
+        # Clean up iSCSI target
+        if not cleanup_iscsi_target(paths['target_iqn'], paths['block_store']):
+            errors.append(f"Failed to clean up iSCSI target")
+
         # Clean up ZFS clone
         try: 
             result = run_command(['zfs', 'list', '-H', paths['clone']], check=False, use_sudo=True)
@@ -1398,10 +1405,7 @@ def delete_client(client_id):
                 run_command(['zfs', 'destroy', paths['clone']], use_sudo=True)
         except Exception as e: 
             errors.append(f"Failed to destroy ZFS clone: {e}")
-        
-        # Clean up iSCSI target
-        if not cleanup_iscsi_target(paths['target_iqn'], paths['block_store']):
-            errors.append(f"Failed to clean up iSCSI target")
+         
             
         # Delete client configuration from JSON file
         if not delete_client_config(client_id):

@@ -11,7 +11,7 @@ import { Button, Card, ContextMenu, Modal } from '../components/ui';
 import { useNotification } from '../contexts/NotificationContext';
 import { apiRequest, handleApiAction } from '../utils/apiRequest';
 
-export const ClientManagement = ({ clients, masters, fetchData }) => {
+export const ClientManagement = ({ clients, masters, refresh }) => {
   const {showNotification} = useNotification();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [client, setClient] = useState({
@@ -92,7 +92,7 @@ export const ClientManagement = ({ clients, masters, fetchData }) => {
         showNotification
       );
     }
-    fetchData();
+    refresh();
   };
 
 
