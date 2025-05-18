@@ -2,9 +2,7 @@ import { useState, useCallback } from 'react';
 import { formatBytes, formatDate } from '../utils/helpers';
 import { apiRequest, handleApiAction } from '../utils/apiRequest';
 import { useNotification } from '../contexts/NotificationContext';
-import { useNotification } from '../contexts/NotificationContext';
 
-export const useMasterManager = (refresh) => {
 export const useMasterManager = (refresh) => {
   const [isCreateSnapshotModalOpen, setIsCreateSnapshotModalOpen] = useState(false);
   const [selectedMaster, setSelectedMaster] = useState(null);
