@@ -1418,17 +1418,59 @@ def create_snapshot():
     except Exception as e: return jsonify({"error": f"Unexpected error: {e}"}), 500
 
 @app.route('/api/snapshots/<path:snapshot_name_encoded>', methods=['DELETE'])
+@app.route('/api/snapshots/<path:snapshot_name_encoded>', methods=['DELETE'])
 def delete_snapshot(snapshot_name_encoded):
-     # ... (keep existing implementation) ...
-     try: snapshot_name = snapshot_name_encoded
-     except Exception as e: abort(400, description=f"Invalid snapshot name encoding: {e}")
-     if '@' not in snapshot_name or not snapshot_name.startswith(ZFS_POOL + '/'): abort(400, description="Invalid snapshot name format.")
-     print(f"Deleting snapshot: {snapshot_name}")
-     try: run_command(['zfs', 'destroy', snapshot_name], use_sudo=True); return jsonify({"message": f"Snapshot {snapshot_name} deleted"}), 200
-     except subprocess.CalledProcessError as e:
-         if 'has dependent clones' in (e.stderr or ''): return jsonify({"error": f"Snapshot '{snapshot_name}' has dependent clones."}), 409
-         else: return jsonify({"error": f"Failed deleting snapshot: {e.stderr or e}"}), 500
-     except Exception as e: return jsonify({"error": f"Unexpected error: {e}"}), 500
+    """Delete a ZFS snapshot after checking for dependent clients."""
+    try:
+        snapshot_name = snapshot_name_encoded
+        
+        if '@' not in snapshot_name or not snapshot_name.startswith(ZFS_POOL + '/'):
+            abort(400, description="Invalid snapshot name format.")
+            
+        # Check for clients using this snapshot
+        try:
+            # Get all clients
+            clients = get_clients()
+            if clients:
+                dependent_clients = []
+                for client in clients:
+                    if client.get('snapshot') == snapshot_name:
+                        dependent_clients.append(client['name'])
+                
+                if dependent_clients:
+                    return jsonify({
+                        "error": "Snapshot has dependent clients",
+                        "message": f"Cannot delete snapshot: It is being used by the following clients: {', '.join(dependent_clients)}",
+                        "dependent_clients": dependent_clients
+                    }), 409
+        except Exception as e:
+            print(f"Error checking for dependent clients: {e}")
+            return jsonify({"error": f"Failed to check for dependent clients: {str(e)}"}), 500
+
+        print(f"Deleting snapshot: {snapshot_name}")
+        
+        # If no dependent clients found, proceed with deletion
+        try:
+            run_command(['zfs', 'destroy', snapshot_name], use_sudo=True)
+            return jsonify({
+                "message": f"Snapshot {snapshot_name} deleted successfully"
+            }), 200
+        except subprocess.CalledProcessError as e:
+            if 'has dependent clones' in (e.stderr or ''):
+                return jsonify({
+                    "error": "Snapshot has dependent clones",
+                    "message": f"Cannot delete snapshot '{snapshot_name}': It has dependent clones."
+                }), 409
+            else:
+                return jsonify({
+                    "error": f"Failed to delete snapshot: {e.stderr or e}"
+                }), 500
+                
+    except Exception as e:
+        print(f"Unexpected error deleting snapshot: {e}")
+        return jsonify({
+            "error": f"Unexpected error: {str(e)}"
+        }), 500
 
 
 # --- Client Control Actions ---

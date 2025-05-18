@@ -28,6 +28,10 @@ export const ImageManagement = ({ masters, refresh }) => {
     setNewMasterName,
     newMasterSize,
     setNewMasterSize,
+    isDeleteSnapshotModalOpen,
+    snapshotToDelete,
+    confirmDeleteSnapshot,
+    cancelDeleteSnapshot,
     formatBytes,
     formatDate
   } = useMasterManager(masters, refresh, showNotification);
@@ -163,6 +167,33 @@ export const ImageManagement = ({ masters, refresh }) => {
             <Button type="submit" icon={Save}>Create Snapshot</Button>
           </div>
         </form>
+      </Modal>
+      <Modal 
+          isOpen={isDeleteSnapshotModalOpen} 
+          onClose={cancelDeleteSnapshot}
+          title="Delete Snapshot"
+      >
+          <div className="space-y-4">
+              <p>
+                  Are you sure you want to delete snapshot "{snapshotToDelete}"?
+                  This action cannot be undone and might affect clones.
+              </p>
+              
+              <div className="flex justify-end space-x-3">
+                  <Button
+                      variant="outline"
+                      onClick={cancelDeleteSnapshot}
+                  >
+                      Cancel
+                  </Button>
+                  <Button
+                      variant="destructive"
+                      onClick={confirmDeleteSnapshot}
+                  >
+                      Delete Snapshot
+                  </Button>
+              </div>
+          </div>
       </Modal>
     </div>
   );

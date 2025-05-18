@@ -9,6 +9,8 @@ export const useMasterManager = (masters, refresh, showNotification) => {
   const [isCreateMasterModalOpen, setIsCreateMasterModalOpen] = useState(false);
   const [newMasterName, setNewMasterName] = useState('');
   const [newMasterSize, setNewMasterSize] = useState('50G');
+  const [isDeleteSnapshotModalOpen, setIsDeleteSnapshotModalOpen] = useState(false);
+  const [snapshotToDelete, setSnapshotToDelete] = useState(null);
 
 // --- Master/Snapshot Actions ---
   const handleOpenCreateMasterModal = () => {
@@ -42,20 +44,29 @@ const handleCreateSnapshot = (snapshotName) => {
 
 
 
-const handleDeleteSnapshot = (snapshotName) => {
-   const encodedSnapshotName = encodeURIComponent(snapshotName);
-   if (confirm(`Are you sure you want to delete snapshot "${snapshotName}"? This cannot be undone and might affect clones.`)) {
-       handleApiAction(
-          () => apiRequest(`/snapshots/${encodedSnapshotName}`, 'DELETE'),
-          `Snapshot ${snapshotName} deleted successfully.`,
-          `Failed to delete snapshot ${snapshotName}`,
-          showNotification
-      );
-  }
-  refresh();
-};
+  const handleDeleteSnapshot = (snapshotName) => {
+    setSnapshotToDelete(snapshotName);
+    setIsDeleteSnapshotModalOpen(true);
+  };
 
+  const confirmDeleteSnapshot = () => {
+    if (!snapshotToDelete) return;
+    
+    const encodedSnapshotName = encodeURIComponent(snapshotToDelete);
+    handleApiAction(
+        () => apiRequest(`/snapshots/${encodedSnapshotName}`, 'DELETE'),
+        `Snapshot ${snapshotToDelete} deleted successfully.`,
+        `Failed to delete snapshot ${snapshotToDelete}`,
+        showNotification
+    );
+    setIsDeleteSnapshotModalOpen(false);
+    setSnapshotToDelete(null);
+  };
 
+  const cancelDeleteSnapshot = () => {
+    setIsDeleteSnapshotModalOpen(false);
+    setSnapshotToDelete(null);
+  };
 
   const handleOpenCreateSnapshotModal = useCallback((master) => {
     setSelectedMaster(master);    
@@ -101,6 +112,10 @@ const handleDeleteSnapshot = (snapshotName) => {
     setNewMasterName,
     setNewMasterSize,
     formatBytes,
-    formatDate
+    formatDate,
+    isDeleteSnapshotModalOpen,
+    snapshotToDelete,
+    confirmDeleteSnapshot,
+    cancelDeleteSnapshot
   };
 };
