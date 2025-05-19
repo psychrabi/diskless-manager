@@ -1,13 +1,12 @@
-import React, { useEffect, useState } from 'react';
-import { RefreshCw, Eye } from 'lucide-react';
-import { useServiceManager } from '../hooks/useServiceManager';
-import { Card, Button, Modal } from '../components/ui';
-import { apiRequest, handleApiAction } from '../utils/apiRequest';
-import { useNotification } from '../contexts/NotificationContext';
 import { invoke } from '@tauri-apps/api/core';
+import { Eye, RefreshCw } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Button, Card } from '../components/ui';
+import { useNotification } from '../contexts/NotificationContext';
+import ServiceConfigModal from './ui/modals/ServiceConfigModal';
+import ZfsPoolCard from './ui/ZfsPoolCard';
 
-export const ServiceManagement = ({ services, refresh, loading, setActionStatus }) => {
-  const { handleServiceAction } = useServiceManager(services, refresh);
+export const ServiceManagement = ({ services, refresh, loading }) => {
   const [isViewConfigModalOpen, setIsViewConfigModalOpen] = useState(false); // New state for view config modal
   const [configContent, setConfigContent] = useState('');
   const [configTitle, setConfigTitle] = useState('');
@@ -81,35 +80,9 @@ export const ServiceManagement = ({ services, refresh, loading, setActionStatus 
                   </div>
               </Card>
           )) : !loading && <p className="text-gray-500 col-span-full">Could not load service status.</p> }
-          <Card title="ZFS Pool Usage">
-          {loading ? (
-            <div>Loading...</div>
-          ) : zpoolStats ? (
-            <div className="space-y-2">
-              <div><span className="font-semibold">Pool:</span> {zpoolStats.name}</div>
-              <div><span className="font-semibold">Size:</span> {zpoolStats.size}</div>
-              <div><span className="font-semibold">Used:</span> {zpoolStats.used}</div>
-              <div><span className="font-semibold">Available:</span> {zpoolStats.available}</div>
-            </div>
-          ) : (
-            <div className="text-red-500">Failed to load ZFS pool info.</div>
-          )}
-        </Card>
-                 {/* View Config Modal */}
-                 <Modal isOpen={isViewConfigModalOpen} onClose={() => setIsViewConfigModalOpen(false)} title={configTitle} size="2xl">
-                      {configLoading ? (
-                          <div className="flex justify-center items-center h-40">
-                              <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-500"></div>
-                          </div>
-                      ) : (
-                          <pre className="bg-gray-100 dark:bg-gray-900 p-4 rounded-md text-xs overflow-auto max-h-[70vh]">
-                              <code>{configContent}</code>
-                          </pre>
-                      )}
-                       <div className="mt-4 flex justify-end">
-                            <Button variant="outline" onClick={() => setIsViewConfigModalOpen(false)}>Close</Button>
-                        </div>
-                 </Modal>
+      <ZfsPoolCard open={isViewConfigModalOpen} setOpen={setIsViewConfigModalOpen} title="ZFS Pool Usage" loading={configLoading} content={zpoolStats} />
+      {/* View Config Modal */}
+      <ServiceConfigModal loading={configLoading} />
        </div>
   );
 };
