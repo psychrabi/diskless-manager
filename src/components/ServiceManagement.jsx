@@ -4,6 +4,7 @@ import { useServiceManager } from '../hooks/useServiceManager';
 import { Card, Button, Modal } from '../components/ui';
 import { apiRequest, handleApiAction } from '../utils/apiRequest';
 import { useNotification } from '../contexts/NotificationContext';
+import { invoke } from '@tauri-apps/api/core';
 
 export const ServiceManagement = ({ services, refresh, loading, setActionStatus }) => {
   const { handleServiceAction } = useServiceManager(services, refresh);
@@ -15,30 +16,36 @@ export const ServiceManagement = ({ services, refresh, loading, setActionStatus 
 
 
     // --- Service Actions ---
-    const handleServiceRestart = (serviceKey) => {
-      handleApiAction(
-           () => apiRequest(`/services/${serviceKey}/control`, 'POST', { action: 'restart' }),
-           `Restart command sent to service ${serviceKey}.`,
-           `Failed to send restart command to service ${serviceKey}`,
-           showNotification
-       );
- };
+    const handleServiceRestart = async (serviceKey) => {
+        await invoke('control_service', {
+            serviceKey: serviceKey,
+            req: { action: 'restart' }
+        }).then((response) => { 
+            if (response.message)  showNotification(response.message, 'success'); 
+        }).catch((error) => showNotification( error,'error',));
+    };
 
     const handleViewConfig = async (serviceKey, serviceName) => {
-        setConfigTitle(`Configuration: ${serviceName}`);
-        setConfigContent(''); // Clear previous content
-        setIsViewConfigModalOpen(true);
-        setConfigLoading(true);
-        try {
-            // Use responseType 'text' for config files
-            const configData = await apiRequest(`/services/${serviceKey}/config`, 'GET', null, 'text');
-            setConfigContent(configData);
-        } catch (error) {
-            setConfigContent(`Error loading configuration:\n${error.message}`);
-        } finally {
-            setConfigLoading(false);
+    setConfigTitle(`Configuration: ${serviceName}`);
+    setConfigContent(''); // Clear previous content
+    setIsViewConfigModalOpen(true);
+    setConfigLoading(true);
+    try {
+        const configData = await invoke('get_service_config', { serviceKey });
+        // Handle both text and JSON object
+        if (configData && typeof configData === 'object' && 'text' in configData) {
+            setConfigContent(configData.text);
+        } else if (typeof configData === 'object') {
+            setConfigContent(JSON.stringify(configData, null, 2));
+        } else {
+            setConfigContent(String(configData));
         }
-    };
+    } catch (error) {
+        setConfigContent(`Error loading configuration:\n${error.message}`);
+    } finally {
+        setConfigLoading(false);
+    }
+};
   
 
   return (
@@ -55,12 +62,14 @@ export const ServiceManagement = ({ services, refresh, loading, setActionStatus 
                       </span>
                       {/* Service Action Buttons */}
                       <div className="flex space-x-1">
-                          <Button onClick={() => handleViewConfig(key, service.name)} variant="ghost" size="icon" className="h-7 w-7" title={`View Config for ${service.name}`}>
-                              <Eye className="h-4 w-4 text-gray-500" />
-                          </Button>
-                          <Button onClick={() => handleServiceRestart(key)} variant="ghost" size="icon" className="h-7 w-7" title={`Restart ${service.name}`}>
-                              <RefreshCw className="h-4 w-4 text-blue-500" />
-                          </Button>
+                            <Button onClick={() => handleViewConfig(key, service.name)} variant="ghost" size="icon" className="h-7 w-7" title={`View Config for ${service.name}`}>
+                                <Eye className="h-4 w-4 text-gray-500" />
+                            </Button>
+                            {(key !== 'zfs') && (
+                            <Button onClick={() => handleServiceRestart(key)} variant="ghost" size="icon" className="h-7 w-7" title={`Restart ${service.name}`}>
+                                <RefreshCw className="h-4 w-4 text-blue-500" />
+                            </Button>
+                            )}     
                       </div>
                   </div>
               </Card>

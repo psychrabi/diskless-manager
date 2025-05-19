@@ -1,8 +1,8 @@
 [package]
-name = "app"
+name = "diskless-server"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "Diskless Boot Server for booting diskless clients"
+authors = ["Rabi Shrestha"]
 license = ""
 repository = ""
 edition = "2021"

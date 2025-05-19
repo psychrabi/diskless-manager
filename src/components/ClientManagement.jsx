@@ -10,6 +10,7 @@ import { useCallback, useState } from 'react';
 import { Button, Card, ContextMenu, Modal } from '../components/ui';
 import { useNotification } from '../contexts/NotificationContext';
 import { apiRequest, handleApiAction } from '../utils/apiRequest';
+import { invoke } from '@tauri-apps/api/core';
 
 export const ClientManagement = ({ clients, masters, refresh }) => {
   const {showNotification} = useNotification();
@@ -161,46 +162,41 @@ export const ClientManagement = ({ clients, masters, refresh }) => {
             showNotification
         );
     },
-    reboot: (client) => {
-        handleApiAction(
-            () => apiRequest(`/clients/${client.id}/control`, 'POST', { action: 'reboot' }),
-            `Reboot command sent to ${client.name}.`,
-            `Failed to send reboot command to ${client.name}`,
-            showNotification
-        );
+    reboot: async (client) => {
+       await invoke('control_client', {
+        clientId: client.id,
+        req: { action: 'reboot' }
+      }).then((response) => { 
+        if (response.message) showNotification(response.message, 'success');
+      }).catch((error) => showNotification(error, 'error'));
+
     },
-    shutdown: (client) => {
-         handleApiAction(
-            () => apiRequest(`/clients/${client.id}/control`, 'POST', { action: 'shutdown' }),
-            `Shutdown command sent to ${client.name}.`,
-            `Failed to send shutdown command to ${client.name}`,
-            showNotification
-        );
+    shutdown: async (client) => {
+        await invoke('control_client', 
+          { clientId: client.id, req: { action: 'shutdown' }
+      }).then((response) => {
+        if (response.message) showNotification(response.message, 'success');  
+      }).catch((error) => showNotification(error, 'error'));
     },
-    wake: (client) => {
-        handleApiAction(
-            () => apiRequest(`/clients/${client.id}/control`, 'POST', { action: 'wake' }),
-            `Wake-on-LAN command sent for ${client.name}.`,
-            `Failed to send Wake-on-LAN for ${client.name}`,
-            showNotification
-        );
+    wake: async (client) => {
+      if (client.status !== 'Offline') { showNotification('Client must be offline to wake', 'error'); return; }
+      await invoke('control_client', {
+        clientId: client.id,
+        req: { action: 'wake' }
+      }).then((response) => {
+        if (response.message) showNotification(response.message, 'success');  
+      }).catch((error) => showNotification(error, 'error'));
     },
-    remote: (client) => {
-        if (client.status !== 'Online') {
-            showNotification('Client must be online to connect remotely', 'error');
-            return;
-        }
-        
-        handleApiAction(
-            () => apiRequest(`/clients/${client.id}/remote`, 'POST'),
-            'Connecting to remote desktop...',
-            'Failed to connect to remote desktop',
-            showNotification
-        ).then(response => {
-            if (response?.url) {
-                window.open(response.url, '_blank', 'noopener,noreferrer');
-            }
-        });        
+    remote: async (client) => {
+      if (client.status !== 'Online') {
+          showNotification('Client must be online to connect remotely', 'error');
+          return;
+      }
+      await invoke('remote_client', {
+        clientId: client.id,
+      }).then((response) => { 
+        if (response.message) showNotification(response.message, 'success');
+      }).catch((error) => showNotification(error, 'error'));
     },
     reset: (client) => {
         if (client.status !== 'Offline') {

@@ -18,7 +18,7 @@ const Notification = lazy(() => import('./components/ui/Notification.jsx'));
 
 import { Button } from './components/ui/index.js';
 import { apiRequest } from './utils/apiRequest.js';
-
+import { invoke } from '@tauri-apps/api/core';
 
 
 
@@ -38,9 +38,9 @@ function App() {
     try {
       console.log("Fetching data...");
       const [clientsRes, mastersRes, servicesRes] = await Promise.all([
-          apiRequest('/clients'),
-          apiRequest('/masters'),
-          apiRequest('/services')
+          invoke('get_clients'),
+          invoke('get_masters', {'zfsPool': 'nsboot0'}),
+          invoke('get_services', {'zfsPool': 'nsboot0'}),          
       ]);
 
       // console.log("Clients:", clientsRes);
@@ -51,7 +51,7 @@ function App() {
       setMasters(mastersRes || []);
       setServices(servicesRes || {});
 
-      // Set default snapshot selection for Add Client modal only if not already set and snapshots exist
+     // Set default snapshot selection for Add Client modal only if not already set and snapshots exist
       if (!selectedSnapshot && mastersRes?.length > 0 && mastersRes[0].snapshots?.length > 0) {
          setSelectedSnapshot(mastersRes[0].snapshots[mastersRes[0].snapshots.length - 1].name);
       } else if (mastersRes?.flatMap(m => m.snapshots || []).length === 0) {
