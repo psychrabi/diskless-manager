@@ -1,4 +1,4 @@
-import React, { Suspense } from 'react'
+import React, { StrictMode, Suspense } from 'react'
 import ReactDOM from 'react-dom/client'
 import './index.css'
 import App from './App.jsx'
@@ -12,11 +12,11 @@ const LoadingFallback = () => (
 )
 
 ReactDOM.createRoot(document.getElementById('root')).render(
-  
+  <StrictMode>
     <Suspense fallback={<LoadingFallback />}>
       <NotificationProvider>
         <App />
       </NotificationProvider>
     </Suspense>
-  
+  </StrictMode>
 )
