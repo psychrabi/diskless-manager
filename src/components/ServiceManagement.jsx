@@ -14,76 +14,75 @@ export const ServiceManagement = ({ services, refresh, loading }) => {
   const { showNotification } = useNotification();
   const [zpoolStats, setZpoolStats] = useState(null);
 
-    // --- Service Actions ---
-    const handleServiceRestart = async (serviceKey) => {
-        await invoke('control_service', {
-            serviceKey: serviceKey,
-            req: { action: 'restart' }
-        }).then((response) => { 
-            if (response.message)  showNotification(response.message, 'success'); 
-        }).catch((error) => showNotification( error,'error',));
-    };
+  // --- Service Actions ---
+  const handleServiceRestart = async (serviceKey) => {
+    await invoke('control_service', {
+      serviceKey: serviceKey,
+      req: { action: 'restart' }
+    }).then((response) => {
+      if (response.message) showNotification(response.message, 'success');
+    }).catch((error) => showNotification(error, 'error',));
+  };
 
-    const handleViewConfig = async (serviceKey, serviceName) => {
+  const handleViewConfig = async (serviceKey, serviceName) => {
     setConfigTitle(`Configuration: ${serviceName}`);
     setConfigContent(''); // Clear previous content
     setIsViewConfigModalOpen(true);
     setConfigLoading(true);
     try {
-        const configData = await invoke('get_service_config', { serviceKey });
-        // Handle both text and JSON object
-        if (configData && typeof configData === 'object' && 'text' in configData) {
-            setConfigContent(configData.text);
-        } else if (typeof configData === 'object') {
-            setConfigContent(JSON.stringify(configData, null, 2));
-        } else {
-            setConfigContent(String(configData));
-        }
+      const configData = await invoke('get_service_config', { serviceKey });
+      // Handle both text and JSON object
+      if (configData && typeof configData === 'object' && 'text' in configData) {
+        setConfigContent(configData.text);
+      } else if (typeof configData === 'object') {
+        setConfigContent(JSON.stringify(configData, null, 2));
+      } else {
+        setConfigContent(String(configData));
+      }
     } catch (error) {
-        setConfigContent(`Error loading configuration:\n${error.message}`);
+      setConfigContent(`Error loading configuration:\n${error.message}`);
     } finally {
-        setConfigLoading(false);
+      setConfigLoading(false);
     }
-};
-  
- useEffect(() => {
+  };
+
+  useEffect(() => {
     // Replace with your actual invoke or fetch call
     invoke("get_zpool_stats")
-      .then((stats) => {        
+      .then((stats) => {
         setZpoolStats(stats);
-      })      
+      })
   }, []);
 
   return (
-     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6 md:mb-8">
-          {Object.entries(services).length > 0 ? Object.entries(services).map(([key, service]) => (
-              <Card key={key} title={service.name} className="flex-1" titleClassName="text-base md:text-lg">
-                  <div className="flex items-center justify-between">
-                       <span className={`px-2 py-0.5 rounded-full text-xs font-semibold capitalize ${
-                           service.status === 'active' || service.status === 'running' ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' :
-                           service.status === 'inactive' || service.status === 'stopped' ? 'bg-gray-200 text-gray-800 dark:bg-gray-700 dark:text-gray-300' :
-                           'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200' // error, failed, degraded etc.
-                       }`}>
-                          {service.status}
-                      </span>
-                      {/* Service Action Buttons */}
-                      <div className="flex space-x-1">
-                            <Button onClick={() => handleViewConfig(key, service.name)} variant="ghost" size="icon" className="h-7 w-7" title={`View Config for ${service.name}`}>
-                                <Eye className="h-4 w-4 text-gray-500" />
-                            </Button>
-                            {(key !== 'zfs') && (
-                            <Button onClick={() => handleServiceRestart(key)} variant="ghost" size="icon" className="h-7 w-7" title={`Restart ${service.name}`}>
-                                <RefreshCw className="h-4 w-4 text-blue-500" />
-                            </Button>
-                            )}     
-                      </div>
-                  </div>
-              </Card>
-          )) : !loading && <p className="text-gray-500 col-span-full">Could not load service status.</p> }
-      <ZfsPoolCard open={isViewConfigModalOpen} setOpen={setIsViewConfigModalOpen} title="ZFS Pool Usage" loading={configLoading} content={zpoolStats} />
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6 md:mb-8">
+      {Object.entries(services).length > 0 ? Object.entries(services).map(([key, service]) => (
+        <Card key={key} title={service.name} className="flex-1" titleClassName="text-base md:text-lg">
+          <div className="flex items-center justify-between">
+            <span className={`px-2 py-0.5 rounded-full text-xs font-semibold capitalize ${service.status === 'active' || service.status === 'running' ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' :
+              service.status === 'inactive' || service.status === 'stopped' ? 'bg-gray-200 text-gray-800 dark:bg-gray-700 dark:text-gray-300' :
+                'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200' // error, failed, degraded etc.
+              }`}>
+              {service.status}
+            </span>
+            {/* Service Action Buttons */}
+            <div className="flex space-x-1">
+              <Button onClick={() => handleViewConfig(key, service.name)} variant="ghost" size="icon" className="h-7 w-7" title={`View Config for ${service.name}`}>
+                <Eye className="h-4 w-4 text-gray-500" />
+              </Button>
+              {(key !== 'zfs') && (
+                <Button onClick={() => handleServiceRestart(key)} variant="ghost" size="icon" className="h-7 w-7" title={`Restart ${service.name}`}>
+                  <RefreshCw className="h-4 w-4 text-blue-500" />
+                </Button>
+              )}
+            </div>
+          </div>
+        </Card>
+      )) : !loading && <p className="text-gray-500 col-span-full">Could not load service status.</p>}
+      <ZfsPoolCard title="ZFS Pool Usage" />
       {/* View Config Modal */}
-      <ServiceConfigModal loading={configLoading} />
-       </div>
+      <ServiceConfigModal loading={configLoading} open={isViewConfigModalOpen} setOpen={setIsViewConfigModalOpen} content={configContent} />
+    </div>
   );
 };
 
