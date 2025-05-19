@@ -1,6 +1,6 @@
 import React from 'react';
 
-const Select = ({ label, id, value, onChange, children, required = false }) => (
+export const Select = ({ label, id, value, onChange, children, required = false }) => (
   <div className="mb-4">
     <label htmlFor={id} className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{label}</label>
     <select
