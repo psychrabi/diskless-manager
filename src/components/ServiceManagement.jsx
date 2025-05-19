@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { RefreshCw, Eye } from 'lucide-react';
 import { useServiceManager } from '../hooks/useServiceManager';
 import { Card, Button, Modal } from '../components/ui';
@@ -13,7 +13,7 @@ export const ServiceManagement = ({ services, refresh, loading, setActionStatus 
   const [configTitle, setConfigTitle] = useState('');
   const [configLoading, setConfigLoading] = useState(false);
   const { showNotification } = useNotification();
-
+  const [zpoolStats, setZpoolStats] = useState(null);
 
     // --- Service Actions ---
     const handleServiceRestart = async (serviceKey) => {
@@ -47,6 +47,13 @@ export const ServiceManagement = ({ services, refresh, loading, setActionStatus 
     }
 };
   
+ useEffect(() => {
+    // Replace with your actual invoke or fetch call
+    invoke("get_zpool_stats")
+      .then((stats) => {        
+        setZpoolStats(stats);
+      })      
+  }, []);
 
   return (
      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6 md:mb-8">
@@ -74,6 +81,20 @@ export const ServiceManagement = ({ services, refresh, loading, setActionStatus 
                   </div>
               </Card>
           )) : !loading && <p className="text-gray-500 col-span-full">Could not load service status.</p> }
+          <Card title="ZFS Pool Usage">
+          {loading ? (
+            <div>Loading...</div>
+          ) : zpoolStats ? (
+            <div className="space-y-2">
+              <div><span className="font-semibold">Pool:</span> {zpoolStats.name}</div>
+              <div><span className="font-semibold">Size:</span> {zpoolStats.size}</div>
+              <div><span className="font-semibold">Used:</span> {zpoolStats.used}</div>
+              <div><span className="font-semibold">Available:</span> {zpoolStats.available}</div>
+            </div>
+          ) : (
+            <div className="text-red-500">Failed to load ZFS pool info.</div>
+          )}
+        </Card>
                  {/* View Config Modal */}
                  <Modal isOpen={isViewConfigModalOpen} onClose={() => setIsViewConfigModalOpen(false)} title={configTitle} size="2xl">
                       {configLoading ? (

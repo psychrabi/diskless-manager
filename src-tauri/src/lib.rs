@@ -576,6 +576,27 @@ async fn get_service_config(service_key: String) -> Result<serde_json::Value, St
     }
 }
 
+#[tauri::command]
+async fn get_zpool_stats() -> Result<serde_json::Value, String> {
+    let output = std::process::Command::new("zpool")
+        .args(["list", "-H", "-o", "name,size,alloc,free"])
+        .output()
+        .map_err(|e| format!("Failed to run zpool list: {e}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    
+    let line = stdout.lines().next().ok_or("No zpool found")?;
+    let parts: Vec<&str> = line.split_whitespace().collect();
+    if parts.len() < 4 {
+        return Err("Unexpected zpool output".to_string());
+    }
+    Ok(serde_json::json!({
+        "name": parts[0],
+        "size": parts[1],
+        "used": parts[2],
+        "available": parts[3],
+    }))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -586,6 +607,7 @@ pub fn run() {
           control_client,
           remote_client,
           control_service,
+          get_zpool_stats,
           get_service_config
           ])
         .setup(|app| {
