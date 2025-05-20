@@ -1420,6 +1420,55 @@ async fn edit_client(
     Ok(serde_json::json!({"message": "No changes detected or no action required"}))
 }
 
+#[tauri::command]
+async fn delete_client(client_id: String) -> Result<serde_json::Value, String> {
+    let re = regex::Regex::new(r"^[\w-]+$").unwrap();
+    if !re.is_match(&client_id) {
+        return Err("Invalid client ID".to_string());
+    }
+
+    let mut errors = Vec::new();
+    let paths = get_client_paths(&client_id);
+
+    // Clean up DHCP configuration
+    if let Err(e) = update_dhcp_config(&client_id, "", false)
+        .and_then(|_| run_command(&["systemctl", "restart", "isc-dhcp-server.service"]))
+    {
+        errors.push(format!("Failed to clean up DHCP config: {}", e));
+    }
+
+    // Clean up iSCSI target
+    if let Err(e) = cleanup_iscsi_target(&paths["target_iqn"], &paths["block_store"]) {
+        errors.push(format!("Failed to clean up iSCSI target: {}", e));
+    }
+
+    // Clean up ZFS clone
+    match run_command_check(&["zfs", "list", "-H", &paths["clone"]]) {
+        0 => {
+            if let Err(e) = run_command(&["zfs", "destroy", &paths["clone"]]) {
+                errors.push(format!("Failed to destroy ZFS clone: {}", e));
+            }
+        }
+        _ => {} // ZFS clone does not exist, nothing to do
+    }
+
+    // Delete client configuration from JSON file
+    if !delete_client_config(&client_id) {
+        errors.push("Failed to delete client configuration file".to_string());
+    }
+
+    if !errors.is_empty() {
+        return Ok(json!({
+            "message": format!("Client {} deleted with issues", client_id),
+            "errors": errors
+        }));
+    }
+
+    Ok(json!({
+        "message": format!("Client {} deleted successfully", client_id)
+    }))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1433,7 +1482,8 @@ pub fn run() {
             get_zpool_stats,
             get_service_config,
             add_client,
-            edit_client
+            edit_client,
+            delete_client
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {

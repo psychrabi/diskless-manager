@@ -73,15 +73,17 @@ export const clientContextMenuActions = (fetchData, closeContextMenu, setClient,
       )
     },
     delete: (client) => {
-      console.log(client)
+      showNotification(`Deleting client... ${client.name}`, 'info');
       if (confirm(`Are you sure you want to delete client "${client.name}"? This will destroy their ZFS clone and remove configurations.`)) {
-        handleApiAction(
-          () => apiRequest(`/clients/${client.name}`, 'DELETE'),
-          `Client ${client.name} deleted successfully.`,
-          `Failed to delete client ${client.name}`,
-          showNotification
-        );
-        fetchData();
+        invoke('delete_client', { clientId: client.id })
+          .then((response) => {
+            if (response.message) showNotification(response.message, 'success');
+          }).catch((error) => showNotification(error, 'error'))
+          .finally(() => {
+            closeContextMenu();
+            // Refresh the data after deletion
+            fetchData();
+          });
       }
     }
   }
