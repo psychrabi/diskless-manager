@@ -2,9 +2,10 @@ import React, { useState } from 'react';
 import { Button } from '../Button';
 import { Modal } from '../Modal';
 import { invoke } from '@tauri-apps/api/core';
+import { useNotification } from '../../../contexts/NotificationContext';
 
 const ClientFormModal = ({client, setClient, masters, isOpen, setIsOpen, refresh}) => {
-  
+  const { showNotification } = useNotification();
 
     const handleSubmit = async (event) => {
         event.preventDefault();
@@ -26,13 +27,16 @@ const ClientFormModal = ({client, setClient, masters, isOpen, setIsOpen, refresh
         setIsOpen(false);
     
         if (!client.id) {
-          console.log("Adding new client")
+          showNotification(`Adding new client ${client.name}`, 'info');
           await invoke('add_client', {req: client}).then((response) => {
-            console.log("Response from add_client:", response);})
-            showNotification(response.message, 'success');
+            if (response.message) showNotification(response.message, 'success');
+            }).catch((error) => {
+              showNotification(error, 'error',)
+            }).finally(() => {
             refresh();
+            });
         } else {
-          console.log("Editing client")
+          showNotification(`Editing client ${client.name}`, 'info');
           await invoke('edit_client', {clientId: client.id, data:{
               name: client.name,
               mac: client.mac,
@@ -40,10 +44,12 @@ const ClientFormModal = ({client, setClient, masters, isOpen, setIsOpen, refresh
               master: client.master,
               snapshot: client.snapshot ? `${client.snapshot}` : null
             }}).then((response) => {
-            console.log("Response from add_client:", response);
-            showNotification(response.message, 'success');
+              if (response.message) showNotification(response.message, 'success');
+            }).catch((error) => {
+              showNotification(error, 'error',)
+            }).finally(() => {
             refresh();
-            })
+            });
           
         }
         

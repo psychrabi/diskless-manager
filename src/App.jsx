@@ -27,10 +27,10 @@ function App() {
     setError(null); // Clear previous errors
     try {
       console.log("Fetching data...");
-      const [clientsRes, mastersRes, servicesRes] = await Promise.all([
-        invoke('get_clients'),
-        invoke('get_masters', { 'zfsPool': 'nsboot0' }),
+      const [servicesRes, mastersRes, clientsRes] = await Promise.all([
         invoke('get_services', { 'zfsPool': 'nsboot0' }),
+        invoke('get_masters', { 'zfsPool': 'nsboot0' }),
+        invoke('get_clients')
       ]);
 
       setClients(clientsRes ? Object.values(clientsRes) : []);
