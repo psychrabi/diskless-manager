@@ -1,10 +1,23 @@
+use chrono::Local;
+use once_cell::sync::Lazy;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::process::{Command, Stdio};
-use std::time::Duration;
-use std::thread;
+use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::Duration;
 
+const ZFS_POOL: &str = "nsboot0"; // Adjust to your ZFS pool name
+const DHCP_CONFIG_PATH: &str = "/etc/dhcp/dhcpd.conf"; // Adjust as needed
+const CONFIG_PATH: &str = "./config.json"; // Adjust as needed
+pub static SERVER_IP: Lazy<String> = Lazy::new(|| {
+    let ip = get_server_ip();
+    println!("Using server IP: {}", ip);
+    ip
+});
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Client {
@@ -57,6 +70,14 @@ pub struct ServiceControlRequest {
     pub action: String,
 }
 
+#[derive(Deserialize)]
+pub struct AddClientRequest {
+    pub name: String,
+    pub mac: String,
+    pub ip: String,
+    pub master: String,
+    pub snapshot: Option<String>,
+}
 
 #[tauri::command]
 async fn get_masters(zfs_pool: String) -> Result<Vec<Master>, String> {
@@ -102,15 +123,7 @@ async fn get_masters(zfs_pool: String) -> Result<Vec<Master>, String> {
         // Check snapshots of this dataset
         let snap_out = Command::new("sudo")
             .args([
-                "zfs",
-                "list",
-                "-H",
-                "-t",
-                "snapshot",
-                "-o",
-                "name",
-                "-r",
-                &ds.name,
+                "zfs", "list", "-H", "-t", "snapshot", "-o", "name", "-r", &ds.name,
             ])
             .output();
         if let Ok(snap_out) = snap_out {
@@ -198,10 +211,13 @@ async fn get_services(zfs_pool: String) -> Result<serde_json::Value, String> {
         } else {
             "inactive".to_string()
         };
-        statuses.insert(key, serde_json::json!({
-            "name": service_name.trim_end_matches(".service"),
-            "status": status
-        }));
+        statuses.insert(
+            key,
+            serde_json::json!({
+                "name": service_name.trim_end_matches(".service"),
+                "status": status
+            }),
+        );
     }
 
     // ZFS pool health check
@@ -221,7 +237,11 @@ async fn get_services(zfs_pool: String) -> Result<serde_json::Value, String> {
                     }
                 })
                 .unwrap_or("unknown");
-            let status = if pool_state == "ONLINE" { "active" } else { "degraded" };
+            let status = if pool_state == "ONLINE" {
+                "active"
+            } else {
+                "degraded"
+            };
             status.to_string()
         }
         Ok(_) => "error".to_string(),
@@ -249,7 +269,10 @@ async fn get_clients(client_id: Option<String>) -> Result<serde_json::Value, Str
     }
 
     if let Some(id) = client_id {
-        let client = config.clients.iter().find(|c| c.id.eq_ignore_ascii_case(&id));
+        let client = config
+            .clients
+            .iter()
+            .find(|c| c.id.eq_ignore_ascii_case(&id));
         Ok(serde_json::json!(client))
     } else {
         Ok(serde_json::json!(config.clients))
@@ -271,10 +294,13 @@ fn get_client_status(ip: &str) -> String {
 }
 
 #[tauri::command]
-async fn control_client(client_id: String, req: ControlRequest) -> Result<serde_json::Value, String> {
+async fn control_client(
+    client_id: String,
+    req: ControlRequest,
+) -> Result<serde_json::Value, String> {
     // Load client info (implement get_client_by_id as needed)
-    let client = get_client_by_id(&client_id)
-        .ok_or_else(|| format!("Client {} not found", client_id))?;
+    let client =
+        get_client_by_id(&client_id).ok_or_else(|| format!("Client {} not found", client_id))?;
 
     let mac = client.mac.clone();
     let ip = client.ip.clone();
@@ -295,7 +321,9 @@ async fn control_client(client_id: String, req: ControlRequest) -> Result<serde_
                     String::from_utf8_lossy(&output.stderr)
                 ));
             }
-            Ok(serde_json::json!({ "message": format!("Wake-on-LAN command sent to {} ({})", name, ip) }))            
+            Ok(
+                serde_json::json!({ "message": format!("Wake-on-LAN command sent to {} ({})", name, ip) }),
+            )
         }
         "reboot" => {
             if ip.is_empty() {
@@ -303,7 +331,16 @@ async fn control_client(client_id: String, req: ControlRequest) -> Result<serde_
             }
             let output = Command::new("net")
                 .args([
-                    "rpc", "shutdown", "-r", "-I", &ip, "-U", "diskless%1", "-f", "-t", "0"
+                    "rpc",
+                    "shutdown",
+                    "-r",
+                    "-I",
+                    &ip,
+                    "-U",
+                    "diskless%1",
+                    "-f",
+                    "-t",
+                    "0",
                 ])
                 .output()
                 .map_err(|e| e.to_string())?;
@@ -313,16 +350,16 @@ async fn control_client(client_id: String, req: ControlRequest) -> Result<serde_
                     String::from_utf8_lossy(&output.stderr)
                 ));
             }
-            Ok(serde_json::json!({ "message": format!("Reboot command sent to {} ({})", name, ip) }))
+            Ok(
+                serde_json::json!({ "message": format!("Reboot command sent to {} ({})", name, ip) }),
+            )
         }
         "shutdown" => {
             if ip.is_empty() {
                 return Err(format!("IP address not found for '{}'", client_id));
             }
             let output = Command::new("net")
-                .args([
-                    "rpc", "shutdown", "-S", &ip, "-U", "diskless%1"
-                ])
+                .args(["rpc", "shutdown", "-S", &ip, "-U", "diskless%1"])
                 .output()
                 .map_err(|e| e.to_string())?;
             if !output.status.success() {
@@ -331,7 +368,9 @@ async fn control_client(client_id: String, req: ControlRequest) -> Result<serde_
                     String::from_utf8_lossy(&output.stderr)
                 ));
             }
-            Ok(serde_json::json!({ "message": format!("Shutdown command sent to {} ({})", name, ip) }))
+            Ok(
+                serde_json::json!({ "message": format!("Shutdown command sent to {} ({})", name, ip) }),
+            )
         }
         "toggleSuper" => {
             // Implement ZFS promote/clone logic here, using req.make_super
@@ -339,13 +378,19 @@ async fn control_client(client_id: String, req: ControlRequest) -> Result<serde_
             let is_super = req.make_super.unwrap_or(false);
             if is_super {
                 // Promote logic
-                Ok(serde_json::json!({ "message": format!("Super Client enabled for {}", client_id) }))
+                Ok(
+                    serde_json::json!({ "message": format!("Super Client enabled for {}", client_id) }),
+                )
             } else {
                 // Demote logic
-                Ok(serde_json::json!({ "message": format!("Super Client disabled for {}", client_id) }))
+                Ok(
+                    serde_json::json!({ "message": format!("Super Client disabled for {}", client_id) }),
+                )
             }
         }
-        "edit" => Ok(serde_json::json!({ "message": format!("Placeholder: Edit Client {} not implemented.", client_id) })),
+        "edit" => Ok(
+            serde_json::json!({ "message": format!("Placeholder: Edit Client {} not implemented.", client_id) }),
+        ),
         _ => Err(format!("Invalid action: {}", req.action)),
     }
 }
@@ -365,13 +410,11 @@ fn get_client_by_id(client_id: &str) -> Option<Client> {
     None
 }
 
-
 #[tauri::command]
 async fn remote_client(client_id: String) -> Result<serde_json::Value, String> {
     print!("Remote client: {}", client_id);
     // 1. Get client info (implement get_client_by_id as needed)
-    let client = get_client_by_id(&client_id)
-        .ok_or_else(|| "Client not found".to_string())?;
+    let client = get_client_by_id(&client_id).ok_or_else(|| "Client not found".to_string())?;
 
     let client_ip = client.ip.clone();
     if client_ip.is_empty() {
@@ -419,8 +462,7 @@ fn launch_remote_desktop(client_ip: &str, username: &str) -> Result<(), String> 
         .map_err(|e| format!("Failed to launch xfreerdp: {}", e))?;
 
     // Wait briefly to check for immediate failures
-    let result = child.wait_timeout(Duration::from_secs(5))
-        .unwrap_or(None);
+    let result = child.wait_timeout(Duration::from_secs(5)).unwrap_or(None);
 
     if let Some(status) = result {
         if !status.success() {
@@ -448,7 +490,8 @@ fn launch_remote_desktop(client_ip: &str, username: &str) -> Result<(), String> 
                 .spawn()
                 .map_err(|e| format!("Fallback xfreerdp failed: {}", e))?;
 
-            let fallback_result = fallback_child.wait_timeout(Duration::from_secs(5))
+            let fallback_result = fallback_child
+                .wait_timeout(Duration::from_secs(5))
                 .unwrap_or(None);
 
             if let Some(fallback_status) = fallback_result {
@@ -467,7 +510,7 @@ trait WaitTimeout {
     fn wait_timeout(&mut self, dur: Duration) -> std::io::Result<Option<std::process::ExitStatus>>;
 }
 impl WaitTimeout for std::process::Child {
-    fn wait_timeout(&mut self, dur: Duration) -> std::io::Result<Option<std::process::ExitStatus>> {        
+    fn wait_timeout(&mut self, dur: Duration) -> std::io::Result<Option<std::process::ExitStatus>> {
         let start = std::time::Instant::now();
         loop {
             match self.try_wait()? {
@@ -484,19 +527,28 @@ impl WaitTimeout for std::process::Child {
 }
 
 #[tauri::command]
-async fn control_service(service_key: String, req: ServiceControlRequest) -> Result<serde_json::Value, String> {
+async fn control_service(
+    service_key: String,
+    req: ServiceControlRequest,
+) -> Result<serde_json::Value, String> {
     // Define your service map (adjust as needed)
     let service_map: HashMap<&str, &str> = [
         ("iscsi", "target.service"),
         ("dhcp", "isc-dhcp-server.service"),
         ("tftp", "tftpd-hpa.service"),
-    ].iter().cloned().collect();
+    ]
+    .iter()
+    .cloned()
+    .collect();
 
     let Some(&service_name) = service_map.get(service_key.as_str()) else {
         return Err(format!("Unknown service key: {}", service_key));
     };
 
-    println!("Received control action '{}' for service: {} ({})", req.action, service_key, service_name);
+    println!(
+        "Received control action '{}' for service: {} ({})",
+        req.action, service_key, service_name
+    );
 
     match req.action.as_str() {
         "restart" => {
@@ -506,13 +558,21 @@ async fn control_service(service_key: String, req: ServiceControlRequest) -> Res
                 .map_err(|e| format!("Failed to run systemctl: {e}"))?;
 
             if output.status.success() {
-                Ok(serde_json::json!({ "message": format!("Service '{}' restart command issued successfully.", service_name) }))
+                Ok(
+                    serde_json::json!({ "message": format!("Service '{}' restart command issued successfully.", service_name) }),
+                )
             } else {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                Err(format!("Failed to restart service '{}': {}", service_name, stderr))
+                Err(format!(
+                    "Failed to restart service '{}': {}",
+                    service_name, stderr
+                ))
             }
         }
-        _ => Err(format!("Unsupported action '{}' for service '{}'", req.action, service_key)),
+        _ => Err(format!(
+            "Unsupported action '{}' for service '{}'",
+            req.action, service_key
+        )),
     }
 }
 
@@ -524,7 +584,10 @@ async fn get_service_config(service_key: String) -> Result<serde_json::Value, St
         ("tftp", "/etc/default/tftpd-hpa"),
         ("iscsi", "/etc/rtslib-fb-target/saveconfig.json"),
         // Add more as needed
-    ].iter().cloned().collect();
+    ]
+    .iter()
+    .cloned()
+    .collect();
 
     if service_key == "zfs" {
         // Get ZFS pool and dataset info
@@ -536,8 +599,13 @@ async fn get_service_config(service_key: String) -> Result<serde_json::Value, St
 
         let zfs_list = Command::new("sudo")
             .args([
-                "zfs", "list", "-H", "-t", "all",
-                "-o", "name,type,used,avail,refer,mountpoint"
+                "zfs",
+                "list",
+                "-H",
+                "-t",
+                "all",
+                "-o",
+                "name,type,used,avail,refer,mountpoint",
             ])
             .output()
             .map_err(|e| format!("Failed to run zfs list: {e}"))?;
@@ -562,7 +630,7 @@ async fn get_service_config(service_key: String) -> Result<serde_json::Value, St
             return Err(format!("Configuration path is not a file: {}", config_path));
         }
 
-       if service_key == "iscsi" {
+        if service_key == "iscsi" {
             let content = fs::read_to_string(config_path)
                 .map_err(|e| format!("Error reading config file {}: {}", config_path, e))?;
             let json_val: serde_json::Value = serde_json::from_str(&content)
@@ -583,7 +651,7 @@ async fn get_zpool_stats() -> Result<serde_json::Value, String> {
         .output()
         .map_err(|e| format!("Failed to run zpool list: {e}"))?;
     let stdout = String::from_utf8_lossy(&output.stdout);
-    
+
     let line = stdout.lines().next().ok_or("No zpool found")?;
     let parts: Vec<&str> = line.split_whitespace().collect();
     if parts.len() < 4 {
@@ -597,19 +665,776 @@ async fn get_zpool_stats() -> Result<serde_json::Value, String> {
     }))
 }
 
+fn create_dhcp_entry(name: &str, mac: &str, ip: &str, target_iqn: &str) -> String {
+    let formatted_name = format_client_name(name);
+    format!(
+        r#"host {formatted_name} {{
+    hardware ethernet {mac};
+    fixed-address {ip};
+    option host-name "{formatted_name}";
+    if substring (option vendor-class-identifier, 15, 5) = "00000" {{
+        filename "ipxe.kpxe";
+    }}
+    elsif substring (option vendor-class-identifier, 15, 5) = "00006" {{
+        filename "ipxe32.efi";
+    }}
+    else {{
+        filename "ipxe.efi";
+    }}
+    option root-path "iscsi:{server_ip}::::{target_iqn}";
+}}"#,
+        formatted_name = formatted_name,
+        mac = mac,
+        ip = ip,
+        target_iqn = target_iqn,
+        server_ip = SERVER_IP.to_string(),
+    )
+}
+
+fn get_client_paths(client_id: &str) -> HashMap<String, String> {
+    let clone = format!("{}/{}-disk", ZFS_POOL, client_id.to_uppercase());
+    let target_iqn = format!(
+        "iqn.2025-04.com.nsboot:{}",
+        client_id.to_lowercase().replace('_', "")
+    );
+    let block_store = format!("block_{}", client_id.to_lowercase());
+
+    let mut map = HashMap::new();
+    map.insert("clone".to_string(), clone);
+    map.insert("target_iqn".to_string(), target_iqn);
+    map.insert("block_store".to_string(), block_store);
+    map
+}
+
+fn check_duplicate_client(name: &str, mac: &str, ip: &str) -> Option<String> {
+    if !Path::new(CONFIG_PATH).exists() {
+        return None;
+    }
+
+    let config_content = match fs::read_to_string(CONFIG_PATH) {
+        Ok(content) => content,
+        Err(e) => {
+            println!("Error reading config file: {}", e);
+            return Some("Error checking for existing clients".to_string());
+        }
+    };
+
+    let config: Value = match serde_json::from_str(&config_content) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            println!("Error parsing config file: {}", e);
+            return Some("Error checking for existing clients".to_string());
+        }
+    };
+
+    let clients = config.get("clients").and_then(|v| v.as_array());
+    if clients.is_none() {
+        return None;
+    }
+
+    for client in clients.unwrap() {
+        let client_name = client
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_lowercase();
+        let client_ip = client.get("ip").and_then(|v| v.as_str()).unwrap_or("");
+        let client_mac = client
+            .get("mac")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_uppercase();
+
+        if name.to_lowercase() == client_name {
+            return Some(format!("A client with name '{}' already exists", name));
+        }
+        if ip == client_ip {
+            return Some(format!(
+                "IP address {} is already in use by client '{}'",
+                ip,
+                client.get("name").and_then(|v| v.as_str()).unwrap_or("")
+            ));
+        }
+        if mac.to_uppercase() == client_mac {
+            return Some(format!(
+                "MAC address {} is already in use by client '{}'",
+                mac,
+                client.get("name").and_then(|v| v.as_str()).unwrap_or("")
+            ));
+        }
+    }
+    None
+}
+
+fn run_command(args: &[&str]) -> Result<(), String> {
+    let status = Command::new("sudo")
+        .args(args)
+        .status()
+        .map_err(|e| format!("Failed to run command: {}: {}", args.join(" "), e))?;
+    if !status.success() {
+        return Err(format!("Command failed: {}", args.join(" ")));
+    }
+    Ok(())
+}
+
+fn run_command_check(args: &[&str]) -> i32 {
+    Command::new("sudo")
+        .args(args)
+        .status()
+        .map(|s| s.code().unwrap_or(-1))
+        .unwrap_or(-1)
+}
+
+fn save_client_config(client_data: &Client) -> bool {
+    // Read existing config if it exists
+    let mut config: Value = if Path::new(CONFIG_PATH).exists() {
+        match fs::read_to_string(CONFIG_PATH)
+            .ok()
+            .and_then(|content| serde_json::from_str(&content).ok())
+        {
+            Some(val) => val,
+            None => json!({"clients": [], "masters": {}}),
+        }
+    } else {
+        json!({"clients": [], "masters": {}})
+    };
+
+    // Ensure clients is a list
+    let clients = config.get_mut("clients").and_then(|v| v.as_array_mut());
+    let mut updated = false;
+
+    if let Some(clients_arr) = clients {
+        // Update or add client data
+        for c in clients_arr.iter_mut() {
+            if c.get("id") == Some(&json!(client_data.id)) {
+                *c = serde_json::to_value(client_data).unwrap();
+                updated = true;
+                break;
+            }
+        }
+        if !updated {
+            clients_arr.push(serde_json::to_value(client_data).unwrap());
+        }
+    } else {
+        // If "clients" is not a list, reset it
+        config["clients"] = json!([client_data]);
+    }
+
+    // Write updated config
+    match fs::write(CONFIG_PATH, serde_json::to_string_pretty(&config).unwrap()) {
+        Ok(_) => true,
+        Err(e) => {
+            println!("Error saving client config: {}", e);
+            false
+        }
+    }
+}
+
+fn update_dhcp_config(client_id: &str, dhcp_entry: &str, is_new: bool) -> Result<(), String> {
+    // Read existing config
+    let content = fs::read_to_string(DHCP_CONFIG_PATH)
+        .map_err(|e| format!("Failed to read DHCP config: {}", e))?;
+
+    // Backup current config
+    let dhcp_backup_path = format!("{}.bak", DHCP_CONFIG_PATH);
+    fs::write(&dhcp_backup_path, &content)
+        .map_err(|e| format!("Failed to backup DHCP config: {}", e))?;
+
+    let mut new_content = content.clone();
+
+    // Remove existing entry if not new
+    if !is_new {
+        let formatted_name = format_client_name(client_id);
+        let host_pattern = format!(
+            r"host\s+{}\s*\{{(?:[^{{}}]|(?:\{{[^{{}}]*\}}))*\}}\s*",
+            regex::escape(&formatted_name)
+        );
+        let re = Regex::new(&host_pattern).map_err(|e| format!("Regex error: {}", e))?;
+        new_content = re.replace(&new_content, "").to_string();
+        // Remove extra blank lines
+        let re_blank = Regex::new(r"\n\s*\n{2,}").unwrap();
+        new_content = re_blank.replace_all(&new_content, "\n\n").to_string();
+    }
+
+    // Add new entry
+    new_content = new_content.trim_end().to_string() + "\n\n" + dhcp_entry;
+
+    // Write updated config
+    match fs::write(DHCP_CONFIG_PATH, &new_content) {
+        Ok(_) => {
+            // Clean up backup
+            let _ = fs::remove_file(&dhcp_backup_path);
+            Ok(())
+        }
+        Err(e) => {
+            // Restore backup on error
+            let _ = fs::write(DHCP_CONFIG_PATH, &content);
+            let _ = fs::remove_file(&dhcp_backup_path);
+            Err(format!("Failed to write DHCP config: {}", e))
+        }
+    }
+}
+
+// Helper: Format client name (implement as needed)
+fn format_client_name(name: &str) -> String {
+    if let Some(idx) = name.find('_') {
+        if let Ok(num) = name[idx + 1..].parse::<u32>() {
+            return format!("PC{:03}", num);
+        }
+    }
+    name.to_uppercase()
+}
+
+fn setup_iscsi_target(
+    target_iqn: &str,
+    block_store: &str,
+    volume_path: &str,
+) -> Result<(), String> {
+    // Create target if it doesn't exist
+    let output = Command::new("sudo")
+        .args(["targetcli", "iscsi/", "ls"])
+        .output()
+        .map_err(|e| format!("Failed to run targetcli iscsi/ ls: {}", e))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if !stdout.contains(target_iqn) {
+        run_command(&["targetcli", "iscsi/", "create", target_iqn])?;
+        run_command(&[
+            "targetcli",
+            &format!("iscsi/{}/tpg1", target_iqn),
+            "set",
+            "attribute",
+            "generate_node_acls=1",
+        ])?;
+        run_command(&[
+            "targetcli",
+            &format!("iscsi/{}/tpg1", target_iqn),
+            "set",
+            "attribute",
+            "cache_dynamic_acls=1",
+        ])?;
+        run_command(&[
+            "targetcli",
+            &format!("iscsi/{}/tpg1", target_iqn),
+            "set",
+            "attribute",
+            "demo_mode_write_protect=0",
+        ])?;
+        run_command(&[
+            "targetcli",
+            &format!("iscsi/{}/tpg1", target_iqn),
+            "set",
+            "attribute",
+            "authentication=0",
+        ])?;
+    }
+
+    // Create or update block store
+    let output = Command::new("sudo")
+        .args(["targetcli", "backstores/block/", "ls"])
+        .output()
+        .map_err(|e| format!("Failed to run targetcli backstores/block/ ls: {}", e))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if stdout.contains(block_store) {
+        run_command(&["targetcli", "backstores/block/", "delete", block_store])?;
+    }
+    run_command(&[
+        "targetcli",
+        "backstores/block",
+        "create",
+        block_store,
+        volume_path,
+    ])?;
+
+    // Create LUN if it doesn't exist
+    let output = Command::new("sudo")
+        .args([
+            "targetcli",
+            &format!("iscsi/{}/tpg1/luns", target_iqn),
+            "ls",
+        ])
+        .output()
+        .map_err(|e| format!("Failed to run targetcli iscsi/.../luns ls: {}", e))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if !stdout.contains(block_store) {
+        run_command(&[
+            "targetcli",
+            &format!("iscsi/{}/tpg1/luns", target_iqn),
+            "create",
+            &format!("/backstores/block/{}", block_store),
+        ])?;
+    }
+
+    // Ensure portal exists
+    let output = Command::new("sudo")
+        .args([
+            "targetcli",
+            &format!("iscsi/{}/tpg1/portals/", target_iqn),
+            "ls",
+        ])
+        .output()
+        .map_err(|e| format!("Failed to run targetcli iscsi/.../portals/ ls: {}", e))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if !stdout.contains("0.0.0.0") {
+        run_command(&[
+            "targetcli",
+            &format!("iscsi/{}/tpg1/portals/", target_iqn),
+            "create",
+            "0.0.0.0",
+            "3260",
+        ])?;
+    }
+    run_command(&["targetcli", "saveconfig"])?;
+
+    Ok(())
+}
+
+fn get_server_ip() -> String {
+    // Try to get the server's IP address using `ip route get 1`
+    match Command::new("ip").args(&["route", "get", "1"]).output() {
+        Ok(output) => {
+            if !output.status.success() {
+                eprintln!(
+                    "Warning: Failed to get server IP: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                return "192.168.1.200".to_string();
+            }
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines() {
+                if let Some(idx) = line.find("src") {
+                    let ip_part = &line[idx + 3..].trim();
+                    let ip = ip_part.split_whitespace().next().unwrap_or("");
+                    if ip.starts_with("192.168.") || ip.starts_with("10.") {
+                        return ip.to_string();
+                    }
+                }
+            }
+            eprintln!("Warning: Could not find valid server IP address in output");
+            "192.168.1.200".to_string()
+        }
+        Err(e) => {
+            eprintln!("Warning: Failed to detect server IP: {}", e);
+            "192.168.1.200".to_string()
+        }
+    }
+}
+
+#[tauri::command]
+async fn add_client(req: AddClientRequest) -> Result<serde_json::Value, String> {
+    // Validate inputs
+    let name = req.name.trim().to_lowercase();
+    let mac = req.mac.trim().to_uppercase();
+    let ip = req.ip.trim().to_string();
+    let master = req.master.trim().to_string();
+    let snapshot = req
+        .snapshot
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+
+    if name.is_empty() || mac.is_empty() || ip.is_empty() {
+        return Err("Missing required fields: name, mac, ip".to_string());
+    }
+    if master.is_empty() {
+        return Err("Master image is required".to_string());
+    }
+
+    // Check for duplicates (implement as needed)
+    if let Some(dup) = check_duplicate_client(&name, &mac, &ip) {
+        return Err(dup);
+    }
+
+    // Get client paths (implement as needed)
+    let mut paths = get_client_paths(&name);
+
+    // Create ZFS clone
+    if !snapshot.is_empty() {
+        // Use provided snapshot
+        run_command(&["zfs", "clone", &snapshot, &paths["clone"]])?;
+    } else {
+        // Check if base snapshot exists
+        let base_snapshot = format!("{}@base", master);
+        let result = run_command_check(&["zfs", "list", "-H", "-t", "snapshot", &base_snapshot]);
+        if result == 0 {
+            // Create new snapshot for this client
+            let snapshot_name = format!("{}@{}_base", master, name);
+            run_command(&["zfs", "snapshot", &snapshot_name])?;
+            run_command(&["zfs", "clone", &snapshot_name, &paths["clone"]])?;
+        } else {
+            // Use master volume directly
+            paths.insert("clone".to_string(), master.clone());
+        }
+    }
+
+    // Set up iSCSI target (implement as needed)
+    setup_iscsi_target(
+        &paths["target_iqn"],
+        &paths["block_store"],
+        &format!("/dev/zvol/{}", &paths["clone"]),
+    )?;
+
+    // Create DHCP entry (implement as needed)
+    let dhcp_entry = create_dhcp_entry(&name, &mac, &ip, &paths["target_iqn"]);
+    update_dhcp_config(&name, &dhcp_entry, true)?;
+
+    let block_device = format!("/dev/zvol/{}", &paths["clone"]);
+
+    // Save client configuration to JSON file (implement as needed)
+    let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let client_data = Client {
+        id: name.clone(),
+        name: name.to_uppercase(),
+        mac: mac.clone(),
+        ip: ip.clone(),
+        master: master.clone(),
+        snapshot: if snapshot.is_empty() {
+            None
+        } else {
+            Some(snapshot.clone())
+        },
+        target_iqn: Some(paths["target_iqn"].clone()),
+        block_device: Some(block_device.clone()),
+        block_store: Some(paths["block_store"].clone()),
+        writeback: Some(paths["clone"].clone()),
+        created_at: Some(now.clone()),
+        last_modified: Some(now.clone()),
+        status: None,
+        mode: None,
+    };
+    if !save_client_config(&client_data) {
+        println!("Warning: Failed to save client configuration for {}", name);
+    }
+
+    // Restart DHCP service
+    run_command(&["systemctl", "restart", "isc-dhcp-server.service"])?;
+
+    Ok(serde_json::json!({ "message": format!("Client {} added successfully", name) }))
+}
+
+// Check if a ZFS dataset exists
+fn zfs_exists(dataset: &str) -> bool {
+    let output = Command::new("sudo")
+        .args(["zfs", "list", "-H", dataset])
+        .output();
+    match output {
+        Ok(out) => out.status.success(),
+        Err(_) => false,
+    }
+}
+
+// Destroy a ZFS dataset
+fn zfs_destroy(dataset: &str) -> Result<(), String> {
+    let status = Command::new("sudo")
+        .args(["zfs", "destroy", dataset])
+        .status()
+        .map_err(|e| format!("Failed to run zfs destroy: {}", e))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("Failed to destroy ZFS dataset: {}", dataset))
+    }
+}
+
+// Clone a ZFS snapshot to a new dataset
+fn zfs_clone(snapshot: &str, clone: &str) -> Result<(), String> {
+    let status = Command::new("sudo")
+        .args(["zfs", "clone", snapshot, clone])
+        .status()
+        .map_err(|e| format!("Failed to run zfs clone: {}", e))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Failed to clone ZFS snapshot {} to {}",
+            snapshot, clone
+        ))
+    }
+}
+
+fn delete_client_config(client_id: &str) -> bool {
+    println!("Deleting client config: {}", client_id);
+    if !Path::new(CONFIG_PATH).exists() {
+        return true;
+    }
+
+    let config_content = match fs::read_to_string(CONFIG_PATH) {
+        Ok(content) => content,
+        Err(e) => {
+            println!("Error reading config file: {}", e);
+            return false;
+        }
+    };
+
+    let mut config: Value = match serde_json::from_str(&config_content) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            println!("Error parsing config file: {}", e);
+            return false;
+        }
+    };
+
+    let clients = config.get_mut("clients").and_then(|v| v.as_array_mut());
+    if clients.is_none() {
+        return true;
+    }
+
+    let client_id_lower = client_id.to_lowercase();
+    let new_clients: Vec<Value> = clients
+        .unwrap()
+        .drain(..)
+        .filter(|c| {
+            c.get("id")
+                .and_then(|id| id.as_str())
+                .map(|id| id.to_lowercase())
+                != Some(client_id_lower.clone())
+        })
+        .collect();
+
+    config["clients"] = Value::Array(new_clients);
+
+    match fs::write(CONFIG_PATH, serde_json::to_string_pretty(&config).unwrap()) {
+        Ok(_) => true,
+        Err(e) => {
+            println!("Error writing config file: {}", e);
+            false
+        }
+    }
+}
+
+fn cleanup_iscsi_target(target_iqn: &str, block_store: &str) -> Result<(), String> {
+    println!(
+        "Cleaning up iSCSI target {} and block store {}",
+        target_iqn, block_store
+    );
+
+    // Try to delete the iSCSI target
+    match run_command(&["targetcli", "iscsi/", "delete", target_iqn]) {
+        Ok(_) => println!("Deleted iSCSI target {}", target_iqn),
+        Err(e) => println!(
+            "Warning: Could not delete target {} directly: {}",
+            target_iqn, e
+        ),
+    }
+
+    // Delete block store if it exists
+    if !block_store.is_empty() {
+        match Command::new("sudo")
+            .args(&["targetcli", "backstores/block", "ls"])
+            .output()
+        {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                if stdout.contains(block_store) {
+                    println!("Deleting block store {}", block_store);
+                    if let Err(e) =
+                        run_command(&["targetcli", "backstores/block/", "delete", block_store])
+                    {
+                        println!(
+                            "Warning: Could not delete block store {}: {}",
+                            block_store, e
+                        );
+                    }
+                }
+            }
+            Err(e) => println!("Warning: Could not list block stores: {}", e),
+        }
+    }
+
+    // Save the configuration
+    let _ = run_command(&["targetcli", "saveconfig"]);
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn edit_client(
+    client_id: String,
+    data: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    use chrono::Local;
+
+    // Validate client_id format
+    if !regex::Regex::new(r"^[\w-]+$").unwrap().is_match(&client_id) {
+        return Err("Invalid client ID".to_string());
+    }
+
+    // Get current client info
+    let mut client_info = match get_client_by_id(&client_id) {
+        Some(info) => info,
+        None => return Err(format!("Client {} not found", client_id)),
+    };
+
+    // Get current paths
+    let current_paths = get_client_paths(&client_id);
+
+    // Extract new client details
+    let new_name = data
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&client_info.name)
+        .trim()
+        .to_string();
+    let new_mac = data
+        .get("mac")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&client_info.mac)
+        .trim()
+        .to_uppercase();
+    let new_ip = data
+        .get("ip")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&client_info.ip)
+        .trim()
+        .to_string();
+    let new_master = data
+        .get("master")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&client_info.master)
+        .trim()
+        .to_string();
+    let new_snapshot = data
+        .get("snapshot")
+        .and_then(|v| v.as_str())
+        .unwrap_or(client_info.snapshot.as_deref().unwrap_or(""))
+        .trim()
+        .to_string();
+
+    // Validate inputs (implement as needed)
+    if new_name.is_empty() || new_mac.is_empty() || new_ip.is_empty() {
+        return Err("Missing required fields: name, mac, ip".to_string());
+    }
+    if new_master.is_empty() {
+        return Err("Master image is required".to_string());
+    }
+
+    // Detect changes
+    let name_changed = new_name != client_info.name;
+    let mac_changed = new_mac != client_info.mac;
+    let ip_changed = new_ip != client_info.ip;
+    let master_changed = new_master != client_info.master;
+    let snapshot_changed = new_snapshot != client_info.snapshot.clone().unwrap_or_default();
+
+    // Case 1: Only MAC or IP changed
+    if (mac_changed || ip_changed) && !(name_changed || master_changed || snapshot_changed) {
+        client_info.mac = new_mac.clone();
+        client_info.ip = new_ip.clone();
+        client_info.last_modified = Some(Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
+
+        // Update DHCP config
+        let dhcp_entry = create_dhcp_entry(
+            &client_info.name,
+            &new_mac,
+            &new_ip,
+            client_info.target_iqn.as_deref().unwrap_or(""),
+        );
+        update_dhcp_config(&client_id, &dhcp_entry, false)?;
+
+        // Save updated config
+        save_client_config(&client_info);
+        return Ok(
+            serde_json::json!({"message": format!("Successfully updated client {}", client_id)}),
+        );
+    }
+
+    // Case 2: Name, master, or snapshot changed
+    if name_changed || master_changed || snapshot_changed {
+        let new_target_iqn = format!("iqn.2025-04.com.nsboot:{}", new_name.to_lowercase());
+        let new_block_store = format!("block_{}", new_name.to_lowercase());
+
+        let current_master = if master_changed {
+            &new_master
+        } else {
+            &client_info.master
+        };
+        let current_snapshot = if snapshot_changed {
+            &new_snapshot
+        } else {
+            client_info.snapshot.as_deref().unwrap_or("")
+        };
+
+        let mut block_device = String::new();
+
+        if !current_master.is_empty() {
+            if !current_snapshot.is_empty() {
+                // Create new clone from snapshot
+                let old_clone = current_paths.get("clone").cloned().unwrap_or_default();
+                if !old_clone.is_empty() && zfs_exists(&old_clone) {
+                    // Update iSCSI target
+                    let old_target_iqn = current_paths.get("target_iqn").cloned();
+                    let old_block_store = current_paths.get("block_store").cloned();
+                    if old_target_iqn.is_some() || old_block_store.is_some() {
+                        cleanup_iscsi_target(
+                            old_target_iqn.as_deref().unwrap_or(""),
+                            old_block_store.as_deref().unwrap_or(""),
+                        )?;
+                    }
+                    zfs_destroy(&old_clone)?;
+                }
+                let new_clone = format!("{}/{}-disk", ZFS_POOL, new_name);
+                zfs_clone(current_snapshot, &new_clone)?;
+                block_device = format!("/dev/zvol/{}", new_clone);
+            } else {
+                // Use master directly
+                block_device = format!("/dev/zvol/{}", current_master);
+            }
+        }
+
+        // Update client info
+        client_info.id = new_name.to_lowercase();
+        client_info.name = new_name.clone();
+        client_info.mac = new_mac.clone();
+        client_info.ip = new_ip.clone();
+        client_info.master = current_master.to_string();
+        client_info.snapshot = if current_snapshot.is_empty() {
+            None
+        } else {
+            Some(current_snapshot.to_string())
+        };
+        client_info.target_iqn = Some(new_target_iqn.clone());
+        client_info.block_store = Some(new_block_store.clone());
+        client_info.block_device = Some(block_device.clone());
+        client_info.writeback = Some(format!("{}/{}-disk", ZFS_POOL, new_name));
+        client_info.last_modified = Some(Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
+
+        // Update DHCP config
+        let dhcp_entry = create_dhcp_entry(&new_name, &new_mac, &new_ip, &new_target_iqn);
+        update_dhcp_config(&client_id, &dhcp_entry, false)?;
+
+        setup_iscsi_target(&new_target_iqn, &new_block_store, &block_device)?;
+
+        // Save updated config
+        save_client_config(&client_info);
+
+        // If name changed, update the client ID in the config
+        if name_changed {
+            delete_client_config(&client_id);
+            save_client_config(&client_info);
+        }
+
+        return Ok(
+            serde_json::json!({"message": format!("Successfully updated client {} and associated resources", client_id)}),
+        );
+    }
+
+    // No changes
+    Ok(serde_json::json!({"message": "No changes detected or no action required"}))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
-          get_clients, 
-          get_services,
-          get_masters,
-          control_client,
-          remote_client,
-          control_service,
-          get_zpool_stats,
-          get_service_config
-          ])
+            get_clients,
+            get_services,
+            get_masters,
+            control_client,
+            remote_client,
+            control_service,
+            get_zpool_stats,
+            get_service_config,
+            add_client,
+            edit_client
+        ])
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(

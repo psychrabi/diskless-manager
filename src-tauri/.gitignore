@@ -2,3 +2,7 @@
 # will have compiled files and executables
 /target/
 /gen/schemas
+~
+./config.json
+config.json
+src-tauri/config.json

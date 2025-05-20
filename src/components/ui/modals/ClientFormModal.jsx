@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Button } from '../Button';
 import { Modal } from '../Modal';
+import { invoke } from '@tauri-apps/api/core';
 
 const ClientFormModal = ({client, setClient, masters, isOpen, setIsOpen, refresh}) => {
   
@@ -26,34 +27,26 @@ const ClientFormModal = ({client, setClient, masters, isOpen, setIsOpen, refresh
     
         if (!client.id) {
           console.log("Adding new client")
-          await handleApiAction(
-            () => apiRequest('/clients', 'POST', {
-              name: client.name,
-              mac: client.mac,
-              ip: client.ip,
-              master: client.master,
-              snapshot: client.snapshot ? `${client.snapshot}` : null
-            }),
-            `Client ${client.name} added successfully.`,
-            `Failed to add client ${client.name}`,
-            showNotification
-          );
+          await invoke('add_client', {req: client}).then((response) => {
+            console.log("Response from add_client:", response);})
+            showNotification(response.message, 'success');
+            refresh();
         } else {
           console.log("Editing client")
-          await handleApiAction(
-            () => apiRequest(`/clients/edit/${client.id}`, 'POST', {
+          await invoke('edit_client', {clientId: client.id, data:{
               name: client.name,
               mac: client.mac,
               ip: client.ip,
               master: client.master,
               snapshot: client.snapshot ? `${client.snapshot}` : null
-            }),
-            `Client ${client.name} updated successfully.`,
-            `Failed to update client ${client.name}`,
-            showNotification
-          );
+            }}).then((response) => {
+            console.log("Response from add_client:", response);
+            showNotification(response.message, 'success');
+            refresh();
+            })
+          
         }
-        refresh();
+        
       };
 
   return (
@@ -122,7 +115,7 @@ const ClientFormModal = ({client, setClient, masters, isOpen, setIsOpen, refresh
         </div>
         <div className="flex justify-end space-x-3">
           <Button type="button" onClick={() => setIsOpen(false)} variant="outline">Cancel</Button>
-          <Button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white">{client.id ? 'Edit Client' : 'Add Client'}</Button>
+          <Button type="button" onClick={(event) => handleSubmit(event)} className="bg-blue-600 hover:bg-blue-700 text-white">{client.id ? 'Edit Client' : 'Add Client'}</Button>
         </div>
       </form>
     </Modal>

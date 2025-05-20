@@ -13,8 +13,8 @@
     "windows": [
       {
         "title": "Diskless Boot Manager",
-        "width": 1366,
-        "height": 768,
+        "width": 1680,
+        "height": 1050,
         "resizable": true,
         "fullscreen": false
       }
