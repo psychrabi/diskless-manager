@@ -294,6 +294,245 @@ fn save_master_config(master_data: &MasterData) -> bool {
     }
 }
 
+
+#[tauri::command]
+async fn delete_master(master_name: String) -> Result<serde_json::Value, String> {
+    // 1. Check for dependent clients
+    let clients_result = get_clients(None).await;
+    if let Ok(clients_json) = clients_result {
+        if let Some(clients) = clients_json.as_array() {
+            let dependent_clients: Vec<String> = clients
+                .iter()
+                .filter(|client| client.get("master") == Some(&json!(master_name)))
+                .filter_map(|client| client.get("name").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                .collect();
+
+            if !dependent_clients.is_empty() {
+                return Ok(json!({
+                    "error": "Master has dependent clients",
+                    "message": format!(
+                        "Cannot delete master: It is being used by the following clients: {}",
+                        dependent_clients.join(", ")
+                    ),
+                    "dependent_clients": dependent_clients
+                }));
+            }
+        }
+    }
+
+    // 2. Try to destroy the ZFS master
+    let output = Command::new("sudo")
+        .args(["zfs", "destroy", &master_name])
+        .output()
+        .map_err(|e| format!("Failed to run zfs destroy: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("has dependent clones") {
+            return Ok(json!({
+                "error": "Master has dependent clones",
+                "message": format!("Cannot delete master '{}': It has dependent clones.", master_name)
+            }));
+        } else {
+            return Ok(json!({
+                "error": format!("Failed to delete master: {}", stderr)
+            }));
+        }
+    }
+
+    // 3. Optionally, remove from config.json
+    if !delete_master_config(&master_name) {
+        // Not fatal, but you may want to log this
+        print!("Failed to remove master from config.json");
+    }
+
+    Ok(json!({
+        "message": format!("Master {} deleted successfully", master_name)
+    }))
+}
+
+fn delete_master_config(master_name: &str) -> bool {
+    // Check if config file exists
+    if !Path::new(CONFIG_PATH).exists() {
+        return true;
+    }
+
+    // Read config file
+    let config_content = match fs::read_to_string(CONFIG_PATH) {
+        Ok(content) => content,
+        Err(e) => {
+            println!("Error reading config file: {}", e);
+            return false;
+        }
+    };
+
+    let mut config: Value = match serde_json::from_str(&config_content) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            println!("Error parsing config file: {}", e);
+            return false;
+        }
+    };
+
+    // Remove master if present
+    if let Some(masters) = config.get_mut("masters") {
+        if masters.get(master_name).is_some() {
+            masters.as_object_mut().unwrap().remove(master_name);
+            // Write updated config
+            if let Err(e) = fs::write(CONFIG_PATH, serde_json::to_string_pretty(&config).unwrap()) {
+                println!("Error writing config file: {}", e);
+                return false;
+            }
+        }
+    }
+
+    true
+}
+
+#[tauri::command]
+fn create_snapshot(snapshot_name: String) -> Result<Value, String> {
+    // Validate input
+    if !snapshot_name.contains('@') || !snapshot_name.starts_with(&format!("{}/", ZFS_POOL)) {
+        return Err(format!(
+            "Invalid snapshot name. Expected {}/master@snapname",
+            ZFS_POOL
+        ));
+    }
+    let master_name = snapshot_name.split('@').next().unwrap();
+
+    // Check if master exists
+    let status = Command::new("sudo")
+        .args(["zfs", "list", "-H", master_name])
+        .status()
+        .map_err(|e| format!("Error validating master: {}", e))?;
+    if !status.success() {
+        return Err(format!("Master '{}' not found.", master_name));
+    }
+
+    // Create snapshot
+    let output = Command::new("sudo")
+        .args(["zfs", "snapshot", &snapshot_name])
+        .output()
+        .map_err(|e| format!("Failed to run zfs snapshot: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("dataset already exists") {
+            return Err(format!("Snapshot '{}' already exists.", snapshot_name));
+        } else {
+            return Err(format!("Failed creating snapshot: {}", stderr));
+        }
+    }
+
+    // Update config.json: add snapshot to masters.snapshots
+    if Path::new(CONFIG_PATH).exists() {
+        let config_content = fs::read_to_string(CONFIG_PATH)
+            .map_err(|e| format!("Failed to read config: {}", e))?;
+        let mut config: Value = serde_json::from_str(&config_content)
+            .map_err(|e| format!("Failed to parse config: {}", e))?;
+
+        if let Some(masters) = config.get_mut("masters") {
+            if let Some(master) = masters.get_mut(master_name) {
+                let snapshots = if let Some(arr) = master.get_mut("snapshots").and_then(|s| s.as_array_mut()) {
+                    arr
+                } else {
+                    master["snapshots"] = json!([]);
+                    master.get_mut("snapshots").unwrap().as_array_mut().unwrap()
+                };
+                if !snapshots.iter().any(|v| v == &json!(snapshot_name)) {
+                    snapshots.push(json!(snapshot_name));
+                }
+                // Save updated config
+                fs::write(CONFIG_PATH, serde_json::to_string_pretty(&config).unwrap())
+                    .map_err(|e| format!("Failed to write config: {}", e))?;
+            }
+        }
+    }
+
+    Ok(json!({
+        "message": format!("Snapshot {} created", snapshot_name)
+    }))
+}
+
+#[tauri::command]
+async fn delete_snapshot(snapshot_name: String) -> Result<Value, String> {
+    // Validate snapshot name
+    if !snapshot_name.contains('@') || !snapshot_name.starts_with(&format!("{}/", ZFS_POOL)) {
+        return Err("Invalid snapshot name format.".to_string());
+    }
+
+    // Check for clients using this snapshot
+    let clients_result = get_clients(None).await;
+    if let Ok(clients_json) = clients_result {
+        if let Some(clients) = clients_json.as_array() {
+            let dependent_clients: Vec<String> = clients
+                .iter()
+                .filter(|client| client.get("snapshot") == Some(&json!(snapshot_name)))
+                .filter_map(|client| client.get("name").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                .collect();
+
+            if !dependent_clients.is_empty() {
+                return Ok(json!({
+                    "error": "Snapshot has dependent clients",
+                    "message": format!(
+                        "Cannot delete snapshot: It is being used by the following clients: {}",
+                        dependent_clients.join(", ")
+                    ),
+                    "dependent_clients": dependent_clients
+                }));
+            }
+        }
+    }
+
+    // Try to destroy the ZFS snapshot
+    let output = Command::new("sudo")
+        .args(["zfs", "destroy", &snapshot_name])
+        .output()
+        .map_err(|e| format!("Failed to run zfs destroy: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("has dependent clones") {
+            return Ok(json!({
+                "error": "Snapshot has dependent clones",
+                "message": format!("Cannot delete snapshot '{}': It has dependent clones.", snapshot_name)
+            }));
+        } else {
+            return Ok(json!({
+                "error": format!("Failed to delete snapshot: {}", stderr)
+            }));
+        }
+    }
+
+    // Remove snapshot from config.json
+    if Path::new(CONFIG_PATH).exists() {
+        let config_content = fs::read_to_string(CONFIG_PATH)
+            .map_err(|e| format!("Failed to read config: {}", e))?;
+        let mut config: Value = serde_json::from_str(&config_content)
+            .map_err(|e| format!("Failed to parse config: {}", e))?;
+
+        if let Some(masters) = config.get_mut("masters") {
+            // Find the master that owns this snapshot
+            for (_master_name, master) in masters.as_object_mut().unwrap() {
+                if let Some(snapshots) = master.get_mut("snapshots").and_then(|s| s.as_array_mut()) {
+                    let before = snapshots.len();
+                    snapshots.retain(|s| s != &json!(snapshot_name));
+                    if snapshots.len() != before {
+                        // Save updated config if we removed a snapshot
+                        fs::write(CONFIG_PATH, serde_json::to_string_pretty(&config).unwrap())
+                            .map_err(|e| format!("Failed to write config: {}", e))?;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(json!({
+        "message": format!("Snapshot {} deleted successfully", snapshot_name)
+    }))
+}
+
 #[tauri::command]
 async fn get_services(zfs_pool: String) -> Result<serde_json::Value, String> {
     let mut statuses = HashMap::new();
@@ -1588,7 +1827,10 @@ pub fn run() {
             add_client,
             edit_client,
             delete_client,
-            create_master
+            create_master,
+            delete_master, 
+            create_snapshot,
+            delete_snapshot
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {

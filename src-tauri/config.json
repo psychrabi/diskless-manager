@@ -1,32 +1,7 @@
 {
-  "clients": [
-    {
-      "block_device": "/dev/zvol/nsboot0/PC002-disk",
-      "block_store": "block_pc002",
-      "created_at": "2025-05-20 22:27:06",
-      "id": "pc002",
-      "ip": "192.168.1.101",
-      "last_modified": "2025-05-20 22:35:38",
-      "mac": "D8:43:AE:A7:8E:A8",
-      "master": "nsboot0/Windows11-master",
-      "mode": null,
-      "name": "PC002",
-      "snapshot": "nsboot0/Windows11-master@base",
-      "status": null,
-      "target_iqn": "iqn.2025-04.com.nsboot:pc002",
-      "writeback": "nsboot0/PC002-disk"
-    }
-  ],
-  "masters": {
-    "nsboot0/Windows11-ent-master": {
-      "created_at": "2025-05-21 07:46:32",
-      "last_modified": "2025-05-21 07:46:32",
-      "name": "nsboot0/Windows11-ent-master",
-      "size": "1G",
-      "snapshots": []
-    }
-  },
+  "clients": [],
+  "masters": {},
   "settings": {
-    "default_master": "nsboot0/Windows11-master"
+    "default_master": ""
   }
 }

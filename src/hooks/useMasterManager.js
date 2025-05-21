@@ -39,14 +39,15 @@ export const useMasterManager = (refresh) => {
   };
 
   const handleCreateSnapshot = (snapshotName) => {  
-        handleApiAction(
-            () => apiRequest('/snapshots', 'POST', { name: snapshotName }),
-            `Snapshot ${snapshotName} created successfully.`,
-            `Failed to create snapshot ${snapshotName}`,
-            showNotification  
-        );
+        invoke('create_snapshot', { masterName: selectedMaster, snapshotName })
+          .then((response) => {
+            if (response.message) showNotification(response.message, 'success');
+          }).catch((error) => {
+            showNotification(error, 'error',)
+          }).finally(() => {
+            refresh();
+          });
         setIsCreateSnapshotModalOpen(false);
-        refresh();
   };
 
 
@@ -60,12 +61,14 @@ export const useMasterManager = (refresh) => {
     if (!snapshotToDelete) return;
     
     const encodedSnapshotName = encodeURIComponent(snapshotToDelete);
-    handleApiAction(
-        () => apiRequest(`/snapshots/${encodedSnapshotName}`, 'DELETE'),
-        `Snapshot ${snapshotToDelete} deleted successfully.`,
-        `Failed to delete snapshot ${snapshotToDelete}`,
-        showNotification
-    );
+    invoke('delete_snapshot', { masterName: selectedMaster, snapshotName: snapshotToDelete })
+      .then((response) => {
+        if (response.message) showNotification(response.message, 'success');
+      }).catch((error) => {
+        showNotification(error, 'error',)
+      }).finally(() => {
+        refresh();
+      });
     setIsDeleteSnapshotModalOpen(false);
     setSnapshotToDelete(null);
   };
@@ -87,14 +90,14 @@ export const useMasterManager = (refresh) => {
     if (!selectedMaster) return;
     
     const encodedMasterName = encodeURIComponent(selectedMaster);
-    handleApiAction(
-        () => apiRequest(`/masters/${encodedMasterName}`, 'DELETE'),
-        `Master ${selectedMaster} deleted successfully.`,
-        `Failed to delete master ${selectedMaster}`,
-        showNotification
-    ).then(() => {
-        refresh(); // Refresh data after creating master
-    });
+    invoke('delete_master', { masterName: selectedMaster })
+      .then((response) => {
+        if (response.message) showNotification(response.message, 'success');
+      }).catch((error) => {
+        showNotification(error, 'error',)
+      }).finally(() => {
+        refresh();
+      });
     setIsDeleteMasterModalOpen(false);
     setSelectedMaster(null);
   };
