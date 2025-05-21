@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { lazy, useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { Route, BrowserRouter as Router, Routes } from "react-router-dom";
 
 // --- UI Components (Keep existing components: Card, Button, Table, Modal, Input, Select, ContextMenu) ---
@@ -12,6 +12,7 @@ const ServiceManagement = lazy(() =>
 );
 const Notification = lazy(() => import("./components/ui/Notification.jsx"));
 const Sidebar = lazy(() => import("./components/ui/Sidebar.jsx"));
+const SetupPage = lazy(() => import("./components/SetupPage.jsx"));
 
 function App() {
   const [clients, setClients] = useState([]);
@@ -20,6 +21,8 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedSnapshot, setSelectedSnapshot] = useState('');
+  const [config, setConfig] = useState(null);
+  const [checkingConfig, setCheckingConfig] = useState(true);
 
   // --- Data Fetching ---
   const fetchData = useCallback(async (showLoading = true) => {
@@ -53,9 +56,35 @@ function App() {
     }
   }, []);
 
-  useEffect(() => {
-    fetchData();
+   useEffect(() => {
+    (async () => {
+      
+        const cfg = await invoke("get_config");
+        setConfig(cfg);
+        console.log("Config fetched successfully:", cfg);
+     
+        setCheckingConfig(false);
+        setLoading(false);
+    
+    })();
   }, []);
+
+  //  if (checkingConfig) {
+  //   return (
+  //     <div className="flex items-center justify-center min-h-screen">
+  //       <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-blue-500"></div>
+  //     </div>
+  //   );
+  // }
+
+   if (!config || !config.settings.zpool_name) {
+    
+    return (
+      <Suspense fallback={<div>Loading setup...</div>}>
+        <SetupPage />
+      </Suspense>
+    );
+  }
 
   return (
     <Router>

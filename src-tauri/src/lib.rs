@@ -1,11 +1,12 @@
 use chrono::Local;
+use directories::ProjectDirs;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
@@ -37,11 +38,12 @@ pub struct Client {
     pub mode: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Default)]
 pub struct Config {
     pub clients: Vec<Client>,
-    pub masters: serde_json::Value,
-    pub settings: serde_json::Value,
+    pub masters: Value,
+    pub services: Value,
+    pub settings: Value,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -228,7 +230,7 @@ fn create_master(name: String, size: String) -> Result<Value, String> {
 
     // Create the ZFS volume (ZVOL)
     let create_status = Command::new("sudo")
-        .args([
+        .args([ 
             "zfs", "create", "-V", &size, "-o", "volblocksize=64k", &master_zvol_name,
         ])
         .status()
@@ -1812,6 +1814,139 @@ async fn delete_client(client_id: String) -> Result<serde_json::Value, String> {
     }))
 }
 
+#[derive(Serialize)]
+struct Disk {
+    name: String,
+    size: String,
+}
+
+// Read config.json, or return default
+fn read_config() -> Config {
+    if let Ok(content) = fs::read_to_string(CONFIG_PATH) {
+        serde_json::from_str(&content).unwrap_or_default()
+    } else {
+        Config::default()
+    }
+}
+
+// Write config.json
+fn write_config(cfg: &Config) -> Result<(), String> {
+    let content = serde_json::to_string_pretty(cfg).unwrap();
+    fs::write(CONFIG_PATH, content).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_config() -> Result<Config, String> {
+    Ok(read_config())
+}
+
+#[tauri::command]
+fn save_config(pool_name: String) -> Result<(), String> {
+    let mut cfg = read_config();
+    // Ensure settings is an object
+    let mut settings = cfg.settings.as_object().cloned().unwrap_or_default();
+    settings.insert("zfsPool".to_string(), json!(pool_name));
+    cfg.settings = json!(settings);
+    write_config(&cfg)
+}
+
+#[tauri::command]
+fn list_disks() -> Result<Vec<Disk>, String> {
+    // Use lsblk to list disks (Linux only)
+    let output = Command::new("lsblk")
+        .args(&["-dn", "-o", "NAME,SIZE,TYPE"])
+        .output()
+        .map_err(|e| e.to_string())?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let disks = stdout
+        .lines()
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() == 3 && parts[2] == "disk" {
+                Some(Disk {
+                    name: parts[0].to_string(),
+                    size: parts[1].to_string(),
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+    Ok(disks)
+}
+
+#[tauri::command]
+fn zfs_pool_exists(pool_name: String) -> Result<bool, String> {
+    let status = Command::new("zpool")
+        .args(&["list", pool_name.as_str()])
+        .status()
+        .map_err(|e| e.to_string())?;
+    Ok(status.success())
+}
+
+#[tauri::command]
+fn create_zfs_pool(name: String, disk: String) -> Result<(), String> {
+    // WARNING: This will destroy data on the disk!
+    let status = Command::new("sudo")
+        .args(&["zpool", "create", &name, &format!("/dev/{}", disk)])
+        .status()
+        .map_err(|e| e.to_string())?;
+    if status.success() {
+        let mut cfg = read_config();
+        let mut settings = cfg.settings.as_object().cloned().unwrap_or_default();
+        settings.insert("zpool_name".to_string(), json!(name));
+        cfg.settings = json!(settings);
+        if let Err(e) = write_config(&cfg) {
+            return Err(format!("ZFS pool created, but failed to update config: {}", e));
+        }
+        Ok(())
+    } else {
+        Err("Failed to create ZFS pool".to_string())
+    }
+}
+
+#[tauri::command]
+fn check_services() -> Result<serde_json::Value, String> {
+    let required = vec![
+        ("zfs", "zfsutils-linux"),
+        ("targetcli", "targetcli-fb"),
+        ("dhcpd", "isc-dhcp-server"),
+        ("tftp", "tftpd-hpa"),
+        ("apache2", "apache2"),
+        ("smbd", "samba"),
+    ];
+    let mut statuses = HashMap::new();
+    for (key, svc) in required {
+        let installed = Command::new("which")
+            .arg(key)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        statuses.insert(
+            key,
+            serde_json::json!({
+                "name": svc,
+                "installed": installed
+            }),
+        );
+    }
+    Ok(serde_json::to_value(statuses).unwrap())
+}
+
+#[tauri::command]
+fn install_service(service: String) -> Result<(), String> {
+    // Use apt for example; adjust for your distro
+    let status = Command::new("sudo")
+        .args(&["apt-get", "install", "-y", &service])
+        .status()
+        .map_err(|e| e.to_string())?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("Failed to install {}", service))
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1830,7 +1965,14 @@ pub fn run() {
             create_master,
             delete_master, 
             create_snapshot,
-            delete_snapshot
+            delete_snapshot,
+            get_config,
+            save_config,
+            list_disks,
+            create_zfs_pool,
+            check_services,
+            install_service,
+            zfs_pool_exists,
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {

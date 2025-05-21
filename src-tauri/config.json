@@ -1,7 +1,8 @@
 {
   "clients": [],
   "masters": {},
+  "services": {},
   "settings": {
-    "default_master": ""
+    "zpool_name": "diskless"
   }
 }
