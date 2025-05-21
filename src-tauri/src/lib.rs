@@ -79,6 +79,15 @@ pub struct AddClientRequest {
     pub snapshot: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+struct MasterData {
+    name: String,
+    size: String,
+    snapshots: Vec<String>,
+    created_at: String,
+    last_modified: String,
+}
+
 #[tauri::command]
 async fn get_masters(zfs_pool: String) -> Result<Vec<Master>, String> {
     // 1. Get default master from config
@@ -188,6 +197,101 @@ fn parse_zfs_list(output: &str) -> Vec<Snapshot> {
             }
         })
         .collect()
+}
+
+
+#[tauri::command]
+fn create_master(name: String, size: String) -> Result<Value, String> {
+    // Validate name
+    if !regex::Regex::new(r"^[\w-]+$").unwrap().is_match(&name) {
+        return Err("Invalid master base name format (use alphanumeric, _, -).".to_string());
+    }
+    if name.contains(' ') {
+        return Err("Master base name cannot contain spaces.".to_string());
+    }
+
+    // Validate size (simple check, expand as needed)
+    if !regex::Regex::new(r"^\d+[KMGTP]$").unwrap().is_match(&size.to_uppercase()) {
+        return Err("Invalid size format (e.g., '50G')".to_string());
+    }
+
+    let master_zvol_name = format!("{}/{}-master", ZFS_POOL, name);
+
+    // Check if ZVOL already exists
+    let status = Command::new("sudo")
+        .args(["zfs", "list", "-H", &master_zvol_name])
+        .status()
+        .map_err(|e| format!("Failed to check ZFS volume: {}", e))?;
+    if status.success() {
+        return Err(format!("ZFS volume '{}' already exists.", master_zvol_name));
+    }
+
+    // Create the ZFS volume (ZVOL)
+    let create_status = Command::new("sudo")
+        .args([
+            "zfs", "create", "-V", &size, "-o", "volblocksize=64k", &master_zvol_name,
+        ])
+        .status()
+        .map_err(|e| format!("Failed to create ZFS volume: {}", e))?;
+    if !create_status.success() {
+        return Err(format!("Failed to create ZFS volume '{}'", master_zvol_name));
+    }
+
+    // Prepare master data
+    let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let master_data = MasterData {
+        name: master_zvol_name.clone(),
+        size: size.clone(),
+        snapshots: vec![],
+        created_at: now.clone(),
+        last_modified: now,
+    };
+
+    // Save to config
+    if !save_master_config(&master_data) {
+        return Err("Failed to update config.json".to_string());
+    }
+
+    Ok(json!({
+        "message": format!("Master ZVOL '{}' created successfully.", master_zvol_name),
+        "master": {
+            "id": master_zvol_name,
+            "name": master_zvol_name,
+            "snapshots": []
+        }
+    }))
+}
+
+fn save_master_config(master_data: &MasterData) -> bool {
+    // Read existing config if it exists
+    let mut config: Value = if Path::new(CONFIG_PATH).exists() {
+        match fs::read_to_string(CONFIG_PATH)
+            .ok()
+            .and_then(|content| serde_json::from_str(&content).ok())
+        {
+            Some(val) => val,
+            None => json!({"clients": [], "masters": {}}),
+        }
+    } else {
+        json!({"clients": [], "masters": {}})
+    };
+
+    // Ensure 'masters' is a map
+    if !config.get("masters").map_or(false, |v| v.is_object()) {
+        config["masters"] = json!({});
+    }
+
+    // Insert or update master
+    config["masters"][&master_data.name] = serde_json::to_value(master_data).unwrap();
+
+    // Write updated config
+    match fs::write(CONFIG_PATH, serde_json::to_string_pretty(&config).unwrap()) {
+        Ok(_) => true,
+        Err(e) => {
+            println!("Error saving master config: {}", e);
+            false
+        }
+    }
 }
 
 #[tauri::command]
@@ -1483,7 +1587,8 @@ pub fn run() {
             get_service_config,
             add_client,
             edit_client,
-            delete_client
+            delete_client,
+            create_master
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {

@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react';
 import { formatBytes, formatDate } from '../utils/helpers';
 import { apiRequest, handleApiAction } from '../utils/apiRequest';
 import { useNotification } from '../contexts/NotificationContext';
+import { invoke } from '@tauri-apps/api/core';
 
 export const useMasterManager = (refresh) => {
   const [isCreateSnapshotModalOpen, setIsCreateSnapshotModalOpen] = useState(false);
@@ -26,13 +27,15 @@ export const useMasterManager = (refresh) => {
   const handleCreateMasterSubmit = async (event) => {
       event.preventDefault();
       setIsCreateMasterModalOpen(false); // Close modal
-      await handleApiAction(
-          () => apiRequest('/masters', 'POST', { name: newMasterName, size: newMasterSize }),
-          `Master ZVOL ${newMasterName}-master created successfully.`,
-          `Failed to create master ZVOL ${newMasterName}-master`,
-          showNotification
-      );
-      refresh();
+      await invoke('create_master', { name: newMasterName, size: newMasterSize })
+            .then((response) => {
+              if (response.message) showNotification(response.message, 'success');
+            }).catch((error) => {
+              showNotification(error, 'error',)
+            }).finally(() => {
+              refresh();
+            });
+      
   };
 
   const handleCreateSnapshot = (snapshotName) => {  

@@ -17,7 +17,15 @@
       "writeback": "nsboot0/PC002-disk"
     }
   ],
-  "masters": {},
+  "masters": {
+    "nsboot0/Windows11-ent-master": {
+      "created_at": "2025-05-21 07:46:32",
+      "last_modified": "2025-05-21 07:46:32",
+      "name": "nsboot0/Windows11-ent-master",
+      "size": "1G",
+      "snapshots": []
+    }
+  },
   "settings": {
     "default_master": "nsboot0/Windows11-master"
   }
