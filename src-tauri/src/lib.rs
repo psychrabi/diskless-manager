@@ -1,17 +1,16 @@
 use chrono::Local;
-use directories::ProjectDirs;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
-const ZFS_POOL: &str = "nsboot0"; // Adjust to your ZFS pool name
+const ZFS_POOL: &str = "diskless"; // Adjust to your ZFS pool name
 const DHCP_CONFIG_PATH: &str = "/etc/dhcp/dhcpd.conf"; // Adjust as needed
 const CONFIG_PATH: &str = "./config.json"; // Adjust as needed
 pub static SERVER_IP: Lazy<String> = Lazy::new(|| {
@@ -58,6 +57,7 @@ pub struct Master {
     pub id: String,
     pub name: String,
     pub is_default: bool,
+    pub size: String,
     pub snapshots: Vec<Snapshot>,
 }
 
@@ -172,10 +172,19 @@ async fn get_masters(zfs_pool: String) -> Result<Vec<Master>, String> {
                 snapshots = parse_zfs_list(&String::from_utf8_lossy(&snap_out.stdout));
             }
         }
+
+        // Find the master dataset to get its size
+        let size = all_datasets
+            .iter()
+            .find(|ds| &ds.name == master_name)
+            .map(|ds| ds.used.clone())
+            .unwrap_or_else(|| "-".to_string());
+
         masters_data.push(Master {
             id: master_name.clone(),
             name: master_name.clone(),
             is_default: master_name == &default_master,
+            size,
             snapshots,
         });
     }
@@ -228,10 +237,10 @@ fn create_master(name: String, size: String) -> Result<Value, String> {
         return Err(format!("ZFS volume '{}' already exists.", master_zvol_name));
     }
 
-    // Create the ZFS volume (ZVOL)
+    // Create a sparse ZFS volume (ZVOL)
     let create_status = Command::new("sudo")
         .args([ 
-            "zfs", "create", "-V", &size, "-o", "volblocksize=64k", &master_zvol_name,
+            "zfs", "create", "-s", "-V", &size, "-o", "volblocksize=64k", &master_zvol_name,
         ])
         .status()
         .map_err(|e| format!("Failed to create ZFS volume: {}", e))?;
@@ -538,12 +547,14 @@ async fn delete_snapshot(snapshot_name: String) -> Result<Value, String> {
 #[tauri::command]
 async fn get_services(zfs_pool: String) -> Result<serde_json::Value, String> {
     let mut statuses = HashMap::new();
-
+    print!("Getting services status...");
     // Systemd services
     let service_map = vec![
         ("iscsi", "target.service"),
         ("dhcp", "isc-dhcp-server.service"),
         ("tftp", "tftpd-hpa.service"),
+        ("http", "apache2.service"),
+        ("share", "smbd.service"),
     ];
 
     for (key, service_name) in service_map {
@@ -556,6 +567,7 @@ async fn get_services(zfs_pool: String) -> Result<serde_json::Value, String> {
         } else {
             "inactive".to_string()
         };
+        print!("Service {} status: {}", service_name, status);
         statuses.insert(
             key,
             serde_json::json!({
@@ -881,6 +893,8 @@ async fn control_service(
         ("iscsi", "target.service"),
         ("dhcp", "isc-dhcp-server.service"),
         ("tftp", "tftpd-hpa.service"),
+        ("http", "apache2.service"),
+        ("share", "smbd.service")        
     ]
     .iter()
     .cloned()
@@ -928,6 +942,8 @@ async fn get_service_config(service_key: String) -> Result<serde_json::Value, St
         ("dhcp", "/etc/dhcp/dhcpd.conf"),
         ("tftp", "/etc/default/tftpd-hpa"),
         ("iscsi", "/etc/rtslib-fb-target/saveconfig.json"),
+        ("http", "/etc/apache2/sites-avaiable/000-default.conf"),        
+        ("share", "/etc/samba/smb.conf"),        
         // Add more as needed
     ]
     .iter()

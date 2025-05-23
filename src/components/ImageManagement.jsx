@@ -44,7 +44,7 @@ export const ImageManagement = ({ masters, refresh }) => {
               <div className="flex flex-wrap justify-between items-center mb-3 gap-2">
                 <div className="flex items-center gap-2">
                   <h4 className="text-lg font-medium break-all flex items-center gap-1">
-                    {master.name}
+                    {master.name} {`(${master.size})`}
                     {master.is_default && <StarIcon className="h-4 w-4 text-yellow-500 fill-yellow-500" />}
                   </h4>
                 </div>
@@ -68,7 +68,7 @@ export const ImageManagement = ({ masters, refresh }) => {
                     <li key={snap.id || snap.name} className="flex flex-wrap justify-between items-center gap-2 p-2 rounded hover:bg-gray-100 dark:hover:bg-gray-600/50">
                       <div className="flex-1 min-w-0">
                         <span className="font-mono text-xs break-all">{snap.name}</span>
-                        <span className="text-gray-500 dark:text-gray-400 text-xs ml-2 whitespace-nowrap">({snap.created}, {snap.size})</span>
+                        <span className="text-gray-500 dark:text-gray-400 text-xs ml-2 whitespace-nowrap">({snap.created}, {snap.used})</span>
                       </div>
                       <div className="flex space-x-1 flex-shrink-0">
                         <Button onClick={() => handleDeleteSnapshot(snap.name)} variant="destructive" size="icon" className="h-7 w-7 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/50" title={`Delete ${snap.name}`}>

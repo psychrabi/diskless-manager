@@ -31,8 +31,8 @@ function App() {
     try {
       console.log("Fetching data...");
       const [servicesRes, mastersRes, clientsRes] = await Promise.all([
-        invoke('get_services', { 'zfsPool': 'nsboot0' }),
-        invoke('get_masters', { 'zfsPool': 'nsboot0' }),
+        invoke('get_services', { 'zfsPool': 'diskless' }),
+        invoke('get_masters', { 'zfsPool': 'diskless' }),
         invoke('get_clients')
       ]);
 
@@ -65,7 +65,7 @@ function App() {
      
         setCheckingConfig(false);
         setLoading(false);
-    
+        fetchData();
     })();
   }, []);
 
