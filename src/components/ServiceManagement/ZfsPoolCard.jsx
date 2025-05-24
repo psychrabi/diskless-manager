@@ -1,12 +1,11 @@
 import { useEffect, useState } from 'react';
-import { Card } from '.';
+import { Card } from '../ui';
 import { invoke } from '@tauri-apps/api/core';
 
 const ZfsPoolCard = ({ loading }) => {
   const [zpoolStats, setZpoolStats] = useState(null);
 
   useEffect(() => {
-    // Replace with your actual invoke or fetch call
     invoke("get_zpool_stats")
       .then((stats) => {
         setZpoolStats(stats);

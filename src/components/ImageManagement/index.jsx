@@ -1,10 +1,11 @@
-import React from 'react';
+import React, { useMemo, useCallback } from 'react';
 import { PlusCircle, Trash2, Save, HardDrive, Star, StarIcon } from 'lucide-react';
-import { useMasterManager } from '../hooks/useMasterManager';
-import { Card, Button, Modal, Input } from '../components/ui';
+import { useMasterManager } from '../../hooks/useMasterManager';
+import { Card, Button, Modal, Input } from '../ui';
+import { useAppStore } from '../../store/useAppStore';
 
-export const ImageManagement = ({ masters, refresh }) => {
-
+export const ImageManagement = () => {
+  const { masters, fetchData } = useAppStore();
   const {
     handleCreateSnapshot,
     handleDeleteSnapshot,
@@ -31,15 +32,20 @@ export const ImageManagement = ({ masters, refresh }) => {
     confirmDeleteMaster,
     setDefaultMaster,
     isDeleteMasterModalOpen,
-  } = useMasterManager(refresh);
+  } = useMasterManager(fetchData);
+
+  const memoizedMasters = useMemo(() => masters, [masters]);
+  const memoizedSetDefaultMaster = useCallback(setDefaultMaster, [setDefaultMaster]);
+  const memoizedHandleOpenCreateSnapshotModal = useCallback(handleOpenCreateSnapshotModal, [handleOpenCreateSnapshotModal]);
+  const memoizedHandleOpenDeleteMasterModal = useCallback(handleOpenDeleteMasterModal, [handleOpenDeleteMasterModal]);
 
   return (
     <div className="space-y-6">
-      <Card title="Image Management" icon={HardDrive} actions={ // Add button to card actions
+      <Card title="Image Management" icon={HardDrive} actions={
         <Button onClick={handleOpenCreateMasterModal} icon={PlusCircle}>Create Image</Button>
       }>
         <div className="space-y-6">
-          {masters.map((master) => (
+          {memoizedMasters.map((master) => (
             <div key={master.id} className="p-4 border border-gray-200 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-700/50">
               <div className="flex flex-wrap justify-between items-center mb-3 gap-2">
                 <div className="flex items-center gap-2">
@@ -49,7 +55,7 @@ export const ImageManagement = ({ masters, refresh }) => {
                   </h4>
                 </div>
                 <div className="flex gap-2">
-                  <Button variant={master.is_default ? 'outline' : 'ghost'} size="sm" onClick={() => setDefaultMaster(master.name)}
+                  <Button variant={master.is_default ? 'outline' : 'ghost'} size="sm" onClick={() => memoizedSetDefaultMaster(master.name)}
                     className={master.is_default ? 'text-green-500 border-green-500' : ''} disabled={master.is_default} >
                     {master.is_default ? (
                       <span className="flex items-center gap-1">
@@ -57,12 +63,12 @@ export const ImageManagement = ({ masters, refresh }) => {
                       </span>
                     ) : 'Set as Default'}
                   </Button>
-                  <Button onClick={() => handleOpenCreateSnapshotModal(master.name)} size="sm" icon={PlusCircle}>Create Snapshot</Button>
-                  <Button variant="destructive" onClick={() => handleOpenDeleteMasterModal(master.name)} size="sm" icon={Trash2}>Delete Master</Button>
+                  <Button onClick={() => memoizedHandleOpenCreateSnapshotModal(master.name)} size="sm" icon={PlusCircle}>Create Snapshot</Button>
+                  <Button variant="destructive" onClick={() => memoizedHandleOpenDeleteMasterModal(master.name)} size="sm" icon={Trash2}>Delete Master</Button>
                 </div>
               </div>
               <h5 className="text-sm font-semibold mb-2 text-gray-600 dark:text-gray-400">Available Snapshots:</h5>
-              {master.snapshots && master.snapshots.length > 0 ? ( // Check if snapshots exist
+              {master.snapshots && master.snapshots.length > 0 ? (
                 <ul className="space-y-2 text-sm">
                   {master.snapshots.map((snap) => (
                     <li key={snap.id || snap.name} className="flex flex-wrap justify-between items-center gap-2 p-2 rounded hover:bg-gray-100 dark:hover:bg-gray-600/50">
@@ -83,7 +89,7 @@ export const ImageManagement = ({ masters, refresh }) => {
               )}
             </div>
           ))}
-          {masters.length === 0 && <p className="text-center py-4 text-gray-500">No master images found.</p>}
+          {memoizedMasters.length === 0 && <p className="text-center py-4 text-gray-500">No master images found.</p>}
         </div>
       </Card>
       <Modal isOpen={isCreateMasterModalOpen} onClose={() => setIsCreateMasterModalOpen(false)} title="Create Master Image" size='xl'>

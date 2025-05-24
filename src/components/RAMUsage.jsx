@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Button } from '../components/ui';
 import { RefreshCw } from 'lucide-react';
-import { apiRequest } from '../utils/apiRequest';
+import { apiRequest } from '../../utils/apiRequest';
 
 export const RAMUsage = () => {
     const [ramUsage, setRamUsage] = useState(null);

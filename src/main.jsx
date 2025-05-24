@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client'
 import './index.css'
 import App from './App.jsx'
 import { NotificationProvider } from './contexts/NotificationContext.jsx'
+import { BrowserRouter } from 'react-router-dom'
 
 // Loading fallback component
 const LoadingFallback = () => (
@@ -15,7 +16,10 @@ ReactDOM.createRoot(document.getElementById('root')).render(
   <StrictMode>
     <Suspense fallback={<LoadingFallback />}>
       <NotificationProvider>
-        <App />
+        <BrowserRouter>
+          <App />
+        </BrowserRouter>
+        
       </NotificationProvider>
     </Suspense>
   </StrictMode>

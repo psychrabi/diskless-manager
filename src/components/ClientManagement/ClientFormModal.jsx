@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { Button } from '../Button';
-import { Modal } from '../Modal';
+import { Button } from '../ui';
+import { Modal } from '../ui';
 import { invoke } from '@tauri-apps/api/core';
-import { useNotification } from '../../../contexts/NotificationContext';
+import { useNotification } from '../../contexts/NotificationContext';
 
 const ClientFormModal = ({client, setClient, masters, isOpen, setIsOpen, refresh}) => {
   const { showNotification } = useNotification();

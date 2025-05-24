@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { Button } from '../Button';
-import { Modal } from '../Modal';
+import { Button } from '../ui';
+import { Modal } from '../ui';
 
 const ServiceConfigModal = ({ open, setOpen, title, loading, content }) => {
 

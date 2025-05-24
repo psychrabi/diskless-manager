@@ -4,11 +4,11 @@ import { Route, BrowserRouter as Router, Routes } from "react-router-dom";
 
 // --- UI Components (Keep existing components: Card, Button, Table, Modal, Input, Select, ContextMenu) ---
 const ClientManagement = lazy(() =>
-  import("./components/ClientManagement.jsx")
+  import("./components/ClientManagement")
 );
-const ImageManagement = lazy(() => import("./components/ImageManagement.jsx"));
+const ImageManagement = lazy(() => import("./components/ImageManagement"));
 const ServiceManagement = lazy(() =>
-  import("./components/ServiceManagement.jsx")
+  import("./components/ServiceManagement")
 );
 const Notification = lazy(() => import("./components/ui/Notification.jsx"));
 const Sidebar = lazy(() => import("./components/ui/Sidebar.jsx"));
@@ -87,7 +87,6 @@ function App() {
   }
 
   return (
-    <Router>
       <div className="min-h-screen bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 p-2 md:p-4 font-sans">
         <div className="flex">
           <Sidebar />
@@ -121,7 +120,6 @@ function App() {
           </div>
         </div>
       </div>
-    </Router>
   );
 }
 
