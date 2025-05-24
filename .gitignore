@@ -25,3 +25,4 @@ dist-ssr
 ~/.targetcli/*
 src-tauri/config.json
 ./src-tauri/config.json
+.cursor/*
