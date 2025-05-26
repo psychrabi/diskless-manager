@@ -4,7 +4,7 @@ import { Modal } from '../ui'
 import { useAppStore } from '../../store/useAppStore'
 import { useServiceManager } from '../../hooks/useServiceManager'
 
-function ServiceConfigModal({serviceKey}) {
+function ServiceConfigModal() {
   const title = useAppStore(state => state.title)
   const loading = useAppStore(state => state.loading)
 
@@ -14,18 +14,17 @@ function ServiceConfigModal({serviceKey}) {
   const setOpen = useAppStore(state => state.setOpen)
   const [editable, setEditable] = useState(false)
   const [saving, setSaving] = useState(false)
-  const {handleConfigSave} = useServiceManager()
- 
+  const { handleConfigSave } = useServiceManager()
+  const serviceKey = useAppStore(state => state.serviceKey)
 
   const handleChange = e => {
     setConfig(e.target.value)
-    
   }
 
   const handleSave = () => {
     setSaving(true)
     handleConfigSave(serviceKey, config)
-      setSaving(false)
+    setSaving(false)
   }
 
   return (

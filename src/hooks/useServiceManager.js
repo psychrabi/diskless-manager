@@ -1,17 +1,17 @@
 import { invoke } from '@tauri-apps/api/core';
+import { useCallback } from 'react';
 import { useNotification } from '../contexts/NotificationContext';
-import { useCallback, useState } from 'react';
 import { useAppStore } from '../store/useAppStore';
 
 export const useServiceManager = () => {
-  const {showNotification} = useNotification();  
+  const { showNotification } = useNotification();
   const setOpen = useAppStore(state => state.setOpen)
   const setConfig = useAppStore(state => state.setConfig)
   const setTitle = useAppStore(state => state.setTitle)
   const setLoading = useAppStore(state => state.setLoading)
   const setSaving = useAppStore(state => state.setSaving)
   const setServiceKey = useAppStore(state => state.setServiceKey)
-  const serviceKey = useAppStore(state => state.serviceKey)
+  const fetchData = useAppStore(state => state.fetchData)
 
   const handleServiceAction = useCallback(async (serviceKey, action) => {
     await invoke('control_service', {
@@ -44,21 +44,21 @@ export const useServiceManager = () => {
     }
   }, []);
 
-  const handleConfigSave = async (content) => {
-    console.log('saving')
+  const handleConfigSave = async (serviceKey, content) => {
+    console.log(serviceKey)
     setSaving(true);
     try {
       await invoke('save_service_config', { serviceKey: serviceKey, content: content });
       showNotification('Configuration saved successfully', 'success');
-      setIsViewConfigModalOpen(false);
+
       fetchData();
     } catch (err) {
       showNotification(`Failed to save config: ${err.message || err}`, 'error');
     } finally {
       setSaving(false);
+      setOpen(false);
     }
   };
-
 
   return {
     handleServiceAction,
