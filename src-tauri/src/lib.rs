@@ -20,6 +20,7 @@ pub static SERVER_IP: Lazy<String> = Lazy::new(|| {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![
             client::get_clients,
             client::add_client,
