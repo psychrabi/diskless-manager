@@ -1,20 +1,68 @@
-import { useCallback } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import { useNotification } from '../contexts/NotificationContext';
+import { useCallback, useState } from 'react';
+import { useAppStore } from '../store/useAppStore';
 
-export const useServiceManager = (services, refresh) => {
+export const useServiceManager = () => {
+  const {showNotification} = useNotification();  
+  const setOpen = useAppStore(state => state.setOpen)
+  const setConfig = useAppStore(state => state.setConfig)
+  const setTitle = useAppStore(state => state.setTitle)
+  const setLoading = useAppStore(state => state.setLoading)
+  const setSaving = useAppStore(state => state.setSaving)
+  const setServiceKey = useAppStore(state => state.setServiceKey)
+  const serviceKey = useAppStore(state => state.serviceKey)
+
   const handleServiceAction = useCallback(async (serviceKey, action) => {
+    await invoke('control_service', {
+      serviceKey: serviceKey,
+      req: { action: action }
+    }).then((response) => {
+      if (response.message) showNotification(response.message, 'success');
+    }).catch((error) => showNotification(error, 'error',));
+  }, [showNotification]);
+
+  const handleServiceConfigView = useCallback(async (serviceKey, serviceName) => {
+    setTitle(`Configuration: ${serviceName}`);
+    setOpen(true);
+    setLoading(true);
+    setServiceKey(serviceKey)
     try {
-      // TODO: Replace with actual API call
-      console.log(`Performing ${action} on service: ${serviceKey}`);
-      // Simulate API response
-      await new Promise(resolve => setTimeout(resolve, 500));
-      refresh();
+      const configData = await invoke('get_service_config', { serviceKey });
+      if (configData && typeof configData === 'object' && 'text' in configData) {
+        setConfig(configData.text);
+        console.log(configData.text)
+      } else if (typeof configData === 'object') {
+        setConfig(JSON.stringify(configData, null, 2));
+      } else {
+        setConfig(String(configData));
+      }
     } catch (error) {
-      console.error(`Failed to ${action} service:`, error);
-      throw error;
+      setConfig(`Error loading configuration:\n${error.message}`);
+    } finally {
+      setLoading(false);
     }
-  }, [refresh]);
+  }, []);
+
+  const handleConfigSave = async (content) => {
+    console.log('saving')
+    setSaving(true);
+    try {
+      await invoke('save_service_config', { serviceKey: serviceKey, content: content });
+      showNotification('Configuration saved successfully', 'success');
+      setIsViewConfigModalOpen(false);
+      fetchData();
+    } catch (err) {
+      showNotification(`Failed to save config: ${err.message || err}`, 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
 
   return {
-    handleServiceAction
+    handleServiceAction,
+    handleServiceConfigView,
+    handleConfigSave
   };
 };

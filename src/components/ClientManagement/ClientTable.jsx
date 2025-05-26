@@ -1,3 +1,4 @@
+import { useAppStore } from '../../store/useAppStore';
 import { Layers, Monitor, Power, PowerOff, Zap } from 'lucide-react';
 
 const Table = ({ children, className = '' }) => <div className={`w-full overflow-x-auto ${className}`}><table className="min-w-full caption-bottom text-sm">{children}</table></div>;
@@ -7,7 +8,10 @@ const TableRow = ({ children, className = '', onContextMenu }) => <tr onContextM
 const TableHead = ({ children, className = '' }) => <th className={`h-12 px-4 text-left align-middle font-medium text-gray-500 dark:text-gray-400 ${className}`}>{children}</th>;
 const TableCell = ({ children, className = '' }) => <td className={`p-4 align-middle ${className}`}>{children}</td>;
 
-const ClientTable = ({ clients, handleClientContextMenu }) => (
+const ClientTable = ({ handleClientContextMenu }) => {
+  const {clients} = useAppStore()
+
+  return (
   <>
     <Table className='border border-gray-200 dark:border-gray-700'>
       <TableHeader>
@@ -58,6 +62,6 @@ const ClientTable = ({ clients, handleClientContextMenu }) => (
     </Table>
     {clients.length === 0 && <p className="text-center py-4 text-gray-500">No clients configured.</p>}
   </>
-);
+)};
 
 export default ClientTable;

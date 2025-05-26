@@ -1,16 +1,19 @@
 import { use, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useNavigate } from "react-router-dom";
+import { useAppStore } from "../store/useAppStore";
 
 export default function SetupPage() {
   const { navigate } = useNavigate();
   const [disks, setDisks] = useState([]);
-  const [services, setServices] = useState([]);
+  
   const [poolExists, setPoolExists] = useState(null);
 
   const [selectedDisk, setSelectedDisk] = useState("");
   const [poolName, setPoolName] = useState("diskless");
   const [installing, setInstalling] = useState(false);
+
+  const { services,error, setClients, setServices } = useAppStore();
 
   useEffect(() => {    
     invoke("list_disks").then(setDisks)

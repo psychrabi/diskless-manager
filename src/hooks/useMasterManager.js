@@ -77,13 +77,15 @@ export const useMasterManager = (refresh) => {
 
 
 
-  const setDefaultMaster = async (masterName) => {    
-     await handleApiAction(
-        () => apiRequest('/masters/default', 'POST', { name: masterName }),
-        `ZVOL ${masterName} has been set as default.`,
-        `Failed to set ZVOL ${masterName} as default`,
-        showNotification
-    )
+  const setDefaultMaster = async (masterName) => {   
+    invoke('set_default_master', { name: masterName })
+      .then((response) => {
+        if (response.message) showNotification(response.message, 'success');
+      }).catch((error) => {
+        showNotification(error, 'error',)
+      }).finally(() => {
+        refresh();
+      }); 
   };
 
   const confirmDeleteMaster = () => {
