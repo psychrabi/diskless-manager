@@ -31,7 +31,6 @@ export const useServiceManager = () => {
       const configData = await invoke('get_service_config', { serviceKey });
       if (configData && typeof configData === 'object' && 'text' in configData) {
         setConfig(configData.text);
-        console.log(configData.text)
       } else if (typeof configData === 'object') {
         setConfig(JSON.stringify(configData, null, 2));
       } else {
@@ -45,7 +44,6 @@ export const useServiceManager = () => {
   }, []);
 
   const handleConfigSave = async (serviceKey, content) => {
-    console.log(serviceKey)
     setSaving(true);
     try {
       await invoke('save_service_config', { serviceKey: serviceKey, content: content });

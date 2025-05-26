@@ -1,16 +1,16 @@
 import React from 'react';
 
 export const Select = ({ label, id, value, onChange, children, className = '', required = false }) => (
-  <div className={`form-control w-full ${className}`}>
-    {label && <label htmlFor={id} className='label'><span className='label-text'>{label}</span></label>}
+  <fieldset className={`fieldset ${className}`}>
+    {label && <legend htmlFor={id} className='fieldset-legend'>{label}</legend>}
     <select
       id={id}
-      value={value}
+      defaultValue={value}
       onChange={onChange}
-      className='select select-bordered w-full'
+      className='select w-full'
       required={required}
     >
       {children}
     </select>
-  </div>
+  </fieldset>
 );

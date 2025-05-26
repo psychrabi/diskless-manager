@@ -1,8 +1,8 @@
-import React, { useMemo, useCallback } from 'react';
-import { PlusCircle, Trash2, Save, HardDrive, Star, StarIcon } from 'lucide-react';
+import { HardDrive, PlusCircle, Save, Star, StarIcon, Trash2 } from 'lucide-react';
+import { useCallback, useMemo } from 'react';
 import { useMasterManager } from '../../hooks/useMasterManager';
-import { Card, Button, Modal, Input } from '../ui';
 import { useAppStore } from '../../store/useAppStore';
+import { Button, Card, Input, Modal } from '../ui';
 
 export const ImageManagement = () => {
   const { masters, fetchData } = useAppStore();
@@ -42,7 +42,7 @@ export const ImageManagement = () => {
   return (
     <div className="space-y-6">
       <Card title="Image Management" icon={HardDrive} actions={
-        <Button onClick={handleOpenCreateMasterModal} icon={PlusCircle}>Create Image</Button>
+        <Button variant="primary" onClick={handleOpenCreateMasterModal} icon={PlusCircle}>Create Image</Button>
       }>
         <div className="space-y-6">
           {memoizedMasters.map((master) => (
@@ -55,7 +55,7 @@ export const ImageManagement = () => {
                   </h4>
                 </div>
                 <div className="flex gap-2">
-                  <Button variant={master.is_default ? 'outline' : 'ghost'} size="sm" onClick={() => memoizedSetDefaultMaster(master.name)}
+                  <Button variant={master.is_default ? 'accent' : 'success'} size="sm" onClick={() => memoizedSetDefaultMaster(master.name)}
                     className={master.is_default ? 'text-green-500 border-green-500' : ''} disabled={master.is_default} >
                     {master.is_default ? (
                       <span className="flex items-center gap-1">
@@ -63,7 +63,7 @@ export const ImageManagement = () => {
                       </span>
                     ) : 'Set as Default'}
                   </Button>
-                  <Button onClick={() => memoizedHandleOpenCreateSnapshotModal(master.name)} size="sm" icon={PlusCircle}>Create Snapshot</Button>
+                  <Button variant='primary' onClick={() => memoizedHandleOpenCreateSnapshotModal(master.name)} size="sm" icon={PlusCircle}>Create Snapshot</Button>
                   <Button variant="destructive" onClick={() => memoizedHandleOpenDeleteMasterModal(master.name)} size="sm" icon={Trash2}>Delete Master</Button>
                 </div>
               </div>
@@ -92,7 +92,7 @@ export const ImageManagement = () => {
           {memoizedMasters.length === 0 && <p className="text-center py-4 text-gray-500">No master images found.</p>}
         </div>
       </Card>
-      <Modal isOpen={isCreateMasterModalOpen} onClose={() => setIsCreateMasterModalOpen(false)} title="Create Master Image" size='xl'>
+      <Modal isOpen={isCreateMasterModalOpen} onClose={() => setIsCreateMasterModalOpen(false)} title="Create Master Image">
         <form onSubmit={handleCreateMasterSubmit}>
           <Input
             label="Master Name:" id="masterName" value={newMasterName}
@@ -111,8 +111,8 @@ export const ImageManagement = () => {
             This will create a ZFS volume named '{newMasterName ? `${newMasterName}-master` : '...-master'}' in the pool.
           </p>
           <div className="mt-6 flex justify-end space-x-3">
-            <Button type="button" variant="outline" onClick={() => setIsCreateMasterModalOpen(false)}>Cancel</Button>
-            <Button type="submit" icon={Save}>Create Master</Button>
+            <Button type="submit" variant="primary" icon={Save}>Create Master</Button>
+            <Button type="button" variant="destructive" onClick={() => setIsCreateMasterModalOpen(false)}>Cancel</Button>
           </div>
         </form>
       </Modal>
@@ -137,8 +137,8 @@ export const ImageManagement = () => {
             This operation cannot be undone.
           </p>
           <div className="mt-6 flex justify-end space-x-3">
-            <Button type="button" variant="outline" onClick={() => setIsCreateSnapshotModalOpen(false)}>Cancel</Button>
-            <Button type="submit" icon={Save}>Create Snapshot</Button>
+            <Button type="submit" variant="primary" icon={Save}>Create Snapshot</Button>
+            <Button type="button" variant="destructive" onClick={() => setIsCreateSnapshotModalOpen(false)}>Cancel</Button>
           </div>
         </form>
       </Modal>
@@ -150,11 +150,11 @@ export const ImageManagement = () => {
           </p>
 
           <div className="flex justify-end space-x-3">
-            <Button variant="outline" onClick={cancelDeleteSnapshot} >
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={confirmDeleteSnapshot}>
+            <Button variant="primary" onClick={confirmDeleteSnapshot}>
               Delete Snapshot
+            </Button>
+            <Button variant="destructive" onClick={cancelDeleteSnapshot} >
+              Cancel
             </Button>
           </div>
         </div>
@@ -167,11 +167,11 @@ export const ImageManagement = () => {
           </p>
 
           <div className="flex justify-end space-x-3">
-            <Button variant="outline" onClick={cancelDeleteMaster} >
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={confirmDeleteMaster} >
+            <Button variant="primary" onClick={confirmDeleteMaster} >
               Delete Master
+            </Button>
+            <Button variant="destructive" onClick={cancelDeleteMaster} >
+              Cancel
             </Button>
           </div>
         </div>

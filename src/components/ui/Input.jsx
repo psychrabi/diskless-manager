@@ -1,6 +1,6 @@
 export const Input = ({ label, id, value, onChange, placeholder, type = 'text', required = false, className = '', pattern = '', title }) => (
-  <div className={`form-control w-full ${className}`}>
-    {label && <label htmlFor={id} className='label'><span className='label-text'>{label}</span></label>}
+  <fieldset className={`fieldset ${className}`}>
+    {label && <legend htmlFor={id} className='fieldset-legend'>{label}</legend>}
     <input
       type={type}
       id={id}
@@ -10,7 +10,7 @@ export const Input = ({ label, id, value, onChange, placeholder, type = 'text', 
       title={title}
       required={required}
       pattern={pattern}
-      className='input input-bordered w-full'
+      className='input w-full'
     />
-  </div>
+  </fieldset>
 );

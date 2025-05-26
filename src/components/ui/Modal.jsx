@@ -1,5 +1,5 @@
-import React, { useRef, useEffect } from 'react';
 import { X } from 'lucide-react';
+import { useEffect, useRef } from 'react';
 import { Button } from './Button.jsx';
 
 export const Modal = ({ isOpen, onClose, title, children, size = 'md', id = 'modal-dialog' }) => {
@@ -28,7 +28,7 @@ export const Modal = ({ isOpen, onClose, title, children, size = 'md', id = 'mod
       <div className={`modal-box ${sizeClasses[size] || ''}`}>
         <div className='flex justify-between items-center mb-4 border-b border-base-200 pb-3'>
           <h2 className='text-xl font-semibold'>{title}</h2>
-          <Button onClick={onClose} variant='ghost' size='icon' className='h-8 w-8'>
+          <Button onClick={onClose} variant='destructive' size='icon' className='h-8 w-8'>
             <X className='h-5 w-5' />
           </Button>
         </div>

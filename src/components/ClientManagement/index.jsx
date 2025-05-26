@@ -1,11 +1,11 @@
 import { PlusCircle, Users } from 'lucide-react';
-import { useCallback, useState, memo } from 'react';
-import { Button, Card } from '../ui';
+import { memo, useCallback, useState } from 'react';
+import { useAppStore } from '../../store/useAppStore';
 import { clientContextMenuActions } from '../../utils/contextMenuAction';
+import { Button, Card } from '../ui';
+import { ContextMenu } from '../ui/ContextMenu';
 import ClientFormModal from './ClientFormModal';
 import ClientTable from './ClientTable';
-import {ContextMenu} from '../ui/ContextMenu';
-import { useAppStore } from '../../store/useAppStore';
 
 const MemoizedClientTable = memo(ClientTable);
 const MemoizedContextMenu = memo(ContextMenu);
@@ -68,7 +68,7 @@ export const ClientManagement = () => {
   return (
     <div className="mb-2 md:mb-4">
       <Card title="Client Management" icon={Users} actions={
-        <Button onClick={handleClientFormModalOpen} icon={PlusCircle} disabled={masters.length === 0}>
+        <Button variant="primary" onClick={handleClientFormModalOpen} icon={PlusCircle} disabled={masters.length === 0}>
           Add Client {masters.length === 0 && <span className="text-xs text-red-500 ml-2 self-center">(Requires Master Image)</span>}
         </Button>
       }>
