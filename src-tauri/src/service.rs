@@ -3,6 +3,8 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
 use std::process::Command;
+use std::path::Path;
+use std::io::Write;
 
 #[derive(Deserialize)]
 pub struct ServiceControlRequest {
@@ -34,7 +36,8 @@ pub async fn get_services(zfs_pool: String) -> Result<Value, String> {
         statuses.insert(
             key,
             json!({
-                "name": service_name.trim_end_matches(".service"),
+                "name": key,
+                "service": service_name.trim_end_matches(".service"),
                 "status": status
             }),
         );
@@ -69,6 +72,33 @@ pub async fn get_services(zfs_pool: String) -> Result<Value, String> {
             "status": zfs_status
         }),
     );
+
+    // --- Update config.json with the new statuses ---
+    let config_path = crate::CONFIG_PATH;
+    let mut config: Value = if Path::new(config_path).exists() {
+        match fs::read_to_string(config_path)
+            .ok()
+            .and_then(|content| serde_json::from_str(&content).ok())
+        {
+            Some(val) => val,
+            None => json!({}),
+        }
+    } else {
+        json!({})
+    };
+
+    // Insert/update the 'services' field
+    config["services"] = serde_json::to_value(&statuses).unwrap();
+
+    // Write back to config.json
+    if let Err(e) = fs::write(
+        config_path,
+        serde_json::to_string_pretty(&config).unwrap(),
+    ) {
+        println!("Error writing services status to config: {}", e);
+        // Optionally: return an error here if you want to fail the command
+    }
+
     Ok(serde_json::to_value(statuses).unwrap())
 }
 
@@ -176,33 +206,29 @@ pub async fn control_service(
     let Some(&service_name) = service_map.get(service_key.as_str()) else {
         return Err(format!("Unknown service key: {}", service_key));
     };
-    println!(
-        "Received control action '{}' for service: {} ({})",
-        req.action, service_key, service_name
-    );
-    match req.action.as_str() {
-        "restart" => {
-            let output = Command::new("sudo")
-                .args(["systemctl", "restart", service_name])
-                .output()
-                .map_err(|e| format!("Failed to run systemctl: {e}"))?;
-            if output.status.success() {
-                Ok(
-                    json!({ "message": format!("Service '{}' restart command issued successfully.", service_name) }),
-                )
-            } else {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                Err(format!(
-                    "Failed to restart service '{}': {}",
-                    service_name, stderr
-                ))
-            }
-        }
-        _ => Err(format!(
-            "Unsupported action '{}' for service '{}'",
-            req.action, service_key
-        )),
+    
+    // println!(
+    //     "Received control action '{}' for service: {} ({})",
+    //     req.action, service_key, service_name
+    // );
+   
+    let output = Command::new("sudo")
+        .args(["systemctl", &req.action, service_name])
+        .output()
+        .map_err(|e| format!("Failed to run systemctl: {e}"))?;
+    if output.status.success() {
+        Ok(
+            json!({ "message": format!("Service '{}' {} command issued successfully.", service_name, &req.action) }),
+        )
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!(
+            "Failed to restart service '{}': {}",
+            service_name, stderr
+        ))
     }
+       
+     
 }
 
 #[tauri::command]
@@ -244,4 +270,49 @@ pub fn install_service(service: String) -> Result<(), String> {
     } else {
         Err(format!("Failed to install {}", service))
     }
+}
+
+#[tauri::command]
+pub async fn save_service_config(service_key: String, content: String) -> Result<(), String> {
+    let config_file_map: HashMap<&str, &str> = [
+        ("dhcp", "/etc/dhcp/dhcpd.conf"),
+        ("tftp", "/etc/default/tftpd-hpa"),
+        ("iscsi", "/etc/rtslib-fb-target/saveconfig.json"),
+        ("http", "/etc/apache2/sites-available/000-default.conf"),
+        ("share", "/etc/samba/smb.conf"),
+        // Add more as needed
+    ]
+    .iter()
+    .cloned()
+    .collect();
+
+    let config_path = config_file_map
+        .get(service_key.as_str())
+        .ok_or_else(|| format!("Unknown service key: {}", service_key))?;
+
+    // Write using sudo tee for protected files
+    let mut child = Command::new("sudo")
+        .arg("tee")
+        .arg(config_path)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to spawn sudo tee: {}", e))?;
+
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin
+            .write_all(content.as_bytes())
+            .map_err(|e| format!("Failed to write to stdin: {}", e))?;
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("Failed to wait for tee: {}", e))?;
+    if !output.status.success() {
+        return Err(format!(
+            "Failed to write config: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(())
 }

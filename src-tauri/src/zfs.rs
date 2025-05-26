@@ -39,6 +39,12 @@ pub struct MasterData {
     last_modified: String,
 }
 
+#[derive(Serialize, Deserialize, Default)]
+struct Settings {
+    #[serde(default)]
+    default_master: String,
+}
+
 // Check if a ZFS dataset exists
 pub fn zfs_exists(dataset: &str) -> bool {
     let output = Command::new("sudo")
@@ -556,5 +562,39 @@ pub fn create_zfs_pool(name: String, disk: String) -> Result<(), String> {
         Ok(())
     } else {
         Err("Failed to create ZFS pool".to_string())
+    }
+}
+
+#[tauri::command]
+pub fn set_default_master(name: &str) -> bool {
+    let mut config: Value = if Path::new(crate::CONFIG_PATH).exists() {
+        match fs::read_to_string(crate::CONFIG_PATH)
+            .ok()
+            .and_then(|content| serde_json::from_str(&content).ok())
+        {
+            Some(val) => val,
+            None => json!({}),
+        }
+    } else {
+        json!({})
+    };
+
+    // Ensure 'settings' is an object
+    if !config.get("settings").map_or(false, |v| v.is_object()) {
+        config["settings"] = json!({});
+    }
+
+    // Set the default_master field
+    config["settings"]["default_master"] = Value::String(name.to_string());
+
+    match fs::write(
+        crate::CONFIG_PATH,
+        serde_json::to_string_pretty(&config).unwrap(),
+    ) {
+        Ok(_) => true,
+        Err(e) => {
+            println!("Error saving default master: {}", e);
+            false
+        }
     }
 }
