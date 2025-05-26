@@ -193,11 +193,43 @@ pub fn save_client_config(client_data: &Client) -> bool {
             .and_then(|content| serde_json::from_str(&content).ok())
         {
             Some(val) => val,
-            None => json!({"clients": [], "masters": {}}),
+            None => json!({
+                "clients": [],
+                "masters": {},
+                "services": {},
+                "settings": {}
+            }),
         }
     } else {
-        json!({"clients": [], "masters": {}})
+        json!({
+            "clients": [],
+            "masters": {},
+            "services": {},
+            "settings": {}
+        })
     };
+
+    // Ensure all required fields exist
+    if !config.is_object() {
+        config = json!({
+            "clients": [],
+            "masters": {},
+            "services": {},
+            "settings": {}
+        });
+    }
+    if !config.get("clients").is_some() {
+        config["clients"] = json!([]);
+    }
+    if !config.get("masters").is_some() {
+        config["masters"] = json!({});
+    }
+    if !config.get("services").is_some() {
+        config["services"] = json!({});
+    }
+    if !config.get("settings").is_some() {
+        config["settings"] = json!({});
+    }
 
     let clients = config.get_mut("clients").and_then(|v| v.as_array_mut());
     let mut updated = false;

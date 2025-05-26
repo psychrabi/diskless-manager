@@ -5,12 +5,23 @@ use serde::{Deserialize, Serialize};
 use crate::{client::Client, CONFIG_PATH};
 use serde_json::{json, Value};
 
-#[derive(Serialize, Deserialize, Clone, Default)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Config {
     pub clients: Vec<Client>,
     pub masters: Value,
     pub services: Value,
     pub settings: Value,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            clients: Vec::new(),
+            masters: json!({}),
+            services: json!({}),
+            settings: json!({}),
+        }
+    }
 }
 
 // Read config.json, or return default
