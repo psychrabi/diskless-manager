@@ -4,6 +4,7 @@ import './index.css'
 import App from './App.jsx'
 import { NotificationProvider } from './contexts/NotificationContext.jsx'
 import { BrowserRouter } from 'react-router-dom'
+import ErrorBoundary from './components/ErrorBoundary'
 
 // Loading fallback component
 const LoadingFallback = () => (
@@ -14,13 +15,15 @@ const LoadingFallback = () => (
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <StrictMode>
-    <Suspense fallback={<LoadingFallback />}>
-      <NotificationProvider>
-        <BrowserRouter>
-          <App />
-        </BrowserRouter>
-        
-      </NotificationProvider>
-    </Suspense>
+    <ErrorBoundary>
+      <Suspense fallback={<LoadingFallback />}>
+        <NotificationProvider>
+          <BrowserRouter>
+            <App />
+          </BrowserRouter>
+
+        </NotificationProvider>
+      </Suspense>
+    </ErrorBoundary>
   </StrictMode>
 )
