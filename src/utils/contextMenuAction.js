@@ -1,6 +1,5 @@
-import { useNotification } from "../contexts/NotificationContext";
 import { invoke } from "@tauri-apps/api/core";
-import { apiRequest, handleApiAction } from '../utils/apiRequest';
+import { useNotification } from "../contexts/NotificationContext";
 
 export const clientContextMenuActions = (fetchData, closeContextMenu, setClient, setIsModalOpen) => {
   const { showNotification } = useNotification();
@@ -13,15 +12,6 @@ export const clientContextMenuActions = (fetchData, closeContextMenu, setClient,
       setIsModalOpen(true);
       closeContextMenu();
     },
-    toggleSuper: (client) => {
-      const makeSuper = !client.isSuperClient;
-      handleApiAction(
-        () => apiRequest(`/clients/${client.id}/control`, 'POST', { action: 'toggleSuper', makeSuper: makeSuper }),
-        `Super Client mode ${makeSuper ? 'enabled' : 'disabled'} for ${client.name}.`,
-        `Failed to toggle Super Client mode for ${client.name}`,
-        showNotification
-      );
-    },
     reboot: async (client) => {
       await invoke('control_client', {
         clientId: client.id,
@@ -29,7 +19,6 @@ export const clientContextMenuActions = (fetchData, closeContextMenu, setClient,
       }).then((response) => {
         if (response.message) showNotification(response.message, 'success');
       }).catch((error) => showNotification(error, 'error'));
-
     },
     shutdown: async (client) => {
       await invoke('control_client',
@@ -59,18 +48,16 @@ export const clientContextMenuActions = (fetchData, closeContextMenu, setClient,
         if (response.message) showNotification(response.message, 'success');
       }).catch((error) => showNotification(error, 'error'));
     },
-    reset: (client) => {
+    reset: async (client) => {
       if (client.status !== 'Offline') {
         showNotification('Client must be offline before you can reset', 'error');
         return;
       }
-
-      handleApiAction(
-        () => apiRequest(`/clients/reset/${client.id}`, 'POST'),
-        'Resetting the client...',
-        'Failed to reset the client',
-        showNotification
-      )
+      await invoke('reset_client', {
+        clientId: client.id,
+      }).then((response) => {
+        if (response.message) showNotification(response.message, 'success');
+      }).catch((error) => showNotification(error, 'error'));
     },
     delete: (client) => {
       showNotification(`Deleting client... ${client.name}`, 'info');

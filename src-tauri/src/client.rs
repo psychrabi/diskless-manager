@@ -777,3 +777,57 @@ pub async fn control_client(
         _ => Err(format!("Invalid action: {}", req.action)),
     }
 }
+
+
+#[tauri::command]
+pub async fn reset_client(client_id: String) -> Result<serde_json::Value, String> {
+    // Validate client ID
+    let re = regex::Regex::new(r"^[\w-]+$").unwrap();
+    if !re.is_match(&client_id) {
+        return Err("Invalid client ID".to_string());
+    }
+
+    // Fetch client info
+    let client_info = match get_client_by_id(&client_id) {
+        Some(info) => info,
+        None => return Err(format!("Client {} not found", client_id)),
+    };
+
+    // Get paths for the client
+    let current_paths = get_client_paths(&client_id);
+    let target_iqn = current_paths.get("target_iqn").cloned().unwrap_or_default();
+    let block_store = current_paths.get("block_store").cloned().unwrap_or_default();
+    let clone = format!("{}/{}-disk", ZFS_POOL, client_id.to_uppercase());
+
+    // 1. Clean up existing iSCSI resources
+    if let Err(e) = cleanup_iscsi_target(&target_iqn, &block_store) {
+        println!("Warning: Failed to clean up iSCSI target: {}", e);
+    }
+
+    // 2. Destroy existing ZFS clone if it exists
+    if zfs_exists(&clone) {
+        if let Err(e) = zfs_destroy(&clone) {
+            return Err(format!("Failed to destroy existing ZFS clone: {}", e));
+        }
+    }
+
+    // 3. Create new clone from snapshot
+    let snapshot = match &client_info.snapshot {
+        Some(s) if !s.is_empty() => s,
+        _ => return Err("No snapshot found for client".to_string()),
+    };
+
+    if let Err(e) = zfs_clone(snapshot, &clone) {
+        return Err(format!("Failed to create ZFS clone: {}", e));
+    }
+
+    // 4. Setup new iSCSI target
+    let block_device = format!("/dev/zvol/{}", clone);
+    if let Err(e) = setup_iscsi_target(&target_iqn, &block_store, &block_device) {
+        return Err(format!("Failed to set up iSCSI target: {}", e));
+    }
+
+    Ok(serde_json::json!({
+        "message": format!("Client {} reset successfully", client_id.to_uppercase())
+    }))
+}

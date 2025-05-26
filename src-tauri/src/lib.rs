@@ -27,6 +27,7 @@ pub fn run() {
             client::delete_client,
             client::control_client,
             client::remote_client,
+            client::reset_client,
             config::get_config,
             config::save_config,
             service::get_services,
