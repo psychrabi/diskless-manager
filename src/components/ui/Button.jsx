@@ -1,21 +1,27 @@
 import React, { forwardRef } from 'react';
 
-export const Button = forwardRef(({ children, onClick, variant = 'default', size = 'default', className = '', icon: Icon, disabled = false, title = '', type = 'button' }, ref) => {
-  const baseStyle = "inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none ring-offset-background";
-  const variantStyles = {
-    default: "bg-blue-600 text-white hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600",
-    destructive: "bg-red-600 text-white hover:bg-red-700 dark:bg-red-500 dark:hover:bg-red-600",
-    outline: "border border-gray-300 dark:border-gray-600 bg-transparent hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-800 dark:text-gray-200",
-    ghost: "hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-800 dark:text-gray-200",
-    link: "text-blue-600 dark:text-blue-400 underline-offset-4 hover:underline",
-  };
-  const sizeStyles = {
-    default: "h-10 py-2 px-4",
-    sm: "h-9 px-3 rounded-md",
-    lg: "h-11 px-8 rounded-md",
-    icon: "h-9 w-9 md:h-10 md:w-10",
-  };
-  const iconPosition = size === 'icon' ? 'mr-0' : 'mr-2';
+export const Button = forwardRef(({ children, onClick, variant = 'default', size = 'md', className = '', icon: Icon, disabled = false, title = '', type = 'button' }, ref) => {
+  // daisyUI btn base
+  const variantClasses = {
+    default: 'btn',
+    destructive: 'btn btn-error',
+    outline: 'btn btn-outline',
+    ghost: 'btn btn-ghost',
+    link: 'btn btn-link',
+    primary: 'btn btn-primary',
+    secondary: 'btn btn-secondary',
+    accent: 'btn btn-accent',
+    info: 'btn btn-info',
+    success: 'btn btn-success',
+    warning: 'btn btn-warning',
+  }
+  const sizeClasses = {
+    sm: 'btn-sm',
+    md: '',
+    lg: 'btn-lg',
+    icon: 'btn-square',
+  }
+  const iconPosition = size === 'icon' ? '' : 'mr-2';
 
   return (
     <button
@@ -24,7 +30,11 @@ export const Button = forwardRef(({ children, onClick, variant = 'default', size
       onClick={onClick}
       disabled={disabled}
       title={title}
-      className={`${baseStyle} ${variantStyles[variant]} ${sizeStyles[size]} ${className}`}
+      className={[
+        variantClasses[variant] || 'btn',
+        sizeClasses[size] || '',
+        className
+      ].join(' ')}
     >
       {Icon && <Icon className={`h-4 w-4 ${iconPosition}`} />}
       {children}
