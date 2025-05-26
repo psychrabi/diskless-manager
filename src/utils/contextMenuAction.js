@@ -6,13 +6,13 @@ export const clientContextMenuActions = (fetchData, closeContextMenu, setClient,
 
   return {
     edit: (client) => {
-      // Open the add client modal with current client data
-      console.log('Client object:', client);
+      if (client.status === 'Offline') { showNotification('Client must be online to make changes.', 'error'); return; }
       setClient(client);
       setIsModalOpen(true);
       closeContextMenu();
     },
     reboot: async (client) => {
+      if (client.status === 'Offline') { showNotification('Client must be online to reboot.', 'error'); return; }
       await invoke('control_client', {
         clientId: client.id,
         req: { action: 'reboot' }
@@ -21,6 +21,7 @@ export const clientContextMenuActions = (fetchData, closeContextMenu, setClient,
       }).catch((error) => showNotification(error, 'error'));
     },
     shutdown: async (client) => {
+      if (client.status === 'Offline') { showNotification('Client must be online to shutdown.', 'error'); return; }
       await invoke('control_client',
         {
           clientId: client.id, req: { action: 'shutdown' }
@@ -38,10 +39,7 @@ export const clientContextMenuActions = (fetchData, closeContextMenu, setClient,
       }).catch((error) => showNotification(error, 'error'));
     },
     remote: async (client) => {
-      if (client.status !== 'Online') {
-        showNotification('Client must be online to connect remotely', 'error');
-        return;
-      }
+      if (client.status !== 'Online') { showNotification('Client must be online to connect remotely', 'error'); return; }
       await invoke('remote_client', {
         clientId: client.id,
       }).then((response) => {
@@ -49,10 +47,7 @@ export const clientContextMenuActions = (fetchData, closeContextMenu, setClient,
       }).catch((error) => showNotification(error, 'error'));
     },
     reset: async (client) => {
-      if (client.status !== 'Offline') {
-        showNotification('Client must be offline before you can reset', 'error');
-        return;
-      }
+      if (client.status !== 'Offline') { showNotification('Client must be offline before you can reset', 'error'); return; }
       await invoke('reset_client', {
         clientId: client.id,
       }).then((response) => {
@@ -60,6 +55,8 @@ export const clientContextMenuActions = (fetchData, closeContextMenu, setClient,
       }).catch((error) => showNotification(error, 'error'));
     },
     delete: (client) => {
+      if (client.status !== 'Offline') { showNotification('Client must be offline to delete.', 'error'); return; }
+
       showNotification(`Deleting client... ${client.name}`, 'info');
       if (confirm(`Are you sure you want to delete client "${client.name}"? This will destroy their ZFS clone and remove configurations.`)) {
         invoke('delete_client', { clientId: client.id })
@@ -71,6 +68,9 @@ export const clientContextMenuActions = (fetchData, closeContextMenu, setClient,
             // Refresh the data after deletion
             fetchData();
           });
+      } else {
+        showNotification('Client deletion cancelled.', 'info');
+        closeContextMenu();
       }
     }
   }
