@@ -15,22 +15,6 @@
       "status": null,
       "target_iqn": "iqn.2025-04.com.nsboot:pc001",
       "writeback": "diskless/Windows10-Pro-master"
-    },
-    {
-      "block_device": "/dev/zvol/diskless/PC002-disk",
-      "block_store": "block_pc002",
-      "created_at": "2025-05-26 17:00:51",
-      "id": "pc002",
-      "ip": "192.168.1.102",
-      "last_modified": "2025-05-26 18:32:11",
-      "mac": "D8:43:AE:A7:8E:A8",
-      "master": "diskless/Windows11-Pro-master",
-      "mode": null,
-      "name": "PC002",
-      "snapshot": "diskless/Windows11-Pro-master@base",
-      "status": null,
-      "target_iqn": "iqn.2025-04.com.nsboot:pc002",
-      "writeback": "diskless/PC002-disk"
     }
   ],
   "masters": {
