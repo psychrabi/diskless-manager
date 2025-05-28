@@ -1,52 +1,44 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Button } from '../components/ui';
-import { RefreshCw } from 'lucide-react';
-import { apiRequest } from '../../utils/apiRequest';
+import { RefreshCw, Database } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
+import { useNotification } from '../contexts/NotificationContext';
+
 
 export const RAMUsage = () => {
     const [ramUsage, setRamUsage] = useState(null);
+    const [arcStat, setArcStat] = useState(null);
     const [loading, setLoading] = useState(true);
-    const [error, setError] = useState(null);
+    const { showNotification } = useNotification();
 
     const fetchRamUsage = async () => {
-        try {
-            setLoading(true);
-            const response = await apiRequest('/system/ram', 'GET');
-            console.log('RAM usage response:', response);
-            if (response) {
-                setRamUsage(response);
-                setError(null);
-            } else {
-                setError('Failed to fetch RAM usage');
-            }
-        } catch (err) {
-            console.error('Error fetching RAM usage:', err);
-            setError('Failed to fetch RAM usage');
-        } finally {
+        await invoke('get_ram_usage').then((response) => {
+            setRamUsage(response);
             setLoading(false);
-        }
+            if (response.message) showNotification(response.message, 'success');
+        }).catch((err) => showNotification(err, 'error'));
+    };
+
+    const fetchArcStat = async () => {
+        await invoke('get_zfs_arcstat').then((response) => {
+            setArcStat(response);
+        }).catch(() => setArcStat(null));
     };
 
     const clearRamCache = async () => {
-        try {
-            const response = await apiRequest('/system/ram/clear', 'POST');
-            if (response) {
-                console.log('RAM clear response:', response);
-
-                // Refresh RAM usage after clearing cache
-                fetchRamUsage();
-            } else {
-                setError('Failed to clear RAM cache');
-            }
-        } catch (err) {
-            setError('Failed to clear RAM cache');
-        }
+        await invoke('clear_ram_cache').then((response) => {
+            if (response.message) showNotification(response.message, 'success');
+        }).catch((err) => showNotification(err, 'error'));
     };
 
     useEffect(() => {
         fetchRamUsage();
-        // Refresh every 30 seconds
-        const interval = setInterval(fetchRamUsage, 30000);
+        fetchArcStat();
+        // Refresh every 5 minutes
+        const interval = setInterval(() => {
+            fetchRamUsage();
+            fetchArcStat();
+        }, 300000);
         return () => clearInterval(interval);
     }, []);
 
@@ -58,43 +50,34 @@ export const RAMUsage = () => {
         );
     }
 
-    if (error) {
-        return (
-            <Card title="RAM Usage" icon={RefreshCw}>
-                <div className="text-red-500">Error: {error}</div>
-            </Card>
-        );
-    }
+
 
     return (
-        <Card title="RAM Usage" icon={RefreshCw}>
-            <div className="space-y-6">
-                <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                        <h4 className="text-sm font-medium text-gray-500">Memory</h4>
-                        <div className="space-y-1">
-                            <div>Total: {ramUsage.memory.total}</div>
-                            <div>Used: {ramUsage.memory.used}</div>
-                            <div>Free: {ramUsage.memory.free}</div>
-                            <div>Available: {ramUsage.memory.available}</div>
-                        </div>
-                    </div>
-                    <div className="space-y-2">
-                        <h4 className="text-sm font-medium text-gray-500">Swap</h4>
-                        <div className="space-y-1">
-                            <div>Total: {ramUsage.swap.total}</div>
-                            <div>Used: {ramUsage.swap.used}</div>
-                            <div>Free: {ramUsage.swap.free}</div>
-                        </div>
-                    </div>
-                </div>
-                <Button
-                    onClick={clearRamCache}
-                    variant="outline"
-                    className="w-full"
-                >
-                    Clear RAM Cache
+        <Card
+            title="RAM Usage"
+            icon={RefreshCw}
+            actions={
+                <Button onClick={clearRamCache} variant="primary" className="w-full">
+                    Clear Cache
                 </Button>
+            }
+        >
+            <div className="space-y-2">
+                <div className="grid grid-cols-2">
+                    <div>Total: {ramUsage.memory.total}</div>
+                    <div>Used: {ramUsage.memory.used}</div>
+                    <div>Free: {ramUsage.memory.free}</div>
+                    <div>Available: {ramUsage.memory.available}</div>
+
+                    {arcStat && (<>
+
+                        <div>ZFS Cache: {(arcStat.size / (1024 * 1024)).toFixed(1)} MB</div>
+                        <div>ZFS Cache Hit: {arcStat.hit_percent.toFixed(2)}%</div>
+                    </>
+                    )}
+                </div>
+
+
             </div>
         </Card>
     );

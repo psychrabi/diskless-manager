@@ -7,6 +7,7 @@ import ServiceConfigModal from './ServiceConfigModal';
 import ZfsPoolCard from './ZfsPoolCard';
 import { useAppStore } from '../../store/useAppStore';
 import { useServiceManager } from '../../hooks/useServiceManager';
+import { RAMUsage } from '../RAMUsage';
 
 export const ServiceManagement = () => {
   const { services, loading } = useAppStore();
@@ -47,6 +48,8 @@ export const ServiceManagement = () => {
         </Card>
       )) : !loading && <p className="text-gray-500 col-span-full">Could not load service status.</p>}
       <ZfsPoolCard title="ZFS Pool Usage" />
+      <RAMUsage />
+  
       <ServiceConfigModal />
     </div>
   );
