@@ -5,6 +5,7 @@ use std::fs;
 use std::process::Command;
 use std::path::Path;
 use std::io::Write;
+use crate::utils::run_command;
 
 #[derive(Deserialize)]
 pub struct ServiceControlRequest {
@@ -207,26 +208,11 @@ pub async fn control_service(
         return Err(format!("Unknown service key: {}", service_key));
     };
     
-    // println!(
-    //     "Received control action '{}' for service: {} ({})",
-    //     req.action, service_key, service_name
-    // );
-   
-    let output = Command::new("sudo")
-        .args(["systemctl", &req.action, service_name])
-        .output()
-        .map_err(|e| format!("Failed to run systemctl: {e}"))?;
-    if output.status.success() {
-        Ok(
-            json!({ "message": format!("Service '{}' {} command issued successfully.", service_name, &req.action) }),
-        )
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!(
-            "Failed to restart service '{}': {}",
-            service_name, stderr
-        ))
-    }
+    run_command(&["systemctl", &req.action, service_name])?;
+
+    Ok(json!({ 
+        "message": format!("Service '{}' {} command issued successfully.", service_name, &req.action) 
+    }))
        
      
 }

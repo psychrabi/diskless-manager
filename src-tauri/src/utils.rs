@@ -3,6 +3,9 @@ use std::process::Command;
 use serde::Serialize;
 
 pub fn run_command(args: &[&str]) -> Result<(), String> {
+    // Print the command being executed
+    println!("Executing command: sudo {}", args.join(" "));
+    
     let status = Command::new("sudo")
         .args(args)
         .status()
