@@ -5,31 +5,27 @@ import { useAppStore } from "../store/useAppStore";
 import { Card } from "./ui";
 
 export default function SetupPage() {
-  const { navigate } = useNavigate();
+  const navigate = useNavigate();
   const [disks, setDisks] = useState([]);
-  
   const [poolExists, setPoolExists] = useState(null);
-
   const [selectedDisk, setSelectedDisk] = useState("");
   const [poolName, setPoolName] = useState("diskless");
   const [installing, setInstalling] = useState(false);
-
-  const { services, setServices } = useAppStore();
-  const anyServiceNotInstalled = Object.values(services).some(svc => !svc.installed);
+  const { services_status } = useAppStore();
 
   useEffect(() => {    
     invoke("list_disks").then(setDisks)
     invoke("zfs_pool_exists", { poolName }).then(setPoolExists);
-    invoke("check_services").then(setServices)
 
-    if(poolExists){
-      navigate("/");
+    // Check if any services are not installed
+    const hasUninstalledServices = Object.values(services_status).some(
+      service => !service.installed
+    );
+
+    if (!hasUninstalledServices) {
+      navigate('/');
     }
-    if(!anyServiceNotInstalled){
-      navigate("/");
-    }
-    
-  }, []);
+  }, [services_status, navigate]);
 
   const handleCreatePool = async () => {
     await invoke("create_zfs_pool", { name: poolName, disk: selectedDisk });
@@ -43,8 +39,6 @@ export default function SetupPage() {
     setInstalling(false);
   };
 
-  // Check if any services are not installed
-  console.log(services);
 
 
 
@@ -83,9 +77,6 @@ export default function SetupPage() {
       </div>)}
       <div>
         <h3 className="font-semibold mb-2">Required Services</h3>
-        {!anyServiceNotInstalled && (
-          <div className="mb-2 text-green-700">All required services are installed.</div>
-        )}
         <div className="overflow-x-auto">
           <table className="table">
             <thead>
@@ -96,7 +87,7 @@ export default function SetupPage() {
               </tr>
             </thead>
             <tbody>
-              {Object.entries(services).map(([key, svc]) => (
+              {Object.entries(services_status).map(([key, svc]) => (
                 <tr key={key}>
                   <td>{svc.name}</td>
                   <td>{svc.installed ? "Installed" : "Not Installed"}</td>

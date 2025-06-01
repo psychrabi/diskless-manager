@@ -8,6 +8,7 @@ export const useAppStore = create()(
       clients: [],
       masters: [],
       services: {},
+      services_status: {},
       config: '',
       error: null,
       loading: true,
@@ -34,15 +35,17 @@ export const useAppStore = create()(
         if (showLoading) set({ loading: true });
         set({ error: null });
         try {
-          const [servicesRes, mastersRes, clientsRes] = await Promise.all([
+          const [servicesRes, mastersRes, clientsRes, services_status] = await Promise.all([
             invoke('get_services', { 'zfsPool': 'diskless' }),
             invoke('get_masters', { 'zfsPool': 'diskless' }),
-            invoke('get_clients')
+            invoke('get_clients'),
+            invoke("check_services")
           ]);
           set({
             clients: clientsRes ? Object.values(clientsRes) : [],
             masters: mastersRes || [],
             services: servicesRes || {},
+            services_status: services_status || {},
           });
           // Set default snapshot selection for Add Client modal only if not already set and snapshots exist
           const { selectedSnapshot } = get();
