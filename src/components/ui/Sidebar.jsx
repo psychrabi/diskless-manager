@@ -1,5 +1,5 @@
 
-import { HardDrive, LayoutDashboard, Monitor, Power } from "lucide-react";
+import { HardDrive, LayoutDashboard, Monitor, Power, Wrench } from "lucide-react";
 import { NavLink } from "react-router-dom";
 import { Button } from ".";
 import { exit } from '@tauri-apps/plugin-process';
@@ -19,6 +19,11 @@ const navItems = [
     to: "/masters",
     label: "Masters",
     icon: <HardDrive className="w-4 h-4 mr-2" />,
+  },
+  {
+    to: "/setup",
+    label: "Setup",
+    icon: <Wrench className="w-4 h-4 mr-2" />,
   },
 ];
 

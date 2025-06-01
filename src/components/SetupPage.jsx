@@ -1,7 +1,8 @@
-import { use, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAppStore } from "../store/useAppStore";
+import { Card } from "./ui";
 
 export default function SetupPage() {
   const { navigate } = useNavigate();
@@ -13,7 +14,8 @@ export default function SetupPage() {
   const [poolName, setPoolName] = useState("diskless");
   const [installing, setInstalling] = useState(false);
 
-  const { services,error, setClients, setServices } = useAppStore();
+  const { services, setServices } = useAppStore();
+  const anyServiceNotInstalled = Object.values(services).some(svc => !svc.installed);
 
   useEffect(() => {    
     invoke("list_disks").then(setDisks)
@@ -23,6 +25,10 @@ export default function SetupPage() {
     if(poolExists){
       navigate("/");
     }
+    if(!anyServiceNotInstalled){
+      navigate("/");
+    }
+    
   }, []);
 
   const handleCreatePool = async () => {
@@ -38,11 +44,15 @@ export default function SetupPage() {
   };
 
   // Check if any services are not installed
-  const anyServiceNotInstalled = Object.values(services).some(svc => !svc.installed);
+  console.log(services);
+
+
 
   return (
-    <div className="max-w-xl mx-auto mt-10 p-6 bg-white rounded shadow">
-      <h2 className="text-2xl font-bold mb-4">Initial Setup</h2>
+    <Card title="Initial Setup">
+    
+    
+      
       {!poolExists && (<div className="mb-4">
         <label className="block mb-2">Select disk to create ZFS pool:</label>
         <select
@@ -76,25 +86,37 @@ export default function SetupPage() {
         {!anyServiceNotInstalled && (
           <div className="mb-2 text-green-700">All required services are installed.</div>
         )}
-        <ul>
-         {Object.entries(services).map(([key, svc]) => (
-          <li key={key} className="mb-2 flex items-center">
-            <span className="flex-1">
-              {svc.name} - {svc.installed ? "Installed" : "Not Installed"}
-            </span>
-            {!svc.installed && (
-              <button
-                className="px-2 py-1 bg-green-600 text-white rounded"
-                disabled={installing === key}
-                onClick={() => handleInstallService(svc.name)}
-              >
-                {installing === key ? "Installing..." : "Install"}
-              </button>
-            )}
-          </li>
-        ))}
-        </ul>
+        <div className="overflow-x-auto">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Service Name</th>
+                <th>Status</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {Object.entries(services).map(([key, svc]) => (
+                <tr key={key}>
+                  <td>{svc.name}</td>
+                  <td>{svc.installed ? "Installed" : "Not Installed"}</td>
+                  <td>
+                    {!svc.installed && (
+                      <button
+                        className="btn btn-success btn-sm"
+                        disabled={installing === key}
+                        onClick={() => handleInstallService(svc.name)}
+                      >
+                        {installing === key ? "Installing..." : "Install"}
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
-    </div>
+    </Card>
   );
 }
