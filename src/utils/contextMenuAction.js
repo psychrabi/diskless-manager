@@ -6,7 +6,7 @@ export const clientContextMenuActions = (fetchData, closeContextMenu, setClient,
 
   return {
     edit: (client) => {
-      if (client.status === 'Offline') { showNotification('Client must be online to make changes.', 'error'); return; }
+      if (client.status !== 'Offline') { showNotification('Client must be offine to make changes.', 'error'); return; }
       setClient(client);
       setIsModalOpen(true);
       closeContextMenu();

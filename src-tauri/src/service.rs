@@ -223,7 +223,7 @@ pub fn check_services() -> Result<Value, String> {
         ("zfs", "zfsutils-linux"),
         ("targetcli", "targetcli-fb"),
         ("dhcpd", "isc-dhcp-server"),
-        ("tftp", "tftpd-hpa"),
+        ("in.tftpd", "tftpd-hpa"),
         ("apache2", "apache2"),
         ("smbd", "samba"),
     ];
