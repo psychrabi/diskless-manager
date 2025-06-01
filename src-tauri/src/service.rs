@@ -226,6 +226,7 @@ pub fn check_services() -> Result<Value, String> {
         ("in.tftpd", "tftpd-hpa"),
         ("apache2", "apache2"),
         ("smbd", "samba"),
+        ("wakeonlan", "wakeonlan"),
     ];
     let mut statuses = HashMap::new();
     for (key, svc) in required {
