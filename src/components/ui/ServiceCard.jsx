@@ -1,7 +1,7 @@
 import { Eye, RefreshCw } from "lucide-react";
 import { Button, Card } from ".";
 
-const ServiceCard = ({ key, service, handleViewConfig, handleServiceRestart }) => {
+export const ServiceCard = ({ key, service, handleViewConfig, handleServiceRestart }) => {
 
   return (<Card key={key} title={service.name} className="flex-1" titleClassName="text-base md:text-lg">
     <div className="flex items-center justify-between">
@@ -25,5 +25,3 @@ const ServiceCard = ({ key, service, handleViewConfig, handleServiceRestart }) =
     </div>
   </Card>)
 }
-
-export default ServiceCard;

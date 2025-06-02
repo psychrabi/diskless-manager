@@ -1,7 +1,7 @@
 import { useNotification } from '../../contexts/NotificationContext';
 import { X } from 'lucide-react';
 
-const Notification = () => {
+export const Notification = () => {
     const { notification, hideNotification } = useNotification();
 
     if (!notification.message) return null;
@@ -22,8 +22,6 @@ const Notification = () => {
         </div>
     );
 };
-
-export default Notification;
 
 
     

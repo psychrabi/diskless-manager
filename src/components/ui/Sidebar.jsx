@@ -27,7 +27,7 @@ const navItems = [
   },
 ];
 
-const Sidebar = () => {
+export const Sidebar = () => {
   const handleExit = async () => {
     try {
       await exit(0);
@@ -63,4 +63,4 @@ const Sidebar = () => {
   );
 };
 
-export default Sidebar;
+
