@@ -6,12 +6,14 @@ import { Button, Card } from '../ui';
 import { ContextMenu } from '../ui/ContextMenu';
 import ClientFormModal from './ClientFormModal';
 import ClientTable from './ClientTable';
+import { useLoaderData } from 'react-router-dom';
 
 const MemoizedClientTable = memo(ClientTable);
 const MemoizedContextMenu = memo(ContextMenu);
 
 export const ClientManagement = () => {
-  const { clients, masters, fetchData } = useAppStore();
+  const { masters, fetchData } = useAppStore();
+  const { clients } = useLoaderData();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [client, setClient] = useState({
     name: '',

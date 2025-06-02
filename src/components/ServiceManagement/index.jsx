@@ -8,11 +8,12 @@ import ZfsPoolCard from './ZfsPoolCard';
 import { useAppStore } from '../../store/useAppStore';
 import { useServiceManager } from '../../hooks/useServiceManager';
 import { RAMUsage } from '../RAMUsage';
+import { useLoaderData } from 'react-router';
 
 export const ServiceManagement = () => {
-  const { services, loading } = useAppStore();
+  const { loading } = useAppStore();
+  const { services } = useLoaderData();
   const {handleServiceAction, handleServiceConfigView} = useServiceManager()
-
 
   const memoizedServices = useMemo(() => Object.entries(services), [services]);
 

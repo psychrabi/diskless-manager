@@ -3,9 +3,11 @@ import { useCallback, useMemo } from 'react';
 import { useMasterManager } from '../../hooks/useMasterManager';
 import { useAppStore } from '../../store/useAppStore';
 import { Button, Card, Input, Modal } from '../ui';
+import { useLoaderData } from 'react-router-dom';
 
 export const ImageManagement = () => {
-  const { masters, fetchData } = useAppStore();
+  const { fetchData } = useAppStore();
+  const { masters } = useLoaderData();
   const {
     handleCreateSnapshot,
     handleDeleteSnapshot,
