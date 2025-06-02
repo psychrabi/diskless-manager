@@ -1,6 +1,6 @@
-import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
-import { persist, createJSONStorage } from 'zustand/middleware'
+import { create } from 'zustand';
+import { createJSONStorage, persist } from 'zustand/middleware';
 
 export const useAppStore = create()(
   persist(
@@ -23,13 +23,13 @@ export const useAppStore = create()(
       setLoading: (loading) => set({ loading }),
       setSelectedSnapshot: (selectedSnapshot) => set({ selectedSnapshot }),
       setCheckingConfig: (checkingConfig) => set({ checkingConfig }),
-      setTitle: (title) => set({title}),
+      setTitle: (title) => set({ title }),
       open: false,
-      setOpen: (open) => set({open}),
+      setOpen: (open) => set({ open }),
       saving: true,
-      setSaving: (saving) => set({saving}),
+      setSaving: (saving) => set({ saving }),
       serviceKey: '',
-      setServiceKey: (serviceKey) => set({serviceKey}),
+      setServiceKey: (serviceKey) => set({ serviceKey }),
 
       fetchData: async (showLoading = true) => {
         if (showLoading) set({ loading: true });
@@ -77,4 +77,5 @@ export const useAppStore = create()(
       name: 'diskless', // name of the item in the storage (must be unique)
       storage: createJSONStorage(() => localStorage), // (optional) by default, 'localStorage' is used
     },
-  )); 
+  )
+); 

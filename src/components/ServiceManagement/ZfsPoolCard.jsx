@@ -1,6 +1,6 @@
+import { invoke } from '@tauri-apps/api/core';
 import { useEffect, useState } from 'react';
 import { Card } from '../ui';
-import { invoke } from '@tauri-apps/api/core';
 
 const ZfsPoolCard = ({ loading }) => {
   const [zpoolStats, setZpoolStats] = useState(null);
@@ -21,9 +21,9 @@ const ZfsPoolCard = ({ loading }) => {
             <span className="font-semibold">Pool:</span> {zpoolStats.name} <br />
             <span className="font-semibold">Size:</span> {zpoolStats.size}
           </div>
-          
           <div className='flex-auto'><span className="font-semibold">Used:</span> {zpoolStats.used}<br />
-          <span className="font-semibold">Available:</span> {zpoolStats.available}</div>
+            <span className="font-semibold">Available:</span> {zpoolStats.available}
+          </div>
         </div>
       ) : (
         <div className="text-red-500">Failed to load ZFS pool info.</div>

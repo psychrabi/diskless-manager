@@ -1,10 +1,10 @@
+import { invoke } from "@tauri-apps/api/core"
 import { createBrowserRouter } from "react-router"
 import ClientManagement from "../components/ClientManagement"
 import ImageManagement from "../components/ImageManagement"
 import ServiceManagement from "../components/ServiceManagement"
 import SetupPage from "../components/SetupPage"
-import {MainLayout} from "../layouts/MainLayout"
-import { invoke } from "@tauri-apps/api/core"
+import { MainLayout } from "../layouts/MainLayout"
 
 export const router = createBrowserRouter([
 	{

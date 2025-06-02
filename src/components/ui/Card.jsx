@@ -1,4 +1,5 @@
 import React from "react";
+
 export const Card = ({ title, icon, children, className = '', titleClassName = '', actions }) => (
   <div className={`card bg-base-100 shadow-xl ${className}`}>
     {title && (

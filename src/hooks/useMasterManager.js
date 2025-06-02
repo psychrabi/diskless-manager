@@ -1,8 +1,7 @@
-import { useState, useCallback } from 'react';
-import { formatBytes, formatDate } from '../utils/helpers';
-import { apiRequest, handleApiAction } from '../utils/apiRequest';
-import { useNotification } from '../contexts/NotificationContext';
 import { invoke } from '@tauri-apps/api/core';
+import { useCallback, useState } from 'react';
+import { useNotification } from '../contexts/NotificationContext';
+import { formatBytes, formatDate } from '../utils/helpers';
 
 export const useMasterManager = (refresh) => {
   const [isCreateSnapshotModalOpen, setIsCreateSnapshotModalOpen] = useState(false);
@@ -14,43 +13,40 @@ export const useMasterManager = (refresh) => {
   const [isDeleteSnapshotModalOpen, setIsDeleteSnapshotModalOpen] = useState(false);
   const [snapshotToDelete, setSnapshotToDelete] = useState(null);
   const [isDeleteMasterModalOpen, setIsDeleteMasterModalOpen] = useState(false);
-  const {showNotification} = useNotification();  
+  const { showNotification } = useNotification();
 
-// --- Master/Snapshot Actions ---
+  // --- Master/Snapshot Actions ---
   const handleOpenCreateMasterModal = () => {
     setNewMasterName('');
     setNewMasterSize('50G'); // Reset to default
     setIsCreateMasterModalOpen(true);
   };
 
-
   const handleCreateMasterSubmit = async (event) => {
-      event.preventDefault();
-      setIsCreateMasterModalOpen(false); // Close modal
-      await invoke('create_master', { name: newMasterName, size: newMasterSize })
-            .then((response) => {
-              if (response.message) showNotification(response.message, 'success');
-            }).catch((error) => {
-              showNotification(error, 'error',)
-            }).finally(() => {
-              refresh();
-            });
-      
+    event.preventDefault();
+    setIsCreateMasterModalOpen(false); // Close modal
+    await invoke('create_master', { name: newMasterName, size: newMasterSize })
+      .then((response) => {
+        if (response.message) showNotification(response.message, 'success');
+      }).catch((error) => {
+        showNotification(error, 'error',)
+      }).finally(() => {
+        refresh();
+      });
+
   };
 
-  const handleCreateSnapshot = (snapshotName) => {  
-        invoke('create_snapshot', { masterName: selectedMaster, snapshotName })
-          .then((response) => {
-            if (response.message) showNotification(response.message, 'success');
-          }).catch((error) => {
-            showNotification(error, 'error',)
-          }).finally(() => {
-            refresh();
-          });
-        setIsCreateSnapshotModalOpen(false);
+  const handleCreateSnapshot = (snapshotName) => {
+    invoke('create_snapshot', { masterName: selectedMaster, snapshotName })
+      .then((response) => {
+        if (response.message) showNotification(response.message, 'success');
+      }).catch((error) => {
+        showNotification(error, 'error',)
+      }).finally(() => {
+        refresh();
+      });
+    setIsCreateSnapshotModalOpen(false);
   };
-
-
 
   const handleDeleteSnapshot = (snapshotName) => {
     setSnapshotToDelete(snapshotName);
@@ -59,8 +55,7 @@ export const useMasterManager = (refresh) => {
 
   const confirmDeleteSnapshot = () => {
     if (!snapshotToDelete) return;
-    
-    const encodedSnapshotName = encodeURIComponent(snapshotToDelete);
+
     invoke('delete_snapshot', { masterName: selectedMaster, snapshotName: snapshotToDelete })
       .then((response) => {
         if (response.message) showNotification(response.message, 'success');
@@ -73,11 +68,7 @@ export const useMasterManager = (refresh) => {
     setSnapshotToDelete(null);
   };
 
-  
-
-
-
-  const setDefaultMaster = async (masterName) => {   
+  const setDefaultMaster = async (masterName) => {
     invoke('set_default_master', { name: masterName })
       .then((response) => {
         if (response.message) showNotification(response.message, 'success');
@@ -85,13 +76,12 @@ export const useMasterManager = (refresh) => {
         showNotification(error, 'error',)
       }).finally(() => {
         refresh();
-      }); 
+      });
   };
 
   const confirmDeleteMaster = () => {
     if (!selectedMaster) return;
-    
-    const encodedMasterName = encodeURIComponent(selectedMaster);
+
     invoke('delete_master', { masterName: selectedMaster })
       .then((response) => {
         if (response.message) showNotification(response.message, 'success');
@@ -105,7 +95,7 @@ export const useMasterManager = (refresh) => {
   };
 
   const handleOpenDeleteMasterModal = useCallback((master) => {
-    setSelectedMaster(master);    
+    setSelectedMaster(master);
     setIsDeleteMasterModalOpen(true);
   }, []);
 
@@ -117,16 +107,12 @@ export const useMasterManager = (refresh) => {
   const cancelDeleteSnapshot = () => {
     setIsDeleteSnapshotModalOpen(false);
     setSnapshotToDelete(null);
-  };    
-  
+  };
 
   const handleOpenCreateSnapshotModal = useCallback((master) => {
-    setSelectedMaster(master);    
+    setSelectedMaster(master);
     setIsCreateSnapshotModalOpen(true);
   }, []);
-
- 
- 
 
   return {
     isCreateSnapshotModalOpen,
@@ -134,7 +120,6 @@ export const useMasterManager = (refresh) => {
     selectedMaster,
     newSnapshotName,
     setIsCreateSnapshotModalOpen,
-
     setIsCreateMasterModalOpen,
     setNewSnapshotName,
     handleCreateSnapshot,

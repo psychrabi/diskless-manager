@@ -150,7 +150,6 @@ export const ImageManagement = () => {
             Are you sure you want to delete snapshot "{snapshotToDelete}"?
             This action cannot be undone and might affect clones.
           </p>
-
           <div className="flex justify-end space-x-3">
             <Button variant="primary" onClick={confirmDeleteSnapshot}>
               Delete Snapshot
@@ -167,7 +166,6 @@ export const ImageManagement = () => {
             Are you sure you want to delete Master "{selectedMaster}"?
             This action cannot be undone and might affect clones.
           </p>
-
           <div className="flex justify-end space-x-3">
             <Button variant="primary" onClick={confirmDeleteMaster} >
               Delete Master

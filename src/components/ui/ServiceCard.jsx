@@ -2,7 +2,6 @@ import { Eye, RefreshCw } from "lucide-react";
 import { Button, Card } from ".";
 
 export const ServiceCard = ({ key, service, handleViewConfig, handleServiceRestart }) => {
-
   return (<Card key={key} title={service.name} className="flex-1" titleClassName="text-base md:text-lg">
     <div className="flex items-center justify-between">
       <span className={`px-2 py-0.5 rounded-full text-xs font-semibold capitalize ${service.status === 'active' || service.status === 'running' ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' :

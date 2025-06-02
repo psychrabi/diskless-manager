@@ -1,5 +1,4 @@
-// NotificationContext.js
-import React, { createContext, useContext, useState } from "react";
+import { createContext, useContext, useState } from "react";
 
 export const NotificationContext = createContext();
 
@@ -9,7 +8,7 @@ export const NotificationProvider = ({ children }) => {
   const showNotification = (message, type) => {
     setNotification({ message, type });
     setTimeout(() => {
-      setNotification({ message: "", type: "" }); // Clear after 3 seconds
+      setNotification({ message: "", type: "" }); // Clear after 10 seconds
     }, 10000);
   };
 

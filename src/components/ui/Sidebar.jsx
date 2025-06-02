@@ -1,8 +1,8 @@
 
+import { exit } from '@tauri-apps/plugin-process';
 import { HardDrive, LayoutDashboard, Monitor, Power, Wrench } from "lucide-react";
 import { NavLink } from "react-router-dom";
 import { Button } from ".";
-import { exit } from '@tauri-apps/plugin-process';
 
 const navItems = [
   {
@@ -42,22 +42,14 @@ export const Sidebar = () => {
         <li className="menu-title font-bold">Diskless Boot Manager</li>
         {navItems.map((item) => (
           <li key={item.to}>
-            <NavLink
-              to={item.to}
-              className={({ isActive }) =>
-                `${isActive ? "active text-primary" : ""}`
-              }
-            >
-              {item.icon}
-              {item.label}
+            <NavLink to={item.to} className={({ isActive }) => `${isActive ? "active text-primary" : ""}`}>
+              {item.icon} {item.label}
             </NavLink>
           </li>
         ))}
       </ul>
-
       <Button variant="destructive" className="m-2" onClick={handleExit}>
-        <Power className="w-4 h-4 mr-2" />
-        Exit
+        <Power className="w-4 h-4 mr-2" /> Exit
       </Button>
     </aside>
   );

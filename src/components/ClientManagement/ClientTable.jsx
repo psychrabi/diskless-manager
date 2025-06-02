@@ -1,5 +1,5 @@
-import { useAppStore } from '../../store/useAppStore';
 import { Layers, Monitor, Power, PowerOff, Zap } from 'lucide-react';
+import { useAppStore } from '../../store/useAppStore';
 
 const Table = ({ children, className = '' }) => <div className={`w-full overflow-x-auto ${className}`}><table className="min-w-full caption-bottom text-sm">{children}</table></div>;
 const TableHeader = ({ children, className = '' }) => <thead className={`[&_tr]:border-b border-gray-200 dark:border-gray-700 ${className}`}>{children}</thead>;

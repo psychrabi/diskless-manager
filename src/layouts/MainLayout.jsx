@@ -1,6 +1,5 @@
 import { Outlet, useNavigation } from 'react-router'
-import {Sidebar} from '@/components/ui/Sidebar'
-import React, { useEffect } from 'react'
+import { Sidebar } from '@/components/ui/Sidebar'
 import { Loading, Notification } from '@/components/ui'
 import { useAppStore } from '@/store/useAppStore'
 import { useNotification } from '@/contexts/NotificationContext'
@@ -10,7 +9,7 @@ export const MainLayout = () => {
 	const { notification } = useNotification()
 
 	const navigation = useNavigation();
-  const isNavigating = Boolean(navigation.location);
+	const isNavigating = Boolean(navigation.location);
 
 
 	return (
@@ -21,7 +20,7 @@ export const MainLayout = () => {
 					{error && <Error error={error} />}
 					{notification && <Notification />}
 					{isNavigating ? <Loading /> : <Outlet />}
-				</div>				
+				</div>
 			</div>
 		</div>
 	)

@@ -13,7 +13,7 @@ export default function SetupPage() {
   const [installing, setInstalling] = useState(false);
   const { services_status } = useAppStore();
 
-  useEffect(() => {    
+  useEffect(() => {
     invoke("list_disks").then(setDisks)
     invoke("zfs_pool_exists", { poolName }).then(setPoolExists);
 
@@ -39,39 +39,18 @@ export default function SetupPage() {
     setInstalling(false);
   };
 
-
-
-
   return (
     <Card title="Initial Setup">
-    
-    
-      
       {!poolExists && (<div className="mb-4">
         <label className="block mb-2">Select disk to create ZFS pool:</label>
-        <select
-          className="border p-2 w-full"
-          value={selectedDisk}
-          onChange={e => setSelectedDisk(e.target.value)}
-        >
+        <select className="border p-2 w-full" value={selectedDisk} onChange={e => setSelectedDisk(e.target.value)}>
           <option value="">-- Select Disk --</option>
           {disks.map(disk => (
-            <option key={disk.name} value={disk.name}>
-              {disk.name} ({disk.size})
-            </option>
+            <option key={disk.name} value={disk.name}> {disk.name} ({disk.size}) </option>
           ))}
         </select>
-        <input
-          className="border p-2 mt-2 w-full"
-          value={poolName}
-          onChange={e => setPoolName(e.target.value)}
-          placeholder="ZFS Pool Name"
-        />
-        <button
-          className="mt-2 px-4 py-2 bg-blue-600 text-white rounded"
-          disabled={!selectedDisk}
-          onClick={handleCreatePool}
-        >
+        <input className="border p-2 mt-2 w-full" value={poolName} onChange={e => setPoolName(e.target.value)} placeholder="ZFS Pool Name" />
+        <button className="mt-2 px-4 py-2 bg-blue-600 text-white rounded" disabled={!selectedDisk} onClick={handleCreatePool} >
           Create Pool
         </button>
       </div>)}
@@ -93,11 +72,7 @@ export default function SetupPage() {
                   <td>{svc.installed ? "Installed" : "Not Installed"}</td>
                   <td>
                     {!svc.installed && (
-                      <button
-                        className="btn btn-success btn-sm"
-                        disabled={installing === key}
-                        onClick={() => handleInstallService(svc.name)}
-                      >
+                      <button className="btn btn-success btn-sm" disabled={installing === key} onClick={() => handleInstallService(svc.name)}>
                         {installing === key ? "Installing..." : "Install"}
                       </button>
                     )}

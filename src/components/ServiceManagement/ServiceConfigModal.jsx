@@ -1,13 +1,11 @@
-import React, { useState, useEffect } from 'react'
-import { Button } from '../ui'
-import { Modal } from '../ui'
-import { useAppStore } from '../../store/useAppStore'
+import { useState } from 'react'
 import { useServiceManager } from '../../hooks/useServiceManager'
+import { useAppStore } from '../../store/useAppStore'
+import { Button, Modal } from '../ui'
 
 function ServiceConfigModal() {
   const title = useAppStore(state => state.title)
   const loading = useAppStore(state => state.loading)
-
   const config = useAppStore(state => state.config)
   const setConfig = useAppStore(state => state.setConfig)
   const open = useAppStore(state => state.open)
@@ -53,7 +51,6 @@ function ServiceConfigModal() {
           <Button onClick={() => handleSave()} loading={saving} disabled={saving || loading}>Save</Button>
         )}
         <Button variant="outline" onClick={() => setOpen(false)} disabled={saving}>Cancel</Button>
-
       </div>
     </Modal>
   )

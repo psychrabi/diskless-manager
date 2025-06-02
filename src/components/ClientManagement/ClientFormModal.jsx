@@ -58,33 +58,18 @@ const ClientFormModal = ({ client, setClient, masters, isOpen, setIsOpen, refres
   return (
     <Modal isOpen={isOpen} onClose={() => setIsOpen(false)} title={client.id ? 'Edit Client' : 'Add Client'}>
       <form onSubmit={() => handleSubmit} className="space-y-2">
-        <Input
-          label="Client name"
-          id="snapshotName"
-          value={client.name}
-          onChange={(e) => setClient({ ...client, name: e.target.value })}
+        <Input label="Client name" id="snapshotName" value={client.name} onChange={(e) => setClient({ ...client, name: e.target.value })}
           placeholder="Enter client name"
           required
         />
 
-        <Input
-          label="MAC Address"
-          value={client.mac}
-          onChange={(e) => setClient({ ...client, mac: e.target.value })}
-          placeholder="XX:XX:XX:XX:XX:XX"
-        />
-        <Input
-          label="IP Address"
-          value={client.ip}
-          onChange={(e) => setClient({ ...client, ip: e.target.value })}
-          placeholder="X.X.X.X"
-        />
+        <Input label="MAC Address" value={client.mac} onChange={(e) => setClient({ ...client, mac: e.target.value })}
+          placeholder="XX:XX:XX:XX:XX:XX" />
 
-        <Select
-          value={client.master}
-          onChange={(e) => setClient({ ...client, master: e.target.value, snapshot: '' })}
-          label="Select master"
-        >
+        <Input label="IP Address" value={client.ip} onChange={(e) => setClient({ ...client, ip: e.target.value })}
+          placeholder="X.X.X.X" />
+
+        <Select value={client.master} onChange={(e) => setClient({ ...client, master: e.target.value, snapshot: '' })} label="Select master" >
           <option value="">Select a master image...</option>
           {masters.map((master) => (
             <option key={master.name} value={master.name}>
@@ -92,12 +77,8 @@ const ClientFormModal = ({ client, setClient, masters, isOpen, setIsOpen, refres
             </option>
           ))}
         </Select>
-        <Select
-          value={client.snapshot}
-          onChange={(e) => setClient({ ...client, snapshot: e.target.value })}
-          disabled={!client.master}
-          label="Select Snapshot"
-        >
+
+        <Select value={client.snapshot} onChange={(e) => setClient({ ...client, snapshot: e.target.value })} disabled={!client.master} label="Select Snapshot">
           <option value="">Use master directly</option>
           {masters.find(m => m.name === client.master)?.snapshots?.map((snap) => (
             <option key={snap.name} value={snap.name}>
@@ -105,6 +86,7 @@ const ClientFormModal = ({ client, setClient, masters, isOpen, setIsOpen, refres
             </option>
           ))}
         </Select>
+
         <div className="flex justify-end space-x-3">
           <Button type="button" onClick={(event) => handleSubmit(event)} variant="primary">{client.id ? 'Edit Client' : 'Add Client'}</Button>
           <Button type="button" onClick={() => setIsOpen(false)} variant="destructive">Cancel</Button>

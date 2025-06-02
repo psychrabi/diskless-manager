@@ -48,7 +48,6 @@ export const useServiceManager = () => {
     try {
       await invoke('save_service_config', { serviceKey: serviceKey, content: content });
       showNotification('Configuration saved successfully', 'success');
-
       fetchData();
     } catch (err) {
       showNotification(`Failed to save config: ${err.message || err}`, 'error');

@@ -1,5 +1,3 @@
-import React from 'react';
-
 export const Table = ({ data, columns, renderCell }) => (
   <div className="overflow-x-auto">
     <table className="table w-full">

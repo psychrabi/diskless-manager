@@ -1,19 +1,17 @@
-import { invoke } from '@tauri-apps/api/core';
 import { Eye, Play, Power, RefreshCw } from 'lucide-react';
-import { useEffect, useState, useMemo, useCallback } from 'react';
+import { useMemo } from 'react';
+import { useLoaderData } from 'react-router';
+import { useServiceManager } from '../../hooks/useServiceManager';
+import { useAppStore } from '../../store/useAppStore';
+import { RAMUsage } from '../RAMUsage';
 import { Button, Card } from '../ui';
-import { useNotification } from '../../contexts/NotificationContext';
 import ServiceConfigModal from './ServiceConfigModal';
 import ZfsPoolCard from './ZfsPoolCard';
-import { useAppStore } from '../../store/useAppStore';
-import { useServiceManager } from '../../hooks/useServiceManager';
-import { RAMUsage } from '../RAMUsage';
-import { useLoaderData } from 'react-router';
 
 export const ServiceManagement = () => {
   const { loading } = useAppStore();
   const { services } = useLoaderData();
-  const {handleServiceAction, handleServiceConfigView} = useServiceManager()
+  const { handleServiceAction, handleServiceConfigView } = useServiceManager()
 
   const memoizedServices = useMemo(() => Object.entries(services), [services]);
 
@@ -33,10 +31,10 @@ export const ServiceManagement = () => {
               </Button>
               {(key !== 'zfs') && (
                 <>
-                  <Button onClick={() => handleServiceAction(key, 'start')} variant="ghost" size="icon" className="h-7 w-7" title={`Start ${service.name}`} disabled={service.status !== "inactive" }>
+                  <Button onClick={() => handleServiceAction(key, 'start')} variant="ghost" size="icon" className="h-7 w-7" title={`Start ${service.name}`} disabled={service.status !== "inactive"}>
                     <Play className="h-4 w-4 text-green-500" />
                   </Button>
-                  <Button onClick={() => handleServiceAction(key, 'stop')} variant="ghost" size="icon" className="h-7 w-7" title={`Stop ${service.name}`} disabled={service.status === 'inactive' }>
+                  <Button onClick={() => handleServiceAction(key, 'stop')} variant="ghost" size="icon" className="h-7 w-7" title={`Stop ${service.name}`} disabled={service.status === 'inactive'}>
                     <Power className="h-4 w-4 text-red-500" />
                   </Button>
                   <Button onClick={() => handleServiceAction(key, 'restart')} variant="ghost" size="icon" className="h-7 w-7" title={`Restart ${service.name}`} disabled={service.status === 'inactive'}>
@@ -50,7 +48,6 @@ export const ServiceManagement = () => {
       )) : !loading && <p className="text-gray-500 col-span-full">Could not load service status.</p>}
       <ZfsPoolCard title="ZFS Pool Usage" />
       <RAMUsage />
-  
       <ServiceConfigModal />
     </div>
   );
