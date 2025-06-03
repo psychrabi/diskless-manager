@@ -6,6 +6,7 @@ mod service;
 mod utils;
 mod zfs;
 use once_cell::sync::Lazy;
+use tauri::Manager;
 
 const ZFS_POOL: &str = "diskless"; // Adjust to your ZFS pool name
 const DHCP_CONFIG_PATH: &str = "/etc/dhcp/dhcpd.conf"; // Adjust as needed
@@ -21,6 +22,13 @@ pub static SERVER_IP: Lazy<String> = Lazy::new(|| {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            // Handle single instance logic here
+            let _ = app
+                .get_webview_window("main")
+                .expect("no main window")
+                .set_focus();
+        }))
         .invoke_handler(tauri::generate_handler![
             client::get_clients,
             client::add_client,
@@ -36,7 +44,7 @@ pub fn run() {
             service::check_services,
             service::install_service,
             service::get_service_config,
-            service::save_service_config,          
+            service::save_service_config,
             utils::list_disks,
             utils::get_ram_usage,
             utils::clear_ram_cache,
