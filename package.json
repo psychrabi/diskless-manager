@@ -20,7 +20,7 @@
     "path": "^0.12.7",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
-    "react-router-dom": "^7.6.1",
+    "react-router-dom": "^7.6.2",
     "tailwind-merge": "^3.3.0",
     "tailwindcss": "^4.1.8",
     "zustand": "^5.0.5"
@@ -28,14 +28,14 @@
   "devDependencies": {
     "@eslint/js": "^9.28.0",
     "@types/react": "^19.1.6",
-    "@types/react-dom": "^19.1.5",
-    "@vitejs/plugin-react": "^4.5.0",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^4.5.1",
     "daisyui": "^5.0.43",
     "eslint": "^9.28.0",
     "eslint-plugin-react-hooks": "^5.2.0",
     "eslint-plugin-react-refresh": "^0.4.20",
     "globals": "^16.2.0",
-    "tw-animate-css": "^1.3.3",
+    "tw-animate-css": "^1.3.4",
     "vite": "^6.3.5"
   }
 }

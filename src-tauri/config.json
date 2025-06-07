@@ -1,20 +1,20 @@
 {
   "clients": [
     {
-      "block_device": "/dev/zvol/diskless/Windows10-Pro-master",
+      "block_device": "/dev/zvol/diskless/Windows11-Pro-master-master",
       "block_store": "block_pc001",
       "created_at": "2025-06-01 22:17:36",
       "id": "pc001",
       "ip": "192.168.1.101",
-      "last_modified": "2025-06-01 22:17:36",
+      "last_modified": "2025-06-07 23:13:46",
       "mac": "D8:43:AE:A7:8E:A7",
-      "master": "diskless/Windows10-Pro-master",
+      "master": "diskless/Windows11-Pro-master-master",
       "mode": null,
       "name": "PC001",
       "snapshot": null,
       "status": null,
       "target_iqn": "iqn.2025-04.com.nsboot:pc001",
-      "writeback": "diskless/Windows10-Pro-master"
+      "writeback": "diskless/PC001-disk"
     }
   ],
   "masters": {
@@ -33,6 +33,13 @@
       "snapshots": [
         "diskless/Windows11-Pro-master@base"
       ]
+    },
+    "diskless/Windows11-Pro-master-master": {
+      "created_at": "2025-06-07 23:13:28",
+      "last_modified": "2025-06-07 23:13:28",
+      "name": "diskless/Windows11-Pro-master-master",
+      "size": "60G",
+      "snapshots": []
     }
   },
   "services": {
@@ -67,7 +74,7 @@
     }
   },
   "settings": {
-    "default_master": "diskless/Windows10-Pro-master",
+    "default_master": "diskless/Windows11-Pro-master-master",
     "zpool_name": "diskless"
   }
 }
