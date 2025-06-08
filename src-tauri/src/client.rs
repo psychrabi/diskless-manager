@@ -1,21 +1,20 @@
 //! Client management logic: helpers for client lookup, config, and deduplication.
 
 use crate::{
-    config::Config,
+    config::{read_config, write_config, Config},
     dhcp::{create_dhcp_entry, update_dhcp_config},
     iscsi::{cleanup_iscsi_target, setup_iscsi_target},
     utils::{run_command, run_command_check},
     zfs::{zfs_clone, zfs_destroy, zfs_exists},
-    CONFIG_PATH, ZFS_POOL,
+    ZFS_POOL,
 };
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::path::Path;
 use std::process::Stdio;
+use std::thread;
 use std::time::Duration;
 use std::{collections::HashMap, process::Command};
-use std::{fs, thread};
 
 trait WaitTimeout {
     fn wait_timeout(&mut self, dur: Duration) -> std::io::Result<Option<std::process::ExitStatus>>;
@@ -72,10 +71,8 @@ pub struct ControlRequest {
 
 #[tauri::command]
 pub async fn get_clients(client_id: Option<String>) -> Result<serde_json::Value, String> {
-    let data = fs::read_to_string("config.json").map_err(|e| e.to_string())?;
-    let mut config: Config = serde_json::from_str(&data).map_err(|e| e.to_string())?;
+    let mut config: Config = read_config();
 
-    // Add status to each client
     for client in config.clients.iter_mut() {
         client.status = Some(get_client_status(&client.ip));
     }
@@ -106,29 +103,17 @@ fn get_client_status(ip: &str) -> String {
 }
 
 fn get_client_by_id(client_id: &str) -> Option<Client> {
-    let data = fs::read_to_string(CONFIG_PATH).ok()?;
-    let config: Value = serde_json::from_str(&data).ok()?;
-    let clients = config.get("clients")?.as_array()?;
-    for c in clients {
-        if c.get("id")?.as_str()? == client_id {
-            return serde_json::from_value(c.clone()).ok();
+    let config = read_config();
+    for c in config.clients {
+        if c.id.eq_ignore_ascii_case(client_id) {
+            return Some(c);
         }
     }
     None
 }
 
 fn check_duplicate_client(name: &str, mac: &str, ip: &str) -> Option<String> {
-    if !Path::new(CONFIG_PATH).exists() {
-        return None;
-    }
-    let config_content = match fs::read_to_string(CONFIG_PATH) {
-        Ok(content) => content,
-        Err(e) => {
-            println!("Error reading config file: {}", e);
-            return Some("Error checking for existing clients".to_string());
-        }
-    };
-    let config: Value = match serde_json::from_str(&config_content) {
+    let config: Value = match serde_json::to_value(read_config()) {
         Ok(cfg) => cfg,
         Err(e) => {
             println!("Error parsing config file: {}", e);
@@ -187,26 +172,14 @@ pub fn get_client_paths(client_id: &str) -> HashMap<String, String> {
 }
 
 pub fn save_client_config(client_data: &Client) -> bool {
-    let mut config: Value = if Path::new(CONFIG_PATH).exists() {
-        match fs::read_to_string(CONFIG_PATH)
-            .ok()
-            .and_then(|content| serde_json::from_str(&content).ok())
-        {
-            Some(val) => val,
-            None => json!({
-                "clients": [],
-                "masters": {},
-                "services": {},
-                "settings": {}
-            }),
-        }
-    } else {
-        json!({
+    let mut config: Value = match serde_json::to_value(read_config()) {
+        Ok(val) => val,
+        Err(_) => json!({
             "clients": [],
             "masters": {},
             "services": {},
             "settings": {}
-        })
+        }),
     };
 
     // Ensure all required fields exist
@@ -249,7 +222,15 @@ pub fn save_client_config(client_data: &Client) -> bool {
         config["clients"] = json!([client_data]);
     }
 
-    match fs::write(CONFIG_PATH, serde_json::to_string_pretty(&config).unwrap()) {
+    // Convert serde_json::Value back to Config before writing
+    let config_struct: Config = match serde_json::from_value(config) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            println!("Error converting config to struct: {}", e);
+            return false;
+        }
+    };
+    match write_config(&config_struct) {
         Ok(_) => true,
         Err(e) => {
             println!("Error saving client config: {}", e);
@@ -354,20 +335,10 @@ fn launch_remote_desktop(client_ip: &str, username: &str) -> Result<(), String> 
 
 pub fn delete_client_config(client_id: &str) -> bool {
     println!("Deleting client config: {}", client_id);
-    if !Path::new(CONFIG_PATH).exists() {
-        return true;
-    }
-    let config_content = match fs::read_to_string(CONFIG_PATH) {
-        Ok(content) => content,
-        Err(e) => {
-            println!("Error reading config file: {}", e);
-            return false;
-        }
-    };
-    let mut config: Value = match serde_json::from_str(&config_content) {
+    let mut config: Value = match serde_json::to_value(read_config()) {
         Ok(cfg) => cfg,
         Err(e) => {
-            println!("Error parsing config file: {}", e);
+            println!("Error serializing config: {}", e);
             return false;
         }
     };
@@ -387,7 +358,15 @@ pub fn delete_client_config(client_id: &str) -> bool {
         })
         .collect();
     config["clients"] = Value::Array(new_clients);
-    match fs::write(CONFIG_PATH, serde_json::to_string_pretty(&config).unwrap()) {
+    // Convert serde_json::Value back to Config before writing
+    let config_struct: Config = match serde_json::from_value(config) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            println!("Error converting config to struct: {}", e);
+            return false;
+        }
+    };
+    match write_config(&config_struct) {
         Ok(_) => true,
         Err(e) => {
             println!("Error writing config file: {}", e);
@@ -810,7 +789,6 @@ pub async fn control_client(
     }
 }
 
-
 #[tauri::command]
 pub async fn reset_client(client_id: String) -> Result<serde_json::Value, String> {
     // Validate client ID
@@ -828,7 +806,10 @@ pub async fn reset_client(client_id: String) -> Result<serde_json::Value, String
     // Get paths for the client
     let current_paths = get_client_paths(&client_id);
     let target_iqn = current_paths.get("target_iqn").cloned().unwrap_or_default();
-    let block_store = current_paths.get("block_store").cloned().unwrap_or_default();
+    let block_store = current_paths
+        .get("block_store")
+        .cloned()
+        .unwrap_or_default();
     let clone = format!("{}/{}-disk", ZFS_POOL, client_id.to_uppercase());
 
     // 1. Clean up existing iSCSI resources

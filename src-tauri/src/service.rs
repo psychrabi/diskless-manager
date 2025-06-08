@@ -1,11 +1,11 @@
+use crate::config::{read_config, write_config, Config};
+use crate::utils::run_command;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
-use std::process::Command;
-use std::path::Path;
 use std::io::Write;
-use crate::utils::run_command;
+use std::process::Command;
 
 #[derive(Deserialize)]
 pub struct ServiceControlRequest {
@@ -74,28 +74,10 @@ pub async fn get_services(zfs_pool: String) -> Result<Value, String> {
         }),
     );
 
-    // --- Update config.json with the new statuses ---
-    let config_path = crate::CONFIG_PATH;
-    let mut config: Value = if Path::new(config_path).exists() {
-        match fs::read_to_string(config_path)
-            .ok()
-            .and_then(|content| serde_json::from_str(&content).ok())
-        {
-            Some(val) => val,
-            None => json!({}),
-        }
-    } else {
-        json!({})
-    };
-
-    // Insert/update the 'services' field
-    config["services"] = serde_json::to_value(&statuses).unwrap();
-
-    // Write back to config.json
-    if let Err(e) = fs::write(
-        config_path,
-        serde_json::to_string_pretty(&config).unwrap(),
-    ) {
+    // --- Update config.json with the new statuses using read_config/write_config ---
+    let mut config: Config = read_config();
+    config.services = serde_json::to_value(&statuses).unwrap_or(json!({}));
+    if let Err(e) = write_config(&config) {
         println!("Error writing services status to config: {}", e);
         // Optionally: return an error here if you want to fail the command
     }

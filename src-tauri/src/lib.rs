@@ -10,7 +10,6 @@ use tauri::Manager;
 
 const ZFS_POOL: &str = "diskless"; // Adjust to your ZFS pool name
 const DHCP_CONFIG_PATH: &str = "/etc/dhcp/dhcpd.conf"; // Adjust as needed
-const CONFIG_PATH: &str = "./config.json"; // Adjust as needed
 
 pub static SERVER_IP: Lazy<String> = Lazy::new(|| {
     let ip = utils::get_server_ip();

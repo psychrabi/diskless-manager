@@ -1,8 +1,8 @@
 use std::fs;
 
 use serde::{Deserialize, Serialize};
-
-use crate::{client::Client, CONFIG_PATH};
+extern crate dirs;
+use crate::client::Client;
 use serde_json::{json, Value};
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -26,17 +26,36 @@ impl Default for Config {
 
 // Read config.json, or return default
 pub fn read_config() -> Config {
-    if let Ok(content) = fs::read_to_string(CONFIG_PATH) {
-        serde_json::from_str(&content).unwrap_or_default()
-    } else {
-        Config::default()
-    }
+    dirs::config_dir()
+        .map(|path| {
+            let config_path = path.join("com.diskless.local").join("config.json");
+            print!("Reading config from: {}\n", config_path.display());
+            if let Ok(content) = fs::read_to_string(config_path) {
+                serde_json::from_str(&content).unwrap_or_default()
+            } else {
+                Config::default()
+            }
+        })
+        .unwrap_or_default()
 }
 
 // Write config.json
 pub fn write_config(cfg: &Config) -> Result<(), String> {
-    let content = serde_json::to_string_pretty(cfg).unwrap();
-    fs::write(CONFIG_PATH, content).map_err(|e| e.to_string())
+    dirs::config_dir()
+        .ok_or("Could not find config directory".to_string())
+        .and_then(|path| {
+            let config_dir = path.join("com.diskless.local");
+            fs::create_dir_all(&config_dir).map_err(|e| e.to_string())?;
+            Ok(config_dir.join("config.json"))
+        })
+        .and_then(|config_path| {
+            fs::write(
+                config_path,
+                serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())
+        })?;
+    Ok(())
 }
 
 #[tauri::command]

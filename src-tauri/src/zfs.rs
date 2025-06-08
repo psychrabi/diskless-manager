@@ -4,14 +4,11 @@ use chrono::Local;
 use regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::fs;
-use std::path::Path;
 use std::process::Command;
 
 use crate::{
     client::get_clients,
-    config::{read_config, write_config},
-    CONFIG_PATH,
+    config::{read_config, write_config, Config},
 };
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -169,13 +166,10 @@ pub fn create_master(name: String, size: String) -> Result<Value, String> {
 #[tauri::command]
 pub async fn get_masters(zfs_pool: String) -> Result<Vec<Master>, String> {
     // 1. Get default master from config
-    let config: serde_json::Value = fs::read_to_string("config.json")
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default();
+    let mut config = read_config();
     let default_master = config
-        .get("settings")
-        .and_then(|s| s.get("default_master"))
+        .settings
+        .get("default_master")
         .and_then(|s| s.as_str())
         .unwrap_or("")
         .to_string();
@@ -264,29 +258,22 @@ pub async fn get_masters(zfs_pool: String) -> Result<Vec<Master>, String> {
             snapshots,
         });
     }
+    // --- Update config.json with the current masters list ---
+    config.masters = serde_json::to_value(&masters_data).unwrap_or(json!({}));
+    if let Err(e) = write_config(&config) {
+        println!("Error writing masters to config: {}", e);
+    }
+
     Ok(masters_data)
 }
 
 pub fn save_master_config(master_data: &MasterData) -> bool {
-    let mut config: Value = if Path::new(crate::CONFIG_PATH).exists() {
-        match fs::read_to_string(crate::CONFIG_PATH)
-            .ok()
-            .and_then(|content| serde_json::from_str(&content).ok())
-        {
-            Some(val) => val,
-            None => json!({"clients": [], "masters": {}}),
-        }
-    } else {
-        json!({"clients": [], "masters": {}})
-    };
-    if !config.get("masters").map_or(false, |v| v.is_object()) {
-        config["masters"] = json!({});
+    let mut config = read_config();
+    if !config.masters.is_object() {
+        config.masters = json!({});
     }
-    config["masters"][&master_data.name] = serde_json::to_value(master_data).unwrap();
-    match fs::write(
-        crate::CONFIG_PATH,
-        serde_json::to_string_pretty(&config).unwrap(),
-    ) {
+    config.masters[&master_data.name] = serde_json::to_value(master_data).unwrap();
+    match write_config(&config) {
         Ok(_) => true,
         Err(e) => {
             println!("Error saving master config: {}", e);
@@ -348,30 +335,10 @@ pub async fn delete_master(master_name: String) -> Result<serde_json::Value, Str
 }
 
 pub fn delete_master_config(master_name: &str) -> bool {
-    if !Path::new(crate::CONFIG_PATH).exists() {
-        return true;
-    }
-    let config_content = match fs::read_to_string(crate::CONFIG_PATH) {
-        Ok(content) => content,
-        Err(e) => {
-            println!("Error reading config file: {}", e);
-            return false;
-        }
-    };
-    let mut config: Value = match serde_json::from_str(&config_content) {
-        Ok(cfg) => cfg,
-        Err(e) => {
-            println!("Error parsing config file: {}", e);
-            return false;
-        }
-    };
-    if let Some(masters) = config.get_mut("masters") {
-        if masters.get(master_name).is_some() {
-            masters.as_object_mut().unwrap().remove(master_name);
-            if let Err(e) = fs::write(
-                crate::CONFIG_PATH,
-                serde_json::to_string_pretty(&config).unwrap(),
-            ) {
+    let mut config = read_config();
+    if let Some(masters) = config.masters.as_object_mut() {
+        if masters.remove(master_name).is_some() {
+            if let Err(e) = write_config(&config) {
                 println!("Error writing config file: {}", e);
                 return false;
             }
@@ -409,29 +376,21 @@ pub fn create_snapshot(snapshot_name: String) -> Result<Value, String> {
             return Err(format!("Failed creating snapshot: {}", stderr));
         }
     }
-    if Path::new(crate::CONFIG_PATH).exists() {
-        let config_content = fs::read_to_string(crate::CONFIG_PATH)
-            .map_err(|e| format!("Failed to read config: {}", e))?;
-        let mut config: Value = serde_json::from_str(&config_content)
-            .map_err(|e| format!("Failed to parse config: {}", e))?;
-        if let Some(masters) = config.get_mut("masters") {
-            if let Some(master) = masters.get_mut(master_name) {
-                let snapshots =
-                    if let Some(arr) = master.get_mut("snapshots").and_then(|s| s.as_array_mut()) {
-                        arr
-                    } else {
-                        master["snapshots"] = json!([]);
-                        master.get_mut("snapshots").unwrap().as_array_mut().unwrap()
-                    };
-                if !snapshots.iter().any(|v| v == &json!(snapshot_name)) {
-                    snapshots.push(json!(snapshot_name));
-                }
-                fs::write(
-                    crate::CONFIG_PATH,
-                    serde_json::to_string_pretty(&config).unwrap(),
-                )
-                .map_err(|e| format!("Failed to write config: {}", e))?;
+    let mut config = read_config();
+    if let Some(masters) = config.masters.as_object_mut() {
+        if let Some(master) = masters.get_mut(master_name) {
+            // Avoid double mutable borrow by splitting the logic
+            if !master.get("snapshots").and_then(|s| s.as_array()).is_some() {
+                master["snapshots"] = json!([]);
             }
+            let snapshots = master
+                .get_mut("snapshots")
+                .and_then(|s| s.as_array_mut())
+                .expect("snapshots should be an array after initialization");
+            if !snapshots.iter().any(|v| v == &json!(snapshot_name)) {
+                snapshots.push(json!(snapshot_name));
+            }
+            write_config(&config).map_err(|e| format!("Failed to write config: {}", e))?;
         }
     }
     Ok(json!({
@@ -487,22 +446,15 @@ pub async fn delete_snapshot(snapshot_name: String) -> Result<Value, String> {
             }));
         }
     }
-    if Path::new(CONFIG_PATH).exists() {
-        let config_content =
-            fs::read_to_string(CONFIG_PATH).map_err(|e| format!("Failed to read config: {}", e))?;
-        let mut config: Value = serde_json::from_str(&config_content)
-            .map_err(|e| format!("Failed to parse config: {}", e))?;
-        if let Some(masters) = config.get_mut("masters") {
-            for (_master_name, master) in masters.as_object_mut().unwrap() {
-                if let Some(snapshots) = master.get_mut("snapshots").and_then(|s| s.as_array_mut())
-                {
-                    let before = snapshots.len();
-                    snapshots.retain(|s| s != &json!(snapshot_name));
-                    if snapshots.len() != before {
-                        fs::write(CONFIG_PATH, serde_json::to_string_pretty(&config).unwrap())
-                            .map_err(|e| format!("Failed to write config: {}", e))?;
-                        break;
-                    }
+    let mut config = read_config();
+    if let Some(masters) = config.masters.as_object_mut() {
+        for (_master_name, master) in masters.iter_mut() {
+            if let Some(snapshots) = master.get_mut("snapshots").and_then(|s| s.as_array_mut()) {
+                let before = snapshots.len();
+                snapshots.retain(|s| s != &json!(snapshot_name));
+                if snapshots.len() != before {
+                    write_config(&config).map_err(|e| format!("Failed to write config: {}", e))?;
+                    break;
                 }
             }
         }
@@ -538,7 +490,22 @@ pub fn zfs_pool_exists(pool_name: String) -> Result<bool, String> {
         .args(&["list", pool_name.as_str()])
         .status()
         .map_err(|e| e.to_string())?;
-    Ok(status.success())
+
+    let exists = status.success();
+
+    if exists {
+        // Update config.json settings.zpool_name
+        let mut config: Config = read_config();
+        if !config.settings.is_object() {
+            config.settings = json!({});
+        }
+        config.settings["zpool_name"] = json!(pool_name);
+        if let Err(e) = write_config(&config) {
+            println!("Error updating zpool_name in config: {}", e);
+        }
+    }
+
+    Ok(exists)
 }
 
 #[tauri::command]
@@ -567,30 +534,12 @@ pub fn create_zfs_pool(name: String, disk: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn set_default_master(name: &str) -> bool {
-    let mut config: Value = if Path::new(crate::CONFIG_PATH).exists() {
-        match fs::read_to_string(crate::CONFIG_PATH)
-            .ok()
-            .and_then(|content| serde_json::from_str(&content).ok())
-        {
-            Some(val) => val,
-            None => json!({}),
-        }
-    } else {
-        json!({})
-    };
-
-    // Ensure 'settings' is an object
-    if !config.get("settings").map_or(false, |v| v.is_object()) {
-        config["settings"] = json!({});
+    let mut config = read_config();
+    if !config.settings.is_object() {
+        config.settings = json!({});
     }
-
-    // Set the default_master field
-    config["settings"]["default_master"] = Value::String(name.to_string());
-
-    match fs::write(
-        crate::CONFIG_PATH,
-        serde_json::to_string_pretty(&config).unwrap(),
-    ) {
+    config.settings["default_master"] = Value::String(name.to_string());
+    match write_config(&config) {
         Ok(_) => true,
         Err(e) => {
             println!("Error saving default master: {}", e);

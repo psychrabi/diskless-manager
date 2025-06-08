@@ -851,6 +851,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "directories",
+ "dirs",
  "log",
  "once_cell",
  "regex",
