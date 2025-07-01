@@ -31,14 +31,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: 'macos-latest' # for Arm based macs (M1 and above).
-            args: '--target aarch64-apple-darwin'
-          - platform: 'macos-latest' # for Intel based macs.
-            args: '--target x86_64-apple-darwin'
           - platform: 'ubuntu-latest'
             args: ''
-          - platform: 'windows-latest'
-            args: ''
+
     runs-on: ${{ matrix.platform }}
     needs: [changelog]
     steps:
@@ -90,22 +85,9 @@ jobs:
         run: |
           pnpm rls
 
-      - name: CI upload Windows
-        if: ${{ github.ref_type == 'branch' && matrix.platform == 'windows-latest' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: 'Windows Installers'
-          path: |
-            src-tauri/release/bundle/msi/*.msi
-            src-tauri/release/bundle/nsis/*.exe
 
-      - name: CI upload macOS
-        if: ${{ github.ref_type == 'branch' && matrix.platform == 'macos-latest' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: 'macOS Installer'
-          path: |
-            src-tauri/release/bundle/dmg/*.dmg
+
+
 
       - name: CI upload Linux
         if: ${{ github.ref_type == 'branch' && matrix.platform == 'ubuntu-latest' }}
