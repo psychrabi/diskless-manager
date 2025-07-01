@@ -1,36 +1,52 @@
-name: 'publish'
-
+name: 'Publish Release'
 on:
-  workflow_dispatch:
   push:
-    branches:
-      - release
+    tags:
+      - 'v*'
+    branches: '*'
+  workflow_dispatch:
+
+env:
+  APP_NAME: "Diskless Boot Server"
 
 jobs:
-  publish-tauri:
+  changelog:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build changelog
+        id: build_changelog
+        run: |
+          # NOTE: if commits subjects are standardized, you can filter the git log based on feat: and fix:
+          # and then replace "feat:" with "New: " and "fix:" with "Fixed "
+          # when AI gets good, we can also summarized commits into a bullet point list
+          PREV_TAG=$(git tag --list v* | tail -n2 | head -n1)
+          echo "changelog=$(git log $PREV_TAG...${{ github.ref_name }} --pretty=format:"- %s")" >> $GITHUB_OUTPUT
+    outputs:
+      changelog: ${{ steps.build_changelog.outputs.changelog }}
+  release:
     permissions:
       contents: write
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: 'ubuntu-22.04'
+          - platform: 'ubuntu-latest'
             args: ''
-
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Install dependencies (Ubuntu only)
-        if: matrix.platform == 'ubuntu-22.04'
+        if: matrix.platform == 'ubuntu-latest'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
-      - name: Install Bun
-        run: |
-          curl -fsSL https://bun.sh/install | bash
-          echo "$HOME/.bun/bin" >> $GITHUB_PATH
+
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -47,14 +63,33 @@ jobs:
 
       - name: Install frontend dependencies
         run: bun install
-
-      - uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: CI upload Linux
+        if: ${{ github.ref_type == 'branch' && matrix.platform == 'ubuntu-latest' }}
+        uses: actions/upload-artifact@v4
         with:
-          tagName: app-v__VERSION__ # Replace with tag logic if needed
-          releaseName: 'App v__VERSION__'
-          releaseBody: 'See the assets to download this version and install.'
+          name: 'Linux Distributions'
+          path: |
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/AppImage/*.AppImage
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        if: ${{ github.ref_type == 'tag' }}
+        # if u get Error: Resource not accessible by integration
+        # go to repository Settings => Action => General => Workflow permissions => Switch to Read and Write permisions
+        env:
+          CI: true
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          # tauri-action replaces \_\_VERSION\_\_ with the app version
+          tagName: ${{ github.ref_name }}
+          releaseName: "${{ env.APP_NAME }} v__VERSION__"
+          releaseBody: |
+            ${{needs.changelog.outputs.changelog}}
+            See the assets to download this version and install.
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
