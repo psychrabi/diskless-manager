@@ -43,6 +43,10 @@ jobs:
         with:
           workspaces: './src-tauri -> target'
 
+      - name: Install Bun
+        run: |
+          curl -fsSL https://bun.sh/install | bash
+          echo "$HOME/.bun/bin" >> $GITHUB_PATH
       - name: install frontend dependencies
         # If you don't have `beforeBuildCommand` configured you may want to build your frontend here too.
         run: bun install # change this to npm or pnpm depending on which one you use.
