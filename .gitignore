@@ -26,3 +26,4 @@ dist-ssr
 src-tauri/config.json
 ./src-tauri/config.json
 .cursor/*
+.env
