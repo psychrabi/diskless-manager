@@ -1,5 +1,5 @@
 import { PlusCircle, Users } from 'lucide-react';
-import { memo, useCallback, useState } from 'react';
+import { memo, useCallback, useEffect, useState } from 'react';
 import { useAppStore } from '../../store/useAppStore';
 import { clientContextMenuActions } from '../../utils/contextMenuAction';
 import { Button, Card } from '../ui';
@@ -37,7 +37,7 @@ export const ClientManagement = () => {
   const contextActions = clientContextMenuActions(fetchData, closeContextMenu, setClient, setIsModalOpen);
 
   const handleClientFormModalOpen = useCallback(() => {
-    let newName = 'pc002'
+    let newName = 'pc000'
     let newIp = '192.168.1.101'
     if (clients.length > 0) {
       const lastClient = clients[clients.length - 1]
@@ -55,7 +55,7 @@ export const ClientManagement = () => {
         ipParts[3] = lastOctet.toString()
         newIp = ipParts.join('.')
       }
-    }
+    }    
     setClient({
       name: newName,
       mac: '',
@@ -67,6 +67,10 @@ export const ClientManagement = () => {
     setIsModalOpen(true)
   }, [clients, masters])
 
+  useEffect(() => {
+    fetchData()    
+  }, [fetchData]);
+
   return (
     <div className="mb-2 md:mb-4">
       <Card title="Client Management" icon={Users} actions={
@@ -74,7 +78,7 @@ export const ClientManagement = () => {
           Add Client {masters.length === 0 && <span className="text-xs text-red-500 ml-2 self-center">(Requires Master Image)</span>}
         </Button>
       }>
-        <MemoizedClientTable clients={clients} handleClientContextMenu={handleClientContextMenu} />
+        <MemoizedClientTable handleClientContextMenu={handleClientContextMenu} />
         <MemoizedContextMenu isOpen={contextMenu.isOpen} xPos={contextMenu.x} yPos={contextMenu.y} targetClient={contextMenu.client} onClose={closeContextMenu} actions={contextActions} />
       </Card>
       <ClientFormModal client={client} setClient={setClient} masters={masters} isOpen={isModalOpen} setIsOpen={setIsModalOpen} refresh={fetchData} />
