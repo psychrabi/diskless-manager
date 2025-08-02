@@ -1,94 +1,140 @@
 import { invoke } from '@tauri-apps/api/core';
 import { useNotification } from '../../contexts/NotificationContext';
 import { Button, Input, Modal, Select } from '../ui';
+import { useForm } from 'react-hook-form';
+import { z } from 'zod';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { useEffect } from 'react';
+
+
+const clientSchema = z.object({
+  name: z.string().min(1, 'Client name is required'),
+  mac: z.string().regex(/^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/, 'Invalid MAC address format. Use XX:XX:XX:XX:XX:XX or XX-XX-XX-XX-XX-XX'),
+  ip: z.string().regex(/^([\d]{1,3}\.){3}\d{1,3}$/, 'Invalid IP address format. Use X.X.X.X'),
+  master: z.string().min(1, 'Master image is required'),
+  snapshot: z.string().optional().nullable(),
+});
 
 const ClientFormModal = ({ client, setClient, masters, isOpen, setIsOpen, refresh }) => {
   const { showNotification } = useNotification();
 
-  const handleSubmit = async (event) => {
-    event.preventDefault();
+  const {
+    register,
+    handleSubmit,
+    formState: { errors },
+    setValue,
+    reset,
+    watch,
+  } = useForm({
+    resolver: zodResolver(clientSchema),
+    defaultValues: {
+      name: client?.name || '',
+      mac: client?.mac || '',
+      ip: client?.ip || '',
+      master: client?.master || '',
+      snapshot: client?.snapshot || '',
+    },
+  });
 
-    // Validate MAC address format
-    const macRegex = /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/;
-    if (!macRegex.test(client.mac)) {
-      showNotification('Invalid MAC address format. Use XX:XX:XX:XX:XX:XX or XX-XX-XX-XX-XX-XX', 'error');
-      return;
-    }
+  // Keep form in sync with client prop
+  useEffect(() => {
+    reset({
+      name: client?.name || '',
+      mac: client?.mac || '',
+      ip: client?.ip || '',
+      master: client?.master || '',
+      snapshot: client?.snapshot || '',
+    });
+  }, [client, reset]);
 
-    // Validate IP address format
-    const ipRegex = /^([\d]{1,3}\.){3}\d{1,3}$/;
-    if (!ipRegex.test(client.ip)) {
-      showNotification('Invalid IP address format. Use X.X.X.X', 'error');
-      return;
-    }
-
+  const onSubmit = async (data) => {
     setIsOpen(false);
-
     if (!client.id) {
-      showNotification(`Adding new client ${client.name}`, 'info');
-      await invoke('add_client', { req: client }).then((response) => {
+      showNotification(`Adding new client ${data.name}`, 'info');
+      await invoke('add_client', { req: data }).then((response) => {
         if (response.message) showNotification(response.message, 'success');
       }).catch((error) => {
-        showNotification(error, 'error',)
+        showNotification(error, 'error');
       }).finally(() => {
         refresh();
       });
     } else {
-      showNotification(`Editing client ${client.name}`, 'info');
+      showNotification(`Editing client ${data.name}`, 'info');
       await invoke('edit_client', {
         clientId: client.id, data: {
-          name: client.name,
-          mac: client.mac,
-          ip: client.ip,
-          master: client.master,
-          snapshot: client.snapshot ? `${client.snapshot}` : null
+          name: data.name,
+          mac: data.mac,
+          ip: data.ip,
+          master: data.master,
+          snapshot: data.snapshot ? `${data.snapshot}` : null
         }
       }).then((response) => {
         if (response.message) showNotification(response.message, 'success');
       }).catch((error) => {
-        showNotification(error, 'error',)
+        showNotification(error, 'error');
       }).finally(() => {
         refresh();
       });
-
     }
-
   };
 
+  const selectedMaster = watch('master');
   return (
     <Modal isOpen={isOpen} onClose={() => setIsOpen(false)} title={client.id ? 'Edit Client' : 'Add Client'}>
-      <form onSubmit={() => handleSubmit} className="space-y-2">
-        <Input label="Client name" id="snapshotName" value={client.name} onChange={(e) => setClient({ ...client, name: e.target.value })}
-          placeholder="Enter client name"
-          required
-        />
+      <form onSubmit={handleSubmit(onSubmit)} className="space-y-2">
 
-        <Input label="MAC Address" value={client.mac} onChange={(e) => setClient({ ...client, mac: e.target.value })}
-          placeholder="XX:XX:XX:XX:XX:XX" />
 
-        <Input label="IP Address" value={client.ip} onChange={(e) => setClient({ ...client, ip: e.target.value })}
-          placeholder="X.X.X.X" />
+        <fieldset className={`fieldset`}>
+          <legend htmlFor='snapshotName' className='fieldset-legend'>Client Name</legend>
+          <input {...register('name')} type='text' id='snapshotName' placeholder="enter client name" className='input w-full' />
+          {errors.name && <div className="text-red-500 text-xs">{errors.mac.message}</div>}
+        </fieldset>
 
-        <Select value={client.master} onChange={(e) => setClient({ ...client, master: e.target.value, snapshot: '' })} label="Select master" >
-          <option value="">Select a master image...</option>
-          {masters.map((master) => (
-            <option key={master.name} value={master.name}>
-              {master.name}
-            </option>
-          ))}
-        </Select>
+        <fieldset className={`fieldset`}>
+          <legend htmlFor='mac' className='fieldset-legend'>MAC Address</legend>
+          <input {...register('mac')} type='text' id='mac' placeholder="XX:XX:XX:XX:XX:XX" className='input w-full' />
+          {errors.mac && <div className="text-red-500 text-xs">{errors.mac.message}</div>}
 
-        <Select value={client.snapshot} onChange={(e) => setClient({ ...client, snapshot: e.target.value })} disabled={!client.master} label="Select Snapshot">
-          <option value="">Use master directly</option>
-          {masters.find(m => m.name === client.master)?.snapshots?.map((snap) => (
-            <option key={snap.name} value={snap.name}>
-              {snap.name} ({snap.created}, {snap.size})
-            </option>
-          ))}
-        </Select>
+        </fieldset>
+        <fieldset className={`fieldset`}>
+          <legend htmlFor='ip' className='fieldset-legend'>IP Address</legend>
+          <input {...register('ip')} type='text' id='ip' placeholder="X.X.X.X" className='input w-full' />
+          {errors.ip && <div className="text-red-500 text-xs">{errors.ip.message}</div>}
+
+        </fieldset>
+
+        <fieldset className={`fieldset`}>
+          <legend htmlFor="master" className='fieldset-legend'>Select Image</legend>
+          <select   {...register('master')} id="master" defaultValue={client.master || ''} className='select w-full' >
+            <option value="">Select image ...</option>
+
+            {masters.map((master) => (
+              <option key={master.name} value={master.name}>
+                {master.name}
+              </option>
+            ))}    </select>
+          {errors.master && <div className="text-red-500 text-xs">{errors.master.message}</div>}
+
+        </fieldset>
+        <fieldset className={`fieldset`}>
+          <legend htmlFor="snapshot" className='fieldset-legend'>Select Snapshot</legend>
+          <select   {...register('snapshot')} value={watch('snapshot')} onChange={e => setValue('snapshot', e.target.value)}
+            id="snapshot" defaultValue={client.master || ''} className='select w-full' disabled={!selectedMaster}
+          >
+            <option value="">Use master directly</option>
+            {masters.find(m => m.name === selectedMaster)?.snapshots?.map((snap) => (
+              <option key={snap.name} value={snap.name}>
+                {snap.name} ({snap.created}, {snap.size})
+              </option>
+            ))}
+          </select>
+          {errors.snapshot && <div className="text-red-500 text-xs">{errors.snapshot.message}</div>}
+        </fieldset>
+
+
 
         <div className="flex justify-end space-x-3">
-          <Button type="button" onClick={(event) => handleSubmit(event)} variant="primary">{client.id ? 'Edit Client' : 'Add Client'}</Button>
+          <Button type="submit" variant="primary">{client.id ? 'Edit Client' : 'Add Client'}</Button>
           <Button type="button" onClick={() => setIsOpen(false)} variant="destructive">Cancel</Button>
         </div>
       </form>
