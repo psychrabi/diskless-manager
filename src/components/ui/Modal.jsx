@@ -14,12 +14,12 @@ export const Modal = ({ isOpen, onClose, title, children, size = 'md', id = 'mod
   }, [isOpen]);
 
   const sizeClasses = {
-    sm: 'modal-sm',
+    sm: 'max-w-sm',
     md: '',
-    lg: 'modal-lg',
-    xl: 'modal-xl',
-    '2xl': 'modal-2xl',
-    '3xl': 'modal-3xl',
+    lg: 'max-w-lg',
+    xl: 'max-w-xl',
+    '2xl': 'max-w-2xl',
+    '3xl': 'max-w-3xl',
     full: 'modal-bottom sm:modal-middle',
   };
 

@@ -87,7 +87,7 @@ const ClientFormModal = ({ client, setClient, masters, isOpen, setIsOpen, refres
         <fieldset className={`fieldset`}>
           <legend htmlFor='snapshotName' className='fieldset-legend'>Client Name</legend>
           <input {...register('name')} type='text' id='snapshotName' placeholder="enter client name" className='input w-full' />
-          {errors.name && <div className="text-red-500 text-xs">{errors.mac.message}</div>}
+          {errors.name && <div className="text-red-500 text-xs">{errors.name.message}</div>}
         </fieldset>
 
         <fieldset className={`fieldset`}>
@@ -130,9 +130,6 @@ const ClientFormModal = ({ client, setClient, masters, isOpen, setIsOpen, refres
           </select>
           {errors.snapshot && <div className="text-red-500 text-xs">{errors.snapshot.message}</div>}
         </fieldset>
-
-
-
         <div className="flex justify-end space-x-3">
           <Button type="submit" variant="primary">{client.id ? 'Edit Client' : 'Add Client'}</Button>
           <Button type="button" onClick={() => setIsOpen(false)} variant="destructive">Cancel</Button>

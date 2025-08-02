@@ -1,50 +1,59 @@
-import { HardDrive, PlusCircle, Save, Star, StarIcon, Trash2 } from 'lucide-react';
-import { useCallback, useMemo } from 'react';
+import { HardDrive, PlusCircle, Star, StarIcon, Trash2 } from 'lucide-react';
+import { lazy, useCallback, useMemo, useState } from 'react';
+import { useLoaderData } from 'react-router-dom';
 import { useMasterManager } from '../../hooks/useMasterManager';
 import { useAppStore } from '../../store/useAppStore';
-import { Button, Card, Input, Modal } from '../ui';
-import { useLoaderData } from 'react-router-dom';
+import { Button, Card } from '../ui';
+
+const CreateImageModal = lazy(() => import('./CreateImageModal'));
+const CreateSnapshotModal = lazy(() => import('./CreateSnapshotModal'));
+const DeleteImageConfirmModal = lazy(() => import('./DeleteImageConfirmModal'));
+const DeleteSnaptshotConfirmModal = lazy(() => import('./DeleteSnaptshotConfirmModal'));
+
+
 
 export const ImageManagement = () => {
   const { fetchData } = useAppStore();
   const { masters } = useLoaderData();
   const {
-    handleCreateSnapshot,
-    handleDeleteSnapshot,
-    handleOpenCreateSnapshotModal,
-    isCreateSnapshotModalOpen,
     setIsCreateSnapshotModalOpen,
-    selectedMaster,
-    newSnapshotName,
-    setNewSnapshotName,
-    handleOpenCreateMasterModal,
-    handleCreateMasterSubmit,
-    isCreateMasterModalOpen,
-    setIsCreateMasterModalOpen,
-    newMasterName,
-    setNewMasterName,
-    newMasterSize,
-    setNewMasterSize,
-    isDeleteSnapshotModalOpen,
-    snapshotToDelete,
-    confirmDeleteSnapshot,
-    cancelDeleteSnapshot,
-    handleOpenDeleteMasterModal,
-    cancelDeleteMaster,
-    confirmDeleteMaster,
     setDefaultMaster,
-    isDeleteMasterModalOpen,
   } = useMasterManager(fetchData);
+
+  const [openImageCreateModal, setOpenImageCreateModal] = useState(false)
+  const [openSnapshotCreateModal, setOpenSnapshotCreateModal] = useState(false)
+  const [openDeleteMasterModal, setOpenDeleteMasterModal] = useState(false)
+  const [openDeleteSnapshotModal, setOpenDeleteSnapshotModal] = useState(false)
+  const [selectedImage, setSelectedImage] = useState('')
+  const [selectedSnapshot, setSelectedSnapshot] = useState('')
 
   const memoizedMasters = useMemo(() => masters, [masters]);
   const memoizedSetDefaultMaster = useCallback(setDefaultMaster, [setDefaultMaster]);
-  const memoizedHandleOpenCreateSnapshotModal = useCallback(handleOpenCreateSnapshotModal, [handleOpenCreateSnapshotModal]);
-  const memoizedHandleOpenDeleteMasterModal = useCallback(handleOpenDeleteMasterModal, [handleOpenDeleteMasterModal]);
+
+  const handleCreateImage = () => {
+    setOpenImageCreateModal(true)
+  }
+
+  const handleCreateSnapshot = (image) => {
+    setSelectedImage(image)
+    setOpenSnapshotCreateModal(true)
+  }
+
+  const handleDeleteImage = (image) => {
+    setSelectedImage(image)
+    setOpenDeleteMasterModal(true)
+  }
+
+  const handleDeleteSnapshot = (snapshot, image) => {
+    setSelectedImage(image)
+    setSelectedSnapshot(snapshot)
+    setOpenDeleteSnapshotModal(true)
+  }
 
   return (
     <div className="space-y-6">
       <Card title="Image Management" icon={HardDrive} actions={
-        <Button variant="primary" onClick={handleOpenCreateMasterModal} icon={PlusCircle}>Create Image</Button>
+        <Button variant="primary" onClick={() => handleCreateImage()} icon={PlusCircle}>Create Image</Button>
       }>
         <div className="space-y-6">
           {memoizedMasters.map((master) => (
@@ -65,8 +74,8 @@ export const ImageManagement = () => {
                       </span>
                     ) : 'Set as Default'}
                   </Button>
-                  <Button variant='primary' onClick={() => memoizedHandleOpenCreateSnapshotModal(master.name)} size="sm" icon={PlusCircle}>Create Snapshot</Button>
-                  <Button variant="destructive" onClick={() => memoizedHandleOpenDeleteMasterModal(master.name)} size="sm" icon={Trash2}>Delete Master</Button>
+                  <Button variant='primary' onClick={() => handleCreateSnapshot(master.name)} size="sm" icon={PlusCircle}>Create Snapshot</Button>
+                  <Button variant="destructive" onClick={() => handleDeleteImage(master.name)} size="sm" icon={Trash2}>Delete Image</Button>
                 </div>
               </div>
               <h5 className="text-sm font-semibold mb-2 text-gray-600 dark:text-gray-400">Available Snapshots:</h5>
@@ -79,7 +88,7 @@ export const ImageManagement = () => {
                         <span className="text-gray-500 dark:text-gray-400 text-xs ml-2 whitespace-nowrap">({snap.created}, {snap.used})</span>
                       </div>
                       <div className="flex space-x-1 flex-shrink-0">
-                        <Button onClick={() => handleDeleteSnapshot(snap.name)} variant="destructive" size="icon" className="h-7 w-7 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/50" title={`Delete ${snap.name}`}>
+                        <Button onClick={() => handleDeleteSnapshot(snap.name, master.name)} variant="destructive" size="icon" className="h-7 w-7 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/50" title={`Delete ${snap.name}`}>
                           <Trash2 className="h-4 w-4" />
                         </Button>
                       </div>
@@ -94,88 +103,10 @@ export const ImageManagement = () => {
           {memoizedMasters.length === 0 && <p className="text-center py-4 text-gray-500">No master images found.</p>}
         </div>
       </Card>
-      <Modal isOpen={isCreateMasterModalOpen} onClose={() => setIsCreateMasterModalOpen(false)} title="Create Master Image">
-        <form onSubmit={handleCreateMasterSubmit}>
-          <Input
-            label="Master Name:" id="masterName" value={newMasterName}
-            onChange={(e) => setNewMasterName(e.target.value)}
-            placeholder="e.g., win11-enterprise (will create pool/name-master)"
-            required
-          />
-          <Input
-            label="Size:" id="masterSize" value={newMasterSize}
-            onChange={(e) => setNewMasterSize(e.target.value)}
-            placeholder="e.g., 50G, 1T"
-            title="Enter size (e.g., 50G, 100G, 1T)" required
-            className='mt-4'
-          />
-          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 mb-4">
-            This will create a ZFS volume named '{newMasterName ? `${newMasterName}-master` : '...-master'}' in the pool.
-          </p>
-          <div className="mt-6 flex justify-end space-x-3">
-            <Button type="submit" variant="primary" icon={Save}>Create Master</Button>
-            <Button type="button" variant="destructive" onClick={() => setIsCreateMasterModalOpen(false)}>Cancel</Button>
-          </div>
-        </form>
-      </Modal>
-      {/* Create Snapshot Modal */}
-      <Modal isOpen={isCreateSnapshotModalOpen} onClose={() => setIsCreateSnapshotModalOpen(false)} title={`Create Snapshot for ${selectedMaster}`} size='3xl'>
-        <form onSubmit={(e) => {
-          e.preventDefault();
-          // Construct the full snapshot name: selectedMaster.name + '@' + newSnapshotName
-          const fullSnapshotName = `${selectedMaster}@${newSnapshotName}`;
-          handleCreateSnapshot(fullSnapshotName); // Pass the constructed full name
-        }}>
-          <Input
-            label="Snapshot Name (e.g., base-install, pre-updates):"
-            id="snapshotName"
-            value={newSnapshotName}
-            onChange={(e) => setNewSnapshotName(e.target.value)} // Only the snapshot name, not the full path
-            placeholder="Enter snapshot name (e.g., my-snapshot-name)"
-            required
-          />
-          <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
-            This operation will capture the current state of <strong className="font-semibold">{selectedMaster}</strong>.
-            This operation cannot be undone.
-          </p>
-          <div className="mt-6 flex justify-end space-x-3">
-            <Button type="submit" variant="primary" icon={Save}>Create Snapshot</Button>
-            <Button type="button" variant="destructive" onClick={() => setIsCreateSnapshotModalOpen(false)}>Cancel</Button>
-          </div>
-        </form>
-      </Modal>
-      <Modal isOpen={isDeleteSnapshotModalOpen} onClose={cancelDeleteSnapshot} title="Delete Snapshot">
-        <div className="space-y-4">
-          <p>
-            Are you sure you want to delete snapshot "{snapshotToDelete}"?
-            This action cannot be undone and might affect clones.
-          </p>
-          <div className="flex justify-end space-x-3">
-            <Button variant="primary" onClick={confirmDeleteSnapshot}>
-              Delete Snapshot
-            </Button>
-            <Button variant="destructive" onClick={cancelDeleteSnapshot} >
-              Cancel
-            </Button>
-          </div>
-        </div>
-      </Modal>
-      <Modal isOpen={isDeleteMasterModalOpen} onClose={cancelDeleteMaster} title="Delete Snapshot" >
-        <div className="space-y-4">
-          <p>
-            Are you sure you want to delete Master "{selectedMaster}"?
-            This action cannot be undone and might affect clones.
-          </p>
-          <div className="flex justify-end space-x-3">
-            <Button variant="primary" onClick={confirmDeleteMaster} >
-              Delete Master
-            </Button>
-            <Button variant="destructive" onClick={cancelDeleteMaster} >
-              Cancel
-            </Button>
-          </div>
-        </div>
-      </Modal>
+      {openImageCreateModal && <CreateImageModal openImageCreateModal={openImageCreateModal} setOpenImageCreateModal={setOpenImageCreateModal} refresh={fetchData} />}
+      {openSnapshotCreateModal && <CreateSnapshotModal openSnapshotCreateModal={openSnapshotCreateModal} setOpenSnapshotCreateModal={setOpenSnapshotCreateModal} refresh={fetchData} selectedImage={selectedImage} />}
+      {openDeleteMasterModal && <DeleteImageConfirmModal openDeleteMasterModal={openDeleteMasterModal} setOpenDeleteMasterModal={setOpenDeleteMasterModal} selectedImage={selectedImage} />}
+      {openDeleteSnapshotModal && <DeleteSnaptshotConfirmModal openDeleteSnapshotModal={openDeleteSnapshotModal} setOpenDeleteSnapshotModal={setOpenDeleteSnapshotModal} selectedSnapshot={selectedSnapshot} selectedImage={selectedImage} />}
     </div>
   );
 };
