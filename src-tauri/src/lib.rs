@@ -7,6 +7,8 @@ mod utils;
 mod zfs;
 use once_cell::sync::Lazy;
 use tauri::Manager;
+use tauri::tray::TrayIconBuilder;
+
 
 const ZFS_POOL: &str = "diskless"; // Adjust to your ZFS pool name
 const DHCP_CONFIG_PATH: &str = "/etc/dhcp/dhcpd.conf"; // Adjust as needed
@@ -66,6 +68,9 @@ pub fn run() {
                         .build(),
                 )?;
             }
+let _tray = TrayIconBuilder::new()
+  .icon(app.default_window_icon().unwrap().clone())
+  .build(app)?;        
             Ok(())
         })
         .run(tauri::generate_context!())

@@ -1,15 +1,27 @@
 use crate::config::{read_config, write_config, Config};
 use crate::utils::run_command;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::process::Command;
+use async_process::Command as AsyncCommand;
+
 
 #[derive(Deserialize)]
 pub struct ServiceControlRequest {
     pub action: String,
+}
+
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PackageStatus {
+    name: String,
+    installed: bool,
+    configured: bool,
+    running: bool,
+    version: Option<String>,
 }
 
 #[tauri::command]
@@ -24,9 +36,10 @@ pub async fn get_services(zfs_pool: String) -> Result<Value, String> {
         ("share", "smbd.service"),
     ];
     for (key, service_name) in service_map {
-        let output = Command::new("systemctl")
+        let output = AsyncCommand::new("systemctl")
             .args(["is-active", service_name])
             .output()
+            .await
             .map_err(|e| e.to_string())?;
         let status = if output.status.success() {
             String::from_utf8_lossy(&output.stdout).trim().to_string()
@@ -43,7 +56,7 @@ pub async fn get_services(zfs_pool: String) -> Result<Value, String> {
             }),
         );
     }
-    let zfs_status = match Command::new("zpool").args(["status", &zfs_pool]).output() {
+    let zfs_status = match AsyncCommand::new("zpool").args(["status", &zfs_pool]).output().await {
         Ok(output) if output.status.success() => {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let pool_state = stdout
@@ -102,13 +115,14 @@ pub async fn get_service_config(service_key: String) -> Result<serde_json::Value
 
     if service_key == "zfs" {
         // Get ZFS pool and dataset info
-        let zpool_status = Command::new("sudo")
+        let zpool_status = AsyncCommand::new("sudo")
             .args(["zpool", "status"])
             .output()
+            .await
             .map_err(|e| format!("Failed to run zpool status: {e}"))?;
         let zpool_status_str = String::from_utf8_lossy(&zpool_status.stdout);
 
-        let zfs_list = Command::new("sudo")
+        let zfs_list = AsyncCommand::new("sudo")
             .args([
                 "zfs",
                 "list",
@@ -118,6 +132,7 @@ pub async fn get_service_config(service_key: String) -> Result<serde_json::Value
                 "name,type,used,avail,refer,mountpoint",
             ])
             .output()
+            .await
             .map_err(|e| format!("Failed to run zfs list: {e}"))?;
         let zfs_list_str = String::from_utf8_lossy(&zfs_list.stdout);
 
@@ -131,10 +146,11 @@ pub async fn get_service_config(service_key: String) -> Result<serde_json::Value
             .get(service_key.as_str())
             .ok_or_else(|| format!("Unknown service key: {}", service_key))?;
 
-        let output = Command::new("sudo")
+        let output = AsyncCommand::new("sudo")
             .arg("cat")
             .arg(config_path)
             .output()
+            .await
             .map_err(|e| format!("Failed to execute sudo cat: {e}"))?;
 
         if !output.status.success() {
@@ -200,7 +216,7 @@ pub async fn control_service(
 }
 
 #[tauri::command]
-pub fn check_services() -> Result<Value, String> {
+pub async fn check_services() -> Result<Value, String> {
     let required = vec![
         ("zfs", "zfsutils-linux"),
         ("targetcli", "targetcli-fb"),
@@ -212,10 +228,11 @@ pub fn check_services() -> Result<Value, String> {
     ];
     let mut statuses = HashMap::new();
     for (key, svc) in required {
-        let installed = Command::new("which")
+        let installed = AsyncCommand::new("which")
             .arg(key)
-            .status()
-            .map(|s| s.success())
+            .output()
+            .await
+            .map(|s| s.status.success())            
             .unwrap_or(false);
         statuses.insert(
             key,
@@ -229,10 +246,11 @@ pub fn check_services() -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub fn install_service(service: String) -> Result<(), String> {
-    let status = Command::new("sudo")
+pub async fn install_service(service: String) -> Result<(), String> {
+    let status = AsyncCommand::new("sudo")
         .args(&["apt-get", "install", "-y", &service])
         .status()
+        .await
         .map_err(|e| e.to_string())?;
     if status.success() {
         Ok(())
