@@ -8,7 +8,7 @@ import { Button, Card } from '../ui';
 import ServiceConfigModal from './ServiceConfigModal';
 import ZfsPoolCard from './ZfsPoolCard';
 
-export const ServiceManagement = () => {
+const ServiceManagement = () => {
   const { loading } = useAppStore();
   const { services } = useLoaderData();
   const { handleServiceAction, handleServiceConfigView } = useServiceManager()
@@ -31,21 +31,21 @@ export const ServiceManagement = () => {
               </Button>
               {(key !== 'zfs') && (
                 <>
-                { service.status === 'inactive' && (
-                  <Button onClick={() => handleServiceAction(key, 'start')} variant="ghost" size="icon" className="h-7 w-7" title={`Start ${service.name}`} disabled={service.status !== "inactive"}>
-                    <Play className="h-4 w-4 text-green-500" />
-                  </Button>
-                )}
-                { service.status !== 'inactive' && (
-<>
-                  <Button onClick={() => handleServiceAction(key, 'stop')} variant="ghost" size="icon" className="h-7 w-7" title={`Stop ${service.name}`} disabled={service.status === 'inactive'}>
-                    <Power className="h-4 w-4 text-red-500" />
-                  </Button>
-                  <Button onClick={() => handleServiceAction(key, 'restart')} variant="ghost" size="icon" className="h-7 w-7" title={`Restart ${service.name}`} disabled={service.status === 'inactive'}>
-                    <RefreshCw className="h-4 w-4 text-blue-500" />
-                  </Button>
-                  </>
-                )}
+                  {service.status === 'inactive' && (
+                    <Button onClick={() => handleServiceAction(key, 'start')} variant="ghost" size="icon" className="h-7 w-7" title={`Start ${service.name}`} disabled={service.status !== "inactive"}>
+                      <Play className="h-4 w-4 text-green-500" />
+                    </Button>
+                  )}
+                  {service.status !== 'inactive' && (
+                    <>
+                      <Button onClick={() => handleServiceAction(key, 'stop')} variant="ghost" size="icon" className="h-7 w-7" title={`Stop ${service.name}`} disabled={service.status === 'inactive'}>
+                        <Power className="h-4 w-4 text-red-500" />
+                      </Button>
+                      <Button onClick={() => handleServiceAction(key, 'restart')} variant="ghost" size="icon" className="h-7 w-7" title={`Restart ${service.name}`} disabled={service.status === 'inactive'}>
+                        <RefreshCw className="h-4 w-4 text-blue-500" />
+                      </Button>
+                    </>
+                  )}
                 </>
               )}
             </div>

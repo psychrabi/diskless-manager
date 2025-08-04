@@ -1,10 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useAppStore } from "../store/useAppStore";
-import { Card } from "./ui";
+import { useAppStore } from "../../store/useAppStore";
+import { Card } from "../ui";
 
-export default function SetupPage() {
+const Setup = () => {
   const navigate = useNavigate();
   const [disks, setDisks] = useState([]);
   const [poolExists, setPoolExists] = useState(null);
@@ -22,9 +22,9 @@ export default function SetupPage() {
       service => !service.installed
     );
 
-    if (!hasUninstalledServices) {
-      navigate('/');
-    }
+    // if (!hasUninstalledServices) {
+    //   navigate('/');
+    // }
   }, [services_status, navigate]);
 
   const handleCreatePool = async () => {
@@ -70,6 +70,7 @@ export default function SetupPage() {
                 <tr key={key}>
                   <td>{svc.name}</td>
                   <td>{svc.installed ? "Installed" : "Not Installed"}</td>
+                  <td>{svc.running? "Running" : "Stopped"}</td>
                   <td>
                     {!svc.installed && (
                       <button className="btn btn-success btn-sm" disabled={installing === key} onClick={() => handleInstallService(svc.name)}>
@@ -86,3 +87,5 @@ export default function SetupPage() {
     </Card>
   );
 }
+
+export default Setup;

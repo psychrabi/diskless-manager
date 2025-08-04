@@ -876,6 +876,7 @@ dependencies = [
 name = "diskless-server"
 version = "0.1.0"
 dependencies = [
+ "async-process",
  "chrono",
  "directories",
  "dirs",

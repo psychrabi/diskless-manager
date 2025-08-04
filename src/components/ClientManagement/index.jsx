@@ -1,17 +1,17 @@
 import { PlusCircle, Users } from 'lucide-react';
 import { memo, useCallback, useEffect, useState } from 'react';
+import { useLoaderData } from 'react-router-dom';
 import { useAppStore } from '../../store/useAppStore';
 import { clientContextMenuActions } from '../../utils/contextMenuAction';
 import { Button, Card } from '../ui';
 import { ContextMenu } from '../ui/ContextMenu';
 import ClientFormModal from './ClientFormModal';
 import ClientTable from './ClientTable';
-import { useLoaderData } from 'react-router-dom';
 
 const MemoizedClientTable = memo(ClientTable);
 const MemoizedContextMenu = memo(ContextMenu);
 
-export const ClientManagement = () => {
+const ClientManagement = () => {
   const { masters, fetchData } = useAppStore();
   const { clients } = useLoaderData();
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -55,7 +55,7 @@ export const ClientManagement = () => {
         ipParts[3] = lastOctet.toString()
         newIp = ipParts.join('.')
       }
-    }    
+    }
     setClient({
       name: newName,
       mac: '',
@@ -68,7 +68,7 @@ export const ClientManagement = () => {
   }, [clients, masters])
 
   useEffect(() => {
-    fetchData()    
+    fetchData()
   }, [fetchData]);
 
   return (

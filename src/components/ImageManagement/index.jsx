@@ -10,9 +10,7 @@ const CreateSnapshotModal = lazy(() => import('./CreateSnapshotModal'));
 const DeleteImageConfirmModal = lazy(() => import('./DeleteImageConfirmModal'));
 const DeleteSnaptshotConfirmModal = lazy(() => import('./DeleteSnaptshotConfirmModal'));
 
-
-
-export const ImageManagement = () => {
+const ImageManagement = () => {
   const { fetchData } = useAppStore();
   const { masters } = useLoaderData();
   const {
