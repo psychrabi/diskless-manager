@@ -225,11 +225,11 @@ pub async fn control_service(
     req: ServiceControlRequest,
 ) -> Result<Value, String> {
     let service_map: HashMap<&str, &str> = [
-        ("iscsi", "target.service"),
-        ("dhcp", "isc-dhcp-server.service"),
-        ("tftp", "tftpd-hpa.service"),
-        ("http", "apache2.service"),
-        ("share", "smbd.service"),
+        ("target", "target.service"),
+        ("isc-dhcp-server", "isc-dhcp-server.service"),
+        ("tftpd-hpa", "tftpd-hpa.service"),
+        ("apache2", "apache2.service"),
+        ("smbd", "smbd.service"),
     ]
     .iter()
     .cloned()
@@ -292,11 +292,11 @@ pub async fn install_service(service: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn save_service_config(service_key: String, content: String) -> Result<(), String> {
     let config_file_map: HashMap<&str, &str> = [
-        ("dhcp", "/etc/dhcp/dhcpd.conf"),
-        ("tftp", "/etc/default/tftpd-hpa"),
-        ("iscsi", "/etc/rtslib-fb-target/saveconfig.json"),
-        ("http", "/etc/apache2/sites-available/000-default.conf"),
-        ("share", "/etc/samba/smb.conf"),
+        ("isc-dhcp-server", "/etc/dhcp/dhcpd.conf"),
+        ("tftpd-hpa", "/etc/default/tftpd-hpa"),
+        ("target", "/etc/rtslib-fb-target/saveconfig.json"),
+        ("apache2", "/etc/apache2/sites-available/000-default.conf"),
+        ("smbd", "/etc/samba/smb.conf"),
         // Add more as needed
     ]
     .iter()

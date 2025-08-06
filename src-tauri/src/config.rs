@@ -81,6 +81,7 @@ pub fn write_config(cfg: &Config) -> Result<(), String> {
             )
             .map_err(|e| e.to_string())
         })?;
+        reload_config_from_disk();
     Ok(())
 }
 
