@@ -67,9 +67,6 @@ const ClientManagement = () => {
     setIsModalOpen(true)
   }, [clients, masters])
 
-  useEffect(() => {
-    fetchData()
-  }, [fetchData]);
 
   return (
     <div className="mb-2 md:mb-4">

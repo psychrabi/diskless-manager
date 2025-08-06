@@ -34,7 +34,7 @@ const Setup = () => {
   const handleInstallService = async (service) => {
     setInstalling(true);
     await invoke("install_service", { service });
-    const updated = await invoke("check_services");
+    const updated = await invoke("check_package_status");
     setServices(updated);
     setInstalling(false);
   };

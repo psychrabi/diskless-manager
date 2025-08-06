@@ -38,7 +38,7 @@ pub fn run() {
             client::control_client,
             client::remote_client,
             client::reset_client,
-            config::get_config,
+            config::read_config,
             config::save_config,
             service::get_services,
             service::control_service,
@@ -46,6 +46,9 @@ pub fn run() {
             service::install_service,
             service::get_service_config,
             service::save_service_config,
+            service::check_package_status,
+            service::install_packages,
+            service::restart_service,
             utils::list_disks,
             utils::get_ram_usage,
             utils::clear_ram_cache,
@@ -58,7 +61,8 @@ pub fn run() {
             zfs::create_snapshot,
             zfs::delete_snapshot,
             zfs::zfs_pool_exists,
-            zfs::set_default_master
+            zfs::set_default_master,
+            zfs::rollback_master_snapshot
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {

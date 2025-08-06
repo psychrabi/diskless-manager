@@ -1,3 +1,28 @@
+use once_cell::sync::OnceCell;
+use std::sync::RwLock;
+
+static CONFIG_CACHE: OnceCell<RwLock<Config>> = OnceCell::new();
+
+pub fn get_config() -> Config {
+    let cache = CONFIG_CACHE.get_or_init(|| {
+        let config = read_config();
+        RwLock::new(config)
+    });
+    cache.read().unwrap().clone()
+}
+
+pub fn set_config(new_config: &Config) {
+    let cache = CONFIG_CACHE.get_or_init(|| {
+        let config = read_config();
+        RwLock::new(config)
+    });
+    *cache.write().unwrap() = new_config.clone();
+}
+
+pub fn reload_config_from_disk() {
+    let config = read_config();
+    set_config(&config);
+}
 use std::fs;
 
 use serde::{Deserialize, Serialize};
@@ -24,6 +49,7 @@ impl Default for Config {
     }
 }
 
+#[tauri::command]
 // Read config.json, or return default
 pub fn read_config() -> Config {
     dirs::config_dir()
@@ -59,13 +85,8 @@ pub fn write_config(cfg: &Config) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn get_config() -> Result<Config, String> {
-    Ok(read_config())
-}
-
-#[tauri::command]
 pub fn save_config(pool_name: String) -> Result<(), String> {
-    let mut cfg = read_config();
+    let mut cfg = get_config();
     // Ensure settings is an object
     let mut settings = cfg.settings.as_object().cloned().unwrap_or_default();
     settings.insert("zfsPool".to_string(), json!(pool_name));

@@ -1,4 +1,4 @@
-import { HardDrive, PlusCircle, Star, StarIcon, Trash2 } from 'lucide-react';
+import { HardDrive, PlusCircle, Star, StarIcon, Trash2, RotateCcw } from 'lucide-react';
 import { lazy, useCallback, useMemo, useState } from 'react';
 import { useLoaderData } from 'react-router-dom';
 import { useMasterManager } from '../../hooks/useMasterManager';
@@ -9,6 +9,7 @@ const CreateImageModal = lazy(() => import('./CreateImageModal'));
 const CreateSnapshotModal = lazy(() => import('./CreateSnapshotModal'));
 const DeleteImageConfirmModal = lazy(() => import('./DeleteImageConfirmModal'));
 const DeleteSnaptshotConfirmModal = lazy(() => import('./DeleteSnaptshotConfirmModal'));
+const RollbackSnapshotConfirmModal = lazy(() => import('./RollbackSnapshotConfirmModal'));
 
 const ImageManagement = () => {
   const { fetchData } = useAppStore();
@@ -24,6 +25,12 @@ const ImageManagement = () => {
   const [openDeleteSnapshotModal, setOpenDeleteSnapshotModal] = useState(false)
   const [selectedImage, setSelectedImage] = useState('')
   const [selectedSnapshot, setSelectedSnapshot] = useState('')
+  const [openRollbackSnapshotModal, setOpenRollbackSnapshotModal] = useState(false)
+  const handleRollbackSnapshot = (snapshot, image) => {
+    setSelectedImage(image)
+    setSelectedSnapshot(snapshot)
+    setOpenRollbackSnapshotModal(true)
+  }
 
   const memoizedMasters = useMemo(() => masters, [masters]);
   const memoizedSetDefaultMaster = useCallback(setDefaultMaster, [setDefaultMaster]);
@@ -86,6 +93,9 @@ const ImageManagement = () => {
                         <span className="text-gray-500 dark:text-gray-400 text-xs ml-2 whitespace-nowrap">({snap.created}, {snap.used})</span>
                       </div>
                       <div className="flex space-x-1 flex-shrink-0">
+                        <Button onClick={() => handleRollbackSnapshot(snap.name, master.name)} variant="info" size="icon" className="h-7 w-7 text-blue-500 hover:bg-blue-100 dark:hover:bg-blue-900/50" title={`Rollback ${snap.name}`}>
+                          <RotateCcw className="h-4 w-4" />
+                        </Button>
                         <Button onClick={() => handleDeleteSnapshot(snap.name, master.name)} variant="destructive" size="icon" className="h-7 w-7 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/50" title={`Delete ${snap.name}`}>
                           <Trash2 className="h-4 w-4" />
                         </Button>
@@ -105,6 +115,7 @@ const ImageManagement = () => {
       {openSnapshotCreateModal && <CreateSnapshotModal openSnapshotCreateModal={openSnapshotCreateModal} setOpenSnapshotCreateModal={setOpenSnapshotCreateModal} refresh={fetchData} selectedImage={selectedImage} />}
       {openDeleteMasterModal && <DeleteImageConfirmModal openDeleteMasterModal={openDeleteMasterModal} setOpenDeleteMasterModal={setOpenDeleteMasterModal} selectedImage={selectedImage} />}
       {openDeleteSnapshotModal && <DeleteSnaptshotConfirmModal openDeleteSnapshotModal={openDeleteSnapshotModal} setOpenDeleteSnapshotModal={setOpenDeleteSnapshotModal} selectedSnapshot={selectedSnapshot} selectedImage={selectedImage} />}
+      {openRollbackSnapshotModal && <RollbackSnapshotConfirmModal open={openRollbackSnapshotModal} setOpen={setOpenRollbackSnapshotModal} selectedSnapshot={selectedSnapshot} selectedImage={selectedImage} refresh={fetchData} />}
     </div>
   );
 };

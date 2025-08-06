@@ -39,8 +39,9 @@ export const useAppStore = create()(
             invoke('get_services', { 'zfsPool': 'diskless' }),
             invoke('get_masters', { 'zfsPool': 'diskless' }),
             invoke('get_clients'),
-            invoke("check_services")
+            invoke("check_package_status")
           ]);
+          console.log(services_status)
           set({
             clients: clientsRes ? Object.values(clientsRes) : [],
             masters: mastersRes || [],
@@ -64,7 +65,7 @@ export const useAppStore = create()(
       fetchConfig: async () => {
         set({ checkingConfig: true, loading: true });
         try {
-          const cfg = await invoke('get_config');
+          const cfg = await invoke('read_config');
           set({ config: cfg });
         } catch (err) {
           set({ error: `Failed to load config: ${err.message || 'Check backend connection.'}` });

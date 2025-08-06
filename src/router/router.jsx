@@ -18,7 +18,8 @@ export const router = createBrowserRouter([
 				path: "/",
 				Component: ServiceManagement,
 				loader: async () => {
-					const services = await invoke('get_services', { 'zfsPool': 'diskless' });
+					const services = await invoke('check_package_status', { 'zfsPool': 'diskless' });
+					console.log(services)
 					return { services };
 				},
 			},

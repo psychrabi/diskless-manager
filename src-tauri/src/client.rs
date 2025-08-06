@@ -1,7 +1,7 @@
-//! Client management logic: helpers for client lookup, config, and deduplication.
+// Client management logic: helpers for client lookup, config, and deduplication.
 
 use crate::{
-    config::{read_config, write_config, Config},
+    config::{get_config, write_config, Config},
     dhcp::{create_dhcp_entry, update_dhcp_config},
     iscsi::{cleanup_iscsi_target, setup_iscsi_target},
     utils::{run_command, run_command_check},
@@ -36,7 +36,7 @@ impl WaitTimeout for std::process::Child {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Client {
     pub id: String,
     pub name: String,
@@ -71,15 +71,36 @@ pub struct ControlRequest {
 
 #[tauri::command]
 pub async fn get_clients(client_id: Option<String>) -> Result<serde_json::Value, String> {
-    let mut config: Config = read_config();
+    let mut config: Config = get_config();
+    use futures::future::join_all;
 
-    for client in config.clients.iter_mut() {
-        client.status = Some(get_client_status(&client.ip));
+    // Collect (index, ip) pairs
+    let client_ips: Vec<(usize, String)> = config.clients.iter().enumerate()
+        .map(|(i, c)| (i, c.ip.clone())).collect();
+
+    // Spawn concurrent tasks to get status
+    let handles: Vec<_> = client_ips.into_iter().map(|(i, ip)| {
+        tokio::task::spawn_blocking(move || (i, get_client_status(&ip)))
+    }).collect();
+
+    // Wait for all tasks to finish
+    let results = join_all(handles).await;
+
+    // Update statuses in the original clients vector
+    for res in results {
+        if let Ok((i, status)) = res {
+            config.clients[i].status = Some(status);
+        } else if let Err(e) = res {
+            println!("[ERROR] spawn_blocking failed: {}", e);
+        }
     }
 
+    // Update the config cache with new statuses
+    crate::config::set_config(&config);
+    // println!("[DEBUG] Updated clients: {:?}", config.clients);
+
     if let Some(id) = client_id {
-        let client = config
-            .clients
+        let client = config.clients
             .iter()
             .find(|c| c.id.eq_ignore_ascii_case(&id));
         Ok(serde_json::json!(client))
@@ -103,7 +124,7 @@ fn get_client_status(ip: &str) -> String {
 }
 
 fn get_client_by_id(client_id: &str) -> Option<Client> {
-    let config = read_config();
+    let config = get_config();
     for c in config.clients {
         if c.id.eq_ignore_ascii_case(client_id) {
             return Some(c);
@@ -113,7 +134,7 @@ fn get_client_by_id(client_id: &str) -> Option<Client> {
 }
 
 fn check_duplicate_client(name: &str, mac: &str, ip: &str) -> Option<String> {
-    let config: Value = match serde_json::to_value(read_config()) {
+    let config: Value = match serde_json::to_value(get_config()) {
         Ok(cfg) => cfg,
         Err(e) => {
             println!("Error parsing config file: {}", e);
@@ -172,7 +193,7 @@ pub fn get_client_paths(client_id: &str) -> HashMap<String, String> {
 }
 
 pub fn save_client_config(client_data: &Client) -> bool {
-    let mut config: Value = match serde_json::to_value(read_config()) {
+    let mut config: Value = match serde_json::to_value(get_config()) {
         Ok(val) => val,
         Err(_) => json!({
             "clients": [],
@@ -335,7 +356,7 @@ fn launch_remote_desktop(client_ip: &str, username: &str) -> Result<(), String> 
 
 pub fn delete_client_config(client_id: &str) -> bool {
     println!("Deleting client config: {}", client_id);
-    let mut config: Value = match serde_json::to_value(read_config()) {
+    let mut config: Value = match serde_json::to_value(get_config()) {
         Ok(cfg) => cfg,
         Err(e) => {
             println!("Error serializing config: {}", e);
@@ -490,31 +511,31 @@ pub async fn edit_client(
     let new_name = data
         .get("name")
         .and_then(|v| v.as_str())
-        .unwrap_or(&client_info.name)
+        .unwrap_or("")
         .trim()
         .to_string();
     let new_mac = data
         .get("mac")
         .and_then(|v| v.as_str())
-        .unwrap_or(&client_info.mac)
+        .unwrap_or("")
         .trim()
         .to_uppercase();
     let new_ip = data
         .get("ip")
         .and_then(|v| v.as_str())
-        .unwrap_or(&client_info.ip)
+        .unwrap_or("")
         .trim()
         .to_string();
     let new_master = data
         .get("master")
         .and_then(|v| v.as_str())
-        .unwrap_or(&client_info.master)
+        .unwrap_or("")
         .trim()
         .to_string();
     let new_snapshot = data
         .get("snapshot")
         .and_then(|v| v.as_str())
-        .unwrap_or(client_info.snapshot.as_deref().unwrap_or(""))
+        .unwrap_or("")
         .trim()
         .to_string();
 
@@ -555,8 +576,12 @@ pub async fn edit_client(
         );
     }
 
-    // Case 2: Name, master, or snapshot changed
-    if name_changed || master_changed || snapshot_changed {
+    // Case 2: Name, master, or snapshot changed, or snapshot is set to use master directly (empty)
+    if name_changed
+        || master_changed
+        || snapshot_changed
+        || (new_snapshot.is_empty() && client_info.snapshot.clone().unwrap_or_default() != "")
+    {
         let new_target_iqn = format!("iqn.2025-04.com.nsboot:{}", new_name.to_lowercase());
         let new_block_store = format!("block_{}", new_name.to_lowercase());
 
@@ -594,6 +619,19 @@ pub async fn edit_client(
                 block_device = format!("/dev/zvol/{}", new_clone);
             } else {
                 // Use master directly
+                // Clean up old clone if it exists
+                let old_clone = current_paths.get("clone").cloned().unwrap_or_default();
+                if !old_clone.is_empty() && zfs_exists(&old_clone) {
+                    let old_target_iqn = current_paths.get("target_iqn").cloned();
+                    let old_block_store = current_paths.get("block_store").cloned();
+                    if old_target_iqn.is_some() || old_block_store.is_some() {
+                        cleanup_iscsi_target(
+                            old_target_iqn.as_deref().unwrap_or(""),
+                            old_block_store.as_deref().unwrap_or(""),
+                        )?;
+                    }
+                    zfs_destroy(&old_clone)?;
+                }
                 block_device = format!("/dev/zvol/{}", current_master);
             }
         }

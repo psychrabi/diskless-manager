@@ -8,7 +8,7 @@ use std::process::Command;
 
 use crate::{
     client::get_clients,
-    config::{read_config, write_config, Config},
+    config::{get_config, write_config, Config},
 };
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -166,7 +166,7 @@ pub fn create_master(name: String, size: String) -> Result<Value, String> {
 #[tauri::command]
 pub async fn get_masters(zfs_pool: String) -> Result<Vec<Master>, String> {
     // 1. Get default master from config
-    let mut config = read_config();
+    let mut config = get_config();
     let default_master = config
         .settings
         .get("default_master")
@@ -268,7 +268,7 @@ pub async fn get_masters(zfs_pool: String) -> Result<Vec<Master>, String> {
 }
 
 pub fn save_master_config(master_data: &MasterData) -> bool {
-    let mut config = read_config();
+    let mut config = get_config();
     if !config.masters.is_object() {
         config.masters = json!({});
     }
@@ -335,7 +335,7 @@ pub async fn delete_master(master_name: String) -> Result<serde_json::Value, Str
 }
 
 pub fn delete_master_config(master_name: &str) -> bool {
-    let mut config = read_config();
+    let mut config = get_config();
     if let Some(masters) = config.masters.as_object_mut() {
         if masters.remove(master_name).is_some() {
             if let Err(e) = write_config(&config) {
@@ -376,7 +376,7 @@ pub fn create_snapshot(snapshot_name: String) -> Result<Value, String> {
             return Err(format!("Failed creating snapshot: {}", stderr));
         }
     }
-    let mut config = read_config();
+    let mut config = get_config();
     if let Some(masters) = config.masters.as_object_mut() {
         if let Some(master) = masters.get_mut(master_name) {
             // Avoid double mutable borrow by splitting the logic
@@ -446,7 +446,7 @@ pub async fn delete_snapshot(snapshot_name: String) -> Result<Value, String> {
             }));
         }
     }
-    let mut config = read_config();
+    let mut config = get_config();
     if let Some(masters) = config.masters.as_object_mut() {
         for (_master_name, master) in masters.iter_mut() {
             if let Some(snapshots) = master.get_mut("snapshots").and_then(|s| s.as_array_mut()) {
@@ -495,7 +495,7 @@ pub fn zfs_pool_exists(pool_name: String) -> Result<bool, String> {
 
     if exists {
         // Update config.json settings.zpool_name
-        let mut config: Config = read_config();
+        let mut config: Config = get_config();
         if !config.settings.is_object() {
             config.settings = json!({});
         }
@@ -516,7 +516,7 @@ pub fn create_zfs_pool(name: String, disk: String) -> Result<(), String> {
         .status()
         .map_err(|e| e.to_string())?;
     if status.success() {
-        let mut cfg = read_config();
+        let mut cfg = get_config();
         let mut settings = cfg.settings.as_object().cloned().unwrap_or_default();
         settings.insert("zpool_name".to_string(), json!(name));
         cfg.settings = json!(settings);
@@ -534,7 +534,7 @@ pub fn create_zfs_pool(name: String, disk: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn set_default_master(name: &str) -> bool {
-    let mut config = read_config();
+    let mut config = get_config();
     if !config.settings.is_object() {
         config.settings = json!({});
     }
@@ -546,4 +546,53 @@ pub fn set_default_master(name: &str) -> bool {
             false
         }
     }
+}
+
+
+#[tauri::command]
+pub async fn rollback_master_snapshot(master_name: String, snapshot_name: String) -> Result<serde_json::Value, String> {    
+    // 1. Rollback the snapshot
+    let rollback_output = Command::new("sudo")
+        .args(["zfs", "rollback", "-r", &snapshot_name])
+        .output();
+    if let Err(e) = rollback_output {
+        return Err(format!("Failed to execute zfs rollback: {}", e));
+    }
+    let rollback_output = rollback_output.unwrap();
+    if !rollback_output.status.success() {
+        return Err(format!("Failed to rollback snapshot: {}", String::from_utf8_lossy(&rollback_output.stderr)));
+    }
+
+    // 2. Find all clients that were using this snapshot as their base
+    let clients_json = get_clients(None).await.map_err(|e| format!("Failed to get clients: {}", e))?;
+    let mut recreated = vec![];
+    if let Some(clients) = clients_json.as_array() {
+        for client in clients {
+            let client_snapshot = client.get("snapshot").and_then(|v| v.as_str()).unwrap_or("");
+            let client_id = client.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            let client_name = client.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let client_clone = format!("{}/{}-disk", master_name, client_name);
+            if client_snapshot == snapshot_name {
+                // Destroy the old clone if it exists
+                let _ = Command::new("sudo").args(["zfs", "destroy", &client_clone]).output();
+                // Re-create the clone from the rolled-back snapshot
+                let clone_output = Command::new("sudo")
+                    .args(["zfs", "clone", &snapshot_name, &client_clone])
+                    .output();
+                if let Ok(clone_out) = clone_output {
+                    if clone_out.status.success() {
+                        recreated.push(client_id.to_string());
+                        // Optionally update the client config's block_device
+                        // (Assumes block_device is /dev/zvol/{clone})
+                        // You may want to reload and update the client config here
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(serde_json::json!({
+        "message": format!("Rolled back snapshot {} and re-created {} clones", snapshot_name, recreated.len()),
+        "recreated_clones": recreated
+    }))
 }
