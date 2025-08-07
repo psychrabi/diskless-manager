@@ -1,5 +1,4 @@
-use crate::config::{get_config, set_config, write_config, reload_config_from_disk, Config};
-use crate::service;
+use crate::config::{get_config, reload_config_from_disk, set_config, write_config, Config};
 use crate::utils::run_command;
 use async_process::Command as AsyncCommand;
 use serde::{Deserialize, Serialize};
@@ -24,10 +23,8 @@ pub struct PackageStatus {
     version: Option<String>,
 }
 
-
-
 #[derive(Debug, Serialize, Deserialize)]
-struct InstallationProgress {
+pub struct InstallationProgress {
     package: String,
     status: String,
     progress: u8,
@@ -35,7 +32,7 @@ struct InstallationProgress {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct DHCPLease {
+pub struct DHCPLease {
     ip: String,
     mac: String,
     hostname: String,
@@ -44,26 +41,28 @@ struct DHCPLease {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct ServiceConfig {
-    dhcp_range_start: String,
-    dhcp_range_end: String,
-    subnet: String,
-    netmask: String,
-    gateway: String,
-    dns_servers: Vec<String>,
-    tftp_root: String,
-    http_root: String,
-    samba_shares: Vec<SambaShare>,
+pub struct DHCPConfig {
+    pub subnet_ip: String,
+    pub start_ip: String,
+    pub end_ip: String,
+    pub subnet_mask: String,
+    pub gateway_ip: String,
+    pub dns_server1: String,
+    pub dns_server2: String,
+    pub broadcast_ip: String,
+    pub boot_server_ip: String,
+    pub boot_file_legacy: String,
+    pub boot_file_uefi32: String,
+    pub boot_file_uefi64: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct SambaShare {
+pub struct SambaShare {
     name: String,
     path: String,
     read_only: bool,
     guest_ok: bool,
 }
-
 
 #[tauri::command]
 pub async fn get_services(zfs_pool: String) -> Result<Value, String> {
@@ -334,19 +333,17 @@ pub async fn save_service_config(service_key: String, content: String) -> Result
     Ok(())
 }
 
-
 #[tauri::command]
 pub async fn check_package_status() -> Result<Vec<PackageStatus>, String> {
-
-     let packages = vec![
-                ("isc-dhcp-server", "isc-dhcp-server"),
-                ("tftpd-hpa", "tftpd-hpa"),
-                ("target", "targetcli-fb"),
-                ("apache2", "apache2"),
-                ("smbd", "samba"),
-                // ("wakeonlan", "wakeonlan"),
-                // ("zfsutils-linux", "zfsutils-linux"),
-            ];        
+    let packages = vec![
+        ("isc-dhcp-server", "isc-dhcp-server"),
+        ("tftpd-hpa", "tftpd-hpa"),
+        ("target", "targetcli-fb"),
+        ("apache2", "apache2"),
+        ("smbd", "samba"),
+        // ("wakeonlan", "wakeonlan"),
+        // ("zfsutils-linux", "zfsutils-linux"),
+    ];
 
     let mut status_list = Vec::new();
 
@@ -393,7 +390,7 @@ async fn check_service_running(service: &str) -> bool {
         "tftpd-hpa" => "tftpd-hpa",
         "apache2" => "apache2",
         "samba" => "smbd",
-        
+
         _ => service,
     };
 
@@ -406,7 +403,6 @@ async fn check_service_running(service: &str) -> bool {
         Err(_) => false,
     }
 }
-
 
 async fn get_package_version(package: &str) -> Option<String> {
     match AsyncCommand::new("dpkg-query")
@@ -485,10 +481,9 @@ pub async fn restart_service(service: &str) -> Result<(), String> {
     }
 }
 
-
-
 #[tauri::command]
-async fn configure_dhcp_server(config: ServiceConfig) -> Result<String, String> {
+pub async fn configure_dhcp_server(config: DHCPConfig) -> Result<serde_json::Value, String> {
+    println!("Received DHCP config: {:?}", config);
     let dhcp_config = format!(
         r#"# Global Config
 option space ipxe;
@@ -556,46 +551,51 @@ subnet {} netmask {} {{
         range {} {};
     }}    
     option routers {};
-    option domain-name-servers {};
+    option domain-name-servers {},{};
     option broadcast-address {};
     
     # PXE Boot Configuration
     next-server {};
       if substring (option vendor-class-identifier, 15, 5) = "00000" {{
-        filename "ipxe.kpxe";
+        filename "{}";
     }}
     elsif substring (option vendor-class-identifier, 15, 5) = "00006" {{
-        filename "ipxe32.efi";
+        filename "{}";
     }}
     else {{
-        filename "snponly.efi";
+        filename "{}";
     }}
 }}
 
 # Static leases will be added here
 "#,
-        config.subnet,
-        config.netmask,
-        config.dhcp_range_start,
-        config.dhcp_range_end,
-        config.gateway,
-        config.dns_servers.join(", "),
-        calculate_broadcast(&config.subnet, &config.netmask),
-        get_server_ip().await.unwrap_or("192.168.1.1".to_string())
+        config.subnet_ip,
+        config.subnet_mask,
+        config.start_ip,
+        config.end_ip,
+        config.gateway_ip,
+        config.dns_server1,
+        config.dns_server2,
+        config.broadcast_ip,
+        config.boot_server_ip,
+        config.boot_file_legacy,
+        config.boot_file_uefi32,
+        config.boot_file_uefi64,
     );
 
-    match fs::write("/etc/dhcp/dhcpd.conf", dhcp_config) {
-        Ok(_) => {
-            // Restart DHCP service
-            restart_service("isc-dhcp-server").await?;
-            Ok("DHCP server configured successfully".to_string())
-        }
-        Err(e) => Err(format!("Failed to write DHCP config: {}", e)),
-    }
+    Ok(serde_json::json!({ "message": dhcp_config }))
+    // match fs::write("/etc/dhcp/dhcpd.conf", dhcp_config) {
+    //     Ok(_) => {
+    //         // Restart DHCP service
+    //         restart_service("isc-dhcp-server").await?;
+    //         Ok("DHCP server configured successfully".to_string())
+    //     }
+    //     Err(e) => Err(format!("Failed to write DHCP config: {}", e)),
+    // }
 }
 
 #[tauri::command]
-async fn configure_tftp_server(tftp_root: String) -> Result<String, String> {
+pub async fn configure_tftp_server(tftp_root: String) -> Result<String, String> {
     let tftp_config = format!(
         r#"# Defaults for tftpd-hpa
 TFTP_USERNAME="tftp"
@@ -621,7 +621,7 @@ TFTP_OPTIONS="--secure"
 }
 
 #[tauri::command]
-async fn configure_apache_server(http_root: String) -> Result<String, String> {
+pub async fn configure_apache_server(http_root: String) -> Result<String, String> {
     let apache_config = format!(
         r#"<VirtualHost *:80>
     DocumentRoot {}
@@ -667,7 +667,7 @@ async fn configure_apache_server(http_root: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn configure_samba_server(shares: Vec<SambaShare>) -> Result<String, String> {
+pub async fn configure_samba_server(shares: Vec<SambaShare>) -> Result<String, String> {
     let mut samba_config = String::from(
         r#"[global]
    workgroup = WORKGROUP

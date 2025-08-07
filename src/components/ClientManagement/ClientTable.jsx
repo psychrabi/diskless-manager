@@ -19,8 +19,8 @@ const ClientTable = ({ handleClientContextMenu }) => {
           <TableHead>Name</TableHead>
           <TableHead className="hidden md:table-cell">MAC Address</TableHead>
           <TableHead>IP Address</TableHead>
-          <TableHead className="hidden md:table-cell">Master</TableHead>
-          <TableHead className="hidden xl:table-cell">Snapshot</TableHead>
+          <TableHead className="hidden md:table-cell">Image</TableHead>
+          <TableHead className="hidden xl:table-cell">Restore Point</TableHead>
           <TableHead className="hidden xl:table-cell">Writeback</TableHead>
           <TableHead>Status</TableHead>
           <TableHead>Mode</TableHead>
@@ -46,13 +46,13 @@ const ClientTable = ({ handleClientContextMenu }) => {
             </TableCell>
             <TableCell>
               {!client.snapshot && (
-                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200" title="Changes persist directly to the clone">
-                  <Zap className="h-3 w-3 mr-1 text-yellow-500" /> Master
+                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200" title="Changes persist directly to the clone">
+                  <Zap className="h-3 w-3 mr-1 text-yellow-500" /> Super Client
                 </span>
               )}
               {client.snapshot && (
-                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200" title="Changes persist directly to the clone">
-                  <Layers className="h-3 w-3 mr-1" />Clone
+                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200" title="Changes persist directly to the clone">
+                  <Layers className="h-3 w-3 mr-1" />Keep Writeback
                 </span>
               )}
             </TableCell>

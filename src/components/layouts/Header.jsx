@@ -16,14 +16,14 @@ const Header = () => {
           <span className="badge badge-success">
             System Online
           </span>
-          <Button
+          {/* <Button
             variant="secondary"
             onClick={() => navigate('/client')}
             className="flex items-center gap-2"
           >
             <User className="h-4 w-4" />
             Client Portal
-          </Button>
+          </Button> */}
           <Button variant="primary" className="flex items-center gap-2">
             <Shield className="h-4 w-4" />
             Admin
