@@ -12,8 +12,7 @@ const MemoizedClientTable = memo(ClientTable);
 const MemoizedContextMenu = memo(ContextMenu);
 
 const ClientManagement = () => {
-  const { masters, fetchData } = useAppStore();
-  const { clients } = useLoaderData();
+  const { clients, fetchData, masters } = useAppStore();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [client, setClient] = useState({
     name: '',

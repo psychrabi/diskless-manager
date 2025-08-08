@@ -36,12 +36,12 @@ export const useAppStore = create()(
         set({ error: null });
         try {
           const [servicesRes, mastersRes, clientsRes, services_status] = await Promise.all([
-            invoke('get_services', { 'zfsPool': 'diskless' }),
+            invoke('check_package_status'),
             invoke('get_masters', { 'zfsPool': 'diskless' }),
             invoke('get_clients'),
             invoke("check_package_status")
           ]);
-          console.log(services_status)
+          console.log(mastersRes)
           set({
             clients: clientsRes ? Object.values(clientsRes) : [],
             masters: mastersRes || [],

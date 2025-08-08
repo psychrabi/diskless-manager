@@ -17,35 +17,18 @@ export const router = createBrowserRouter([
 			{
 				path: "/",
 				Component: ServiceManagement,
-				loader: async () => {
-					const services = await invoke('check_package_status', { 'zfsPool': 'diskless' });
-					console.log(services)
-					return { services };
-				},
 			},
 			{
 				path: "/clients",
 				Component: ClientManagement,
-				loader: async () => {
-					const clients = await invoke('get_clients', { 'zfsPool': 'diskless' });
-					return { clients };
-				},
 			},
 			{
 				path: "/masters",
 				Component: ImageManagement,
-				loader: async () => {
-					const masters = await invoke('get_masters', { 'zfsPool': 'diskless' });
-					return { masters };
-				},
 			},
 			{
 				path: "/settings",
 				Component: SettingManagement,
-				// loader: async () => {
-				// 	const masters = await invoke('get_masters', { 'zfsPool': 'diskless' });
-				// 	return { masters };
-				// },
 			},
 			{
 				path: "/setup",
