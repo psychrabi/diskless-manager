@@ -12,12 +12,11 @@ const DeleteSnaptshotConfirmModal = lazy(() => import('./DeleteSnaptshotConfirmM
 const RollbackSnapshotConfirmModal = lazy(() => import('./RollbackSnapshotConfirmModal'));
 
 const ImageManagement = () => {
-  const { fetchData } = useAppStore();
-  const { masters } = useLoaderData();
+  const { masters, fetchData } = useAppStore();
   const {
     setIsCreateSnapshotModalOpen,
     setDefaultMaster,
-  } = useMasterManager(fetchData);
+  } = useMasterManager();
 
   const [openImageCreateModal, setOpenImageCreateModal] = useState(false)
   const [openSnapshotCreateModal, setOpenSnapshotCreateModal] = useState(false)
@@ -111,7 +110,7 @@ const ImageManagement = () => {
           {memoizedMasters.length === 0 && <p className="text-center py-4 text-gray-500">No master images found.</p>}
         </div>
       </Card>
-      {openImageCreateModal && <CreateImageModal openImageCreateModal={openImageCreateModal} setOpenImageCreateModal={setOpenImageCreateModal} refresh={fetchData} />}
+      {openImageCreateModal && <CreateImageModal openImageCreateModal={openImageCreateModal} setOpenImageCreateModal={setOpenImageCreateModal}  />}
       {openSnapshotCreateModal && <CreateSnapshotModal openSnapshotCreateModal={openSnapshotCreateModal} setOpenSnapshotCreateModal={setOpenSnapshotCreateModal} refresh={fetchData} selectedImage={selectedImage} />}
       {openDeleteMasterModal && <DeleteImageConfirmModal openDeleteMasterModal={openDeleteMasterModal} setOpenDeleteMasterModal={setOpenDeleteMasterModal} selectedImage={selectedImage} />}
       {openDeleteSnapshotModal && <DeleteSnaptshotConfirmModal openDeleteSnapshotModal={openDeleteSnapshotModal} setOpenDeleteSnapshotModal={setOpenDeleteSnapshotModal} selectedSnapshot={selectedSnapshot} selectedImage={selectedImage} />}

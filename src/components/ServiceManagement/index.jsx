@@ -1,6 +1,5 @@
 import { Eye, Play, Power, RefreshCw } from 'lucide-react';
 import { useMemo } from 'react';
-import { useLoaderData } from 'react-router';
 import { useServiceManager } from '../../hooks/useServiceManager';
 import { useAppStore } from '../../store/useAppStore';
 import { RAMUsage } from '../RAMUsage';
@@ -9,8 +8,8 @@ import ServiceConfigModal from './ServiceConfigModal';
 import ZfsPoolCard from './ZfsPoolCard';
 
 const ServiceManagement = () => {
-  const { loading } = useAppStore();
-  const { services } = useLoaderData();
+  const { loading, services, fetchData } = useAppStore();
+  
   const { handleServiceAction, handleServiceConfigView } = useServiceManager()
 
   const memoizedServices = useMemo(() => Object.entries(services), [services]);

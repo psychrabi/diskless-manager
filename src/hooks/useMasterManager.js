@@ -3,7 +3,7 @@ import { useCallback, useState } from 'react';
 import { useNotification } from '../contexts/NotificationContext';
 import { formatBytes, formatDate } from '../utils/helpers';
 
-export const useMasterManager = (refresh) => {
+export const useMasterManager = () => {
   const [isCreateSnapshotModalOpen, setIsCreateSnapshotModalOpen] = useState(false);
   const [selectedMaster, setSelectedMaster] = useState(null);
   const [newSnapshotName, setNewSnapshotName] = useState('');
@@ -31,7 +31,7 @@ export const useMasterManager = (refresh) => {
       }).catch((error) => {
         showNotification(error, 'error',)
       }).finally(() => {
-        refresh();
+        window.location.reload();
       });
 
   };
@@ -43,7 +43,7 @@ export const useMasterManager = (refresh) => {
       }).catch((error) => {
         showNotification(error, 'error',)
       }).finally(() => {
-        refresh();
+        window.location.reload();
       });
     setIsCreateSnapshotModalOpen(false);
   };
@@ -62,7 +62,7 @@ export const useMasterManager = (refresh) => {
       }).catch((error) => {
         showNotification(error, 'error',)
       }).finally(() => {
-        refresh();
+        window.location.reload();
       });
     setIsDeleteSnapshotModalOpen(false);
     setSnapshotToDelete(null);
@@ -75,7 +75,7 @@ export const useMasterManager = (refresh) => {
       }).catch((error) => {
         showNotification(error, 'error',)
       }).finally(() => {
-        refresh();
+        window.location.reload();
       });
   };
 
@@ -88,7 +88,7 @@ export const useMasterManager = (refresh) => {
       }).catch((error) => {
         showNotification(error, 'error',)
       }).finally(() => {
-        refresh();
+        window.location.reload();
       });
     setIsDeleteMasterModalOpen(false);
     setSelectedMaster(null);

@@ -571,7 +571,7 @@ pub async fn rollback_master_snapshot(master_name: String, snapshot_name: String
             let client_snapshot = client.get("snapshot").and_then(|v| v.as_str()).unwrap_or("");
             let client_id = client.get("id").and_then(|v| v.as_str()).unwrap_or("");
             let client_name = client.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            let client_clone = format!("{}/{}-disk", master_name, client_name);
+            let client_clone = format!("{}/{}-disk", crate::ZFS_POOL, client_name.to_uppercase());
             if client_snapshot == snapshot_name {
                 // Destroy the old clone if it exists
                 let _ = Command::new("sudo").args(["zfs", "destroy", &client_clone]).output();
