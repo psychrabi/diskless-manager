@@ -114,7 +114,7 @@ const ImageManagement = () => {
       {openSnapshotCreateModal && <CreateSnapshotModal openSnapshotCreateModal={openSnapshotCreateModal} setOpenSnapshotCreateModal={setOpenSnapshotCreateModal} refresh={fetchData} selectedImage={selectedImage} />}
       {openDeleteMasterModal && <DeleteImageConfirmModal openDeleteMasterModal={openDeleteMasterModal} setOpenDeleteMasterModal={setOpenDeleteMasterModal} selectedImage={selectedImage} />}
       {openDeleteSnapshotModal && <DeleteSnaptshotConfirmModal openDeleteSnapshotModal={openDeleteSnapshotModal} setOpenDeleteSnapshotModal={setOpenDeleteSnapshotModal} selectedSnapshot={selectedSnapshot} selectedImage={selectedImage} />}
-      {openRollbackSnapshotModal && <RollbackSnapshotConfirmModal open={openRollbackSnapshotModal} setOpen={setOpenRollbackSnapshotModal} selectedSnapshot={selectedSnapshot} selectedImage={selectedImage} refresh={fetchData} />}
+      {openRollbackSnapshotModal && <RollbackSnapshotConfirmModal open={openRollbackSnapshotModal} setOpen={setOpenRollbackSnapshotModal} selectedSnapshot={selectedSnapshot} selectedImage={selectedImage} />}
     </div>
   );
 };
