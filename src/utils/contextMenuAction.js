@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useNotification } from "../contexts/NotificationContext";
 
-export const clientContextMenuActions = (fetchData, closeContextMenu, setClient, setIsModalOpen) => {
+export const clientContextMenuActions = (fetchData, closeContextMenu, setClient, setIsModalOpen, setDeprovisionModal) => {
   const { showNotification } = useNotification();
 
   return {
@@ -72,6 +72,11 @@ export const clientContextMenuActions = (fetchData, closeContextMenu, setClient,
         showNotification('Client deletion cancelled.', 'info');
         closeContextMenu();
       }
+    },
+    deprovision: (client) => {
+      // Open deprovision modal with client data
+      setDeprovisionModal({ isOpen: true, client: client });
+      closeContextMenu();
     }
   }
 };

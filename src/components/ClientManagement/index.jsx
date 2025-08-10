@@ -7,6 +7,7 @@ import { Button, Card } from '../ui';
 import { ContextMenu } from '../ui/ContextMenu';
 import ClientFormModal from './ClientFormModal';
 import ClientTable from './ClientTable';
+import DeprovisionModal from './DeprovisionModal';
 
 const MemoizedClientTable = memo(ClientTable);
 const MemoizedContextMenu = memo(ContextMenu);
@@ -23,6 +24,7 @@ const ClientManagement = () => {
     clone: ''
   });
   const [contextMenu, setContextMenu] = useState({ isOpen: false, x: 0, y: 0, client: null });
+  const [deprovisionModal, setDeprovisionModal] = useState({ isOpen: false, client: null });
 
   const handleClientContextMenu = useCallback((event, client) => {
     event.preventDefault();
@@ -33,7 +35,7 @@ const ClientManagement = () => {
     setContextMenu(prev => ({ ...prev, isOpen: false }));
   }, []);
 
-  const contextActions = clientContextMenuActions(fetchData, closeContextMenu, setClient, setIsModalOpen);
+  const contextActions = clientContextMenuActions(fetchData, closeContextMenu, setClient, setIsModalOpen, setDeprovisionModal);
 
   const handleClientFormModalOpen = useCallback(() => {
     let newName = 'pc000'
@@ -78,6 +80,15 @@ const ClientManagement = () => {
         <MemoizedContextMenu isOpen={contextMenu.isOpen} xPos={contextMenu.x} yPos={contextMenu.y} targetClient={contextMenu.client} onClose={closeContextMenu} actions={contextActions} />
       </Card>
       <ClientFormModal client={client} setClient={setClient} masters={masters} isOpen={isModalOpen} setIsOpen={setIsModalOpen} refresh={fetchData} />
+      <DeprovisionModal 
+        isOpen={deprovisionModal.isOpen} 
+        onClose={() => setDeprovisionModal({ isOpen: false, client: null })}
+        client={deprovisionModal.client}
+        onSuccess={() => {
+          fetchData();
+          setDeprovisionModal({ isOpen: false, client: null });
+        }}
+      />
     </div>
   );
 };

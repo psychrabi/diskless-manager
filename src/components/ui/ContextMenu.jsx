@@ -1,4 +1,4 @@
-import { Edit, History, Play, Power, RefreshCw, ScreenShare, Trash2 } from "lucide-react";
+import { Edit, History, Play, Power, RefreshCw, ScreenShare, Trash2, XCircle } from "lucide-react";
 import { useRef } from "react";
 import { useOnClickOutside } from "../../hooks/useOnClickOutside";
 
@@ -28,6 +28,7 @@ export const ContextMenu = ({ isOpen, xPos, yPos, targetClient, onClose, actions
         <li><a onClick={() => { actions.wake(targetClient); onClose(); }}><Play className="w-4 h-4" />Wake Up</a></li>
         <li><a onClick={() => { actions.remote(targetClient); onClose(); }}><ScreenShare className="w-4 h-4" />Remote Control</a></li>
         <div className="divider my-0"></div>
+        <li><a onClick={() => { actions.deprovision(targetClient); onClose(); }}><XCircle className="w-4 h-4" />Deprovision Client</a></li>
         <li><a onClick={() => { actions.delete(targetClient); onClose(); }}><Trash2 className="w-4 h-4" />Delete Client</a></li>
       </ul>
       <style jsx="true">{`

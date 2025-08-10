@@ -8,6 +8,8 @@ use crate::{
     zfs::{zfs_clone, zfs_destroy, zfs_exists},
     ZFS_POOL,
 };
+
+const IQN_BASE: &str = "iqn.2025-04.com.nsboot";
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -67,6 +69,14 @@ pub struct AddClientRequest {
 pub struct ControlRequest {
     pub action: String,
     pub make_super: Option<bool>, // for toggleSuper
+}
+
+#[derive(Deserialize)]
+pub struct DeprovisionRequest {
+    pub mac: String,
+    pub force: Option<bool>,
+    pub keep_zfs: Option<bool>,
+    pub dry_run: Option<bool>,
 }
 
 #[tauri::command]
@@ -881,4 +891,151 @@ pub async fn reset_client(client_id: String) -> Result<serde_json::Value, String
     Ok(serde_json::json!({
         "message": format!("Client {} reset successfully", client_id.to_uppercase())
     }))
+}
+
+#[tauri::command]
+pub async fn deprovision_client(req: DeprovisionRequest) -> Result<serde_json::Value, String> {
+    let mac = req.mac;
+    let force = req.force.unwrap_or(false);
+    let keep_zfs = req.keep_zfs.unwrap_or(false);
+    let dry_run = req.dry_run.unwrap_or(false);
+
+    // Validate MAC address format
+    let mac_regex = regex::Regex::new(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$").unwrap();
+    if !mac_regex.is_match(&mac) {
+        return Err("Invalid MAC address format".to_string());
+    }
+
+    // Build command arguments
+    let mut args = vec!["/usr/local/bin/deprovision_client.sh", &mac];
+    
+    if force {
+        args.push("--force");
+    }
+    if keep_zfs {
+        args.push("--keep-zfs");
+    }
+    if dry_run {
+        args.push("--dry-run");
+    }
+
+    // Execute the deprovisioning script
+    let output = Command::new("sudo")
+        .args(&args)
+        .output()
+        .map_err(|e| format!("Failed to execute deprovision script: {}", e))?;
+
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Ok(serde_json::json!({
+            "success": true,
+            "message": "Client deprovisioned successfully",
+            "output": stdout.trim()
+        }))
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Err(format!("Deprovisioning failed: {}\n{}", stderr, stdout))
+    }
+}
+
+#[tauri::command]
+pub async fn deprovision_client_by_id(client_id: String, force: Option<bool>, keep_zfs: Option<bool>) -> Result<serde_json::Value, String> {
+    // Get client by ID to extract MAC address
+    let client = get_client_by_id(&client_id)
+        .ok_or_else(|| format!("Client {} not found", client_id))?;
+
+    let req = DeprovisionRequest {
+        mac: client.mac,
+        force,
+        keep_zfs,
+        dry_run: Some(false),
+    };
+
+    // Call the deprovision function
+    let result = deprovision_client(req).await?;
+
+    // If deprovisioning was successful, also remove from config
+    if let Ok(json_result) = serde_json::from_value::<serde_json::Value>(result.clone()) {
+        if json_result.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+            // Remove client from configuration
+            if !delete_client_config(&client_id) {
+                println!("Warning: Failed to remove client {} from configuration", client_id);
+            }
+        }
+    }
+
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn get_deprovision_status(mac: String) -> Result<serde_json::Value, String> {
+    // Check if client exists in various systems
+    let mut status = serde_json::Map::new();
+    
+    // Normalize MAC
+    let mac_lc = mac.to_lowercase();
+    let mac_hy = mac_lc.replace(':', "-");
+    let client_vol = format!("client-{}", mac_hy);
+    let target_iqn = format!("{}:{}", IQN_BASE, mac_hy);
+    let pxe_file = format!("/srv/tftp/pxelinux.cfg/01-{}", mac_hy);
+
+    // Check ZFS clone
+    let zfs_exists = Command::new("zfs")
+        .args(&["list", "-H", "-o", "name", &format!("{}/{}", ZFS_POOL, client_vol)])
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false);
+    status.insert("zfs_clone_exists".to_string(), serde_json::Value::Bool(zfs_exists));
+
+    // Check iSCSI target
+    let iscsi_exists = Command::new("targetcli")
+        .args(&["/iscsi", "ls"])
+        .output()
+        .map(|output| {
+            String::from_utf8_lossy(&output.stdout).contains(&target_iqn)
+        })
+        .unwrap_or(false);
+    status.insert("iscsi_target_exists".to_string(), serde_json::Value::Bool(iscsi_exists));
+
+    // Check PXE configuration
+    let pxe_exists = std::path::Path::new(&pxe_file).exists();
+    status.insert("pxe_config_exists".to_string(), serde_json::Value::Bool(pxe_exists));
+
+    // Check if client is online
+    let online = check_client_online_status(&mac_lc);
+    status.insert("client_online".to_string(), serde_json::Value::Bool(online));
+
+    Ok(serde_json::Value::Object(status))
+}
+
+fn check_client_online_status(mac: &str) -> bool {
+    // Check DHCP leases
+    if let Ok(output) = Command::new("dhcp-lease-list").output() {
+        if String::from_utf8_lossy(&output.stdout).contains(mac) {
+            return true;
+        }
+    }
+
+    // Check if client responds to ping (if we can determine IP)
+    if let Ok(output) = Command::new("grep")
+        .args(&["-A", "10", mac, "/var/lib/dhcp/dhcpd.leases"])
+        .output() {
+        if let Ok(lease_content) = String::from_utf8(output.stdout) {
+            if let Some(ip_line) = lease_content.lines().find(|line| line.contains("lease")) {
+                if let Some(ip) = ip_line.split_whitespace().nth(1) {
+                    let ip = ip.trim_end_matches(';');
+                    if Command::new("ping")
+                        .args(&["-c", "1", "-W", "2", ip])
+                        .output()
+                        .map(|output| output.status.success())
+                        .unwrap_or(false) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
+    false
 }
