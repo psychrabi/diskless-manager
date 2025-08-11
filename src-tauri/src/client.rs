@@ -1116,14 +1116,31 @@ pub async fn get_deprovision_status(mac: String) -> Result<serde_json::Value, St
         .unwrap_or(false);
     status.insert("zfs_clone_exists".to_string(), serde_json::Value::Bool(zfs_exists));
 
-    // Check iSCSI target
-    let iscsi_exists = Command::new("targetcli")
-        .args(&["/iscsi", "ls"])
-        .output()
-        .map(|output| {
-            String::from_utf8_lossy(&output.stdout).contains(&target_iqn)
-        })
-        .unwrap_or(false);
+    // Check iSCSI target (targetcli often requires sudo and may write to stderr)
+    let iscsi_exists = {
+        // First attempt: sudo targetcli ls
+        let out1 = Command::new("sudo").args(["targetcli", "ls"]).output();
+        if let Ok(o) = out1 {
+            let txt = String::from_utf8_lossy(&o.stdout);
+            let err = String::from_utf8_lossy(&o.stderr);
+            let combined = format!("{}{}", txt, err);
+            if combined.contains(&target_iqn) { true } else {
+                // Fallback: sudo targetcli /iscsi ls
+                match Command::new("sudo").args(["targetcli", "/iscsi", "ls"]).output() {
+                    Ok(o2) => {
+                        let txt2 = String::from_utf8_lossy(&o2.stdout);
+                        let err2 = String::from_utf8_lossy(&o2.stderr);
+                        let combined2 = format!("{}{}", txt2, err2);
+                        combined2.contains(&target_iqn)
+                    }
+                    Err(_) => false,
+                }
+            }
+        } else {
+            false
+        }
+    };
+    println!("iscsi_exists: {}", iscsi_exists);
     status.insert("iscsi_target_exists".to_string(), serde_json::Value::Bool(iscsi_exists));
 
     // Check PXE configuration
