@@ -6,6 +6,8 @@ mod service;
 mod utils;
 mod zfs;
 use once_cell::sync::Lazy;
+use serde::Serialize;
+use sysinfo::System;
 use tauri::Manager;
 use tauri::tray::TrayIconBuilder;
 
@@ -19,6 +21,28 @@ pub static SERVER_IP: Lazy<String> = Lazy::new(|| {
     ip
 });
 
+#[derive(Debug, Serialize)]
+struct ServerInfo {
+  os_name: Option<String>,
+  kernel_version: Option<String>,
+  host_name: Option<String>,
+  total_memory_mb: u64,
+  cpu_count: usize,
+}
+
+#[tauri::command]
+fn get_server_info() -> ServerInfo {
+  let mut sys = System::new_all();
+  sys.refresh_all();
+  ServerInfo {
+    os_name: System::name(),
+    kernel_version: System::kernel_version(),
+    host_name: System::host_name(),
+    total_memory_mb: sys.total_memory() / 1024, // KiB -> GiB
+    cpu_count: sys.cpus().len(),    
+  }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -31,6 +55,7 @@ pub fn run() {
                 .set_focus();
         }))
         .invoke_handler(tauri::generate_handler![
+            get_server_info,
             client::get_clients,
             client::add_client,
             client::edit_client,
