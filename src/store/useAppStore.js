@@ -62,6 +62,28 @@ export const useAppStore = create()(
         }
       },
 
+      // Lightweight polling to keep client statuses fresh
+      startClientStatusPolling: () => {
+        const { _pollIntervalId } = get();
+        if (_pollIntervalId) return; // already running
+        const id = setInterval(async () => {
+          try {
+            const clientsRes = await invoke('get_clients');
+            set({ clients: clientsRes ? Object.values(clientsRes) : [] });
+          } catch (err) {
+            // ignore transient errors
+          }
+        }, 5000);
+        set({ _pollIntervalId: id });
+      },
+      stopClientStatusPolling: () => {
+        const { _pollIntervalId } = get();
+        if (_pollIntervalId) {
+          clearInterval(_pollIntervalId);
+          set({ _pollIntervalId: null });
+        }
+      },
+
       fetchConfig: async () => {
         set({ checkingConfig: true, loading: true });
         try {

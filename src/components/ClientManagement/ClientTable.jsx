@@ -39,10 +39,23 @@ const ClientTable = ({ handleClientContextMenu }) => {
             <TableCell className="hidden xl:table-cell text-xs font-mono break-all">{client.snapshot}</TableCell>
             <TableCell className="hidden xl:table-cell text-xs font-mono break-all">{client.block_device}</TableCell>
             <TableCell>
-              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${client.status === 'Online' ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'}`}>
-                {client.status === 'Online' ? <Power className="h-3 w-3 mr-1 text-green-500" /> : <PowerOff className="h-3 w-3 mr-1 text-gray-500" />}
-                {client.status}
-              </span>
+              {(() => {
+                const status = client.status || 'Offline';
+                const isOnline = status === 'Online';
+                const isLeased = status === 'Leased';
+                const badgeClass = isOnline
+                  ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
+                  : isLeased
+                  ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200'
+                  : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300';
+                const Icon = isOnline ? Power : PowerOff;
+                return (
+                  <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${badgeClass}`}>
+                    <Icon className={`h-3 w-3 mr-1 ${isOnline ? 'text-green-500' : isLeased ? 'text-yellow-500' : 'text-gray-500'}`} />
+                    {status}
+                  </span>
+                );
+              })()}
             </TableCell>
             <TableCell>
               {!client.snapshot && (

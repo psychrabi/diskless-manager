@@ -84,14 +84,21 @@ pub async fn get_clients(client_id: Option<String>) -> Result<serde_json::Value,
     let mut config: Config = get_config();
     use futures::future::join_all;
 
-    // Collect (index, ip) pairs
-    let client_ips: Vec<(usize, String)> = config.clients.iter().enumerate()
-        .map(|(i, c)| (i, c.ip.clone())).collect();
+    // Collect (index, mac, ip) tuples
+    let client_tuples: Vec<(usize, String, String)> = config
+        .clients
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (i, c.mac.clone(), c.ip.clone()))
+        .collect();
 
-    // Spawn concurrent tasks to get status
-    let handles: Vec<_> = client_ips.into_iter().map(|(i, ip)| {
-        tokio::task::spawn_blocking(move || (i, get_client_status(&ip)))
-    }).collect();
+    // Spawn concurrent tasks to get status (Online / Leased / Offline)
+    let handles: Vec<_> = client_tuples
+        .into_iter()
+        .map(|(i, mac, ip)| {
+            tokio::task::spawn_blocking(move || (i, get_client_status_realtime(&mac, &ip)))
+        })
+        .collect();
 
     // Wait for all tasks to finish
     let results = join_all(handles).await;
@@ -107,30 +114,145 @@ pub async fn get_clients(client_id: Option<String>) -> Result<serde_json::Value,
 
     // Update the config cache with new statuses
     crate::config::set_config(&config);
-    // println!("[DEBUG] Updated clients: {:?}", config.clients);
+
+    // Discover dynamically provisioned clients (from DHCP leases) not yet in config
+    let mut combined_clients = config.clients.clone();
+    let existing_macs: std::collections::HashSet<String> = combined_clients
+        .iter()
+        .map(|c| c.mac.to_lowercase())
+        .collect();
+    let discovered = discover_dynamic_clients();
+    for mut c in discovered {
+        if !existing_macs.contains(&c.mac.to_lowercase()) {
+            // compute status for the discovered client
+            let status = get_client_status_realtime(&c.mac, &c.ip);
+            c.status = Some(status);
+            combined_clients.push(c);
+        }
+    }
 
     if let Some(id) = client_id {
-        let client = config.clients
+        let client = combined_clients
             .iter()
             .find(|c| c.id.eq_ignore_ascii_case(&id));
         Ok(serde_json::json!(client))
     } else {
-        Ok(serde_json::json!(config.clients))
+        Ok(serde_json::json!(combined_clients))
     }
 }
 
 // Helper function for status
-fn get_client_status(ip: &str) -> String {
-    if ip.is_empty() || ip == "N/A" {
-        return "Unknown".to_string();
+fn get_client_status_realtime(mac: &str, ip: &str) -> String {
+    let mac_norm = mac.to_lowercase();
+    let has_lease = has_active_dhcp_lease(&mac_norm, if ip.is_empty() { None } else { Some(ip) });
+
+    // Consider ping reachability as Online
+    let online = if ip.is_empty() || ip == "N/A" {
+        false
+    } else {
+        match std::process::Command::new("ping").args(["-c", "1", "-W", "1", ip]).output() {
+            Ok(out) => out.status.success(),
+            Err(_) => false,
+        }
+    };
+
+    if online {
+        "Online".to_string()
+    } else if has_lease {
+        // Lease present, but ping not responding yet
+        "Leased".to_string()
+    } else {
+        "Offline".to_string()
     }
-    let output = std::process::Command::new("ping")
-        .args(["-c", "1", "-W", "1", ip])
-        .output();
-    match output {
-        Ok(out) if out.status.success() => "Online".to_string(),
-        _ => "Offline".to_string(),
+}
+
+fn has_active_dhcp_lease(mac_lower: &str, ip_opt: Option<&str>) -> bool {
+    use std::fs;
+    let leases_path = "/var/lib/dhcp/dhcpd.leases";
+    if let Ok(content) = fs::read_to_string(leases_path) {
+        // Very light parsing: look for a block that contains either the MAC or the IP with active state
+        // Split into simple blocks by 'lease ' occurrences
+        for block in content.split("lease ") {
+            let block_lc = block.to_lowercase();
+            if block_lc.contains(mac_lower) || ip_opt.map(|ip| block_lc.contains(ip)).unwrap_or(false) {
+                if block_lc.contains("binding state active") {
+                    return true;
+                }
+            }
+        }
+    } else {
+        // Fallback to dhcp-lease-list if available
+        if let Ok(output) = std::process::Command::new("dhcp-lease-list").output() {
+            let out = String::from_utf8_lossy(&output.stdout).to_lowercase();
+            if out.contains(mac_lower) {
+                return true;
+            }
+        }
     }
+    false
+}
+
+fn discover_dynamic_clients() -> Vec<Client> {
+    use std::fs;
+    let leases_path = "/var/lib/dhcp/dhcpd.leases";
+    let mut clients: Vec<Client> = Vec::new();
+    if let Ok(content) = fs::read_to_string(leases_path) {
+        // Parse by blocks
+        for raw_block in content.split("lease ") {
+            let block = raw_block.trim();
+            if block.is_empty() { continue; }
+            // first token is IP until space or '{'
+            let ip = block
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .trim_matches(|c: char| c == '{' || c.is_whitespace())
+                .trim_end_matches(';')
+                .to_string();
+            let block_lc = block.to_lowercase();
+            if !block_lc.contains("binding state active") { continue; }
+            // extract mac
+            let mac = block_lc
+                .lines()
+                .find_map(|l| {
+                    if l.contains("hardware ethernet") {
+                        l.split("hardware ethernet")
+                            .nth(1)
+                            .map(|s| s.trim().trim_end_matches(';').to_string())
+                    } else { None }
+                })
+                .unwrap_or_default();
+            if mac.is_empty() || ip.is_empty() { continue; }
+            // extract hostname if any
+            let hostname = block
+                .lines()
+                .find_map(|l| {
+                    if l.contains("client-hostname") {
+                        l.split('"').nth(1).map(|s| s.to_string())
+                    } else { None }
+                })
+                .unwrap_or_else(|| mac.replace(':', "").to_lowercase());
+            // Build ephemeral client
+            let name_upper = hostname.to_uppercase();
+            clients.push(Client {
+                id: hostname.to_lowercase(),
+                name: name_upper,
+                mac: mac.to_uppercase(),
+                ip,
+                master: String::from(""),
+                snapshot: None,
+                block_store: None,
+                target_iqn: None,
+                writeback: None,
+                created_at: None,
+                last_modified: None,
+                block_device: None,
+                status: Some(String::from("Leased")),
+                mode: None,
+            });
+        }
+    }
+    clients
 }
 
 fn get_client_by_id(client_id: &str) -> Option<Client> {

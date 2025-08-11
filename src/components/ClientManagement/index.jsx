@@ -13,7 +13,7 @@ const MemoizedClientTable = memo(ClientTable);
 const MemoizedContextMenu = memo(ContextMenu);
 
 const ClientManagement = () => {
-  const { clients, fetchData, masters } = useAppStore();
+  const { clients, fetchData, masters, startClientStatusPolling, stopClientStatusPolling } = useAppStore();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [client, setClient] = useState({
     name: '',
@@ -67,6 +67,12 @@ const ClientManagement = () => {
     })
     setIsModalOpen(true)
   }, [clients, masters])
+
+  useEffect(() => {
+    // Start polling when this page mounts; stop when it unmounts
+    startClientStatusPolling();
+    return () => stopClientStatusPolling();
+  }, [startClientStatusPolling, stopClientStatusPolling]);
 
 
   return (
