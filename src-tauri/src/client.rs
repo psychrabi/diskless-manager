@@ -193,11 +193,12 @@ fn has_active_dhcp_lease(mac_lower: &str, ip_opt: Option<&str>) -> bool {
 }
 
 fn discover_dynamic_clients() -> Vec<Client> {
+    use std::collections::HashMap;
     use std::fs;
     let leases_path = "/var/lib/dhcp/dhcpd.leases";
-    let mut clients: Vec<Client> = Vec::new();
+    let mut mac_to_client: HashMap<String, Client> = HashMap::new();
     if let Ok(content) = fs::read_to_string(leases_path) {
-        // Parse by blocks
+        // Parse by blocks; last active block for a MAC wins
         for raw_block in content.split("lease ") {
             let block = raw_block.trim();
             if block.is_empty() { continue; }
@@ -212,7 +213,7 @@ fn discover_dynamic_clients() -> Vec<Client> {
             let block_lc = block.to_lowercase();
             if !block_lc.contains("binding state active") { continue; }
             // extract mac
-            let mac = block_lc
+            let mac_lc = block_lc
                 .lines()
                 .find_map(|l| {
                     if l.contains("hardware ethernet") {
@@ -222,7 +223,7 @@ fn discover_dynamic_clients() -> Vec<Client> {
                     } else { None }
                 })
                 .unwrap_or_default();
-            if mac.is_empty() || ip.is_empty() { continue; }
+            if mac_lc.is_empty() || ip.is_empty() { continue; }
             // extract hostname if any
             let hostname = block
                 .lines()
@@ -231,28 +232,33 @@ fn discover_dynamic_clients() -> Vec<Client> {
                         l.split('"').nth(1).map(|s| s.to_string())
                     } else { None }
                 })
-                .unwrap_or_else(|| mac.replace(':', "").to_lowercase());
-            // Build ephemeral client
+                .unwrap_or_else(|| mac_lc.replace(':', "").to_lowercase());
+            // Build/overwrite ephemeral client for this MAC
             let name_upper = hostname.to_uppercase();
-            clients.push(Client {
-                id: hostname.to_lowercase(),
-                name: name_upper,
-                mac: mac.to_uppercase(),
-                ip,
-                master: String::from(""),
-                snapshot: None,
-                block_store: None,
-                target_iqn: None,
-                writeback: None,
-                created_at: None,
-                last_modified: None,
-                block_device: None,
-                status: Some(String::from("Leased")),
-                mode: None,
-            });
+            let mac_upper = mac_lc.to_uppercase();
+            mac_to_client.insert(
+                mac_lc,
+                Client {
+                    // Use MAC as stable ID to avoid duplicate rows by hostname differences
+                    id: mac_upper.to_lowercase(),
+                    name: name_upper,
+                    mac: mac_upper,
+                    ip,
+                    master: String::from(""),
+                    snapshot: None,
+                    block_store: None,
+                    target_iqn: None,
+                    writeback: None,
+                    created_at: None,
+                    last_modified: None,
+                    block_device: None,
+                    status: Some(String::from("Leased")),
+                    mode: None,
+                },
+            );
         }
     }
-    clients
+    mac_to_client.into_values().collect()
 }
 
 fn get_client_by_id(client_id: &str) -> Option<Client> {
