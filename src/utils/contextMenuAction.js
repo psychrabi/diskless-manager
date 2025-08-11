@@ -12,7 +12,7 @@ export const clientContextMenuActions = (fetchData, closeContextMenu, setClient,
       closeContextMenu();
     },
     reboot: async (client) => {
-      if (client.status === 'Offline') { showNotification('Client must be online to reboot.', 'error'); return; }
+      if (client.status !== 'Online') { showNotification('Client must be online to reboot.', 'error'); return; }
       await invoke('control_client', {
         clientId: client.id,
         req: { action: 'reboot' }
@@ -21,7 +21,7 @@ export const clientContextMenuActions = (fetchData, closeContextMenu, setClient,
       }).catch((error) => showNotification(error, 'error'));
     },
     shutdown: async (client) => {
-      if (client.status === 'Offline') { showNotification('Client must be online to shutdown.', 'error'); return; }
+      if (client.status !== 'Online') { showNotification('Client must be online to shutdown.', 'error'); return; }
       await invoke('control_client',
         {
           clientId: client.id, req: { action: 'shutdown' }
