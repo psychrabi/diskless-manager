@@ -77,7 +77,8 @@ pub fn zfs_clone(snapshot: &str, clone: &str) -> Result<(), String> {
     } else {
         Err(format!(
             "Failed to clone ZFS snapshot {} to {}",
-            snapshot, clone
+            snapshot,
+            clone
         ))
     }
 }
@@ -349,8 +350,7 @@ pub fn delete_master_config(master_name: &str) -> bool {
 
 #[tauri::command]
 pub fn create_snapshot(snapshot_name: String) -> Result<Value, String> {
-    if !snapshot_name.contains('@') || !snapshot_name.starts_with(&format!("{}/", crate::ZFS_POOL))
-    {
+    if !snapshot_name.contains('@') || !snapshot_name.starts_with(&format!("{}/", crate::ZFS_POOL)) {
         return Err(format!(
             "Invalid snapshot name. Expected {}/master@snapname",
             crate::ZFS_POOL
@@ -400,8 +400,7 @@ pub fn create_snapshot(snapshot_name: String) -> Result<Value, String> {
 
 #[tauri::command]
 pub async fn delete_snapshot(snapshot_name: String) -> Result<Value, String> {
-    if !snapshot_name.contains('@') || !snapshot_name.starts_with(&format!("{}/", crate::ZFS_POOL))
-    {
+    if !snapshot_name.contains('@') || !snapshot_name.starts_with(&format!("{}/", crate::ZFS_POOL)) {
         return Err("Invalid snapshot name format.".to_string());
     }
     let clients_result = get_clients(None).await;
@@ -591,8 +590,89 @@ pub async fn rollback_master_snapshot(master_name: String, snapshot_name: String
         }
     }
 
-    Ok(serde_json::json!({
+    Ok(json!({
         "message": format!("Rolled back snapshot {} and re-created {} clones", snapshot_name, recreated.len()),
         "recreated_clones": recreated
+    }))
+}
+
+#[tauri::command]
+pub async fn get_zfs_arcstat() -> Result<serde_json::Value, String> {
+    let output = Command::new("arc_summary")
+        .output()
+        .map_err(|e| format!("Failed to run arc_summary: {}", e))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut size = 0.0;
+    let mut hit_percent = 0.0;
+    for line in stdout.lines() {
+        if line.contains("ARC Size (current)") {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() > 4 {
+                size = parts[4].parse::<f64>().unwrap_or(0.0);
+            }
+        }
+        if line.contains("ARC Hit Ratio") {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() > 3 {
+                hit_percent = parts[3].parse::<f64>().unwrap_or(0.0);
+            }
+        }
+    }
+    Ok(json!({
+        "size": size,
+        "hit_percent": hit_percent,
+    }))
+}
+
+#[tauri::command]
+pub async fn get_client_overview() -> Result<serde_json::Value, String> {
+    let output = Command::new("sudo")
+        .args(["zfs", "list", "-H", "-o", "name", "-t", "filesystem", "-r", crate::ZFS_POOL])
+        .output()
+        .map_err(|e| format!("Failed to run zfs list: {}", e))?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let client_count = stdout.lines().filter(|line| line.contains("-disk")).count();
+
+    // For active clients, we would need to parse targetcli or similar, which is more complex.
+    // For now, we'll just return the total number of clients.
+    Ok(json!({
+        "total_clients": client_count,
+        "active_clients": 0 // Placeholder
+    }))
+}
+
+#[tauri::command]
+pub async fn get_master_image_overview() -> Result<serde_json::Value, String> {
+    let config = get_config();
+    let master_dataset = config.settings.get("default_master").and_then(|s| s.as_str()).unwrap_or("");
+
+    if master_dataset.is_empty() {
+        return Err("Default master image not set in config".to_string());
+    }
+
+    let output = Command::new("sudo")
+        .args(["zfs", "get", "creation,clones", "-o", "value", "-H", master_dataset])
+        .output()
+        .map_err(|e| format!("Failed to get master image info: {}", e))?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    if lines.len() < 2 {
+        return Err("Unexpected output from zfs get".to_string());
+    }
+
+    Ok(json!({
+        "name": master_dataset,
+        "creation_date": lines[0],
+        "clones": lines[1]
     }))
 }

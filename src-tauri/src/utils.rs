@@ -154,33 +154,3 @@ pub fn clear_ram_cache() -> Result<serde_json::Value, String> {
 
     Ok(serde_json::json!({ "message": "Ram Cleared successfully" }))
 }
-
-#[tauri::command]
-pub async fn get_zfs_arcstat() -> Result<serde_json::Value, String> {
-    use std::fs;
-    let arcstat_path = "/proc/spl/kstat/zfs/arcstats";
-    let content = fs::read_to_string(arcstat_path).map_err(|e| e.to_string())?;
-    let mut hits = 0u64;
-    let mut misses = 0u64;
-    let mut size = 0u64;
-    for line in content.lines() {
-        if line.starts_with("hits ") {
-            hits = line.split_whitespace().nth(2).and_then(|v| v.parse().ok()).unwrap_or(0);
-        }
-        if line.starts_with("misses ") {
-            misses = line.split_whitespace().nth(2).and_then(|v| v.parse().ok()).unwrap_or(0);
-        }
-        if line.starts_with("size ") {
-            size = line.split_whitespace().nth(2).and_then(|v| v.parse().ok()).unwrap_or(0);
-        }
-    }
-    let hit_percent = if hits + misses > 0 {
-        (hits as f64 / (hits + misses) as f64) * 100.0
-    } else {
-        0.0
-    };
-    Ok(serde_json::json!({
-        "size": size,
-        "hit_percent": hit_percent
-    }))
-}

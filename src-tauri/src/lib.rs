@@ -84,7 +84,7 @@ pub fn run() {
             utils::list_disks,
             utils::get_ram_usage,
             utils::clear_ram_cache,
-            utils::get_zfs_arcstat,
+            zfs::get_zfs_arcstat,
             zfs::get_masters,
             zfs::create_zfs_pool,
             zfs::get_zpool_stats,
@@ -94,7 +94,9 @@ pub fn run() {
             zfs::delete_snapshot,
             zfs::zfs_pool_exists,
             zfs::set_default_master,
-            zfs::rollback_master_snapshot
+            zfs::rollback_master_snapshot,
+            zfs::get_client_overview,
+            zfs::get_master_image_overview
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {
