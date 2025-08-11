@@ -122,12 +122,39 @@ pub async fn get_clients(client_id: Option<String>) -> Result<serde_json::Value,
         .map(|c| c.mac.to_lowercase())
         .collect();
     let discovered = discover_dynamic_clients();
+    let mut new_clients_to_persist: Vec<Client> = Vec::new();
     for mut c in discovered {
         if !existing_macs.contains(&c.mac.to_lowercase()) {
             // compute status for the discovered client
             let status = get_client_status_realtime(&c.mac, &c.ip);
             c.status = Some(status);
+            // Queue for persistence with transient status cleared (status is computed on read)
+            let mut to_save = c.clone();
+            to_save.status = None;
+            new_clients_to_persist.push(to_save);
             combined_clients.push(c);
+        }
+    }
+
+    // Persist any newly discovered clients into config.json so they become managed entries
+    if !new_clients_to_persist.is_empty() {
+        let mut cfg_to_write = get_config();
+        // Deduplicate against MAC again in case of races
+        let cfg_macs: std::collections::HashSet<String> = cfg_to_write
+            .clients
+            .iter()
+            .map(|c| c.mac.to_lowercase())
+            .collect();
+        for client in new_clients_to_persist.into_iter() {
+            if !cfg_macs.contains(&client.mac.to_lowercase()) {
+                cfg_to_write.clients.push(client);
+            }
+        }
+        // Best effort write; failures are logged
+        if let Err(e) = write_config(&cfg_to_write) {
+            println!("[WARN] Failed to persist discovered clients: {}", e);
+        } else {
+            crate::config::set_config(&cfg_to_write);
         }
     }
 
