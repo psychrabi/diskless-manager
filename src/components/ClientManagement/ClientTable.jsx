@@ -58,15 +58,19 @@ const ClientTable = ({ handleClientContextMenu }) => {
               })()}
             </TableCell>
             <TableCell>
-              {!client.snapshot && (
-                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200" title="Changes persist directly to the clone">
+              {client.super_client && (
+                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200" title="Using the image directly">
                   <Zap className="h-3 w-3 mr-1 text-yellow-500" /> Super Client
                 </span>
               )}
-              {client.snapshot && (
-                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200" title="Changes persist directly to the clone">
+              {client.keep_writeback ? (
+                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200" title="Client changes will be kept in the clone">
                   <Layers className="h-3 w-3 mr-1" />Keep Writeback
                 </span>
+              ) : (
+                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200" title="Clone will be reset on reboot">
+                <Layers className="h-3 w-3 mr-1" />Reset on reboot
+              </span>
               )}
             </TableCell>
           </TableRow>

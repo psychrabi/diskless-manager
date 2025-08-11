@@ -171,7 +171,7 @@ pub async fn get_clients(client_id: Option<String>) -> Result<serde_json::Value,
 // Helper function for status
 fn get_client_status_realtime(mac: &str, ip: &str) -> String {
     let mac_norm = mac.to_lowercase();
-    let has_lease = has_active_dhcp_lease(&mac_norm, if ip.is_empty() { None } else { Some(ip) });
+    // let has_lease = has_active_dhcp_lease(&mac_norm, if ip.is_empty() { None } else { Some(ip) });
 
     // Consider ping reachability as Online
     let online = if ip.is_empty() || ip == "N/A" {
@@ -185,39 +185,39 @@ fn get_client_status_realtime(mac: &str, ip: &str) -> String {
 
     if online {
         "Online".to_string()
-    } else if has_lease {
-        // Lease present, but ping not responding yet
-        "Leased".to_string()
+    // } else if has_lease {
+    //     // Lease present, but ping not responding yet
+    //     "Leased".to_string()
     } else {
         "Offline".to_string()
     }
 }
 
-fn has_active_dhcp_lease(mac_lower: &str, ip_opt: Option<&str>) -> bool {
-    use std::fs;
-    let leases_path = "/var/lib/dhcp/dhcpd.leases";
-    if let Ok(content) = fs::read_to_string(leases_path) {
-        // Very light parsing: look for a block that contains either the MAC or the IP with active state
-        // Split into simple blocks by 'lease ' occurrences
-        for block in content.split("lease ") {
-            let block_lc = block.to_lowercase();
-            if block_lc.contains(mac_lower) || ip_opt.map(|ip| block_lc.contains(ip)).unwrap_or(false) {
-                if block_lc.contains("binding state active") {
-                    return true;
-                }
-            }
-        }
-    } else {
-        // Fallback to dhcp-lease-list if available
-        if let Ok(output) = std::process::Command::new("dhcp-lease-list").output() {
-            let out = String::from_utf8_lossy(&output.stdout).to_lowercase();
-            if out.contains(mac_lower) {
-                return true;
-            }
-        }
-    }
-    false
-}
+// fn has_active_dhcp_lease(mac_lower: &str, ip_opt: Option<&str>) -> bool {
+//     use std::fs;
+//     let leases_path = "/var/lib/dhcp/dhcpd.leases";
+//     if let Ok(content) = fs::read_to_string(leases_path) {
+//         // Very light parsing: look for a block that contains either the MAC or the IP with active state
+//         // Split into simple blocks by 'lease ' occurrences
+//         for block in content.split("lease ") {
+//             let block_lc = block.to_lowercase();
+//             if block_lc.contains(mac_lower) || ip_opt.map(|ip| block_lc.contains(ip)).unwrap_or(false) {
+//                 if block_lc.contains("binding state active") {
+//                     return true;
+//                 }
+//             }
+//         }
+//     } else {
+//         // Fallback to dhcp-lease-list if available
+//         if let Ok(output) = std::process::Command::new("dhcp-lease-list").output() {
+//             let out = String::from_utf8_lossy(&output.stdout).to_lowercase();
+//             if out.contains(mac_lower) {
+//                 return true;
+//             }
+//         }
+//     }
+//     false
+// }
 
 fn discover_dynamic_clients() -> Vec<Client> {
     use std::collections::HashMap;

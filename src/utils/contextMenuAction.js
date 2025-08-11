@@ -6,7 +6,7 @@ export const clientContextMenuActions = (fetchData, closeContextMenu, setClient,
 
   return {
     edit: (client) => {
-      if (client.status !== 'Offline') { showNotification('Client must be offine to make changes.', 'error'); return; }
+      if (client.status === 'Online') { showNotification('Client must be offine to make changes.', 'error'); return; }
       setClient(client);
       setIsModalOpen(true);
       closeContextMenu();
@@ -30,7 +30,7 @@ export const clientContextMenuActions = (fetchData, closeContextMenu, setClient,
         }).catch((error) => showNotification(error, 'error'));
     },
     wake: async (client) => {
-      if (client.status !== 'Offline') { showNotification('Client must be offline to wake', 'error'); return; }
+      if (client.status === 'Online') { showNotification('Client must be offline to wake', 'error'); return; }
       await invoke('control_client', {
         clientId: client.id,
         req: { action: 'wake' }
