@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { List, RefreshCw } from 'lucide-react';
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Card } from '../ui';
 
 
@@ -25,22 +25,21 @@ const ServerInfoCard = () => {
     <div>
       {serverInfo ? (
         <Card title="Server Info" icon={List}>
-
-          <ul className="text-sm">
+          <ul className="space-y-2">
             <li className='flex justify-between items-center'>
-              <span className="font-medium">Host:</span> {serverInfo.host_name}
+              <span className="font-semibold">Host:</span> {serverInfo.host_name}
             </li>
             <li className='flex justify-between items-center'>
-              <span className="font-medium">OS:</span> {serverInfo.os_name}
+              <span className="font-semibold">OS:</span> {serverInfo.os_name}
             </li>
             <li className='flex justify-between items-center'>
-              <span className="font-medium">Kernel:</span> {serverInfo.kernel_version}
+              <span className="font-semibold">Kernel:</span> {serverInfo.kernel_version}
             </li>
             <li className='flex justify-between items-center'>
-              <span className="font-medium">CPU cores:</span> {serverInfo.cpu_count}
+              <span className="font-semibold">CPU cores:</span> {serverInfo.cpu_count}
             </li>
             <li className='flex justify-between items-center'>
-              <span className="font-medium">Usable Memory:</span> {(serverInfo.total_memory_mb/1024/1024).toPrecision(4)} GB
+              <span className="font-semibold">Usable Memory:</span> {(serverInfo.total_memory_mb / 1024 / 1024).toPrecision(4)} GB
             </li>
           </ul>
         </Card>

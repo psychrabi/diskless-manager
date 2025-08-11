@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { Card, Button } from '../components/ui';
-import { RefreshCw, Database } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
+import { RefreshCw } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Button, Card } from '../components/ui';
 import { useNotification } from '../contexts/NotificationContext';
 
 export const RAMUsage = () => {
@@ -51,19 +51,19 @@ export const RAMUsage = () => {
 
   return (
     <Card title="RAM Usage" icon={RefreshCw} actions={<Button onClick={clearRamCache} variant="primary" className="w-full">Clear Cache</Button>}>
-      <div className="space-y-2">
-        <div className="grid grid-cols-2">
-          <div>Total: {ramUsage.memory.total}</div>
-          <div>Used: {ramUsage.memory.used}</div>
-          <div>Free: {ramUsage.memory.free}</div>
-          <div>Available: {ramUsage.memory.available}</div>
+      <ul className="">
+        <div className="grid grid-cols-2 gap-x-10 space-y-2">
+          <li className='flex justify-between'><span className="font-semibold">Total:</span> {ramUsage.memory.total}</li>
+          <li className='flex justify-between'><span className="font-semibold">Used:</span> {ramUsage.memory.used}</li>
+          <li className='flex justify-between'><span className="font-semibold">Free:</span> {ramUsage.memory.free}</li>
+          <li className='flex justify-between'><span className="font-semibold">Available:</span> {ramUsage.memory.available}</li>
           {arcStat && (<>
-            <div>ZFS Cache: {(arcStat.size / (1024 * 1024)).toFixed(1)} MB</div>
-            <div>ZFS Cache Hit: {arcStat.hit_percent.toFixed(2)}%</div>
+            <li className='flex justify-between'><span className="font-semibold">ZFS Cache:</span> {(arcStat.size / (1024 * 1024)).toFixed(1)} MB</li>
+            <li className='flex justify-between'><span className="font-semibold">ZFS Cache Hit:</span> {arcStat.hit_percent.toFixed(2)}%</li>
           </>
           )}
         </div>
-      </div>
+      </ul>
     </Card>
   );
 };

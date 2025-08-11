@@ -16,15 +16,21 @@ const ZfsPoolCard = ({ loading }) => {
       {loading ? (
         <div>Loading...</div>
       ) : zpoolStats ? (
-        <div className="space-y-2 flex">
-          <div className='flex-auto'>
-            <span className="font-semibold">Pool:</span> {zpoolStats.name} <br />
-            <span className="font-semibold">Size:</span> {zpoolStats.size}
+        <ul className="">
+          <div className='grid grid-cols-2 gap-x-10 space-y-2'>
+            <li className='flex justify-between'>
+              <span className="font-semibold">Pool:</span> {zpoolStats.name}
+            </li>
+            <li className='flex justify-between'>
+              <span className="font-semibold">Size:</span> {zpoolStats.size}
+            </li>
+            <li className='flex justify-between'>
+              <span className="font-semibold">Used:</span> {zpoolStats.used}</li>
+            <li className='flex justify-between'>
+              <span className="font-semibold">Available:</span> {zpoolStats.available}
+            </li>
           </div>
-          <div className='flex-auto'><span className="font-semibold">Used:</span> {zpoolStats.used}<br />
-            <span className="font-semibold">Available:</span> {zpoolStats.available}
-          </div>
-        </div>
+        </ul>
       ) : (
         <div className="text-red-500">Failed to load ZFS pool info.</div>
       )}

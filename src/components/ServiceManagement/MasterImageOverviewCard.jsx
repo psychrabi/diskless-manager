@@ -24,20 +24,20 @@ const MasterImageOverviewCard = () => {
       {loading ? (
         <div>Loading...</div>
       ) : overview ? (
-        <div className="space-y-2">
-          <div className="flex justify-between">
+        <ul className="space-y-2">
+          <li className="flex justify-between">
             <span className="font-semibold">Name:</span>
-            <span>{overview.name}</span>
-          </div>
-          <div className="flex justify-between">
+            {overview.name}
+          </li>
+          <li className="flex justify-between">
             <span className="font-semibold">Created:</span>
-            <span>{overview.creation_date}</span>
-          </div>
-          <div className="flex justify-between">
+            {overview.creation_date}
+          </li>
+          <li className="flex justify-between">
             <span className="font-semibold">Clones:</span>
-            <span>{overview.clones}</span>
-          </div>
-        </div>
+            {overview.clones}
+          </li>
+        </ul>
       ) : (
         <div className="text-red-500">Failed to load master image overview.</div>
       )}

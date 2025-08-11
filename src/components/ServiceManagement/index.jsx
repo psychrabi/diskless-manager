@@ -4,31 +4,26 @@ import { useServiceManager } from '../../hooks/useServiceManager';
 import { useAppStore } from '../../store/useAppStore';
 import { RAMUsage } from '../RAMUsage';
 import { Button, Card } from '../ui';
-import ServiceConfigModal from './ServiceConfigModal';
-import ZfsPoolCard from './ZfsPoolCard';
-import ServerInfoCard from './ServerInfoCard';
 import ClientOverviewCard from './ClientOverviewCard';
 import MasterImageOverviewCard from './MasterImageOverviewCard';
+import ServerInfoCard from './ServerInfoCard';
+import ServiceConfigModal from './ServiceConfigModal';
+import ZfsPoolCard from './ZfsPoolCard';
 
 const ServiceManagement = () => {
   const { loading, services, fetchData } = useAppStore();
-  
   const { handleServiceAction, handleServiceConfigView } = useServiceManager()
 
   const memoizedServices = useMemo(() => Object.entries(services), [services]);
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         <ServerInfoCard />
         <RAMUsage />
         <ZfsPoolCard title="ZFS Pool Usage" />
       </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <ClientOverviewCard />
-        <MasterImageOverviewCard />
-      </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         {memoizedServices.length > 0 ? memoizedServices.map(([key, service]) => (
           <Card key={key} title={service.name} className="flex-1" titleClassName="text-base md:text-lg">
             <div className="flex items-center justify-between">
@@ -43,7 +38,7 @@ const ServiceManagement = () => {
                 </Button>
                 {(service.service !== 'zfs') && (
                   <>
-                    {!service.running  && (
+                    {!service.running && (
                       <Button onClick={() => handleServiceAction(service.service, 'start')} variant="ghost" size="icon" className="h-7 w-7" title={`Start ${service.service}`} disabled={service.running}>
                         <Play className="h-4 w-4 text-green-500" />
                       </Button>
@@ -64,6 +59,10 @@ const ServiceManagement = () => {
             </div>
           </Card>
         )) : !loading && <p className="text-gray-500 col-span-full">Could not load service status.</p>}
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <ClientOverviewCard />
+        <MasterImageOverviewCard />
       </div>
       <ServiceConfigModal />
     </div>

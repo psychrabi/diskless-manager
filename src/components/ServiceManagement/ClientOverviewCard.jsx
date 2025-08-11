@@ -24,16 +24,16 @@ const ClientOverviewCard = () => {
       {loading ? (
         <div>Loading...</div>
       ) : overview ? (
-        <div className="space-y-2">
-          <div className="flex justify-between">
+        <ul className="space-y-2 ">
+          <li className="flex justify-between">
             <span className="font-semibold">Total Clients:</span>
-            <span>{overview.total_clients}</span>
-          </div>
-          <div className="flex justify-between">
+            {overview.total_clients}
+          </li>
+          <li className="flex justify-between">
             <span className="font-semibold">Active Clients:</span>
-            <span>{overview.active_clients}</span>
-          </div>
-        </div>
+            {overview.active_clients}
+          </li>
+        </ul>
       ) : (
         <div className="text-red-500">Failed to load client overview.</div>
       )}
