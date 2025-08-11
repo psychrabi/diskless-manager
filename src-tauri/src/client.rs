@@ -403,7 +403,7 @@ pub async fn remote_client(client_id: String) -> Result<serde_json::Value, Strin
     }
 
     // 2. Check if client is online
-    let status = get_client_status(&client_ip);
+    let status = get_client_status_realtime(&client.mac, &client_ip);
     if status != "Online" {
         return Err("Client is not online".to_string());
     }
