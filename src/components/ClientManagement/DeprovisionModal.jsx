@@ -149,7 +149,7 @@ export const DeprovisionModal = ({
                 onChange={(e) => setForce(e.target.checked)}
                 className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
               />
-              <label htmlFor="force" className="ml-2 block text-sm text-gray-900">
+              <label htmlFor="force" className="ml-2 block text-sm text-gray-100">
                 Force deprovisioning (even if client is online)
               </label>
             </div>
@@ -162,7 +162,7 @@ export const DeprovisionModal = ({
                 onChange={(e) => setKeepZfs(e.target.checked)}
                 className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
               />
-              <label htmlFor="keep-zfs" className="ml-2 block text-sm text-gray-900">
+              <label htmlFor="keep-zfs" className="ml-2 block text-sm text-gray-100">
                 Keep ZFS clone (don't destroy storage)
               </label>
             </div>
@@ -175,7 +175,7 @@ export const DeprovisionModal = ({
                 onChange={(e) => setDryRun(e.target.checked)}
                 className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
               />
-              <label htmlFor="dry-run" className="ml-2 block text-sm text-gray-900">
+              <label htmlFor="dry-run" className="ml-2 block text-sm text-gray-100">
                 Dry run (show what would be done)
               </label>
             </div>
