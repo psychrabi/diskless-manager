@@ -1,6 +1,9 @@
 #!/bin/bash
 # Provision PXE/iSCSI client from ZFS golden image
 # Usage: provision_client.sh <MAC> [--size 60G] [--initiator-iqn iqn....] [--ipxe-path ipxe.lkrn]
+#
+# This script checks if the client already exists in config.json before provisioning.
+# If the client's MAC address is found in the config, provisioning is skipped.
 
 set -euo pipefail
 
@@ -54,11 +57,12 @@ main() {
     SUDO="/usr/bin/sudo -n"
   else
     SUDO=""
-  fi
+  fi  
   
   [[ -x $ZFS_BIN ]] || die "zfs not found at $ZFS_BIN"
   [[ -x $FLOCK_BIN ]] || die "flock not found at $FLOCK_BIN"
   [[ -x $TARGETCLI_BIN ]] || die "targetcli not found at $TARGETCLI_BIN"
+  have jq || die "jq not found - required for config.json parsing"
 
   [[ $# -ge 1 ]] || { usage; exit 2; }
 
@@ -93,6 +97,51 @@ main() {
   mac_lc="$(echo "$mac_raw" | tr '[:upper:]' '[:lower:]')"
   mac_hy="${mac_lc//:/-}"               # 01-xx-xx-...
   mac_iqn="${mac_lc//:/-}"              # same hyphenated form
+
+  # Check if client already exists in config.json
+  # Try to find config file in standard locations
+  local config_file=""
+  
+  # When running with sudo, try to get the actual user's home directory
+  local user_home=""
+  if [[ -n "${SUDO_USER:-}" ]]; then
+    user_home=$(eval echo "~$SUDO_USER")
+  elif [[ -n "${HOME:-}" ]]; then
+    user_home="$HOME"
+  else
+    # Fallback to /home/rabistha if HOME is not set
+    user_home="/home/rabistha"
+  fi
+  
+  local possible_paths=(
+    "$user_home/.config/com.diskless.local/config.json"
+    "/home/rabistha/.config/com.diskless.local/config.json"
+    "/etc/diskless-manager/config.json"
+  )
+  
+  for path in "${possible_paths[@]}"; do
+    if [[ -f "$path" ]]; then
+      config_file="$path"
+      break
+    fi
+  done
+  
+  if [[ -n "$config_file" ]]; then
+    # Try exact match first
+    if jq -e --arg mac "$mac_raw" '.clients[] | select(.mac == $mac)' "$config_file" >/dev/null 2>&1; then
+      log "[INFO] Client with MAC $mac_raw already exists in config.json ($config_file), skipping provisioning"
+      exit 0
+    else
+      # Try case-insensitive match
+      local mac_upper=$(echo "$mac_raw" | tr '[:lower:]' '[:upper:]')
+      if jq -e --arg mac "$mac_upper" '.clients[] | select(.mac == $mac)' "$config_file" >/dev/null 2>&1; then
+        log "[INFO] Client with MAC $mac_raw already exists in config.json ($config_file), skipping provisioning"
+        exit 0
+      fi
+    fi
+  else
+    log "[WARN] Config file not found in any standard location, proceeding with provisioning"
+  fi
 
   local client_vol="client-${mac_iqn}"
   local target_iqn="${IQN_BASE}:${mac_iqn}"
