@@ -5,6 +5,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useNotification } from '@/contexts/NotificationContext';
 import { useForm } from 'react-hook-form';
 import { HardDrive, Network } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
 const dhcpSchema = z.object({
   subnet_ip: z.ipv4(),
   start_ip: z.ipv4(),

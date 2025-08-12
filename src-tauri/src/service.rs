@@ -482,7 +482,7 @@ pub async fn restart_service(service: &str) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn configure_dhcp_server(config: DHCPConfig) -> Result<serde_json::Value, String> {
+pub async fn configure_dhcp_server(config: DHCPConfig) -> Result<String, String> {
     println!("Received DHCP config: {:?}", config);
     let dhcp_config = format!(
         r#"# Global Config
@@ -532,15 +532,30 @@ option ipxe.nfs code 41 = unsigned integer 8;
 option ipxe.no-pxedhcp 1;
 
 # DHCP Server Configuration
-default-lease-time 600;
-max-lease-time 7200;
+default-lease-time 86400;
+max-lease-time 86400;
 authoritative;
 allow booting;
 allow bootp;
+one-lease-per-client true;
+
 
 # Define a class for PXE clients
 class "pxeclients" {{
   match if substring(option vendor-class-identifier, 0, 9) = "PXEClient";
+}}
+
+on commit {{
+  set clip = binary-to-ascii(10, 8, ".", leased-address);
+  set clmac = concat(
+    suffix(concat("0", binary-to-ascii(16, 8, "", substring(hardware, 1, 1))), 2), ":",
+    suffix(concat("0", binary-to-ascii(16, 8, "", substring(hardware, 2, 1))), 2), ":",
+    suffix(concat("0", binary-to-ascii(16, 8, "", substring(hardware, 3, 1))), 2), ":",
+    suffix(concat("0", binary-to-ascii(16, 8, "", substring(hardware, 4, 1))), 2), ":",
+    suffix(concat("0", binary-to-ascii(16, 8, "", substring(hardware, 5, 1))), 2), ":",
+    suffix(concat("0", binary-to-ascii(16, 8, "", substring(hardware, 6, 1))), 2)
+  );
+  execute("/usr/local/bin/provision_client.sh", clmac);
 }}
 
 # DHCP Configuration
@@ -583,15 +598,15 @@ subnet {} netmask {} {{
         config.boot_file_uefi64,
     );
 
-    Ok(serde_json::json!({ "message": dhcp_config }))
-    // match fs::write("/etc/dhcp/dhcpd.conf", dhcp_config) {
-    //     Ok(_) => {
-    //         // Restart DHCP service
-    //         restart_service("isc-dhcp-server").await?;
-    //         Ok("DHCP server configured successfully".to_string())
-    //     }
-    //     Err(e) => Err(format!("Failed to write DHCP config: {}", e)),
-    // }
+    
+    match fs::write("/etc/dhcp/dhcpd.conf", dhcp_config) {
+        Ok(_) => {
+            // Restart DHCP service
+            restart_service("isc-dhcp-server").await?;
+            Ok("DHCP server configured successfully".to_string())
+        }
+        Err(e) => Err(format!("Failed to write DHCP config: {}", e)),
+    }
 }
 
 #[tauri::command]

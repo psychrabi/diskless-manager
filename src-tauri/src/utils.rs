@@ -112,8 +112,6 @@ pub struct RamUsage {
 #[tauri::command]
 pub fn get_ram_usage() -> Result<RamUsage, String> {
     // Use run_command to check if "free" is available (for error handling consistency)
-    run_command(&["free", "-g"])?;
-
     let output = Command::new("free")
         .arg("-h")
         .output()
