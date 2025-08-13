@@ -1,12 +1,7 @@
 // Client management logic: helpers for client lookup, config, and deduplication.
 
 use crate::{
-    config::{get_config, write_config, Config},
-    dhcp::{create_dhcp_entry, update_dhcp_config},
-    iscsi::{cleanup_iscsi_target, setup_iscsi_target},
-    utils::{run_command, run_command_check},
-    zfs::{zfs_clone, zfs_destroy, zfs_exists},
-    ZFS_POOL,
+    client, config::{get_config, read_config, write_config, Config}, dhcp::{create_dhcp_entry, update_dhcp_config}, iscsi::{cleanup_iscsi_target, setup_iscsi_target}, utils::{run_command, run_command_check}, zfs::{zfs_clone, zfs_destroy, zfs_exists}, ZFS_POOL
 };
 
 const IQN_BASE: &str = "iqn.2025-04.com.nsboot";
@@ -79,92 +74,111 @@ pub struct DeprovisionRequest {
     pub dry_run: Option<bool>,
 }
 
+// #[tauri::command]
+// pub async fn get_clients(client_id: Option<String>) -> Result<serde_json::Value, String> {
+//     let mut config: Config = get_config();
+//     use futures::future::join_all;
+
+//     // Collect (index, mac, ip) tuples
+//     let client_tuples: Vec<(usize, String, String)> = config
+//         .clients
+//         .iter()
+//         .enumerate()
+//         .map(|(i, c)| (i, c.mac.clone(), c.ip.clone()))
+//         .collect();
+
+//     // Spawn concurrent tasks to get status (Online / Leased / Offline)
+//     let handles: Vec<_> = client_tuples
+//         .into_iter()
+//         .map(|(i, mac, ip)| {
+//             tokio::task::spawn_blocking(move || (i, get_client_status_realtime(&mac, &ip)))
+//         })
+//         .collect();
+
+//     // Wait for all tasks to finish
+//     let results = join_all(handles).await;
+
+//     // Update statuses in the original clients vector
+//     for res in results {
+//         if let Ok((i, status)) = res {
+//             config.clients[i].status = Some(status);
+//         } else if let Err(e) = res {
+//             println!("[ERROR] spawn_blocking failed: {}", e);
+//         }
+//     }
+
+//     // Update the config cache with new statuses
+//     crate::config::set_config(&config);
+
+//     // Discover dynamically provisioned clients (from DHCP leases) not yet in config
+//     let mut combined_clients = config.clients.clone();
+//     let existing_macs: std::collections::HashSet<String> = combined_clients
+//         .iter()
+//         .map(|c| c.mac.to_lowercase())
+//         .collect();
+//     let discovered = discover_dynamic_clients();
+//     let mut new_clients_to_persist: Vec<Client> = Vec::new();
+//     for mut c in discovered {
+//         if !existing_macs.contains(&c.mac.to_lowercase()) {
+//             // compute status for the discovered client
+//             let status = get_client_status_realtime(&c.mac, &c.ip);
+//             c.status = Some(status);
+//             // Queue for persistence with transient status cleared (status is computed on read)
+//             let mut to_save = c.clone();
+//             to_save.status = None;
+//             new_clients_to_persist.push(to_save);
+//             combined_clients.push(c);
+//         }
+//     }
+
+//     // Persist any newly discovered clients into config.json so they become managed entries
+//     if !new_clients_to_persist.is_empty() {
+//         let mut cfg_to_write = get_config();
+//         // Deduplicate against MAC again in case of races
+//         let cfg_macs: std::collections::HashSet<String> = cfg_to_write
+//             .clients
+//             .iter()
+//             .map(|c| c.mac.to_lowercase())
+//             .collect();
+//         for client in new_clients_to_persist.into_iter() {
+//             if !cfg_macs.contains(&client.mac.to_lowercase()) {
+//                 cfg_to_write.clients.push(client);
+//             }
+//         }
+//         // Best effort write; failures are logged
+//         if let Err(e) = write_config(&cfg_to_write) {
+//             println!("[WARN] Failed to persist discovered clients: {}", e);
+//         } else {
+//             crate::config::set_config(&cfg_to_write);
+//         }
+//     }
+
+//     if let Some(id) = client_id {
+//         let client = combined_clients
+//             .iter()
+//             .find(|c| c.id.eq_ignore_ascii_case(&id));
+//         Ok(serde_json::json!(client))
+//     } else {
+//         Ok(serde_json::json!(combined_clients))
+//     }
+// }
+
 #[tauri::command]
 pub async fn get_clients(client_id: Option<String>) -> Result<serde_json::Value, String> {
-    let mut config: Config = get_config();
-    use futures::future::join_all;
+    let mut config: Config = read_config();
 
-    // Collect (index, mac, ip) tuples
-    let client_tuples: Vec<(usize, String, String)> = config
-        .clients
-        .iter()
-        .enumerate()
-        .map(|(i, c)| (i, c.mac.clone(), c.ip.clone()))
-        .collect();
-
-    // Spawn concurrent tasks to get status (Online / Leased / Offline)
-    let handles: Vec<_> = client_tuples
-        .into_iter()
-        .map(|(i, mac, ip)| {
-            tokio::task::spawn_blocking(move || (i, get_client_status_realtime(&mac, &ip)))
-        })
-        .collect();
-
-    // Wait for all tasks to finish
-    let results = join_all(handles).await;
-
-    // Update statuses in the original clients vector
-    for res in results {
-        if let Ok((i, status)) = res {
-            config.clients[i].status = Some(status);
-        } else if let Err(e) = res {
-            println!("[ERROR] spawn_blocking failed: {}", e);
-        }
-    }
-
-    // Update the config cache with new statuses
-    crate::config::set_config(&config);
-
-    // Discover dynamically provisioned clients (from DHCP leases) not yet in config
-    let mut combined_clients = config.clients.clone();
-    let existing_macs: std::collections::HashSet<String> = combined_clients
-        .iter()
-        .map(|c| c.mac.to_lowercase())
-        .collect();
-    let discovered = discover_dynamic_clients();
-    let mut new_clients_to_persist: Vec<Client> = Vec::new();
-    for mut c in discovered {
-        if !existing_macs.contains(&c.mac.to_lowercase()) {
-            // compute status for the discovered client
-            let status = get_client_status_realtime(&c.mac, &c.ip);
-            c.status = Some(status);
-            // Queue for persistence with transient status cleared (status is computed on read)
-            let mut to_save = c.clone();
-            to_save.status = None;
-            new_clients_to_persist.push(to_save);
-            combined_clients.push(c);
-        }
-    }
-
-    // Persist any newly discovered clients into config.json so they become managed entries
-    if !new_clients_to_persist.is_empty() {
-        let mut cfg_to_write = get_config();
-        // Deduplicate against MAC again in case of races
-        let cfg_macs: std::collections::HashSet<String> = cfg_to_write
-            .clients
-            .iter()
-            .map(|c| c.mac.to_lowercase())
-            .collect();
-        for client in new_clients_to_persist.into_iter() {
-            if !cfg_macs.contains(&client.mac.to_lowercase()) {
-                cfg_to_write.clients.push(client);
-            }
-        }
-        // Best effort write; failures are logged
-        if let Err(e) = write_config(&cfg_to_write) {
-            println!("[WARN] Failed to persist discovered clients: {}", e);
-        } else {
-            crate::config::set_config(&cfg_to_write);
-        }
+    for client in config.clients.iter_mut() {
+        client.status = Some(get_client_status_realtime(&client.mac,&client.ip));
     }
 
     if let Some(id) = client_id {
-        let client = combined_clients
+        let client = config
+            .clients
             .iter()
             .find(|c| c.id.eq_ignore_ascii_case(&id));
         Ok(serde_json::json!(client))
     } else {
-        Ok(serde_json::json!(combined_clients))
+        Ok(serde_json::json!(config.clients))
     }
 }
 
@@ -343,11 +357,11 @@ fn check_duplicate_client(name: &str, mac: &str, ip: &str) -> Option<String> {
     None
 }
 
-pub fn get_client_paths(client_id: &str) -> HashMap<String, String> {
+pub fn get_client_paths(client_id: &str, client_mac: &str) -> HashMap<String, String> {
     let clone = format!("{}/{}-disk", crate::ZFS_POOL, client_id.to_uppercase());
     let target_iqn = format!(
         "iqn.2025-04.com.nsboot:{}",
-        client_id.to_lowercase().replace('_', "")
+        client_mac.to_lowercase().replace(':', "-")
     );
     let block_store = format!("block_{}", client_id.to_lowercase());
     let mut map = HashMap::new();
@@ -587,7 +601,7 @@ pub async fn add_client(req: AddClientRequest) -> Result<serde_json::Value, Stri
     }
 
     // Get client paths (implement as needed)
-    let mut paths = get_client_paths(&name);
+    let mut paths = get_client_paths(&name, &mac);
 
     // Create ZFS clone
     if !snapshot.is_empty() {
@@ -670,7 +684,7 @@ pub async fn edit_client(
     };
 
     // Get current paths
-    let current_paths = get_client_paths(&client_id);
+    let current_paths = get_client_paths(&client_id, &client_info.mac);
 
     // Extract new client details
     let new_name = data
@@ -849,8 +863,14 @@ pub async fn delete_client(client_id: String) -> Result<serde_json::Value, Strin
         return Err("Invalid client ID".to_string());
     }
 
+      // Get current client info
+    let mut client_info = match get_client_by_id(&client_id) {
+        Some(info) => info,
+        None => return Err(format!("Client {} not found", client_id)),
+    };
+
     let mut errors = Vec::new();
-    let paths = get_client_paths(&client_id);
+    let paths = get_client_paths(&client_id, &client_info.mac);
 
     // Clean up DHCP configuration
     if let Err(e) = update_dhcp_config(&client_id, "", false)
@@ -1007,7 +1027,7 @@ pub async fn reset_client(client_id: String) -> Result<serde_json::Value, String
     };
 
     // Get paths for the client
-    let current_paths = get_client_paths(&client_id);
+    let current_paths = get_client_paths(&client_id, &client_info.mac);
     let target_iqn = current_paths.get("target_iqn").cloned().unwrap_or_default();
     let block_store = current_paths
         .get("block_store")

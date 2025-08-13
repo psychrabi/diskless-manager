@@ -1,7 +1,8 @@
-//! DHCP-related logic for config file management and helpers.
+// DHCP-related logic for config file management and helpers.
 
 use regex::Regex;
 use std::fs;
+use std::process::Command;
 
 pub fn update_dhcp_config(client_id: &str, dhcp_entry: &str, is_new: bool) -> Result<(), String> {
     use crate::DHCP_CONFIG_PATH;
@@ -14,24 +15,38 @@ pub fn update_dhcp_config(client_id: &str, dhcp_entry: &str, is_new: bool) -> Re
     if !is_new {
         let formatted_name = format_client_name(client_id);
         let host_pattern = format!(
-            r"host\s+{}\s*\{{(?:[^\{{\}}]|(?:\{{[^\{{\}}]*\}}))*\}}\s*",
+            r"host\s+{}\s*\{{(?:[^\{{}}|\{{(?:\{{[^\{{}}|]*\}}))*}}\}}\s*",
             regex::escape(&formatted_name)
         );
         let re = Regex::new(&host_pattern).map_err(|e| format!("Regex error: {}", e))?;
         new_content = re.replace(&new_content, "").to_string();
-        let re_blank = Regex::new(r"\n\s*\n{2,}").unwrap();
+        let re_blank = Regex::new(r"\n\s*\n{{2,}}").unwrap();
         new_content = re_blank.replace_all(&new_content, "\n\n").to_string();
     }
     new_content = new_content.trim_end().to_string() + "\n\n" + dhcp_entry;
-    match fs::write(DHCP_CONFIG_PATH, &new_content) {
+    let temp_path = format!("{}.tmp", DHCP_CONFIG_PATH);
+    match fs::write(&temp_path, &new_content) {
         Ok(_) => {
-            let _ = fs::remove_file(&dhcp_backup_path);
-            Ok(())
+            // Use sudo to move the temporary file to the actual config path
+            let output = std::process::Command::new("sudo")
+                .args(&["mv", &temp_path, DHCP_CONFIG_PATH])
+                .output()
+                .map_err(|e| format!("Failed to move DHCP config with sudo: {}", e))?;
+
+            if output.status.success() {
+                println!("Finished writing DHCP config");
+                let _ = fs::remove_file(&dhcp_backup_path);
+                Ok(())
+            } else {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let _ = fs::remove_file(&dhcp_backup_path);
+                Err(format!("Failed to write DHCP config (sudo mv failed): {}\n{}", stderr, stdout))
+            }
         }
         Err(e) => {
-            let _ = fs::write(DHCP_CONFIG_PATH, &content);
             let _ = fs::remove_file(&dhcp_backup_path);
-            Err(format!("Failed to write DHCP config: {}", e))
+            Err(format!("Failed to write temporary DHCP config: {}", e))
         }
     }
 }
