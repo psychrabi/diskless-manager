@@ -9,7 +9,7 @@ import { useEffect } from 'react';
 
 const clientSchema = z.object({
   name: z.string().min(1, 'Client name is required'),
-  mac: z.string().regex(/^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/, 'Invalid MAC address format. Use XX:XX:XX:XX:XX:XX or XX-XX-XX-XX-XX-XX'),
+  mac: z.string().regex(/^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/,"Invalid MAC address format"),
   ip: z.string().regex(/^([\d]{1,3}\.){3}\d{1,3}$/, 'Invalid IP address format. Use X.X.X.X'),
   master: z.string().min(1, 'Master image is required'),
   snapshot: z.string().optional().nullable(),

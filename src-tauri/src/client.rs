@@ -761,7 +761,7 @@ pub async fn edit_client(
         || snapshot_changed
         || (new_snapshot.is_empty() && client_info.snapshot.clone().unwrap_or_default() != "")
     {
-        let new_target_iqn = format!("iqn.2025-04.com.nsboot:{}", new_name.to_lowercase());
+        let new_target_iqn = current_paths.get("target_iqn").cloned().unwrap_or_default();
         let new_block_store = format!("block_{}", new_name.to_lowercase());
 
         let current_master = if master_changed {
