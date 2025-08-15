@@ -14,13 +14,44 @@ pub fn update_dhcp_config(client_id: &str, dhcp_entry: &str, is_new: bool) -> Re
     let mut new_content = content.clone();
     if !is_new {
         let formatted_name = format_client_name(client_id);
-        let host_pattern = format!(
-            r"host\s+{}\s*\{{(?:[^\{{}}|\{{(?:\{{[^\{{}}|]*\}}))*}}\}}\s*",
+        // Use a more robust approach to remove the entire host block
+        let host_start_pattern = format!(
+            "host\\s+{}\\s*\\{{",
             regex::escape(&formatted_name)
         );
-        let re = Regex::new(&host_pattern).map_err(|e| format!("Regex error: {}", e))?;
-        new_content = re.replace(&new_content, "").to_string();
-        let re_blank = Regex::new(r"\n\s*\n{{2,}}").unwrap();
+        let re_start = Regex::new(&host_start_pattern).map_err(|e| format!("Regex error: {}", e))?;
+        
+        // Find the start position of the host block
+        if let Some(m) = re_start.find(&new_content) {
+            let start_pos = m.start();
+            let mut brace_count = 0;
+            let mut end_pos = start_pos;
+            let chars: Vec<char> = new_content.chars().collect();
+            
+            // Find the matching closing brace by counting braces
+            for (i, &ch) in chars.iter().enumerate().skip(start_pos) {
+                if ch == '{' {
+                    brace_count += 1;
+                } else if ch == '}' {
+                    brace_count -= 1;
+                    if brace_count == 0 {
+                        end_pos = i + 1;
+                        break;
+                    }
+                }
+            }
+            
+            // Remove the entire host block
+            if end_pos > start_pos {
+                new_content = format!("{}{}", 
+                    &new_content[..start_pos], 
+                    &new_content[end_pos..]
+                );
+            }
+        }
+        
+        // Clean up multiple blank lines
+        let re_blank = Regex::new(r"\n\s*\n{2,}").unwrap();
         new_content = re_blank.replace_all(&new_content, "\n\n").to_string();
     }
     new_content = new_content.trim_end().to_string() + "\n\n" + dhcp_entry;
@@ -69,15 +100,6 @@ pub fn create_dhcp_entry(name: &str, mac: &str, ip: &str, target_iqn: &str) -> S
     hardware ethernet {mac};
     fixed-address {ip};
     option host-name "{formatted_name}";
-    if substring (option vendor-class-identifier, 15, 5) = "00000" {{
-        filename "ipxe.kpxe";
-    }}
-    elsif substring (option vendor-class-identifier, 15, 5) = "00006" {{
-        filename "ipxe32.efi";
-    }}
-    else {{
-        filename "ipxe.efi";
-    }}
     option root-path "iscsi:{server_ip}::::{target_iqn}";
 }}"#,
         formatted_name = formatted_name,

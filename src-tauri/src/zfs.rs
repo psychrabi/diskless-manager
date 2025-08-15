@@ -676,3 +676,95 @@ pub async fn get_master_image_overview() -> Result<serde_json::Value, String> {
         "clones": lines[1]
     }))
 }
+
+#[tauri::command]
+pub async fn rename_master(old_name: String, new_name: String) -> Result<serde_json::Value, String> {
+    // Validate new name format
+    if !regex::Regex::new(r"^[\w-]+$").unwrap().is_match(&new_name) {
+        return Err("Invalid master base name format (use alphanumeric, _, -).".to_string());
+    }
+    if new_name.contains(' ') {
+        return Err("Master base name cannot contain spaces.".to_string());
+    }
+
+    // Check if old master exists
+    if !zfs_exists(&old_name) {
+        return Err(format!("Master '{}' not found.", old_name));
+    }
+
+    // Check if new master name already exists
+    let new_master_zvol_name = format!("{}/{}-master", crate::ZFS_POOL, new_name);
+    if zfs_exists(&new_master_zvol_name) {
+        return Err(format!("Master '{}' already exists.", new_master_zvol_name));
+    }
+
+    // Check for dependent clients
+    let clients_result = get_clients(None).await;
+    if let Ok(clients_json) = clients_result {
+        if let Some(clients) = clients_json.as_array() {
+            let dependent_clients: Vec<String> = clients
+                .iter()
+                .filter(|client| client.get("master") == Some(&json!(old_name)))
+                .filter_map(|client| {
+                    client
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                })
+                .collect();
+            if !dependent_clients.is_empty() {
+                return Ok(json!({
+                    "error": "Master has dependent clients",
+                    "message": format!(
+                        "Cannot rename master: It is being used by the following clients: {}",
+                        dependent_clients.join(", ")
+                    ),
+                    "dependent_clients": dependent_clients
+                }));
+            }
+        }
+    }
+
+    // Perform the rename
+    let output = Command::new("sudo")
+        .args(["zfs", "rename", &old_name, &new_master_zvol_name])
+        .output()
+        .map_err(|e| format!("Failed to run zfs rename: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("has dependent clones") {
+            return Ok(json!({
+                "error": "Master has dependent clones",
+                "message": format!("Cannot rename master '{}': It has dependent clones.", old_name)
+            }));
+        } else {
+            return Ok(json!({
+                "error": format!("Failed to rename master: {}", stderr)
+            }));
+        }
+    }
+
+    // Update config if this was the default master
+    let mut config = get_config();
+    if config.settings.get("default_master") == Some(&json!(old_name)) {
+        config.settings["default_master"] = json!(new_master_zvol_name);
+        if let Err(e) = write_config(&config) {
+            println!("Warning: Failed to update default master in config: {}", e);
+        }
+    }
+
+    // Update master config entry
+    if let Some(masters) = config.masters.as_object_mut() {
+        if let Some(master_data) = masters.remove(&old_name) {
+            masters.insert(new_master_zvol_name.clone(), master_data);
+            if let Err(e) = write_config(&config) {
+                println!("Warning: Failed to update master config: {}", e);
+            }
+        }
+    }
+
+    Ok(json!({
+        "message": format!("Master renamed from '{}' to '{}' successfully", old_name, new_master_zvol_name)
+    }))
+}

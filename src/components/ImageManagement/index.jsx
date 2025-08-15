@@ -1,4 +1,4 @@
-import { HardDrive, PlusCircle, Star, StarIcon, Trash2, RotateCcw } from 'lucide-react';
+import { HardDrive, PlusCircle, Star, StarIcon, Trash2, RotateCcw, Edit } from 'lucide-react';
 import { lazy, useCallback, useMemo, useState } from 'react';
 import { useLoaderData } from 'react-router-dom';
 import { useMasterManager } from '../../hooks/useMasterManager';
@@ -10,6 +10,7 @@ const CreateSnapshotModal = lazy(() => import('./CreateSnapshotModal'));
 const DeleteImageConfirmModal = lazy(() => import('./DeleteImageConfirmModal'));
 const DeleteSnaptshotConfirmModal = lazy(() => import('./DeleteSnaptshotConfirmModal'));
 const RollbackSnapshotConfirmModal = lazy(() => import('./RollbackSnapshotConfirmModal'));
+const RenameImageModal = lazy(() => import('./RenameImageModal'));
 
 const ImageManagement = () => {
   const { masters, fetchData } = useAppStore();
@@ -25,6 +26,7 @@ const ImageManagement = () => {
   const [selectedImage, setSelectedImage] = useState('')
   const [selectedSnapshot, setSelectedSnapshot] = useState('')
   const [openRollbackSnapshotModal, setOpenRollbackSnapshotModal] = useState(false)
+  const [openRenameModal, setOpenRenameModal] = useState(false)
   const handleRollbackSnapshot = (snapshot, image) => {
     setSelectedImage(image)
     setSelectedSnapshot(snapshot)
@@ -54,6 +56,11 @@ const ImageManagement = () => {
     setOpenDeleteSnapshotModal(true)
   }
 
+  const handleRenameImage = (image) => {
+    setSelectedImage(image)
+    setOpenRenameModal(true)
+  }
+
   return (
     <div className="space-y-6">
       <Card title="Image Management" icon={HardDrive} actions={
@@ -79,6 +86,7 @@ const ImageManagement = () => {
                     ) : 'Set as Default'}
                   </Button>
                   <Button variant='primary' onClick={() => handleCreateSnapshot(master.name)} size="sm" icon={PlusCircle}>Create Snapshot</Button>
+                  <Button variant="info" onClick={() => handleRenameImage(master.name)} size="sm" icon={Edit}>Rename</Button>
                   <Button variant="destructive" onClick={() => handleDeleteImage(master.name)} size="sm" icon={Trash2}>Delete Image</Button>
                 </div>
               </div>
@@ -115,6 +123,7 @@ const ImageManagement = () => {
       {openDeleteMasterModal && <DeleteImageConfirmModal openDeleteMasterModal={openDeleteMasterModal} setOpenDeleteMasterModal={setOpenDeleteMasterModal} selectedImage={selectedImage} />}
       {openDeleteSnapshotModal && <DeleteSnaptshotConfirmModal openDeleteSnapshotModal={openDeleteSnapshotModal} setOpenDeleteSnapshotModal={setOpenDeleteSnapshotModal} selectedSnapshot={selectedSnapshot} selectedImage={selectedImage} />}
       {openRollbackSnapshotModal && <RollbackSnapshotConfirmModal open={openRollbackSnapshotModal} setOpen={setOpenRollbackSnapshotModal} selectedSnapshot={selectedSnapshot} selectedImage={selectedImage} />}
+      {openRenameModal && <RenameImageModal openRenameModal={openRenameModal} setOpenRenameModal={setOpenRenameModal} selectedImage={selectedImage} refresh={fetchData} />}
     </div>
   );
 };
