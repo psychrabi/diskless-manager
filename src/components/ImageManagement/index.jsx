@@ -74,6 +74,11 @@ const ImageManagement = () => {
                   <h4 className="text-lg font-medium break-all flex items-center gap-1">
                     {master.name} {`(${master.size})`}
                     {master.is_default && <StarIcon className="h-4 w-4 text-yellow-500 fill-yellow-500" />}
+                    {master.name.includes('/var/lib/diskless/fileio/') && (
+                      <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">
+                        FileIO
+                      </span>
+                    )}
                   </h4>
                 </div>
                 <div className="flex gap-2">
@@ -85,13 +90,24 @@ const ImageManagement = () => {
                       </span>
                     ) : 'Set as Default'}
                   </Button>
-                  <Button variant='primary' onClick={() => handleCreateSnapshot(master.name)} size="sm" icon={PlusCircle}>Create Snapshot</Button>
+                  <Button 
+                    variant='primary' 
+                    onClick={() => handleCreateSnapshot(master.name)} 
+                    size="sm" 
+                    icon={PlusCircle}
+                    disabled={master.name.includes('/var/lib/diskless/fileio/')}
+                    title={master.name.includes('/var/lib/diskless/fileio/') ? 'Snapshots not supported for FileIO images' : 'Create Snapshot'}
+                  >
+                    Create Snapshot
+                  </Button>
                   <Button variant="info" onClick={() => handleRenameImage(master.name)} size="sm" icon={Edit}>Rename</Button>
                   <Button variant="destructive" onClick={() => handleDeleteImage(master.name)} size="sm" icon={Trash2}>Delete Image</Button>
                 </div>
               </div>
               <h5 className="text-sm font-semibold mb-2 text-gray-600 dark:text-gray-400">Available Snapshots:</h5>
-              {master.snapshots && master.snapshots.length > 0 ? (
+              {master.name.includes('/var/lib/diskless/fileio/') ? (
+                <p className="text-sm text-gray-500 dark:text-gray-400">Snapshots are not supported for FileIO images.</p>
+              ) : master.snapshots && master.snapshots.length > 0 ? (
                 <ul className="space-y-2 text-sm">
                   {master.snapshots.map((snap) => (
                     <li key={snap.id || snap.name} className="flex flex-wrap justify-between items-center gap-2 p-2 rounded hover:bg-gray-100 dark:hover:bg-gray-600/50">

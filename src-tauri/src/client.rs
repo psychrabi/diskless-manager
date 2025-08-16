@@ -371,6 +371,33 @@ pub fn get_client_paths(client_id: &str, client_mac: &str) -> HashMap<String, St
     map
 }
 
+pub fn get_client_paths_with_master(client_id: &str, client_mac: &str, master: &str) -> HashMap<String, String> {
+    let target_iqn = format!(
+        "iqn.2025-04.com.nsboot:{}",
+        client_mac.to_lowercase().replace(':', "-")
+    );
+    let block_store = format!("block_{}", client_id.to_lowercase());
+    let mut map = HashMap::new();
+    map.insert("target_iqn".to_string(), target_iqn);
+    map.insert("block_store".to_string(), block_store);
+    
+    // Check if master is a fileIO image
+    if master.contains("/var/lib/diskless/fileio/") && master.ends_with(".img") {
+        // For fileIO images, create a copy in the same directory
+        let fileio_dir = "/var/lib/diskless/fileio";
+        let client_image = format!("{}/{}-{}-client.img", fileio_dir, client_id.to_lowercase(), client_mac.to_lowercase().replace(':', "-"));
+        map.insert("clone".to_string(), client_image);
+        map.insert("is_fileio".to_string(), "true".to_string());
+    } else {
+        // For ZFS images, create a clone
+        let clone = format!("{}/{}-disk", crate::ZFS_POOL, client_id.to_uppercase());
+        map.insert("clone".to_string(), clone);
+        map.insert("is_fileio".to_string(), "false".to_string());
+    }
+    
+    map
+}
+
 pub fn save_client_config(client_data: &Client) -> bool {
     let mut config: Value = match serde_json::to_value(get_config()) {
         Ok(val) => val,
@@ -600,40 +627,60 @@ pub async fn add_client(req: AddClientRequest) -> Result<serde_json::Value, Stri
         return Err(dup);
     }
 
-    // Get client paths (implement as needed)
-    let mut paths = get_client_paths(&name, &mac);
+    // Get client paths based on master type
+    let mut paths = get_client_paths_with_master(&name, &mac, &master);
+    let is_fileio = paths.get("is_fileio").map(|s| s == "true").unwrap_or(false);
 
-    // Create ZFS clone
-    if !snapshot.is_empty() {
-        // Use provided snapshot
-        run_command(&["zfs", "clone", &snapshot, &paths["clone"]])?;
+    // Create client image (ZFS clone or fileIO copy)
+    if is_fileio {
+        // For fileIO images, copy the master file
+        if !snapshot.is_empty() {
+            return Err("Snapshots are not supported for fileIO images".to_string());
+        }
+        copy_fileio_image(&master, &paths["clone"])?;
     } else {
-        // Check if base snapshot exists
-        let base_snapshot = format!("{}@base", master);
-        let result = run_command_check(&["zfs", "list", "-H", "-t", "snapshot", &base_snapshot]);
-        if result == 0 {
-            // Create new snapshot for this client
-            let snapshot_name = format!("{}@{}_base", master, name);
-            run_command(&["zfs", "snapshot", &snapshot_name])?;
-            run_command(&["zfs", "clone", &snapshot_name, &paths["clone"]])?;
+        // For ZFS images, create clone
+        if !snapshot.is_empty() {
+            // Use provided snapshot
+            run_command(&["zfs", "clone", &snapshot, &paths["clone"]])?;
         } else {
-            // Use master volume directly
-            paths.insert("clone".to_string(), master.clone());
+            // Check if base snapshot exists
+            let base_snapshot = format!("{}@base", master);
+            let result = run_command_check(&["zfs", "list", "-H", "-t", "snapshot", &base_snapshot]);
+            if result == 0 {
+                // Create new snapshot for this client
+                let snapshot_name = format!("{}@{}_base", master, name);
+                run_command(&["zfs", "snapshot", &snapshot_name])?;
+                run_command(&["zfs", "clone", &snapshot_name, &paths["clone"]])?;
+            } else {
+                // Use master volume directly
+                paths.insert("clone".to_string(), master.clone());
+            }
         }
     }
 
-    // Set up iSCSI target (implement as needed)
+    // Set up iSCSI target
+    let block_device = if is_fileio {
+        paths["clone"].clone()
+    } else {
+        format!("/dev/zvol/{}", &paths["clone"])
+    };
+    
     setup_iscsi_target(
         &paths["target_iqn"],
         &paths["block_store"],
-        &format!("/dev/zvol/{}", &paths["clone"]),
+        &block_device,
     )?;
 
     // Create DHCP entry (implement as needed)
     let dhcp_entry = create_dhcp_entry(&name, &mac, &ip, &paths["target_iqn"]);
     update_dhcp_config(&name, &dhcp_entry, true)?;
 
-    let block_device = format!("/dev/zvol/{}", &paths["clone"]);
+    let block_device = if is_fileio {
+        paths["clone"].clone()
+    } else {
+        format!("/dev/zvol/{}", &paths["clone"])
+    };
 
     // Save client configuration to JSON file (implement as needed)
     let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -685,6 +732,7 @@ pub async fn edit_client(
 
     // Get current paths
     let current_paths = get_client_paths(&client_id, &client_info.mac);
+    let current_is_fileio = client_info.master.contains("/var/lib/diskless/fileio/") && client_info.master.ends_with(".img");
 
     // Extract new client details
     let new_name = data
@@ -776,13 +824,31 @@ pub async fn edit_client(
         };
 
         let mut block_device = String::new();
+        let new_is_fileio = current_master.contains("/var/lib/diskless/fileio/") && current_master.ends_with(".img");
 
         if !current_master.is_empty() {
-            if !current_snapshot.is_empty() {
-                // Create new clone from snapshot
+            
+            if new_is_fileio {
+                // Handle fileIO image
+                if !current_snapshot.is_empty() {
+                    return Err("Snapshots are not supported for fileIO images".to_string());
+                }
+                
+                // Clean up old client image
                 let old_clone = current_paths.get("clone").cloned().unwrap_or_default();
-                if !old_clone.is_empty() && zfs_exists(&old_clone) {
-                    // Update iSCSI target
+                if !old_clone.is_empty() {
+                    // Check if the old client was using fileIO
+                    let old_is_fileio = client_info.master.contains("/var/lib/diskless/fileio/") && client_info.master.ends_with(".img");
+                    
+                    if old_is_fileio {
+                        // Delete old fileIO image
+                        delete_fileio_image(&old_clone)?;
+                    } else if zfs_exists(&old_clone) {
+                        // Delete old ZFS clone
+                        zfs_destroy(&old_clone)?;
+                    }
+                    
+                    // Clean up iSCSI target
                     let old_target_iqn = current_paths.get("target_iqn").cloned();
                     let old_block_store = current_paths.get("block_store").cloned();
                     if old_target_iqn.is_some() || old_block_store.is_some() {
@@ -791,27 +857,70 @@ pub async fn edit_client(
                             old_block_store.as_deref().unwrap_or(""),
                         )?;
                     }
-                    zfs_destroy(&old_clone)?;
                 }
-                let new_clone = format!("{}/{}-disk", ZFS_POOL, new_name);
-                zfs_clone(current_snapshot, &new_clone)?;
-                block_device = format!("/dev/zvol/{}", new_clone);
+                
+                // Create new fileIO client image
+                let new_paths = get_client_paths_with_master(&new_name, &new_mac, current_master);
+                copy_fileio_image(current_master, &new_paths["clone"])?;
+                block_device = new_paths["clone"].clone();
             } else {
-                // Use master directly
-                // Clean up old clone if it exists
-                let old_clone = current_paths.get("clone").cloned().unwrap_or_default();
-                if !old_clone.is_empty() && zfs_exists(&old_clone) {
-                    let old_target_iqn = current_paths.get("target_iqn").cloned();
-                    let old_block_store = current_paths.get("block_store").cloned();
-                    if old_target_iqn.is_some() || old_block_store.is_some() {
-                        cleanup_iscsi_target(
-                            old_target_iqn.as_deref().unwrap_or(""),
-                            old_block_store.as_deref().unwrap_or(""),
-                        )?;
+                // Handle ZFS image
+                if !current_snapshot.is_empty() {
+                    // Create new clone from snapshot
+                    let old_clone = current_paths.get("clone").cloned().unwrap_or_default();
+                    if !old_clone.is_empty() {
+                        // Check if the old client was using fileIO
+                        let old_is_fileio = client_info.master.contains("/var/lib/diskless/fileio/") && client_info.master.ends_with(".img");
+                        
+                        if old_is_fileio {
+                            // Delete old fileIO image
+                            delete_fileio_image(&old_clone)?;
+                        } else if zfs_exists(&old_clone) {
+                            // Delete old ZFS clone
+                            zfs_destroy(&old_clone)?;
+                        }
+                        
+                        // Clean up iSCSI target
+                        let old_target_iqn = current_paths.get("target_iqn").cloned();
+                        let old_block_store = current_paths.get("block_store").cloned();
+                        if old_target_iqn.is_some() || old_block_store.is_some() {
+                            cleanup_iscsi_target(
+                                old_target_iqn.as_deref().unwrap_or(""),
+                                old_block_store.as_deref().unwrap_or(""),
+                            )?;
+                        }
                     }
-                    zfs_destroy(&old_clone)?;
+                    let new_clone = format!("{}/{}-disk", ZFS_POOL, new_name);
+                    zfs_clone(current_snapshot, &new_clone)?;
+                    block_device = format!("/dev/zvol/{}", new_clone);
+                } else {
+                    // Use master directly
+                    // Clean up old clone if it exists
+                    let old_clone = current_paths.get("clone").cloned().unwrap_or_default();
+                    if !old_clone.is_empty() {
+                        // Check if the old client was using fileIO
+                        let old_is_fileio = client_info.master.contains("/var/lib/diskless/fileio/") && client_info.master.ends_with(".img");
+                        
+                        if old_is_fileio {
+                            // Delete old fileIO image
+                            delete_fileio_image(&old_clone)?;
+                        } else if zfs_exists(&old_clone) {
+                            // Delete old ZFS clone
+                            zfs_destroy(&old_clone)?;
+                        }
+                        
+                        // Clean up iSCSI target
+                        let old_target_iqn = current_paths.get("target_iqn").cloned();
+                        let old_block_store = current_paths.get("block_store").cloned();
+                        if old_target_iqn.is_some() || old_block_store.is_some() {
+                            cleanup_iscsi_target(
+                                old_target_iqn.as_deref().unwrap_or(""),
+                                old_block_store.as_deref().unwrap_or(""),
+                            )?;
+                        }
+                    }
+                    block_device = format!("/dev/zvol/{}", current_master);
                 }
-                block_device = format!("/dev/zvol/{}", current_master);
             }
         }
 
@@ -829,7 +938,11 @@ pub async fn edit_client(
         client_info.target_iqn = Some(new_target_iqn.clone());
         client_info.block_store = Some(new_block_store.clone());
         client_info.block_device = Some(block_device.clone());
-        client_info.writeback = Some(format!("{}/{}-disk", ZFS_POOL, new_name));
+        client_info.writeback = if new_is_fileio {
+            Some(block_device.clone())
+        } else {
+            Some(format!("{}/{}-disk", ZFS_POOL, new_name))
+        };
         client_info.last_modified = Some(Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
 
         // Update DHCP config
@@ -884,14 +997,28 @@ pub async fn delete_client(client_id: String) -> Result<serde_json::Value, Strin
         errors.push(format!("Failed to clean up iSCSI target: {}", e));
     }
 
-    // Clean up ZFS clone
-    match run_command_check(&["zfs", "list", "-H", &paths["clone"]]) {
-        0 => {
-            if let Err(e) = run_command(&["zfs", "destroy", &paths["clone"]]) {
-                errors.push(format!("Failed to destroy ZFS clone: {}", e));
+    // Clean up client image (ZFS clone or fileIO copy)
+    let is_fileio = client_info.master.contains("/var/lib/diskless/fileio/") && client_info.master.ends_with(".img");
+    
+    if is_fileio {
+        // For fileIO images, delete the client copy
+        if let Some(block_device) = &client_info.block_device {
+            if std::path::Path::new(block_device).exists() {
+                if let Err(e) = delete_fileio_image(block_device) {
+                    errors.push(format!("Failed to delete fileIO image: {}", e));
+                }
             }
         }
-        _ => {} // ZFS clone does not exist, nothing to do
+    } else {
+        // For ZFS images, destroy the clone
+        match run_command_check(&["zfs", "list", "-H", &paths["clone"]]) {
+            0 => {
+                if let Err(e) = run_command(&["zfs", "destroy", &paths["clone"]]) {
+                    errors.push(format!("Failed to destroy ZFS clone: {}", e));
+                }
+            }
+            _ => {} // ZFS clone does not exist, nothing to do
+        }
     }
 
     // Delete client configuration from JSON file
@@ -1034,31 +1161,55 @@ pub async fn reset_client(client_id: String) -> Result<serde_json::Value, String
         .cloned()
         .unwrap_or_default();
     let clone = format!("{}/{}-disk", ZFS_POOL, client_id.to_uppercase());
+    let is_fileio = client_info.master.contains("/var/lib/diskless/fileio/") && client_info.master.ends_with(".img");
 
     // 1. Clean up existing iSCSI resources
     if let Err(e) = cleanup_iscsi_target(&target_iqn, &block_store) {
         println!("Warning: Failed to clean up iSCSI target: {}", e);
     }
 
-    // 2. Destroy existing ZFS clone if it exists
-    if zfs_exists(&clone) {
-        if let Err(e) = zfs_destroy(&clone) {
-            return Err(format!("Failed to destroy existing ZFS clone: {}", e));
+    // 2. Destroy existing client image (ZFS clone or fileIO copy)
+    if is_fileio {
+        // For fileIO images, delete the client copy
+        if std::path::Path::new(&client_info.block_device.as_ref().unwrap_or(&String::new())).exists() {
+            if let Err(e) = delete_fileio_image(&client_info.block_device.as_ref().unwrap_or(&String::new())) {
+                return Err(format!("Failed to delete existing fileIO image: {}", e));
+            }
+        }
+    } else {
+        // For ZFS images, destroy the clone
+        if zfs_exists(&clone) {
+            if let Err(e) = zfs_destroy(&clone) {
+                return Err(format!("Failed to destroy existing ZFS clone: {}", e));
+            }
         }
     }
 
-    // 3. Create new clone from snapshot
-    let snapshot = match &client_info.snapshot {
-        Some(s) if !s.is_empty() => s,
-        _ => return Err("No snapshot found for client".to_string()),
-    };
+    // 3. Create new client image from master
+    if is_fileio {
+        // For fileIO images, copy from master
+        if let Err(e) = copy_fileio_image(&client_info.master, &client_info.block_device.as_ref().unwrap_or(&String::new())) {
+            return Err(format!("Failed to copy fileIO image: {}", e));
+        }
+    } else {
+        // For ZFS images, create clone from snapshot
+        let snapshot = match &client_info.snapshot {
+            Some(s) if !s.is_empty() => s,
+            _ => return Err("No snapshot found for client".to_string()),
+        };
 
-    if let Err(e) = zfs_clone(snapshot, &clone) {
-        return Err(format!("Failed to create ZFS clone: {}", e));
+        if let Err(e) = zfs_clone(snapshot, &clone) {
+            return Err(format!("Failed to create ZFS clone: {}", e));
+        }
     }
 
     // 4. Setup new iSCSI target
-    let block_device = format!("/dev/zvol/{}", clone);
+    let block_device = if is_fileio {
+        client_info.block_device.as_ref().unwrap_or(&String::new()).clone()
+    } else {
+        format!("/dev/zvol/{}", clone)
+    };
+    
     if let Err(e) = setup_iscsi_target(&target_iqn, &block_store, &block_device) {
         return Err(format!("Failed to set up iSCSI target: {}", e));
     }
@@ -1230,4 +1381,57 @@ fn check_client_online_status(mac: &str) -> bool {
     }
 
     false
+}
+
+pub fn copy_fileio_image(master_path: &str, client_path: &str) -> Result<(), String> {
+    // Check if master file exists
+    if !std::path::Path::new(master_path).exists() {
+        return Err(format!("Master fileIO image not found: {}", master_path));
+    }
+    
+    // Create directory if it doesn't exist
+    let client_dir = std::path::Path::new(client_path).parent().unwrap();
+    if !client_dir.exists() {
+        std::fs::create_dir_all(client_dir)
+            .map_err(|e| format!("Failed to create directory: {}", e))?;
+    }
+    
+    // Copy the file using cp command (preserves sparse file structure)
+    let output = Command::new("sudo")
+        .args(["cp", "--sparse=always", master_path, client_path])
+        .output()
+        .map_err(|e| format!("Failed to copy fileIO image: {}", e))?;
+    
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Failed to copy fileIO image: {}", stderr));
+    }
+    
+    // Set proper permissions
+    let chmod_output = Command::new("sudo")
+        .args(["chmod", "644", client_path])
+        .output()
+        .map_err(|e| format!("Failed to set file permissions: {}", e))?;
+    
+    if !chmod_output.status.success() {
+        println!("Warning: Failed to set file permissions for {}", client_path);
+    }
+    
+    Ok(())
+}
+
+pub fn delete_fileio_image(image_path: &str) -> Result<(), String> {
+    if std::path::Path::new(image_path).exists() {
+        let output = Command::new("sudo")
+            .args(["rm", "-f", image_path])
+            .output()
+            .map_err(|e| format!("Failed to delete fileIO image: {}", e))?;
+        
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("Failed to delete fileIO image: {}", stderr));
+        }
+    }
+    
+    Ok(())
 }
