@@ -89,6 +89,7 @@ pub fn run() {
             zfs::create_zfs_pool,
             zfs::get_zpool_stats,
             zfs::create_master,
+            zfs::create_fileio_master,
             zfs::delete_master,
             zfs::rename_master,
             zfs::create_snapshot,
