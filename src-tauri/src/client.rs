@@ -826,8 +826,7 @@ pub async fn edit_client(
         let mut block_device = String::new();
         let new_is_fileio = current_master.contains("/var/lib/diskless/fileio/") && current_master.ends_with(".img");
 
-        if !current_master.is_empty() {
-            
+        if !current_master.is_empty() {            
             if new_is_fileio {
                 // Handle fileIO image
                 if !current_snapshot.is_empty() {
@@ -840,13 +839,7 @@ pub async fn edit_client(
                     // Check if the old client was using fileIO
                     let old_is_fileio = client_info.master.contains("/var/lib/diskless/fileio/") && client_info.master.ends_with(".img");
                     
-                    if old_is_fileio {
-                        // Delete old fileIO image
-                        delete_fileio_image(&old_clone)?;
-                    } else if zfs_exists(&old_clone) {
-                        // Delete old ZFS clone
-                        zfs_destroy(&old_clone)?;
-                    }
+                  
                     
                     // Clean up iSCSI target
                     let old_target_iqn = current_paths.get("target_iqn").cloned();
@@ -856,6 +849,14 @@ pub async fn edit_client(
                             old_target_iqn.as_deref().unwrap_or(""),
                             old_block_store.as_deref().unwrap_or(""),
                         )?;
+                    }
+
+                    if old_is_fileio {
+                        // Delete old fileIO image
+                        delete_fileio_image(&old_clone)?;
+                    } else if zfs_exists(&old_clone) {
+                        // Delete old ZFS clone
+                        zfs_destroy(&old_clone)?;
                     }
                 }
                 
@@ -872,13 +873,7 @@ pub async fn edit_client(
                         // Check if the old client was using fileIO
                         let old_is_fileio = client_info.master.contains("/var/lib/diskless/fileio/") && client_info.master.ends_with(".img");
                         
-                        if old_is_fileio {
-                            // Delete old fileIO image
-                            delete_fileio_image(&old_clone)?;
-                        } else if zfs_exists(&old_clone) {
-                            // Delete old ZFS clone
-                            zfs_destroy(&old_clone)?;
-                        }
+                       
                         
                         // Clean up iSCSI target
                         let old_target_iqn = current_paths.get("target_iqn").cloned();
@@ -888,6 +883,13 @@ pub async fn edit_client(
                                 old_target_iqn.as_deref().unwrap_or(""),
                                 old_block_store.as_deref().unwrap_or(""),
                             )?;
+                        }
+                        if old_is_fileio {
+                            // Delete old fileIO image
+                            delete_fileio_image(&old_clone)?;
+                        } else if zfs_exists(&old_clone) {
+                            // Delete old ZFS clone
+                            zfs_destroy(&old_clone)?;
                         }
                     }
                     let new_clone = format!("{}/{}-disk", ZFS_POOL, new_name);
