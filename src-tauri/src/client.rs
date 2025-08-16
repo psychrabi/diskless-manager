@@ -996,7 +996,7 @@ pub async fn delete_client(token: String, client_id: String) -> Result<serde_jso
     }
 
       // Get current client info
-    let mut client_info = match get_client_by_id(&client_id) {
+    let client_info = match get_client_by_id(&client_id) {
         Some(info) => info,
         None => return Err(format!("Client {} not found", client_id)),
     };
@@ -1325,6 +1325,23 @@ pub async fn deprovision_client_by_id(token: String, client_id: String, force: O
     }
 
     Ok(result)
+}
+
+#[tauri::command]
+pub async fn get_client_overview() -> Result<serde_json::Value, String> {
+    let config = get_config();
+    let mut online_clients = 0;
+
+    for client in &config.clients {
+        if client.status == Some("Online".to_string()) {
+            online_clients += 1;
+        }
+    }
+
+    Ok(json!({
+        "total_clients": config.clients.len(),
+        "active_clients": online_clients
+    }))
 }
 
 #[tauri::command]

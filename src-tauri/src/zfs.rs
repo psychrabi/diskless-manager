@@ -757,53 +757,35 @@ pub async fn rollback_master_snapshot(token: String, master_name: String, snapsh
 
 #[tauri::command]
 pub async fn get_zfs_arcstat() -> Result<serde_json::Value, String> {
-    let output = Command::new("arc_summary")
-        .output()
-        .map_err(|e| format!("Failed to run arc_summary: {}", e))?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut size = 0.0;
-    let mut hit_percent = 0.0;
-    for line in stdout.lines() {
-        if line.contains("ARC Size (current)") {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() > 4 {
-                size = parts[4].parse::<f64>().unwrap_or(0.0);
-            }
+    use std::fs;
+    let arcstat_path = "/proc/spl/kstat/zfs/arcstats";
+    let content = fs::read_to_string(arcstat_path).map_err(|e| e.to_string())?;
+    let mut hits = 0u64;
+    let mut misses = 0u64;
+    let mut size = 0u64;
+    for line in content.lines() {
+        if line.starts_with("hits ") {
+            hits = line.split_whitespace().nth(2).and_then(|v| v.parse().ok()).unwrap_or(0);
         }
-        if line.contains("ARC Hit Ratio") {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() > 3 {
-                hit_percent = parts[3].parse::<f64>().unwrap_or(0.0);
-            }
+        if line.starts_with("misses ") {
+            misses = line.split_whitespace().nth(2).and_then(|v| v.parse().ok()).unwrap_or(0);
+        }
+        if line.starts_with("size ") {
+            size = line.split_whitespace().nth(2).and_then(|v| v.parse().ok()).unwrap_or(0);
         }
     }
-    Ok(json!({
+    let hit_percent = if hits + misses > 0 {
+        (hits as f64 / (hits + misses) as f64) * 100.0
+    } else {
+        0.0
+    };
+    Ok(serde_json::json!({
         "size": size,
-        "hit_percent": hit_percent,
+        "hit_percent": hit_percent
     }))
 }
 
-#[tauri::command]
-pub async fn get_client_overview() -> Result<serde_json::Value, String> {
-    let output = Command::new("sudo")
-        .args(["zfs", "list", "-H", "-o", "name", "-t", "filesystem", "-r", crate::ZFS_POOL])
-        .output()
-        .map_err(|e| format!("Failed to run zfs list: {}", e))?;
 
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).to_string());
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let client_count = stdout.lines().filter(|line| line.contains("-disk")).count();
-
-    // For active clients, we would need to parse targetcli or similar, which is more complex.
-    // For now, we'll just return the total number of clients.
-    Ok(json!({
-        "total_clients": client_count,
-        "active_clients": 0 // Placeholder
-    }))
-}
 
 #[tauri::command]
 pub async fn get_master_image_overview() -> Result<serde_json::Value, String> {

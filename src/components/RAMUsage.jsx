@@ -50,7 +50,7 @@ export const RAMUsage = () => {
   }
 
   return (
-    <Card title="RAM Usage" icon={RefreshCw} actions={<Button onClick={clearRamCache} variant="primary" className="w-full">Clear Cache</Button>}>
+    <Card title="RAM Usage" icon={RefreshCw} actions={<Button onClick={clearRamCache} variant="primary" className="w-full btn-xs">Clear Cache</Button>}>
       <ul className="">
         <div className="grid grid-cols-2 gap-x-10 space-y-2">
           <li className='flex justify-between'><span className="font-semibold">Total:</span> {ramUsage.memory.total}</li>

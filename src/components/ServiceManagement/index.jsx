@@ -27,7 +27,7 @@ const ServiceManagement = () => {
         {memoizedServices.length > 0 ? memoizedServices.map(([key, service]) => (
           <Card key={key} title={service.name} className="flex-1" titleClassName="text-base md:text-lg">
             <div className="flex items-center justify-between">
-              <span className={`px-2 py-0.5 rounded-full text-xs font-semibold capitalize ${service.status === 'active' ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' :
+              <span className={`px-2 py-0.5 rounded-full text-xs font-semibold capitalize ${service.running ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' :
                 'bg-gray-200 text-gray-800 dark:bg-gray-700 dark:text-gray-300'
                 }`}>
                 {service.running ? 'Running' : 'Stopped'}

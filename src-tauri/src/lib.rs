@@ -30,6 +30,7 @@ struct ServerInfo {
   host_name: Option<String>,
   total_memory_mb: u64,
   cpu_count: usize,
+  server_ip: String,
 }
 
 #[tauri::command]
@@ -41,7 +42,8 @@ fn get_server_info() -> ServerInfo {
     kernel_version: System::kernel_version(),
     host_name: System::host_name(),
     total_memory_mb: sys.total_memory() / 1024, // KiB -> GiB
-    cpu_count: sys.cpus().len(),    
+    cpu_count: sys.cpus().len(),
+    server_ip: SERVER_IP.clone(),    
   }
 }
 
@@ -71,6 +73,7 @@ pub fn run() {
             client::deprovision_client,
             client::deprovision_client_by_id,
             client::get_deprovision_status,
+            client::get_client_overview,
             config::read_config,
             config::save_config,
             service::get_services,
@@ -102,7 +105,6 @@ pub fn run() {
             zfs::zfs_pool_exists,
             zfs::set_default_master,
             zfs::rollback_master_snapshot,
-            zfs::get_client_overview,
             zfs::get_master_image_overview
         ])
         .setup(|app| {
