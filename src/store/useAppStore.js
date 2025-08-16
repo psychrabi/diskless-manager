@@ -37,18 +37,15 @@ export const useAppStore = create()(
         try {
           // Get token from localStorage
           const token = localStorage.getItem('authToken') || '';
-          const [servicesRes, mastersRes, clientsRes, services_status] = await Promise.all([
-            invoke('get_services', { token, 'zfsPool': 'diskless' }),
+          const [servicesRes, mastersRes, clientsRes] = await Promise.all([
+            invoke('check_package_status', { token, 'zfsPool': 'diskless' }),
             invoke('get_masters', { token, 'zfsPool': 'diskless' }),
             invoke('get_clients', { token }),
-            invoke("check_package_status")
           ]);
-          console.log(mastersRes)
           set({
             clients: clientsRes ? Object.values(clientsRes) : [],
             masters: mastersRes || [],
             services: servicesRes || {},
-            services_status: services_status || {},
           });
           // Set default snapshot selection for Add Client modal only if not already set and snapshots exist
           const { selectedSnapshot } = get();

@@ -33,10 +33,6 @@ const MasterImageOverviewCard = () => {
             <span className="font-semibold">Created:</span>
             {overview.creation_date}
           </li>
-          <li className="flex justify-between">
-            <span className="font-semibold">Clones:</span>
-            {overview.clones}
-          </li>
         </ul>
       ) : (
         <div className="text-red-500">Failed to load master image overview.</div>

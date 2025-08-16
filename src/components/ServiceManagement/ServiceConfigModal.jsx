@@ -57,7 +57,7 @@ function ServiceConfigModal() {
         {editable ? (
           <Button onClick={() => handleSave()} loading={saving} disabled={saving || loading}>Save</Button>
         ): 
-          ((serviceKey !== 'iscsi') && 
+          ((serviceKey !== 'iscsi') || (serviceKey !== 'zfs') && 
           <Button onClick={() => setEditable(true)} disabled={saving}>Edit</Button>
           )
         }

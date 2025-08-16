@@ -130,6 +130,7 @@ pub async fn get_services(token: String, zfs_pool: String) -> Result<Value, Stri
         "zfs",
         json!({
             "name": format!("ZFS Pool ({})", zfs_pool),
+            "service": "zfs",
             "status": zfs_status
         }),
     );

@@ -11,21 +11,21 @@ const Setup = () => {
   const [selectedDisk, setSelectedDisk] = useState("");
   const [poolName, setPoolName] = useState("diskless");
   const [installing, setInstalling] = useState(false);
-  const { services_status } = useAppStore();
+  const { services } = useAppStore();
 
   useEffect(() => {
     invoke("list_disks").then(setDisks)
     invoke("zfs_pool_exists", { poolName }).then(setPoolExists);
 
     // Check if any services are not installed
-    const hasUninstalledServices = Object.values(services_status).some(
+    const hasUninstalledServices = Object.values(services).some(
       service => !service.installed
     );
 
     // if (!hasUninstalledServices) {
     //   navigate('/');
     // }
-  }, [services_status, navigate]);
+  }, [services, navigate]);
 
   const handleCreatePool = async () => {
     await invoke("create_zfs_pool", { name: poolName, disk: selectedDisk });
@@ -66,7 +66,7 @@ const Setup = () => {
               </tr>
             </thead>
             <tbody>
-              {Object.entries(services_status).map(([key, svc]) => (
+              {Object.entries(services).map(([key, svc]) => (
                 <tr key={key}>
                   <td>{svc.name}</td>
                   <td>{svc.installed ? "Installed" : "Not Installed"}</td>

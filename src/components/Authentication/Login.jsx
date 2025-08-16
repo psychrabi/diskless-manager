@@ -1,34 +1,50 @@
-import { useState } from 'react';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
 import { invoke } from '@tauri-apps/api/core';
 import { useNavigate } from 'react-router-dom';
 import { Card, Input, Button } from '@/components/ui';
+import { useState } from 'react';
+
+// Define validation schema
+const loginSchema = z.object({
+  username: z.string().min(1, 'Username is required'),
+  password: z.string().min(6, 'Password must be at least 6 characters')
+});
 
 const Login = () => {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  const {
+    register,
+    handleSubmit,
+    formState: { errors },
+    reset
+  } = useForm({
+    resolver: zodResolver(loginSchema),
+    defaultValues: {
+      username: '',
+      password: ''
+    }
+  });
+
+  const onSubmit = async (data) => {
     setLoading(true);
     setError('');
 
     try {
-      // Call the login Tauri command
       const response = await invoke('login', {
-        request: { username, password }
+        request: { username: data.username, password: data.password }
       });
 
-      // Store the token in localStorage
       localStorage.setItem('authToken', response.token);
       localStorage.setItem('user', JSON.stringify(response.user));
-
-      // Redirect to the main application
       navigate('/');
     } catch (err) {
       setError(err.message || 'Login failed');
+      reset({ password: '' }); // Clear password field on error
     } finally {
       setLoading(false);
     }
@@ -48,47 +64,49 @@ const Login = () => {
           </div>
         )}
 
-        <form onSubmit={handleSubmit}>
-          <div className="space-y-4">
-            <div>
-              <label htmlFor="username" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Username
-              </label>
-              <Input
-                id="username"
-                type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                required
-                placeholder="Enter your username"
-                className="w-full"
-              />
-            </div>
-
-            <div>
-              <label htmlFor="password" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Password
-              </label>
-              <Input
-                id="password"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                placeholder="Enter your password"
-                className="w-full"
-              />
-            </div>
-
-            <Button
-              type="submit"
-              disabled={loading}
+        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+          <div>
+            <label htmlFor="username" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Username
+            </label>
+            <Input
+              id="username"
+              type="text"
+              register={register('username')}
+              placeholder="Enter your username"
               className="w-full"
-              variant="primary"
-            >
-              {loading ? 'Signing in...' : 'Sign in'}
-            </Button>
+              error={errors.username?.message}
+            />
+            {errors.username && (
+              <p className="mt-1 text-sm text-red-600 dark:text-red-400">{errors.username.message}</p>
+            )}
           </div>
+
+          <div>
+            <label htmlFor="password" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Password
+            </label>
+            <Input
+              id="password"
+              type="password"
+              register={register('password')}
+              placeholder="Enter your password"
+              className="w-full"
+              error={errors.password?.message}
+            />
+            {errors.password && (
+              <p className="mt-1 text-sm text-red-600 dark:text-red-400">{errors.password.message}</p>
+            )}
+          </div>
+
+          <Button
+            type="submit"
+            disabled={loading}
+            className="w-full"
+            variant="primary"
+          >
+            {loading ? 'Signing in...' : 'Sign in'}
+          </Button>
         </form>
 
         <div className="mt-6 text-center text-sm text-gray-600 dark:text-gray-400">
