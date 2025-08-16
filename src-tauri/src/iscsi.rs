@@ -20,29 +20,9 @@ pub fn setup_iscsi_target(
             &format!("iscsi/{}/tpg1", target_iqn),
             "set",
             "attribute",
-            "generate_node_acls=1",
+            "generate_node_acls=1","cache_dynamic_acls=1","demo_mode_write_protect=0","authentication=0",
         ])?;
-        run_command(&[
-            "targetcli",
-            &format!("iscsi/{}/tpg1", target_iqn),
-            "set",
-            "attribute",
-            "cache_dynamic_acls=1",
-        ])?;
-        run_command(&[
-            "targetcli",
-            &format!("iscsi/{}/tpg1", target_iqn),
-            "set",
-            "attribute",
-            "demo_mode_write_protect=0",
-        ])?;
-        run_command(&[
-            "targetcli",
-            &format!("iscsi/{}/tpg1", target_iqn),
-            "set",
-            "attribute",
-            "authentication=0",
-        ])?;
+        
     }
 
     // Determine if this is a fileIO image or ZFS volume

@@ -5,7 +5,7 @@ import { useAuth } from '@/contexts/AuthContext';
 
 const Header = () => {
   const navigate = useNavigate();
-  const { logout } = useAuth();
+  const { logout, user } = useAuth();
 
   return (
     <div className="bg-white dark:bg-gray-900 dark:border-gray-700 px-6 py-4 shadow-xl">
@@ -15,9 +15,9 @@ const Header = () => {
           <p className="text-sm dark:text-gray-200">Administrator Dashboard</p>
         </div>
         <div className="flex items-center gap-4">
-          <span className="badge badge-success">
-            System Online
-          </span>
+          <Button variant="success" className="flex items-center gap-2 capitalize">
+            <Shield className="h-4 w-4" />{user.username}
+          </Button>
           <Button
             variant="destructive"
             onClick={() => {
@@ -28,10 +28,6 @@ const Header = () => {
           >
             <LogOut className="h-4 w-4" />
             Logout
-          </Button>
-          <Button variant="primary" className="flex items-center gap-2">
-            <Shield className="h-4 w-4" />
-            Admin
           </Button>
         </div>
       </div>
