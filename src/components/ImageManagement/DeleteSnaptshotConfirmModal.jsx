@@ -10,7 +10,9 @@ const DeleteSnaptshotConfirmModal = ({ openDeleteSnapshotModal, setOpenDeleteSna
   const confirmDeleteSnapshot = async () => {
     if (!selectedSnapshot) return;
 
-    await invoke('delete_snapshot', { masterName: selectedImage, snapshotName: selectedSnapshot })
+    // Get token from localStorage
+    const token = localStorage.getItem('authToken') || '';
+    await invoke('delete_snapshot', { token, masterName: selectedImage, snapshotName: selectedSnapshot })
       .then((response) => {
         setOpenDeleteSnapshotModal(false);
         if (response.message) showNotification(response.message, 'success');

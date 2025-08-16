@@ -65,7 +65,10 @@ pub struct SambaShare {
 }
 
 #[tauri::command]
-pub async fn get_services(zfs_pool: String) -> Result<Value, String> {
+pub async fn get_services(token: String, zfs_pool: String) -> Result<Value, String> {
+    // Validate authentication token
+    crate::middleware::validate_auth_token_for_command(&token)
+        .map_err(|e| format!("Authentication failed: {}", e.message))?;
     let mut statuses = HashMap::new();
     print!("Getting services status... \n");
     let service_map = vec![
@@ -145,7 +148,10 @@ pub async fn get_services(zfs_pool: String) -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub async fn get_service_config(service_key: String) -> Result<serde_json::Value, String> {
+pub async fn get_service_config(token: String, service_key: String) -> Result<serde_json::Value, String> {
+    // Validate authentication token
+    crate::middleware::validate_auth_token_for_command(&token)
+        .map_err(|e| format!("Authentication failed: {}", e.message))?;
     // Map service keys to config file paths
     let config_file_map: HashMap<&str, &str> = [
         ("isc-dhcp-server", "/etc/dhcp/dhcpd.conf"),
@@ -220,9 +226,13 @@ pub async fn get_service_config(service_key: String) -> Result<serde_json::Value
 
 #[tauri::command]
 pub async fn control_service(
+    token: String,
     service_key: String,
     req: ServiceControlRequest,
 ) -> Result<Value, String> {
+    // Validate authentication token
+    crate::middleware::validate_auth_token_for_command(&token)
+        .map_err(|e| format!("Authentication failed: {}", e.message))?;
     let service_map: HashMap<&str, &str> = [
         ("target", "target.service"),
         ("isc-dhcp-server", "isc-dhcp-server.service"),
@@ -289,7 +299,10 @@ pub async fn install_service(service: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn save_service_config(service_key: String, content: String) -> Result<(), String> {
+pub async fn save_service_config(token: String, service_key: String, content: String) -> Result<(), String> {
+    // Validate authentication token
+    crate::middleware::validate_auth_token_for_command(&token)
+        .map_err(|e| format!("Authentication failed: {}", e.message))?;
     let config_file_map: HashMap<&str, &str> = [
         ("isc-dhcp-server", "/etc/dhcp/dhcpd.conf"),
         ("tftpd-hpa", "/etc/default/tftpd-hpa"),
@@ -482,7 +495,10 @@ pub async fn restart_service(service: &str) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn configure_dhcp_server(config: DHCPConfig) -> Result<String, String> {
+pub async fn configure_dhcp_server(token: String, config: DHCPConfig) -> Result<String, String> {
+    // Validate authentication token
+    crate::middleware::validate_auth_token_for_command(&token)
+        .map_err(|e| format!("Authentication failed: {}", e.message))?;
     println!("Received DHCP config: {:?}", config);
     let dhcp_config = format!(
         r#"# Global Config
@@ -610,7 +626,10 @@ subnet {} netmask {} {{
 }
 
 #[tauri::command]
-pub async fn configure_tftp_server(tftp_root: String) -> Result<String, String> {
+pub async fn configure_tftp_server(token: String, tftp_root: String) -> Result<String, String> {
+    // Validate authentication token
+    crate::middleware::validate_auth_token_for_command(&token)
+        .map_err(|e| format!("Authentication failed: {}", e.message))?;
     let tftp_config = format!(
         r#"# Defaults for tftpd-hpa
 TFTP_USERNAME="tftp"
@@ -636,7 +655,10 @@ TFTP_OPTIONS="--secure"
 }
 
 #[tauri::command]
-pub async fn configure_apache_server(http_root: String) -> Result<String, String> {
+pub async fn configure_apache_server(token: String, http_root: String) -> Result<String, String> {
+    // Validate authentication token
+    crate::middleware::validate_auth_token_for_command(&token)
+        .map_err(|e| format!("Authentication failed: {}", e.message))?;
     let apache_config = format!(
         r#"<VirtualHost *:80>
     DocumentRoot {}
@@ -682,7 +704,10 @@ pub async fn configure_apache_server(http_root: String) -> Result<String, String
 }
 
 #[tauri::command]
-pub async fn configure_samba_server(shares: Vec<SambaShare>) -> Result<String, String> {
+pub async fn configure_samba_server(token: String, shares: Vec<SambaShare>) -> Result<String, String> {
+    // Validate authentication token
+    crate::middleware::validate_auth_token_for_command(&token)
+        .map_err(|e| format!("Authentication failed: {}", e.message))?;
     let mut samba_config = String::from(
         r#"[global]
    workgroup = WORKGROUP

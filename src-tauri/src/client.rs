@@ -164,7 +164,11 @@ pub struct DeprovisionRequest {
 // }
 
 #[tauri::command]
-pub async fn get_clients(client_id: Option<String>) -> Result<serde_json::Value, String> {
+pub async fn get_clients(token: String, client_id: Option<String>) -> Result<serde_json::Value, String> {
+    // Validate authentication token
+    crate::middleware::validate_auth_token_for_command(&token)
+        .map_err(|e| format!("Authentication failed: {}", e.message))?;
+    
     let mut config: Config = read_config();
 
     for client in config.clients.iter_mut() {
@@ -467,7 +471,10 @@ pub fn save_client_config(client_data: &Client) -> bool {
 }
 
 #[tauri::command]
-pub async fn remote_client(client_id: String) -> Result<serde_json::Value, String> {
+pub async fn remote_client(token: String, client_id: String) -> Result<serde_json::Value, String> {
+    // Validate authentication token
+    crate::middleware::validate_auth_token_for_command(&token)
+        .map_err(|e| format!("Authentication failed: {}", e.message))?;
     print!("Remote client: {}", client_id);
     let client = get_client_by_id(&client_id).ok_or_else(|| "Client not found".to_string())?;
 
@@ -603,7 +610,10 @@ pub fn delete_client_config(client_id: &str) -> bool {
 }
 
 #[tauri::command]
-pub async fn add_client(req: AddClientRequest) -> Result<serde_json::Value, String> {
+pub async fn add_client(token: String, req: AddClientRequest) -> Result<serde_json::Value, String> {
+    // Validate authentication token
+    crate::middleware::validate_auth_token_for_command(&token)
+        .map_err(|e| format!("Authentication failed: {}", e.message))?;
     // Validate inputs
     let name = req.name.trim().to_lowercase();
     let mac = req.mac.trim().to_uppercase();
@@ -716,9 +726,13 @@ pub async fn add_client(req: AddClientRequest) -> Result<serde_json::Value, Stri
 
 #[tauri::command]
 pub async fn edit_client(
+    token: String,
     client_id: String,
     data: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
+    // Validate authentication token
+    crate::middleware::validate_auth_token_for_command(&token)
+        .map_err(|e| format!("Authentication failed: {}", e.message))?;
     // Validate client_id format
     if !regex::Regex::new(r"^[\w-]+$").unwrap().is_match(&client_id) {
         return Err("Invalid client ID".to_string());
@@ -972,7 +986,10 @@ pub async fn edit_client(
 }
 
 #[tauri::command]
-pub async fn delete_client(client_id: String) -> Result<serde_json::Value, String> {
+pub async fn delete_client(token: String, client_id: String) -> Result<serde_json::Value, String> {
+    // Validate authentication token
+    crate::middleware::validate_auth_token_for_command(&token)
+        .map_err(|e| format!("Authentication failed: {}", e.message))?;
     let re = regex::Regex::new(r"^[\w-]+$").unwrap();
     if !re.is_match(&client_id) {
         return Err("Invalid client ID".to_string());
@@ -1042,9 +1059,13 @@ pub async fn delete_client(client_id: String) -> Result<serde_json::Value, Strin
 
 #[tauri::command]
 pub async fn control_client(
+    token: String,
     client_id: String,
     req: ControlRequest,
 ) -> Result<serde_json::Value, String> {
+    // Validate authentication token
+    crate::middleware::validate_auth_token_for_command(&token)
+        .map_err(|e| format!("Authentication failed: {}", e.message))?;
     let client =
         get_client_by_id(&client_id).ok_or_else(|| format!("Client {} not found", client_id))?;
 
@@ -1142,7 +1163,10 @@ pub async fn control_client(
 }
 
 #[tauri::command]
-pub async fn reset_client(client_id: String) -> Result<serde_json::Value, String> {
+pub async fn reset_client(token: String, client_id: String) -> Result<serde_json::Value, String> {
+    // Validate authentication token
+    crate::middleware::validate_auth_token_for_command(&token)
+        .map_err(|e| format!("Authentication failed: {}", e.message))?;
     // Validate client ID
     let re = regex::Regex::new(r"^[\w-]+$").unwrap();
     if !re.is_match(&client_id) {
@@ -1222,7 +1246,10 @@ pub async fn reset_client(client_id: String) -> Result<serde_json::Value, String
 }
 
 #[tauri::command]
-pub async fn deprovision_client(req: DeprovisionRequest) -> Result<serde_json::Value, String> {
+pub async fn deprovision_client(token: String, req: DeprovisionRequest) -> Result<serde_json::Value, String> {
+    // Validate authentication token
+    crate::middleware::validate_auth_token_for_command(&token)
+        .map_err(|e| format!("Authentication failed: {}", e.message))?;
     let mac = req.mac;
     let force = req.force.unwrap_or(false);
     let keep_zfs = req.keep_zfs.unwrap_or(false);
@@ -1268,7 +1295,11 @@ pub async fn deprovision_client(req: DeprovisionRequest) -> Result<serde_json::V
 }
 
 #[tauri::command]
-pub async fn deprovision_client_by_id(client_id: String, force: Option<bool>, keep_zfs: Option<bool>) -> Result<serde_json::Value, String> {
+pub async fn deprovision_client_by_id(token: String, client_id: String, force: Option<bool>, keep_zfs: Option<bool>) -> Result<serde_json::Value, String> {
+    // Validate authentication token
+    crate::middleware::validate_auth_token_for_command(&token)
+        .map_err(|e| format!("Authentication failed: {}", e.message))?;
+        
     // Get client by ID to extract MAC address
     let client = get_client_by_id(&client_id)
         .ok_or_else(|| format!("Client {} not found", client_id))?;
@@ -1281,7 +1312,7 @@ pub async fn deprovision_client_by_id(client_id: String, force: Option<bool>, ke
     };
 
     // Call the deprovision function
-    let result = deprovision_client(req).await?;
+    let result = deprovision_client(token, req).await?;
 
     // If deprovisioning was successful, also remove from config
     if let Ok(json_result) = serde_json::from_value::<serde_json::Value>(result.clone()) {
@@ -1297,7 +1328,10 @@ pub async fn deprovision_client_by_id(client_id: String, force: Option<bool>, ke
 }
 
 #[tauri::command]
-pub async fn get_deprovision_status(mac: String) -> Result<serde_json::Value, String> {
+pub async fn get_deprovision_status(token: String, mac: String) -> Result<serde_json::Value, String> {
+    // Validate authentication token
+    crate::middleware::validate_auth_token_for_command(&token)
+        .map_err(|e| format!("Authentication failed: {}", e.message))?;
     // Check if client exists in various systems
     let mut status = serde_json::Map::new();
     

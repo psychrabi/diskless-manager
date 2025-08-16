@@ -51,7 +51,9 @@ const ClientFormModal = ({ client, setClient, masters, isOpen, setIsOpen, refres
     setIsOpen(false);
     if (!client.id) {
       showNotification(`Adding new client ${data.name}`, 'info');
-      await invoke('add_client', { req: data }).then((response) => {
+      // Get token from localStorage
+      const token = localStorage.getItem('authToken') || '';
+      await invoke('add_client', { token, req: data }).then((response) => {
         if (response.message) showNotification(response.message, 'success');
       }).catch((error) => {
         showNotification(error, 'error');
@@ -60,7 +62,10 @@ const ClientFormModal = ({ client, setClient, masters, isOpen, setIsOpen, refres
       });
     } else {
       showNotification(`Editing client ${data.name}`, 'info');
+      // Get token from localStorage
+      const token = localStorage.getItem('authToken') || '';
       await invoke('edit_client', {
+        token,
         clientId: client.id, data: {
           name: data.name,
           mac: data.mac,

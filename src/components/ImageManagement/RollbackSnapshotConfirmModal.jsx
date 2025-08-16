@@ -8,7 +8,9 @@ const RollbackSnapshotConfirmModal = ({ open, setOpen, selectedSnapshot, selecte
 
   const confirmRollback = async () => {
     if (!selectedSnapshot || !selectedImage) return;
-    await invoke('rollback_master_snapshot', { masterName: selectedImage, snapshotName: selectedSnapshot })
+    // Get token from localStorage
+    const token = localStorage.getItem('authToken') || '';
+    await invoke('rollback_master_snapshot', { token, masterName: selectedImage, snapshotName: selectedSnapshot })
       .then((response) => {
         setOpen(false);
         if (response.message) showNotification(response.message, 'success');

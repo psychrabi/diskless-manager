@@ -33,7 +33,9 @@ const CreateSnapshotModal = ({ openSnapshotCreateModal, setOpenSnapshotCreateMod
 
     const fullSnapshotName = `${selectedImage}@${data.name}`;
     showNotification(`Adding new snapshot ${fullSnapshotName}`, 'info');
-    await invoke('create_snapshot', { masterName: selectedImage, snapshotName: fullSnapshotName })
+    // Get token from localStorage
+    const token = localStorage.getItem('authToken') || '';
+    await invoke('create_snapshot', { token, masterName: selectedImage, snapshotName: fullSnapshotName })
       .then((response) => {
         if (response.message) showNotification(response.message, 'success');
       }).catch((error) => {

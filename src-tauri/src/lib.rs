@@ -1,7 +1,9 @@
+mod auth;
 mod client;
 mod config;
 mod dhcp;
 mod iscsi;
+mod middleware;
 mod service;
 mod utils;
 mod zfs;
@@ -56,6 +58,9 @@ pub fn run() {
         }))
         .invoke_handler(tauri::generate_handler![
             get_server_info,
+            auth::login,
+            auth::validate_auth_token,
+            middleware::authenticate,
             client::get_clients,
             client::add_client,
             client::edit_client,

@@ -60,7 +60,9 @@ export default function DHCPConfigForm({dhcp = {}}) {
   const onSubmit = async (data) => {
     console.log(data)
     showNotification(`Updating DHCP Configurations`, 'info');
-    await invoke('configure_dhcp_server', { config: data }).then((response) => {
+    // Get token from localStorage
+    const token = localStorage.getItem('authToken') || '';
+    await invoke('configure_dhcp_server', { token, config: data }).then((response) => {
       if (response.message) showNotification(response.message, 'success');
     }).catch((error) => {
       showNotification(error, 'error');

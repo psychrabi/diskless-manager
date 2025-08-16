@@ -36,9 +36,12 @@ const RenameImageModal = ({ openRenameModal, setOpenRenameModal, selectedImage, 
 
     setOpenRenameModal(false);
 
-    await invoke('rename_master', { 
-      oldName: selectedImage, 
-      newName: data.newName 
+    // Get token from localStorage
+    const token = localStorage.getItem('authToken') || '';
+    await invoke('rename_master', {
+      token,
+      oldName: selectedImage,
+      newName: data.newName
     })
       .then((response) => {
         if (response.message) showNotification(response.message, 'success');

@@ -104,7 +104,10 @@ fn parse_zfs_list(output: &str) -> Vec<Snapshot> {
 }
 
 #[tauri::command]
-pub fn create_master(name: String, size: String) -> Result<Value, String> {
+pub fn create_master(token: String, name: String, size: String) -> Result<Value, String> {
+    // Validate authentication token
+    crate::middleware::validate_auth_token_for_command(&token)
+        .map_err(|e| format!("Authentication failed: {}", e.message))?;
     if !regex::Regex::new(r"^[\w-]+$").unwrap().is_match(&name) {
         return Err("Invalid master base name format (use alphanumeric, _, -).".to_string());
     }
@@ -166,7 +169,10 @@ pub fn create_master(name: String, size: String) -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub fn create_fileio_master(name: String, size: String) -> Result<Value, String> {
+pub fn create_fileio_master(token: String, name: String, size: String) -> Result<Value, String> {
+    // Validate authentication token
+    crate::middleware::validate_auth_token_for_command(&token)
+        .map_err(|e| format!("Authentication failed: {}", e.message))?;
     if !regex::Regex::new(r"^[\w-]+$").unwrap().is_match(&name) {
         return Err("Invalid master base name format (use alphanumeric, _, -).".to_string());
     }
@@ -242,7 +248,10 @@ pub fn create_fileio_master(name: String, size: String) -> Result<Value, String>
 }
 
 #[tauri::command]
-pub async fn get_masters(zfs_pool: String) -> Result<Vec<Master>, String> {
+pub async fn get_masters(token: String, zfs_pool: String) -> Result<Vec<Master>, String> {
+    // Validate authentication token
+    crate::middleware::validate_auth_token_for_command(&token)
+        .map_err(|e| format!("Authentication failed: {}", e.message))?;
     // 1. Get default master from config
     let mut config = get_config();
     let default_master = config
@@ -402,8 +411,11 @@ pub fn save_master_config(master_data: &MasterData) -> bool {
 }
 
 #[tauri::command]
-pub async fn delete_master(master_name: String) -> Result<serde_json::Value, String> {
-    let clients_result = get_clients(None).await;
+pub async fn delete_master(token: String, master_name: String) -> Result<serde_json::Value, String> {
+    // Validate authentication token
+    crate::middleware::validate_auth_token_for_command(&token)
+        .map_err(|e| format!("Authentication failed: {}", e.message))?;
+    let clients_result = get_clients("".to_string(), None).await;
     if let Ok(clients_json) = clients_result {
         if let Some(clients) = clients_json.as_array() {
             let dependent_clients: Vec<String> = clients
@@ -484,7 +496,10 @@ pub fn delete_master_config(master_name: &str) -> bool {
 }
 
 #[tauri::command]
-pub fn create_snapshot(snapshot_name: String) -> Result<Value, String> {
+pub fn create_snapshot(token: String, snapshot_name: String) -> Result<Value, String> {
+    // Validate authentication token
+    crate::middleware::validate_auth_token_for_command(&token)
+        .map_err(|e| format!("Authentication failed: {}", e.message))?;
     if !snapshot_name.contains('@') || !snapshot_name.starts_with(&format!("{}/", crate::ZFS_POOL)) {
         return Err(format!(
             "Invalid snapshot name. Expected {}/master@snapname",
@@ -534,11 +549,14 @@ pub fn create_snapshot(snapshot_name: String) -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub async fn delete_snapshot(snapshot_name: String) -> Result<Value, String> {
+pub async fn delete_snapshot(token: String, snapshot_name: String) -> Result<Value, String> {
+    // Validate authentication token
+    crate::middleware::validate_auth_token_for_command(&token)
+        .map_err(|e| format!("Authentication failed: {}", e.message))?;
     if !snapshot_name.contains('@') || !snapshot_name.starts_with(&format!("{}/", crate::ZFS_POOL)) {
         return Err("Invalid snapshot name format.".to_string());
     }
-    let clients_result = get_clients(None).await;
+    let clients_result = get_clients("".to_string(), None).await;
     if let Ok(clients_json) = clients_result {
         if let Some(clients) = clients_json.as_array() {
             let dependent_clients: Vec<String> = clients
@@ -667,24 +685,30 @@ pub fn create_zfs_pool(name: String, disk: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn set_default_master(name: &str) -> bool {
+pub fn set_default_master(token: String, name: &str) -> Result<bool, String> {
+    // Validate authentication token
+    crate::middleware::validate_auth_token_for_command(&token)
+        .map_err(|e| format!("Authentication failed: {}", e.message))?;
     let mut config = get_config();
     if !config.settings.is_object() {
         config.settings = json!({});
     }
     config.settings["default_master"] = Value::String(name.to_string());
     match write_config(&config) {
-        Ok(_) => true,
+        Ok(_) => Ok(true),
         Err(e) => {
             println!("Error saving default master: {}", e);
-            false
+            Err(format!("Error saving default master: {}", e))
         }
     }
 }
 
 
 #[tauri::command]
-pub async fn rollback_master_snapshot(master_name: String, snapshot_name: String) -> Result<serde_json::Value, String> {    
+pub async fn rollback_master_snapshot(token: String, master_name: String, snapshot_name: String) -> Result<serde_json::Value, String> {
+    // Validate authentication token
+    crate::middleware::validate_auth_token_for_command(&token)
+        .map_err(|e| format!("Authentication failed: {}", e.message))?;
     // 1. Rollback the snapshot
     let rollback_output = Command::new("sudo")
         .args(["zfs", "rollback", "-r", &snapshot_name])
@@ -698,7 +722,7 @@ pub async fn rollback_master_snapshot(master_name: String, snapshot_name: String
     }
 
     // 2. Find all clients that were using this snapshot as their base
-    let clients_json = get_clients(None).await.map_err(|e| format!("Failed to get clients: {}", e))?;
+    let clients_json = get_clients("".to_string(), None).await.map_err(|e| format!("Failed to get clients: {}", e))?;
     let mut recreated = vec![];
     if let Some(clients) = clients_json.as_array() {
         for client in clients {
@@ -813,7 +837,10 @@ pub async fn get_master_image_overview() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-pub async fn rename_master(old_name: String, new_name: String) -> Result<serde_json::Value, String> {
+pub async fn rename_master(token: String, old_name: String, new_name: String) -> Result<serde_json::Value, String> {
+    // Validate authentication token
+    crate::middleware::validate_auth_token_for_command(&token)
+        .map_err(|e| format!("Authentication failed: {}", e.message))?;
     // Validate new name format
     if !regex::Regex::new(r"^[\w-]+$").unwrap().is_match(&new_name) {
         return Err("Invalid master base name format (use alphanumeric, _, -).".to_string());
@@ -834,7 +861,7 @@ pub async fn rename_master(old_name: String, new_name: String) -> Result<serde_j
     }
 
     // Check for dependent clients
-    let clients_result = get_clients(None).await;
+    let clients_result = get_clients("".to_string(), None).await;
     if let Ok(clients_json) = clients_result {
         if let Some(clients) = clients_json.as_array() {
             let dependent_clients: Vec<String> = clients

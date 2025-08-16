@@ -9,7 +9,9 @@ const DeleteImageConfirmModal = ({ openDeleteMasterModal, setOpenDeleteMasterMod
   const confirmDeleteMaster = async () => {
     if (!selectedImage) return;
 
-    await invoke('delete_master', { masterName: selectedImage })
+    // Get token from localStorage
+    const token = localStorage.getItem('authToken') || '';
+    await invoke('delete_master', { token, masterName: selectedImage })
       .then((response) => {
         setOpenDeleteMasterModal(false);
         if (response.message) showNotification(response.message, 'success');

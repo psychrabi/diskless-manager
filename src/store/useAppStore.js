@@ -35,10 +35,12 @@ export const useAppStore = create()(
         if (showLoading) set({ loading: true });
         set({ error: null });
         try {
+          // Get token from localStorage
+          const token = localStorage.getItem('authToken') || '';
           const [servicesRes, mastersRes, clientsRes, services_status] = await Promise.all([
-            invoke('check_package_status'),
-            invoke('get_masters', { 'zfsPool': 'diskless' }),
-            invoke('get_clients'),
+            invoke('get_services', { token, 'zfsPool': 'diskless' }),
+            invoke('get_masters', { token, 'zfsPool': 'diskless' }),
+            invoke('get_clients', { token }),
             invoke("check_package_status")
           ]);
           console.log(mastersRes)
@@ -68,7 +70,9 @@ export const useAppStore = create()(
         if (_pollIntervalId) return; // already running
         const id = setInterval(async () => {
           try {
-            const clientsRes = await invoke('get_clients');
+            // Get token from localStorage
+            const token = localStorage.getItem('authToken') || '';
+            const clientsRes = await invoke('get_clients', { token });
             set({ clients: clientsRes ? Object.values(clientsRes) : [] });
           } catch (err) {
             // ignore transient errors

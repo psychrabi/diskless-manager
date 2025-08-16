@@ -21,6 +21,37 @@ const SettingManagement = ({ dhcp = {}, refresh }) => {
         {/* TFTP Server Configuration */}
         <TFTPConfigForm />
 
+        {/* Samba Server Configuration */}
+        {/* <Card title="Samba Server Configuration" icon={Shield} >
+          <div className="space-y-4">
+            <div>
+              <label className="label">
+                <input type="checkbox" defaultChecked className="toggle" />
+                Enable Samba Sharing
+              </label>
+            </div>
+            <div>
+              <Input id="sambaShareName" type="text" defaultValue="diskless" placeholder="Share Name" />
+            </div>
+            <div>
+              <Input id="sambaSharePath" type="text" defaultValue="/srv/tftp" placeholder="Share Path" />
+            </div>
+            <div>
+              <label className="label">
+                <input type="checkbox" defaultChecked className="toggle" />
+                Read Only
+              </label>
+            </div>
+            <div>
+              <label className="label">
+                <input type="checkbox" defaultChecked className="toggle" />
+                Guest Access
+              </label>
+            </div>
+            <Button variant="primary">Save Samba Settings</Button>
+          </div>
+        </Card> */}
+
         {/* Security Settings */}
         {/* <Card title="Security Settings" icon={Shield} >
           <div className="space-y-4">

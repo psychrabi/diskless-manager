@@ -14,7 +14,10 @@ export const useServiceManager = () => {
   const fetchData = useAppStore(state => state.fetchData)
 
   const handleServiceAction = useCallback(async (serviceKey, action) => {
+    // Get token from localStorage
+    const token = localStorage.getItem('authToken') || '';
     await invoke('control_service', {
+      token,
       serviceKey: serviceKey,
       req: { action: action }
     }).then((response) => {
@@ -28,7 +31,9 @@ export const useServiceManager = () => {
     setLoading(true);
     setServiceKey(serviceKey)
     try {
-      const configData = await invoke('get_service_config', { serviceKey });
+      // Get token from localStorage
+      const token = localStorage.getItem('authToken') || '';
+      const configData = await invoke('get_service_config', { token, serviceKey });
       if (configData && typeof configData === 'object' && 'text' in configData) {
         setConfig(configData.text);
       } else if (typeof configData === 'object') {
@@ -46,7 +51,9 @@ export const useServiceManager = () => {
   const handleConfigSave = async (serviceKey, content) => {
     setSaving(true);
     try {
-      await invoke('save_service_config', { serviceKey: serviceKey, content: content });
+      // Get token from localStorage
+      const token = localStorage.getItem('authToken') || '';
+      await invoke('save_service_config', { token, serviceKey: serviceKey, content: content });
       showNotification('Configuration saved successfully', 'success');
       fetchData();
     } catch (err) {

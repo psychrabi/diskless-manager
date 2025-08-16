@@ -1,9 +1,11 @@
 import { Button } from '@/components/ui';
-import { Shield, User } from 'lucide-react';
+import { Shield, User, LogOut } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { useAuth } from '@/contexts/AuthContext';
 
 const Header = () => {
   const navigate = useNavigate();
+  const { logout } = useAuth();
 
   return (
     <div className="bg-white dark:bg-gray-900 dark:border-gray-700 px-6 py-4 shadow-xl">
@@ -16,14 +18,17 @@ const Header = () => {
           <span className="badge badge-success">
             System Online
           </span>
-          {/* <Button
-            variant="secondary"
-            onClick={() => navigate('/client')}
+          <Button
+            variant="destructive"
+            onClick={() => {
+              logout();
+              navigate('/login');
+            }}
             className="flex items-center gap-2"
           >
-            <User className="h-4 w-4" />
-            Client Portal
-          </Button> */}
+            <LogOut className="h-4 w-4" />
+            Logout
+          </Button>
           <Button variant="primary" className="flex items-center gap-2">
             <Shield className="h-4 w-4" />
             Admin

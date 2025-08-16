@@ -11,7 +11,10 @@ export const useDeprovisioning = () => {
     setError(null);
     
     try {
+      // Get token from localStorage
+      const token = localStorage.getItem('authToken') || '';
       const result = await invoke('deprovision_client', {
+        token,
         req: {
           mac,
           force: options.force || false,
@@ -35,7 +38,10 @@ export const useDeprovisioning = () => {
     setError(null);
     
     try {
+      // Get token from localStorage
+      const token = localStorage.getItem('authToken') || '';
       const result = await invoke('deprovision_client_by_id', {
+        token,
         clientId,
         force: options.force || false,
         keep_zfs: options.keep_zfs || false,
@@ -53,7 +59,9 @@ export const useDeprovisioning = () => {
 
   const getDeprovisionStatus = async (mac) => {
     try {
-      const status = await invoke('get_deprovision_status', { mac });
+      // Get token from localStorage
+      const token = localStorage.getItem('authToken') || '';
+      const status = await invoke('get_deprovision_status', { token, mac });
       return { success: true, data: status };
     } catch (err) {
       return { success: false, error: err.toString() };

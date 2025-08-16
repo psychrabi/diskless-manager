@@ -42,7 +42,9 @@ const CreateImageModal = ({ openImageCreateModal, setOpenImageCreateModal }) => 
     setOpenImageCreateModal(false);
 
     if (data.imageType === 'zfs') {
-      await invoke('create_master', { name: data.name, size: data.size })
+      // Get token from localStorage
+      const token = localStorage.getItem('authToken') || '';
+      await invoke('create_master', { token, name: data.name, size: data.size })
         .then((response) => {
           console.log(response)
           if (response.message) showNotification(response.message, 'success');
@@ -50,7 +52,9 @@ const CreateImageModal = ({ openImageCreateModal, setOpenImageCreateModal }) => 
           showNotification(error, 'error',)
         })
     } else {
-      await invoke('create_fileio_master', { name: data.name, size: data.size })
+      // Get token from localStorage
+      const token = localStorage.getItem('authToken') || '';
+      await invoke('create_fileio_master', { token, name: data.name, size: data.size })
         .then((response) => {
           console.log(response)
           if (response.message) showNotification(response.message, 'success');

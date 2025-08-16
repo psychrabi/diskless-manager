@@ -7,31 +7,37 @@ const ImageManagement = lazy(() => import("@/components/ImageManagement"));
 const ServiceManagement = lazy(() => import("@/components/ServiceManagement"));
 const Setup = lazy(() => import("@/components/Setup"));
 const SettingManagement = lazy(() => import("@/components/SettingsManagement"));
+const Login = lazy(() => import("@/components/Authentication/Login"));
+const ProtectedRoute = lazy(() => import("@/components/Authentication/ProtectedRoute"));
 
 export const router = createBrowserRouter([
+  {
+    path: "/login",
+    element: <Login />,
+  },
 	{
 		path: "/",
-		Component: MainLayout,
+		element: <ProtectedRoute><MainLayout /></ProtectedRoute>,
 		children: [
 			{
-				path: "/",
-				Component: ServiceManagement,
+				index: true,
+				element: <ServiceManagement />,
 			},
 			{
 				path: "/clients",
-				Component: ClientManagement,
+				element: <ClientManagement />,
 			},
 			{
 				path: "/masters",
-				Component: ImageManagement,
+				element: <ImageManagement />,
 			},
 			{
 				path: "/settings",
-				Component: SettingManagement,
+				element: <SettingManagement />,
 			},
 			{
 				path: "/setup",
-				Component: Setup,
+				element: <Setup />,
 			},
 		],
 	},

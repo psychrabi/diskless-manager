@@ -13,7 +13,10 @@ export const clientContextMenuActions = (fetchData, closeContextMenu, setClient,
     },
     reboot: async (client) => {
       if (client.status !== 'Online') { showNotification('Client must be online to reboot.', 'error'); return; }
+      // Get token from localStorage
+      const token = localStorage.getItem('authToken') || '';
       await invoke('control_client', {
+        token,
         clientId: client.id,
         req: { action: 'reboot' }
       }).then((response) => {
@@ -22,8 +25,11 @@ export const clientContextMenuActions = (fetchData, closeContextMenu, setClient,
     },
     shutdown: async (client) => {
       if (client.status !== 'Online') { showNotification('Client must be online to shutdown.', 'error'); return; }
+      // Get token from localStorage
+      const token = localStorage.getItem('authToken') || '';
       await invoke('control_client',
         {
+          token,
           clientId: client.id, req: { action: 'shutdown' }
         }).then((response) => {
           if (response.message) showNotification(response.message, 'success');
@@ -31,7 +37,10 @@ export const clientContextMenuActions = (fetchData, closeContextMenu, setClient,
     },
     wake: async (client) => {
       if (client.status === 'Online') { showNotification('Client must be offline to wake', 'error'); return; }
+      // Get token from localStorage
+      const token = localStorage.getItem('authToken') || '';
       await invoke('control_client', {
+        token,
         clientId: client.id,
         req: { action: 'wake' }
       }).then((response) => {
@@ -40,7 +49,10 @@ export const clientContextMenuActions = (fetchData, closeContextMenu, setClient,
     },
     remote: async (client) => {
       if (client.status !== 'Online') { showNotification('Client must be online to connect remotely', 'error'); return; }
+      // Get token from localStorage
+      const token = localStorage.getItem('authToken') || '';
       await invoke('remote_client', {
+        token,
         clientId: client.id,
       }).then((response) => {
         if (response.message) showNotification(response.message, 'success');
@@ -48,7 +60,10 @@ export const clientContextMenuActions = (fetchData, closeContextMenu, setClient,
     },
     reset: async (client) => {
       if (client.status !== 'Offline') { showNotification('Client must be offline before you can reset', 'error'); return; }
+      // Get token from localStorage
+      const token = localStorage.getItem('authToken') || '';
       await invoke('reset_client', {
+        token,
         clientId: client.id,
       }).then((response) => {
         if (response.message) showNotification(response.message, 'success');
@@ -59,7 +74,9 @@ export const clientContextMenuActions = (fetchData, closeContextMenu, setClient,
 
       showNotification(`Deleting client... ${client.name}`, 'info');
       if (confirm(`Are you sure you want to delete client "${client.name}"? This will destroy their ZFS clone and remove configurations.`)) {
-        invoke('delete_client', { clientId: client.id })
+        // Get token from localStorage
+        const token = localStorage.getItem('authToken') || '';
+        invoke('delete_client', { token, clientId: client.id })
           .then((response) => {
             if (response.message) showNotification(response.message, 'success');
           }).catch((error) => showNotification(error, 'error'))

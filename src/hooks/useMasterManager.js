@@ -25,7 +25,9 @@ export const useMasterManager = () => {
   const handleCreateMasterSubmit = async (event) => {
     event.preventDefault();
     setIsCreateMasterModalOpen(false); // Close modal
-    await invoke('create_master', { name: newMasterName, size: newMasterSize })
+    // Get token from localStorage
+    const token = localStorage.getItem('authToken') || '';
+    await invoke('create_master', { token, name: newMasterName, size: newMasterSize })
       .then((response) => {
         if (response.message) showNotification(response.message, 'success');
       }).catch((error) => {
@@ -37,7 +39,9 @@ export const useMasterManager = () => {
   };
 
   const handleCreateSnapshot = (snapshotName) => {
-    invoke('create_snapshot', { masterName: selectedMaster, snapshotName })
+    // Get token from localStorage
+    const token = localStorage.getItem('authToken') || '';
+    invoke('create_snapshot', { token, masterName: selectedMaster, snapshotName })
       .then((response) => {
         if (response.message) showNotification(response.message, 'success');
       }).catch((error) => {
@@ -56,7 +60,9 @@ export const useMasterManager = () => {
   const confirmDeleteSnapshot = () => {
     if (!snapshotToDelete) return;
 
-    invoke('delete_snapshot', { masterName: selectedMaster, snapshotName: snapshotToDelete })
+    // Get token from localStorage
+    const token = localStorage.getItem('authToken') || '';
+    invoke('delete_snapshot', { token, masterName: selectedMaster, snapshotName: snapshotToDelete })
       .then((response) => {
         if (response.message) showNotification(response.message, 'success');
       }).catch((error) => {
@@ -69,7 +75,9 @@ export const useMasterManager = () => {
   };
 
   const setDefaultMaster = async (masterName) => {
-    invoke('set_default_master', { name: masterName })
+    // Get token from localStorage
+    const token = localStorage.getItem('authToken') || '';
+    invoke('set_default_master', { token, name: masterName })
       .then((response) => {
         if (response.message) showNotification(response.message, 'success');
       }).catch((error) => {
@@ -82,7 +90,9 @@ export const useMasterManager = () => {
   const confirmDeleteMaster = () => {
     if (!selectedMaster) return;
 
-    invoke('delete_master', { masterName: selectedMaster })
+    // Get token from localStorage
+    const token = localStorage.getItem('authToken') || '';
+    invoke('delete_master', { token, masterName: selectedMaster })
       .then((response) => {
         if (response.message) showNotification(response.message, 'success');
       }).catch((error) => {
