@@ -57,6 +57,20 @@ pub struct DHCPConfig {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct TFTPConfig {
+    pub tftp_root: String,
+    pub tftp_server_ip: String,
+    pub tftp_options: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct HTTPConfig {
+    pub http_root: String,
+    pub http_server_ip: String,
+    pub http_server_port: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SambaShare {
     name: String,
     path: String,
@@ -627,26 +641,26 @@ subnet {} netmask {} {{
 }
 
 #[tauri::command]
-pub async fn configure_tftp_server(token: String, tftp_root: String) -> Result<String, String> {
+pub async fn configure_tftp_server(token: String, tftp_config: TFTPConfig) -> Result<String, String> {
     // Validate authentication token
     crate::middleware::validate_auth_token_for_command(&token)
         .map_err(|e| format!("Authentication failed: {}", e.message))?;
-    let tftp_config = format!(
+    let tftp_content = format!(
         r#"# Defaults for tftpd-hpa
 TFTP_USERNAME="tftp"
 TFTP_DIRECTORY="{}"
-TFTP_ADDRESS="0.0.0.0:69"
-TFTP_OPTIONS="--secure"
+TFTP_ADDRESS="{}:69"
+TFTP_OPTIONS="{}"
 "#,
-        tftp_root
+        tftp_config.tftp_root, tftp_config.tftp_server_ip, tftp_config.tftp_options
     );
 
     // Create TFTP directory if it doesn't exist
-    if let Err(e) = fs::create_dir_all(&tftp_root) {
+    if let Err(e) = fs::create_dir_all(&tftp_config.tftp_root) {
         return Err(format!("Failed to create TFTP directory: {}", e));
     }
 
-    match fs::write("/etc/default/tftpd-hpa", tftp_config) {
+    match fs::write("/etc/default/tftpd-hpa", tftp_content) {
         Ok(_) => {
             restart_service("tftpd-hpa").await?;
             Ok("TFTP server configured successfully".to_string())
@@ -656,12 +670,12 @@ TFTP_OPTIONS="--secure"
 }
 
 #[tauri::command]
-pub async fn configure_apache_server(token: String, http_root: String) -> Result<String, String> {
+pub async fn configure_apache_server(token: String, http_config: HTTPConfig) -> Result<String, String> {
     // Validate authentication token
     crate::middleware::validate_auth_token_for_command(&token)
         .map_err(|e| format!("Authentication failed: {}", e.message))?;
     let apache_config = format!(
-        r#"<VirtualHost *:80>
+        r#"<VirtualHost {}:{}>
     DocumentRoot {}
     ServerName diskless-server
     
@@ -678,11 +692,11 @@ pub async fn configure_apache_server(token: String, http_root: String) -> Result
     </Directory>
 </VirtualHost>
 "#,
-        http_root, http_root, http_root
+        http_config.http_server_ip, http_config.http_server_port, http_config.http_root, http_config.http_root, http_config.http_root
     );
 
     // Create HTTP directory if it doesn't exist
-    if let Err(e) = fs::create_dir_all(&http_root) {
+    if let Err(e) = fs::create_dir_all(&http_config.http_root) {
         return Err(format!("Failed to create HTTP directory: {}", e));
     }
 

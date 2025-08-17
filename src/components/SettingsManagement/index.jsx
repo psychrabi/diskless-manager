@@ -1,6 +1,7 @@
 
 import BootFileConfigForm from './BootFileConfigForm';
 import DHCPConfigForm from './DHCPConfigForm';
+import HTTPConfigForm from './HTTPConfigForm';
 import TFTPConfigForm from './TFTPConfigForm';
 
 const SettingManagement = ({ dhcp = {}, refresh }) => {
@@ -20,6 +21,9 @@ const SettingManagement = ({ dhcp = {}, refresh }) => {
 
         {/* TFTP Server Configuration */}
         <TFTPConfigForm />
+
+        {/* TFTP Server Configuration */}
+        <HTTPConfigForm />
 
         {/* Samba Server Configuration */}
         {/* <Card title="Samba Server Configuration" icon={Shield} >

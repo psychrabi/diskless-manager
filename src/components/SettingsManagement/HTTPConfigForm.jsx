@@ -5,7 +5,7 @@ import { useNotification } from "@/contexts/NotificationContext";
 import { invoke } from "@tauri-apps/api/core";
 
 
-export default function TFTPConfigForm() {
+export default function HTTPConfigForm() {
   const { showNotification } = useNotification();
 
   const {
@@ -19,10 +19,10 @@ export default function TFTPConfigForm() {
 
   const onSubmit = async (data) => {
     console.log(data);
-    showNotification(`Updating TFTP Configurations`, 'info');
+    showNotification(`Updating HTTP Configurations`, 'info');
     // Get token from localStorage
     const token = localStorage.getItem('authToken') || '';
-    await invoke('configure_tftp_server', { token, tftpConfig: data })
+    await invoke('configure_apache_server', { token, httpConfig: data })
       .then((response) => {
         if (response.message) showNotification(response.message, 'success');
       })
@@ -33,15 +33,15 @@ export default function TFTPConfigForm() {
   };
 
   return (
-    <Card title="TFTP Server Configuration" icon={Network} className=''>
+    <Card title="HTTP Server Configuration" icon={Network} className=''>
       <form onSubmit={handleSubmit(onSubmit)}>
         <div className="space-y-4">
           <div className='grid grid-cols-2 gap-2'>
-            <Input id="tftp_root" defaultValue="/srv/tftp" register={register("tftp_root")} label="TFTP Root Directory" className="w-full" placeholder="/srv/tftp"/>          
-            <Input id="tftp_server_ip" defaultValue="192.168.1.50" register={register("tftp_server_ip")} label="TFTP Server IP" className="w-full" placeholder="192.168.1.250"/>
-            <Input id="tftp_options" defaultValue="--secure" register={register("tftp_options")} label="TFTP Options" className="w-full" placeholder="--secure"/>              
+            <Input id="http_root" defaultValue="/srv/http" register={register("http_root")} label="HTTP Root Directory" className="w-full" placeholder="/srv/http"/>          
+            <Input id="http_server_ip" defaultValue="192.168.1.50" register={register("http_server_ip")} label="HTTP Server IP" className="w-full" placeholder="192.168.1.250"/>            
+            <Input id="http_server_port" defaultValue="80" register={register("http_server_port")} label="HTTP Server Port" className="w-full" placeholder="80"/>
           </div>
-          <Button variant="primary" type="submit">Save TFTP Settings</Button>
+          <Button variant="primary" type="submit">Save HTTP Settings</Button>
         </div>
       </form>
     </Card>
