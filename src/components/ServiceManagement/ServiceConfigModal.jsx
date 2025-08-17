@@ -30,7 +30,7 @@ function ServiceConfigModal() {
     setOpen(false)
   }
 
-  
+
 
   return (
     <Modal isOpen={open} onClose={() => setOpen(false)} title={title} size="5xl">
@@ -40,7 +40,7 @@ function ServiceConfigModal() {
         </div>
       ) : (
         editable ? (
-          <textarea 
+          <textarea
             className="bg-gray-100 dark:bg-gray-900 p-4 rounded-md text-xs overflow-auto h-[80vh] w-full font-mono max-h-[80vh]"
             value={config}
             onChange={handleChange}
@@ -56,10 +56,8 @@ function ServiceConfigModal() {
       <div className="mt-4 flex justify-end space-x-2">
         {editable ? (
           <Button onClick={() => handleSave()} loading={saving} disabled={saving || loading}>Save</Button>
-        ): 
-          ((serviceKey !== 'iscsi') || (serviceKey !== 'zfs') && 
+        ) :
           <Button onClick={() => setEditable(true)} disabled={saving}>Edit</Button>
-          )
         }
         <Button variant="outline" onClick={() => handleCancel()} disabled={saving}>Cancel</Button>
       </div>

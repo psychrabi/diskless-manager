@@ -1,9 +1,9 @@
-import { useForm } from "react-hook-form";
+import { useForm, useFormContext } from "react-hook-form";
 import { Button, Card, Input } from "../ui";
 import { Network } from "lucide-react";
 import { useNotification } from "@/contexts/NotificationContext";
 import { invoke } from "@tauri-apps/api/core";
-
+import { useEffect } from "react";
 
 export default function TFTPConfigForm() {
   const { showNotification } = useNotification();
@@ -12,10 +12,29 @@ export default function TFTPConfigForm() {
     register,
     handleSubmit,
     formState: { errors },
-    setValue,
     reset,
-    watch,
-  } = useForm();
+  } = useForm({
+    defaultValues: {
+      tftp_root: "/srv/tftp",
+      tftp_server_ip: "0.0.0.0",
+      tftp_options: "--secure"
+    }
+  });
+
+  // Load saved config on component mount
+  useEffect(() => {
+    const loadConfig = async () => {
+      try {
+        const config = await invoke('read_config');
+        if (config?.settings?.tftp) {
+          reset(config.settings.tftp);
+        }
+      } catch (error) {
+        console.error('Failed to load TFTP config:', error);
+      }
+    };
+    loadConfig();
+  }, [reset]);
 
   const onSubmit = async (data) => {
     console.log(data);
@@ -37,9 +56,9 @@ export default function TFTPConfigForm() {
       <form onSubmit={handleSubmit(onSubmit)}>
         <div className="space-y-4">
           <div className='grid grid-cols-2 gap-2'>
-            <Input id="tftp_root" defaultValue="/srv/tftp" register={register("tftp_root")} label="TFTP Root Directory" className="w-full" placeholder="/srv/tftp"/>          
-            <Input id="tftp_server_ip" defaultValue="192.168.1.50" register={register("tftp_server_ip")} label="TFTP Server IP" className="w-full" placeholder="192.168.1.250"/>
-            <Input id="tftp_options" defaultValue="--secure" register={register("tftp_options")} label="TFTP Options" className="w-full" placeholder="--secure"/>              
+            <Input id="tftp_root" register={register("tftp_root")} label="TFTP Root Directory" className="w-full" placeholder="/srv/tftp" />
+            <Input id="tftp_server_ip" register={register("tftp_server_ip")} label="TFTP Server IP" className="w-full" placeholder="0.0.0.0" />
+            <Input id="tftp_options" register={register("tftp_options")} label="TFTP Options" className="w-full" placeholder="--secure" />
           </div>
           <Button variant="primary" type="submit">Save TFTP Settings</Button>
         </div>

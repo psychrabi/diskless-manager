@@ -49,6 +49,7 @@ pub struct Client {
     pub block_device: Option<String>,
     pub status: Option<String>,
     pub mode: Option<String>,
+    pub pxe_mode: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -299,6 +300,7 @@ fn discover_dynamic_clients() -> Vec<Client> {
                     block_device: None,
                     status: Some(String::from("Leased")),
                     mode: None,
+                    pxe_mode: None,
                 },
             );
         }
@@ -713,6 +715,7 @@ pub async fn add_client(token: String, req: AddClientRequest) -> Result<serde_js
         last_modified: Some(now.clone()),
         status: None,
         mode: None,
+        pxe_mode: Some("uefi".to_string()),
     };
     if !save_client_config(&client_data) {
         println!("Warning: Failed to save client configuration for {}", name);
@@ -1333,6 +1336,7 @@ pub async fn get_client_overview() -> Result<serde_json::Value, String> {
     let mut online_clients = 0;
 
     for client in &config.clients {
+        
         if client.status == Some("Online".to_string()) {
             online_clients += 1;
         }

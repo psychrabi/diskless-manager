@@ -1,4 +1,3 @@
-
 import z from 'zod';
 import { Button, Card } from '../ui';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -6,6 +5,8 @@ import { useNotification } from '@/contexts/NotificationContext';
 import { useForm } from 'react-hook-form';
 import { HardDrive, Network } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
+import { useEffect } from 'react';
+
 const dhcpSchema = z.object({
   subnet_ip: z.ipv4(),
   start_ip: z.ipv4(),
@@ -21,53 +22,64 @@ const dhcpSchema = z.object({
   boot_file_uefi64: z.string().optional(),
 });
 
-export default function DHCPConfigForm({dhcp = {}}) {
-  const { showNotification } = useNotification();
+const dhcpInitial = {
+  subnet_ip: "192.168.1.0",
+  start_ip: "192.168.1.120",
+  end_ip: "192.168.1.130",
+  subnet_mask: "255.255.255.0",
+  gateway_ip: "192.168.1.254",
+  dns_server1: "1.1.1.1",
+  dns_server2: "1.0.0.1",
+  broadcast_ip: "192.168.1.255",
+  boot_server_ip: "192.168.1.250",
+  boot_file_legacy: "ipxe.kpxe",
+  boot_file_uefi32: "ipxe.efi",
+  boot_file_uefi64: "ipxe.efi",
+}
 
-  const dhcpInitial = {
-    subnet_ip: dhcp.subnet_ip ?? "192.168.1.0",
-    start_ip: dhcp?.start_ip ?? "192.168.1.120",
-    end_ip: dhcp.end_ip ?? "192.168.1.130",
-    subnet_mask: dhcp.subnet_mask ?? "255.255.255.0",
-    gateway_ip: dhcp.gateway_ip ?? "192.168.1.254",
-    dns_server1: dhcp.dns_server1 ?? "1.1.1.1",
-    dns_server2: dhcp.dns_server2 ?? "1.0.0.1",
-    broadcast_ip: dhcp.broadcast_ip ?? "192.168.1.255",
-    boot_server_ip: dhcp.boot_server_ip ?? "192.168.1.250",
-    boot_file_legacy: dhcp.boot_file_legacy ?? "ipxe.kpxe",
-    boot_file_uefi32: dhcp.boot_file_uefi32 ?? "ipxe.efi",
-    boot_file_uefi64: dhcp.boot_file_user64 ?? "ipxe.efi",
-  }
+export default function DHCPConfigForm() {
+  const { showNotification } = useNotification();
 
   const {
     register,
     handleSubmit,
     formState: { errors },
-    setValue,
     reset,
-    watch,
   } = useForm({
     resolver: zodResolver(dhcpSchema),
-    defaultValues: dhcpInitial,
+    defaultValues: dhcpInitial
   });
 
-
-  // Keep form in sync with client prop
-  // useEffect(() => {
-  //   reset(dhcpInitial);
-  // }, [dhcp, reset]);
+  // Load saved config on component mount
+  useEffect(() => {
+    const loadConfig = async () => {
+      try {
+        const config = await invoke('read_config');
+        if (config?.settings?.dhcp) {
+          reset(config.settings.dhcp);
+        } else {
+          reset(dhcpInitial);
+        }
+      } catch (error) {
+        console.error('Failed to load DHCP config:', error);
+        reset(dhcpInitial);
+      }
+    };
+    loadConfig();
+  }, [reset]);
 
   const onSubmit = async (data) => {
-    console.log(data)
+    console.log(data);
     showNotification(`Updating DHCP Configurations`, 'info');
-    // Get token from localStorage
     const token = localStorage.getItem('authToken') || '';
-    await invoke('configure_dhcp_server', { token, config: data }).then((response) => {
-      if (response.message) showNotification(response.message, 'success');
-    }).catch((error) => {
+    
+    try {
+      await invoke('configure_dhcp_server', { token, config: data });
+      showNotification('DHCP configuration saved successfully', 'success');
+    } catch (error) {
       showNotification(error, 'error');
-      console.log(error)
-    })
+      console.error(error);
+    }
   };
 
   return (

@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::process::Command;
+use chrono;
 
 #[derive(Deserialize)]
 pub struct ServiceControlRequest {
@@ -279,6 +280,7 @@ pub async fn check_services() -> Result<Value, String> {
         ("apache2", "apache2"),
         ("smbd", "samba"),
         ("wakeonlan", "wakeonlan"),
+        // ("zfsutils-linux", "zfsutils-linux"),
     ];
     let mut statuses = HashMap::new();
     for (key, svc) in required {
@@ -509,12 +511,45 @@ pub async fn restart_service(service: &str) -> Result<(), String> {
     }
 }
 
+fn backup_file(file_path: &str) -> Result<(), String> {
+    if !std::path::Path::new(file_path).exists() {
+        return Ok(()); // No need to backup if file doesn't exist
+    }
+    
+    let backup_dir = "/srv/tftp/backups";
+    std::fs::create_dir_all(backup_dir)
+        .map_err(|e| format!("Failed to create backup directory: {}", e))?;
+    
+    let file_name = std::path::Path::new(file_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| "Invalid file path".to_string())?;
+    
+    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+    let backup_path = format!("{}/{}_{}", backup_dir, timestamp, file_name);
+    
+    std::fs::copy(file_path, &backup_path)
+        .map(|_| ())
+        .map_err(|e| format!("Failed to create backup of {}: {}", file_path, e))
+}
+
 #[tauri::command]
 pub async fn configure_dhcp_server(token: String, config: DHCPConfig) -> Result<String, String> {
     // Validate authentication token
     crate::middleware::validate_auth_token_for_command(&token)
         .map_err(|e| format!("Authentication failed: {}", e.message))?;
-    println!("Received DHCP config: {:?}", config);
+
+    // Save to config
+    let mut cfg = crate::config::read_config();
+    let mut settings = cfg.settings.as_object().cloned().unwrap_or_default();
+    settings.insert("dhcp".to_string(), serde_json::to_value(&config).map_err(|e| e.to_string())?);
+    cfg.settings = serde_json::Value::Object(settings);
+    crate::config::write_config(&cfg).map_err(|e| format!("Failed to save DHCP config: {}", e))?;
+
+    // Create backup of existing config
+    let dhcp_config_path = "/etc/dhcp/dhcpd.conf";
+    backup_file(dhcp_config_path)?;
+
     let dhcp_config = format!(
         r#"# Global Config
 option space ipxe;
@@ -645,6 +680,11 @@ pub async fn configure_tftp_server(token: String, tftp_config: TFTPConfig) -> Re
     // Validate authentication token
     crate::middleware::validate_auth_token_for_command(&token)
         .map_err(|e| format!("Authentication failed: {}", e.message))?;
+
+    // Create backup of existing config
+    let tftp_config_path = "/etc/default/tftpd-hpa";
+    backup_file(tftp_config_path)?;
+
     let tftp_content = format!(
         r#"# Defaults for tftpd-hpa
 TFTP_USERNAME="tftp"
@@ -660,6 +700,13 @@ TFTP_OPTIONS="{}"
         return Err(format!("Failed to create TFTP directory: {}", e));
     }
 
+    // Save to config
+    let mut cfg = crate::config::read_config();
+    let mut settings = cfg.settings.as_object().cloned().unwrap_or_default();
+    settings.insert("tftp".to_string(), serde_json::to_value(&tftp_config).map_err(|e| e.to_string())?);
+    cfg.settings = serde_json::Value::Object(settings);
+    crate::config::write_config(&cfg).map_err(|e| format!("Failed to save TFTP config: {}", e))?;
+
     match fs::write("/etc/default/tftpd-hpa", tftp_content) {
         Ok(_) => {
             restart_service("tftpd-hpa").await?;
@@ -674,6 +721,11 @@ pub async fn configure_apache_server(token: String, http_config: HTTPConfig) -> 
     // Validate authentication token
     crate::middleware::validate_auth_token_for_command(&token)
         .map_err(|e| format!("Authentication failed: {}", e.message))?;
+
+    // Create backup of existing config
+    let apache_config_path = "/etc/apache2/sites-available/diskless-server.conf";
+    backup_file(apache_config_path)?;
+
     let apache_config = format!(
         r#"<VirtualHost {}:{}>
     DocumentRoot {}
@@ -699,6 +751,13 @@ pub async fn configure_apache_server(token: String, http_config: HTTPConfig) -> 
     if let Err(e) = fs::create_dir_all(&http_config.http_root) {
         return Err(format!("Failed to create HTTP directory: {}", e));
     }
+
+    // Save to config
+    let mut cfg = crate::config::read_config();
+    let mut settings = cfg.settings.as_object().cloned().unwrap_or_default();
+    settings.insert("http".to_string(), serde_json::to_value(&http_config).map_err(|e| e.to_string())?);
+    cfg.settings = serde_json::Value::Object(settings);
+    crate::config::write_config(&cfg).map_err(|e| format!("Failed to save HTTP config: {}", e))?;
 
     match fs::write(
         "/etc/apache2/sites-available/diskless-server.conf",
