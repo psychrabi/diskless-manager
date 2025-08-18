@@ -1,64 +1,109 @@
-import { HardDrive, PlusCircle, Star, StarIcon, Trash2, RotateCcw, Edit } from 'lucide-react';
+import { useConfirm } from '@/contexts/ConfirmDialogContext';
+import { useNotification } from '@/contexts/NotificationContext';
+import { invoke } from '@tauri-apps/api/core';
+import { Edit, HardDrive, PlusCircle, RotateCcw, Star, StarIcon, Trash2 } from 'lucide-react';
 import { lazy, useCallback, useMemo, useState } from 'react';
-import { useLoaderData } from 'react-router-dom';
 import { useMasterManager } from '../../hooks/useMasterManager';
 import { useAppStore } from '../../store/useAppStore';
 import { Button, Card } from '../ui';
 
 const CreateImageModal = lazy(() => import('./CreateImageModal'));
 const CreateSnapshotModal = lazy(() => import('./CreateSnapshotModal'));
-const DeleteImageConfirmModal = lazy(() => import('./DeleteImageConfirmModal'));
-const DeleteSnaptshotConfirmModal = lazy(() => import('./DeleteSnaptshotConfirmModal'));
-const RollbackSnapshotConfirmModal = lazy(() => import('./RollbackSnapshotConfirmModal'));
+
 const RenameImageModal = lazy(() => import('./RenameImageModal'));
 
 const ImageManagement = () => {
   const { masters, fetchData } = useAppStore();
-  const {
-    setIsCreateSnapshotModalOpen,
-    setDefaultMaster,
-  } = useMasterManager();
-
+  const { showNotification } = useNotification();
+  const { setDefaultMaster } = useMasterManager();
   const [openImageCreateModal, setOpenImageCreateModal] = useState(false)
   const [openSnapshotCreateModal, setOpenSnapshotCreateModal] = useState(false)
-  const [openDeleteMasterModal, setOpenDeleteMasterModal] = useState(false)
-  const [openDeleteSnapshotModal, setOpenDeleteSnapshotModal] = useState(false)
-  const [selectedImage, setSelectedImage] = useState('')
-  const [selectedSnapshot, setSelectedSnapshot] = useState('')
-  const [openRollbackSnapshotModal, setOpenRollbackSnapshotModal] = useState(false)
+  const [selectedImage, setSelectedImage] = useState('')  
   const [openRenameModal, setOpenRenameModal] = useState(false)
-  const handleRollbackSnapshot = (snapshot, image) => {
-    setSelectedImage(image)
-    setSelectedSnapshot(snapshot)
-    setOpenRollbackSnapshotModal(true)
-  }
+  const confirm = useConfirm();
 
   const memoizedMasters = useMemo(() => masters, [masters]);
   const memoizedSetDefaultMaster = useCallback(setDefaultMaster, [setDefaultMaster]);
 
-  const handleCreateImage = () => {
-    setOpenImageCreateModal(true)
-  }
+  const handleCreateImage = () => setOpenImageCreateModal(true)  
 
   const handleCreateSnapshot = (image) => {
     setSelectedImage(image)
     setOpenSnapshotCreateModal(true)
   }
 
-  const handleDeleteImage = (image) => {
-    setSelectedImage(image)
-    setOpenDeleteMasterModal(true)
-  }
-
-  const handleDeleteSnapshot = (snapshot, image) => {
-    setSelectedImage(image)
-    setSelectedSnapshot(snapshot)
-    setOpenDeleteSnapshotModal(true)
-  }
-
   const handleRenameImage = (image) => {
     setSelectedImage(image)
     setOpenRenameModal(true)
+  }
+
+  const handleRollbackSnapshot = async (snapshot, image) => {
+    if (!snapshot || !image) return;
+    const ok = await confirm({
+      title: 'Rollback Snapshot',
+      description: `Are you sure you want to rollback snapshot "${snapshot}" for image "${image}"? This action cannot be undone and might affect clones.`,
+      confirmText: 'Rollback Snapshot',
+      cancelText: 'Cancel',
+      confirmVariant: 'primary',
+      size: '2xl',
+    });
+    if (ok) {
+      const token = localStorage.getItem('authToken') || '';
+      await invoke('rollback_master_snapshot', { token, masterName: image, snapshotName: snapshot })
+        .then((response) => {
+          if (response.message) showNotification(response.message, 'success');
+        }).catch((error) => {
+          showNotification(error, 'error',)
+        })
+    } else {
+      showNotification("Snapshot rollback cancelled", 'error',)
+    }
+  }
+
+  const handleDeleteImage = async (image) => {
+    if (!image) return;
+    const ok = await confirm({
+      title: 'Delete Image',
+      description: `Are you sure you want to delete image "${image}"? This action cannot be undone and might affect clones.`,
+      confirmText: 'Delete Image',
+      cancelText: 'Cancel',
+      confirmVariant: 'primary',
+      size: '2xl',
+    });
+    if (ok) {
+      const token = localStorage.getItem('authToken') || '';
+      await invoke('delete_master', { token, masterName: selectedImage })
+        .then((response) => {
+          if (response.message) showNotification(response.message, 'success');
+        }).catch((error) => {
+          showNotification(error, 'error',)
+        })
+    } else {
+      showNotification("Image deletion cancelled", 'error',)
+    }
+  }
+
+  const handleDeleteSnapshot = async (snapshot, image) => {
+    if (!snapshot || !image) return;
+    const ok = await confirm({
+      title: 'Delete Snapshot',
+      description: `Are you sure you want to delete snapshot "${snapshot}" for image "${image}"? This action cannot be undone and might affect clones.`,
+      confirmText: 'Delete Snapshot',
+      cancelText: 'Cancel',
+      confirmVariant: 'primary',
+      size: '2xl',
+    });
+    if (ok) {
+      const token = localStorage.getItem('authToken') || '';
+      await invoke('delete_snapshot', { token, masterName: image, snapshotName: snapshot })
+        .then((response) => {
+          if (response.message) showNotification(response.message, 'success');
+        }).catch((error) => {
+          showNotification(error, 'error',)
+        })
+    } else {
+      showNotification("Snapshot deletion cancelled", 'error',)
+    }
   }
 
   return (
@@ -90,10 +135,10 @@ const ImageManagement = () => {
                       </span>
                     ) : 'Set as Default'}
                   </Button>
-                  <Button 
-                    variant='primary' 
-                    onClick={() => handleCreateSnapshot(master.name)} 
-                    size="sm" 
+                  <Button
+                    variant='primary'
+                    onClick={() => handleCreateSnapshot(master.name)}
+                    size="sm"
                     icon={PlusCircle}
                     disabled={master.name.includes('/var/lib/diskless/fileio/')}
                     title={master.name.includes('/var/lib/diskless/fileio/') ? 'Snapshots not supported for FileIO images' : 'Create Snapshot'}
@@ -134,11 +179,8 @@ const ImageManagement = () => {
           {memoizedMasters.length === 0 && <p className="text-center py-4 text-gray-500">No master images found.</p>}
         </div>
       </Card>
-      {openImageCreateModal && <CreateImageModal openImageCreateModal={openImageCreateModal} setOpenImageCreateModal={setOpenImageCreateModal}  />}
+      {openImageCreateModal && <CreateImageModal openImageCreateModal={openImageCreateModal} setOpenImageCreateModal={setOpenImageCreateModal} />}
       {openSnapshotCreateModal && <CreateSnapshotModal openSnapshotCreateModal={openSnapshotCreateModal} setOpenSnapshotCreateModal={setOpenSnapshotCreateModal} refresh={fetchData} selectedImage={selectedImage} />}
-      {openDeleteMasterModal && <DeleteImageConfirmModal openDeleteMasterModal={openDeleteMasterModal} setOpenDeleteMasterModal={setOpenDeleteMasterModal} selectedImage={selectedImage} />}
-      {openDeleteSnapshotModal && <DeleteSnaptshotConfirmModal openDeleteSnapshotModal={openDeleteSnapshotModal} setOpenDeleteSnapshotModal={setOpenDeleteSnapshotModal} selectedSnapshot={selectedSnapshot} selectedImage={selectedImage} />}
-      {openRollbackSnapshotModal && <RollbackSnapshotConfirmModal open={openRollbackSnapshotModal} setOpen={setOpenRollbackSnapshotModal} selectedSnapshot={selectedSnapshot} selectedImage={selectedImage} />}
       {openRenameModal && <RenameImageModal openRenameModal={openRenameModal} setOpenRenameModal={setOpenRenameModal} selectedImage={selectedImage} refresh={fetchData} />}
     </div>
   );
