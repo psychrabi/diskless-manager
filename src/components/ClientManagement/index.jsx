@@ -1,6 +1,5 @@
 import { PlusCircle, Users } from 'lucide-react';
 import { memo, useCallback, useEffect, useState } from 'react';
-import { useLoaderData } from 'react-router-dom';
 import { useAppStore } from '../../store/useAppStore';
 import { clientContextMenuActions } from '../../utils/contextMenuAction';
 import { Button, Card } from '../ui';
@@ -8,7 +7,7 @@ import { ContextMenu } from '../ui/ContextMenu';
 import ClientFormModal from './ClientFormModal';
 import ClientTable from './ClientTable';
 import DeprovisionModal from './DeprovisionModal';
-import ClientDeleteConfirmModal from './ClientDeleteConfirmModal';
+
 
 const MemoizedClientTable = memo(ClientTable);
 const MemoizedContextMenu = memo(ContextMenu);
@@ -38,12 +37,7 @@ const ClientManagement = () => {
     setContextMenu(prev => ({ ...prev, isOpen: false }));
   }, []);
 
-  const handleDeleteClient = (client) => {
-    setSelectedClient(client)
-    setOpenDeleteClientModal(true)
-  }
-
-  const contextActions = clientContextMenuActions(fetchData, closeContextMenu, setClient, setIsModalOpen, setDeprovisionModal, handleDeleteClient);
+  const contextActions = clientContextMenuActions(fetchData, closeContextMenu, setClient, setIsModalOpen, setDeprovisionModal);
 
   const handleClientFormModalOpen = useCallback(() => {
     let newName = 'pc000'
@@ -103,7 +97,6 @@ const ClientManagement = () => {
           setDeprovisionModal({ isOpen: false, client: null });
         }}
       />
-      {openDeleteClientModal &&<ClientDeleteConfirmModal openDeleteClientModal={openDeleteClientModal} setOpenDeleteClientModal={setOpenDeleteClientModal} selectedClient={selectedClient} />}
     </div>
   );
 };

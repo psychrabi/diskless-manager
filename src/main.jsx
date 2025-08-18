@@ -7,6 +7,7 @@ import { router } from '@/router/router'
 import { StrictMode, Suspense } from 'react'
 import { createRoot } from 'react-dom/client'
 import { RouterProvider } from 'react-router-dom'
+import { ConfirmDialogProvider } from '@/contexts/ConfirmDialogContext.jsx'
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
@@ -14,7 +15,9 @@ createRoot(document.getElementById('root')).render(
       <Suspense fallback={<Loading />}>
         <AuthProvider>
           <NotificationProvider>
-            <RouterProvider router={router} />
+            <ConfirmDialogProvider>
+              <RouterProvider router={router} />
+            </ConfirmDialogProvider>
           </NotificationProvider>
         </AuthProvider>
       </Suspense>
