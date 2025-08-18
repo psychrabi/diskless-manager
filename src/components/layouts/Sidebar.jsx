@@ -29,9 +29,17 @@ const handleExit = async () => {
   }
 };
 
-const Sidebar = ({ activeTab, onTabChange }) => {
+const Sidebar = ({ activeTab, onTabChange, isOpen = false, onClose }) => {
   return (
-    <div className="flex h-full w-64 flex-col bg-gray-800 text-gray-100 shadow-mg">
+    <div
+      className={cn(
+        'fixed inset-y-0 left-0 z-40 w-64 flex h-full flex-col bg-gray-800 text-gray-100 shadow-mg transform transition-transform duration-200 ease-in-out',
+        'lg:static lg:translate-x-0',
+        isOpen ? 'translate-x-0' : '-translate-x-full'
+      )}
+      role="navigation"
+      aria-label="Sidebar"
+    >
       <div className="flex h-16 items-center px-6 gap-2">
         <Gamepad /><h1 className="text-xl font-bold">Hak3r'z Cafe</h1>
       </div>
@@ -50,7 +58,11 @@ const Sidebar = ({ activeTab, onTabChange }) => {
                     ? 'bg-gray-800 text-white'
                     : 'text-gray-300 hover:bg-gray-800 hover:text-white'
                 )}
-                onClick={() => onTabChange(item.id)}
+                onClick={() => {
+                  onTabChange(item.id);
+                  // Auto-close on small screens after navigation
+                  if (onClose) onClose();
+                }}
 
               >
                 <Icon className="h-5 w-5" />
@@ -61,7 +73,14 @@ const Sidebar = ({ activeTab, onTabChange }) => {
         </nav>
       </div>
       <div className="p-3">
-        <Button variant="ghost" className="w-full justify-start gap-3 text-gray-300 hover:bg-gray-800 hover:text-white" onClick={handleExit}>
+        <Button
+          variant="ghost"
+          className="w-full justify-start gap-3 text-gray-300 hover:bg-gray-800 hover:text-white"
+          onClick={() => {
+            if (onClose) onClose();
+            handleExit();
+          }}
+        >
           <Power className="h-5 w-5" />
           Exit
         </Button>

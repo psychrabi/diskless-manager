@@ -1,7 +1,12 @@
 // Client management logic: helpers for client lookup, config, and deduplication.
 
 use crate::{
-    client, config::{get_config, read_config, write_config, Config}, dhcp::{create_dhcp_entry, update_dhcp_config}, iscsi::{cleanup_iscsi_target, setup_iscsi_target}, utils::{run_command, run_command_check}, zfs::{zfs_clone, zfs_destroy, zfs_exists}, ZFS_POOL
+    config::{get_config, read_config, write_config, Config},
+    dhcp::{create_dhcp_entry, update_dhcp_config},
+    iscsi::{cleanup_iscsi_target, setup_iscsi_target},
+    utils::{run_command, run_command_check},
+    zfs::{zfs_clone, zfs_destroy, zfs_exists},
+    ZFS_POOL,
 };
 
 const IQN_BASE: &str = "iqn.2025-04.com.nsboot";
@@ -165,15 +170,17 @@ pub struct DeprovisionRequest {
 // }
 
 #[tauri::command]
-pub async fn get_clients(token: String, client_id: Option<String>) -> Result<serde_json::Value, String> {
+pub async fn get_clients(
+    token: String,
+    client_id: Option<String>,
+) -> Result<serde_json::Value, String> {
     // Validate authentication token
     crate::middleware::validate_auth_token_for_command(&token)
         .map_err(|e| format!("Authentication failed: {}", e.message))?;
-    
     let mut config: Config = read_config();
 
     for client in config.clients.iter_mut() {
-        client.status = Some(get_client_status_realtime(&client.mac,&client.ip));
+        client.status = Some(get_client_status_realtime(&client.mac, &client.ip));
     }
 
     if let Some(id) = client_id {
@@ -196,7 +203,10 @@ fn get_client_status_realtime(mac: &str, ip: &str) -> String {
     let online = if ip.is_empty() || ip == "N/A" {
         false
     } else {
-        match std::process::Command::new("ping").args(["-c", "1", "-W", "1", ip]).output() {
+        match std::process::Command::new("ping")
+            .args(["-c", "1", "-W", "1", ip])
+            .output()
+        {
             Ok(out) => out.status.success(),
             Err(_) => false,
         }
@@ -238,75 +248,85 @@ fn get_client_status_realtime(mac: &str, ip: &str) -> String {
 //     false
 // }
 
-fn discover_dynamic_clients() -> Vec<Client> {
-    use std::collections::HashMap;
-    use std::fs;
-    let leases_path = "/var/lib/dhcp/dhcpd.leases";
-    let mut mac_to_client: HashMap<String, Client> = HashMap::new();
-    if let Ok(content) = fs::read_to_string(leases_path) {
-        // Parse by blocks; last active block for a MAC wins
-        for raw_block in content.split("lease ") {
-            let block = raw_block.trim();
-            if block.is_empty() { continue; }
-            // first token is IP until space or '{'
-            let ip = block
-                .split_whitespace()
-                .next()
-                .unwrap_or("")
-                .trim_matches(|c: char| c == '{' || c.is_whitespace())
-                .trim_end_matches(';')
-                .to_string();
-            let block_lc = block.to_lowercase();
-            if !block_lc.contains("binding state active") { continue; }
-            // extract mac
-            let mac_lc = block_lc
-                .lines()
-                .find_map(|l| {
-                    if l.contains("hardware ethernet") {
-                        l.split("hardware ethernet")
-                            .nth(1)
-                            .map(|s| s.trim().trim_end_matches(';').to_string())
-                    } else { None }
-                })
-                .unwrap_or_default();
-            if mac_lc.is_empty() || ip.is_empty() { continue; }
-            // extract hostname if any
-            let hostname = block
-                .lines()
-                .find_map(|l| {
-                    if l.contains("client-hostname") {
-                        l.split('"').nth(1).map(|s| s.to_string())
-                    } else { None }
-                })
-                .unwrap_or_else(|| mac_lc.replace(':', "").to_lowercase());
-            // Build/overwrite ephemeral client for this MAC
-            let name_upper = hostname.to_uppercase();
-            let mac_upper = mac_lc.to_uppercase();
-            mac_to_client.insert(
-                mac_lc,
-                Client {
-                    // Use MAC as stable ID to avoid duplicate rows by hostname differences
-                    id: mac_upper.to_lowercase(),
-                    name: name_upper,
-                    mac: mac_upper,
-                    ip,
-                    master: String::from(""),
-                    snapshot: None,
-                    block_store: None,
-                    target_iqn: None,
-                    writeback: None,
-                    created_at: None,
-                    last_modified: None,
-                    block_device: None,
-                    status: Some(String::from("Leased")),
-                    mode: None,
-                    pxe_mode: None,
-                },
-            );
-        }
-    }
-    mac_to_client.into_values().collect()
-}
+// fn discover_dynamic_clients() -> Vec<Client> {
+//     use std::collections::HashMap;
+//     use std::fs;
+//     let leases_path = "/var/lib/dhcp/dhcpd.leases";
+//     let mut mac_to_client: HashMap<String, Client> = HashMap::new();
+//     if let Ok(content) = fs::read_to_string(leases_path) {
+//         // Parse by blocks; last active block for a MAC wins
+//         for raw_block in content.split("lease ") {
+//             let block = raw_block.trim();
+//             if block.is_empty() {
+//                 continue;
+//             }
+//             // first token is IP until space or '{'
+//             let ip = block
+//                 .split_whitespace()
+//                 .next()
+//                 .unwrap_or("")
+//                 .trim_matches(|c: char| c == '{' || c.is_whitespace())
+//                 .trim_end_matches(';')
+//                 .to_string();
+//             let block_lc = block.to_lowercase();
+//             if !block_lc.contains("binding state active") {
+//                 continue;
+//             }
+//             // extract mac
+//             let mac_lc = block_lc
+//                 .lines()
+//                 .find_map(|l| {
+//                     if l.contains("hardware ethernet") {
+//                         l.split("hardware ethernet")
+//                             .nth(1)
+//                             .map(|s| s.trim().trim_end_matches(';').to_string())
+//                     } else {
+//                         None
+//                     }
+//                 })
+//                 .unwrap_or_default();
+//             if mac_lc.is_empty() || ip.is_empty() {
+//                 continue;
+//             }
+//             // extract hostname if any
+//             let hostname = block
+//                 .lines()
+//                 .find_map(|l| {
+//                     if l.contains("client-hostname") {
+//                         l.split('"').nth(1).map(|s| s.to_string())
+//                     } else {
+//                         None
+//                     }
+//                 })
+//                 .unwrap_or_else(|| mac_lc.replace(':', "").to_lowercase());
+//             // Build/overwrite ephemeral client for this MAC
+//             let name_upper = hostname.to_uppercase();
+//             let mac_upper = mac_lc.to_uppercase();
+//             mac_to_client.insert(
+//                 mac_lc,
+//                 Client {
+//                     // Use MAC as stable ID to avoid duplicate rows by hostname differences
+//                     id: mac_upper.to_lowercase(),
+//                     name: name_upper,
+//                     mac: mac_upper,
+//                     ip,
+//                     master: String::from(""),
+//                     snapshot: None,
+//                     block_store: None,
+//                     target_iqn: None,
+//                     writeback: None,
+//                     created_at: None,
+//                     last_modified: None,
+//                     block_device: None,
+//                     status: Some(String::from("Leased")),
+//                     mode: None,
+//                     pxe_mode: None,
+//                 },
+//             );
+//         }
+//     }
+//     mac_to_client.into_values().collect()
+// }
 
 fn get_client_by_id(client_id: &str) -> Option<Client> {
     let config = get_config();
@@ -377,7 +397,11 @@ pub fn get_client_paths(client_id: &str, client_mac: &str) -> HashMap<String, St
     map
 }
 
-pub fn get_client_paths_with_master(client_id: &str, client_mac: &str, master: &str) -> HashMap<String, String> {
+pub fn get_client_paths_with_master(
+    client_id: &str,
+    client_mac: &str,
+    master: &str,
+) -> HashMap<String, String> {
     let target_iqn = format!(
         "iqn.2025-04.com.nsboot:{}",
         client_mac.to_lowercase().replace(':', "-")
@@ -386,12 +410,17 @@ pub fn get_client_paths_with_master(client_id: &str, client_mac: &str, master: &
     let mut map = HashMap::new();
     map.insert("target_iqn".to_string(), target_iqn);
     map.insert("block_store".to_string(), block_store);
-    
+
     // Check if master is a fileIO image
     if master.contains("/var/lib/diskless/fileio/") && master.ends_with(".img") {
         // For fileIO images, create a copy in the same directory
         let fileio_dir = "/var/lib/diskless/fileio";
-        let client_image = format!("{}/{}-{}-client.img", fileio_dir, client_id.to_lowercase(), client_mac.to_lowercase().replace(':', "-"));
+        let client_image = format!(
+            "{}/{}-{}-client.img",
+            fileio_dir,
+            client_id.to_lowercase(),
+            client_mac.to_lowercase().replace(':', "-")
+        );
         map.insert("clone".to_string(), client_image);
         map.insert("is_fileio".to_string(), "true".to_string());
     } else {
@@ -400,7 +429,7 @@ pub fn get_client_paths_with_master(client_id: &str, client_mac: &str, master: &
         map.insert("clone".to_string(), clone);
         map.insert("is_fileio".to_string(), "false".to_string());
     }
-    
+
     map
 }
 
@@ -644,6 +673,7 @@ pub async fn add_client(token: String, req: AddClientRequest) -> Result<serde_js
     let is_fileio = paths.get("is_fileio").map(|s| s == "true").unwrap_or(false);
 
     // Create client image (ZFS clone or fileIO copy)
+    let mut used_master_directly = false;
     if is_fileio {
         // For fileIO images, copy the master file
         if !snapshot.is_empty() {
@@ -658,7 +688,8 @@ pub async fn add_client(token: String, req: AddClientRequest) -> Result<serde_js
         } else {
             // Check if base snapshot exists
             let base_snapshot = format!("{}@base", master);
-            let result = run_command_check(&["zfs", "list", "-H", "-t", "snapshot", &base_snapshot]);
+            let result =
+                run_command_check(&["zfs", "list", "-H", "-t", "snapshot", &base_snapshot]);
             if result == 0 {
                 // Create new snapshot for this client
                 let snapshot_name = format!("{}@{}_base", master, name);
@@ -667,6 +698,7 @@ pub async fn add_client(token: String, req: AddClientRequest) -> Result<serde_js
             } else {
                 // Use master volume directly
                 paths.insert("clone".to_string(), master.clone());
+                used_master_directly = true;
             }
         }
     }
@@ -677,12 +709,7 @@ pub async fn add_client(token: String, req: AddClientRequest) -> Result<serde_js
     } else {
         format!("/dev/zvol/{}", &paths["clone"])
     };
-    
-    setup_iscsi_target(
-        &paths["target_iqn"],
-        &paths["block_store"],
-        &block_device,
-    )?;
+    setup_iscsi_target(&paths["target_iqn"], &paths["block_store"], &block_device)?;
 
     // Create DHCP entry (implement as needed)
     let dhcp_entry = create_dhcp_entry(&name, &mac, &ip, &paths["target_iqn"]);
@@ -714,7 +741,11 @@ pub async fn add_client(token: String, req: AddClientRequest) -> Result<serde_js
         created_at: Some(now.clone()),
         last_modified: Some(now.clone()),
         status: None,
-        mode: None,
+        mode: if used_master_directly {
+            Some("super".to_string())
+        } else {
+            None
+        },
         pxe_mode: Some("uefi".to_string()),
     };
     if !save_client_config(&client_data) {
@@ -749,7 +780,8 @@ pub async fn edit_client(
 
     // Get current paths
     let current_paths = get_client_paths(&client_id, &client_info.mac);
-    let current_is_fileio = client_info.master.contains("/var/lib/diskless/fileio/") && client_info.master.ends_with(".img");
+    let current_is_fileio = client_info.master.contains("/var/lib/diskless/fileio/")
+        && client_info.master.ends_with(".img");
 
     // Extract new client details
     let new_name = data
@@ -805,12 +837,8 @@ pub async fn edit_client(
         client_info.last_modified = Some(Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
 
         // Update DHCP config
-        let dhcp_entry = create_dhcp_entry(
-            &client_info.name,
-            &new_mac,
-            &new_ip,
-            client_info.target_iqn.as_deref().unwrap_or(""),
-        );
+        let dhcp_entry =
+            create_dhcp_entry(&new_name, &new_mac, &new_ip, &current_paths["target_iqn"]);
         update_dhcp_config(&client_id, &dhcp_entry, false)?;
 
         // Save updated config
@@ -841,23 +869,24 @@ pub async fn edit_client(
         };
 
         let mut block_device = String::new();
-        let new_is_fileio = current_master.contains("/var/lib/diskless/fileio/") && current_master.ends_with(".img");
+        let new_is_fileio = current_master.contains("/var/lib/diskless/fileio/")
+            && current_master.ends_with(".img");
+        let mut used_master_directly = false;
 
-        if !current_master.is_empty() {            
+        if !current_master.is_empty() {
             if new_is_fileio {
                 // Handle fileIO image
                 if !current_snapshot.is_empty() {
                     return Err("Snapshots are not supported for fileIO images".to_string());
                 }
-                
+
                 // Clean up old client image
                 let old_clone = current_paths.get("clone").cloned().unwrap_or_default();
                 if !old_clone.is_empty() {
                     // Check if the old client was using fileIO
-                    let old_is_fileio = client_info.master.contains("/var/lib/diskless/fileio/") && client_info.master.ends_with(".img");
-                    
-                  
-                    
+                    let old_is_fileio = client_info.master.contains("/var/lib/diskless/fileio/")
+                        && client_info.master.ends_with(".img");
+
                     // Clean up iSCSI target
                     let old_target_iqn = current_paths.get("target_iqn").cloned();
                     let old_block_store = current_paths.get("block_store").cloned();
@@ -876,7 +905,7 @@ pub async fn edit_client(
                         zfs_destroy(&old_clone)?;
                     }
                 }
-                
+
                 // Create new fileIO client image
                 let new_paths = get_client_paths_with_master(&new_name, &new_mac, current_master);
                 copy_fileio_image(current_master, &new_paths["clone"])?;
@@ -888,10 +917,10 @@ pub async fn edit_client(
                     let old_clone = current_paths.get("clone").cloned().unwrap_or_default();
                     if !old_clone.is_empty() {
                         // Check if the old client was using fileIO
-                        let old_is_fileio = client_info.master.contains("/var/lib/diskless/fileio/") && client_info.master.ends_with(".img");
-                        
-                       
-                        
+                        let old_is_fileio =
+                            client_info.master.contains("/var/lib/diskless/fileio/")
+                                && client_info.master.ends_with(".img");
+
                         // Clean up iSCSI target
                         let old_target_iqn = current_paths.get("target_iqn").cloned();
                         let old_block_store = current_paths.get("block_store").cloned();
@@ -918,16 +947,10 @@ pub async fn edit_client(
                     let old_clone = current_paths.get("clone").cloned().unwrap_or_default();
                     if !old_clone.is_empty() {
                         // Check if the old client was using fileIO
-                        let old_is_fileio = client_info.master.contains("/var/lib/diskless/fileio/") && client_info.master.ends_with(".img");
-                        
-                        if old_is_fileio {
-                            // Delete old fileIO image
-                            delete_fileio_image(&old_clone)?;
-                        } else if zfs_exists(&old_clone) {
-                            // Delete old ZFS clone
-                            zfs_destroy(&old_clone)?;
-                        }
-                        
+                        let old_is_fileio =
+                            client_info.master.contains("/var/lib/diskless/fileio/")
+                                && client_info.master.ends_with(".img");
+
                         // Clean up iSCSI target
                         let old_target_iqn = current_paths.get("target_iqn").cloned();
                         let old_block_store = current_paths.get("block_store").cloned();
@@ -937,8 +960,17 @@ pub async fn edit_client(
                                 old_block_store.as_deref().unwrap_or(""),
                             )?;
                         }
+
+                        if old_is_fileio {
+                            // Delete old fileIO image
+                            delete_fileio_image(&old_clone)?;
+                        } else if zfs_exists(&old_clone) {
+                            // Delete old ZFS clone
+                            zfs_destroy(&old_clone)?;
+                        }
                     }
                     block_device = format!("/dev/zvol/{}", current_master);
+                    used_master_directly = true;
                 }
             }
         }
@@ -963,6 +995,11 @@ pub async fn edit_client(
             Some(format!("{}/{}-disk", ZFS_POOL, new_name))
         };
         client_info.last_modified = Some(Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
+        client_info.mode = if used_master_directly {
+            Some("super".to_string())
+        } else {
+            None
+        };
 
         // Update DHCP config
         let dhcp_entry = create_dhcp_entry(&new_name, &new_mac, &new_ip, &new_target_iqn);
@@ -998,7 +1035,7 @@ pub async fn delete_client(token: String, client_id: String) -> Result<serde_jso
         return Err("Invalid client ID".to_string());
     }
 
-      // Get current client info
+    // Get current client info
     let client_info = match get_client_by_id(&client_id) {
         Some(info) => info,
         None => return Err(format!("Client {} not found", client_id)),
@@ -1020,15 +1057,18 @@ pub async fn delete_client(token: String, client_id: String) -> Result<serde_jso
     }
 
     // Clean up client image (ZFS clone or fileIO copy)
-    let is_fileio = client_info.master.contains("/var/lib/diskless/fileio/") && client_info.master.ends_with(".img");
-    
+    let is_fileio = client_info.master.contains("/var/lib/diskless/fileio/")
+        && client_info.master.ends_with(".img");
+
     if is_fileio {
         // For fileIO images, delete the client copy
-        if let Some(block_device) = &client_info.block_device {
-            if std::path::Path::new(block_device).exists() {
-                if let Err(e) = delete_fileio_image(block_device) {
-                    errors.push(format!("Failed to delete fileIO image: {}", e));
-                }
+        if std::path::Path::new(&client_info.block_device.as_ref().unwrap_or(&String::new()))
+            .exists()
+        {
+            if let Err(e) =
+                delete_fileio_image(&client_info.block_device.as_ref().unwrap_or(&String::new()))
+            {
+                errors.push(format!("Failed to delete fileIO image: {}", e));
             }
         }
     } else {
@@ -1142,20 +1182,133 @@ pub async fn control_client(
                 serde_json::json!({ "message": format!("Shutdown command sent to {} ({})", name, ip) }),
             )
         }
-        "toggleSuper" => {
-            // Implement ZFS promote/clone logic here, using req.make_super
-            // Example stub:
-            let is_super = req.make_super.unwrap_or(false);
-            if is_super {
-                // Promote logic
-                Ok(
-                    serde_json::json!({ "message": format!("Super Client enabled for {}", client_id) }),
-                )
+        "super" => {
+            // Super mode toggle requires client to be offline
+            let status = get_client_status_realtime(&client.mac, &client.ip);
+            if status != "Offline" {
+                return Err("Client must be offline to toggle Super mode".to_string());
+            }
+
+            let is_fileio = client.master.contains("/var/lib/diskless/fileio/")
+                && client.master.ends_with(".img");
+            let paths = if is_fileio {
+                // Build target/block_store without a clone path
+                let mut p = std::collections::HashMap::new();
+                let target_iqn = format!(
+                    "iqn.2025-04.com.nsboot:{}",
+                    client.mac.to_lowercase().replace(':', "-")
+                );
+                let block_store = format!("block_{}", client.id.to_lowercase());
+                p.insert("target_iqn".to_string(), target_iqn);
+                p.insert("block_store".to_string(), block_store);
+                p
             } else {
-                // Demote logic
-                Ok(
-                    serde_json::json!({ "message": format!("Super Client disabled for {}", client_id) }),
-                )
+                get_client_paths_with_master(&client.id, &client.mac, &client.master)
+            };
+
+            if req.make_super.unwrap_or(false) {
+                // Promote: point iSCSI target to master directly
+                let block_device = if is_fileio {
+                    client.master.clone()
+                } else {
+                    // ZFS master device
+                    format!("/dev/zvol/{}", client.master)
+                };
+
+                // Recreate iSCSI target pointing to master
+                let target_iqn = paths.get("target_iqn").cloned().unwrap_or_default();
+                let block_store = paths.get("block_store").cloned().unwrap_or_default();
+                if let Some(tiqn) = client.target_iqn.as_ref() {
+                    let _ = cleanup_iscsi_target(tiqn, &block_store);
+                }
+                setup_iscsi_target(&target_iqn, &block_store, &block_device)
+                    .map_err(|e| format!("Failed to set iSCSI to master: {}", e))?;
+
+                // Persist mode = super and block_device (for fileIO)
+                let mut updated = client.clone();
+                updated.mode = Some("super".to_string());
+                if is_fileio {
+                    updated.block_device = Some(block_device);
+                }
+                if !save_client_config(&updated) {
+                    println!(
+                        "[WARN] Failed to persist client mode change for {}",
+                        client_id
+                    );
+                }
+
+                Ok(serde_json::json!({
+                    "message": format!("Super Client enabled for {}", client_id)
+                }))
+            } else {
+                // Demote: point iSCSI back to client's writeback clone
+                let clone_path = if is_fileio {
+                    // FileIO client image path is already computed in get_client_paths_with_master
+                    paths.get("clone").cloned().unwrap_or_else(|| {
+                        // For fileIO, client image resides under /var/lib/diskless/fileio
+                        let fileio_dir = "/var/lib/diskless/fileio";
+                        format!(
+                            "{}/{}-{}-client.img",
+                            fileio_dir,
+                            client.id.to_lowercase(),
+                            client.mac.to_lowercase().replace(':', "-")
+                        )
+                    })
+                } else {
+                    format!("{}/{}-disk", crate::ZFS_POOL, client.id.to_uppercase())
+                };
+
+                if is_fileio {
+                    // Ensure client file exists by copying from master if missing
+                    if !std::path::Path::new(&clone_path).exists() {
+                        copy_fileio_image(&client.master, &clone_path).map_err(|e| {
+                            format!("Failed to create client image from master: {}", e)
+                        })?;
+                    }
+                } else {
+                    // Ensure ZFS clone exists; create from client's snapshot if needed
+                    if !zfs_exists(&clone_path) {
+                        let snapshot = client.snapshot.as_ref().ok_or_else(|| {
+                            "Client has no base snapshot to recreate clone".to_string()
+                        })?;
+                        zfs_clone(snapshot, &clone_path)
+                            .map_err(|e| format!("Failed to recreate ZFS clone: {}", e))?;
+                    }
+                }
+
+                let block_device = if is_fileio {
+                    clone_path.clone()
+                } else {
+                    format!("/dev/zvol/{}", clone_path)
+                };
+
+                // Recreate iSCSI target pointing back to client writeback
+                let target_iqn = paths.get("target_iqn").cloned().unwrap_or_default();
+                let block_store = paths.get("block_store").cloned().unwrap_or_default();
+                if let Some(tiqn) = client.target_iqn.as_ref() {
+                    let _ = cleanup_iscsi_target(tiqn, &block_store);
+                }
+                setup_iscsi_target(&target_iqn, &block_store, &block_device)
+                    .map_err(|e| format!("Failed to set iSCSI to client writeback: {}", e))?;
+
+                // Persist mode cleared
+                let mut updated = client.clone();
+                updated.mode = None;
+                if is_fileio {
+                    updated.block_device = Some(block_device);
+                } else {
+                    updated.block_device = Some(format!("/dev/zvol/{}", clone_path));
+                }
+                if !save_client_config(&updated) {
+                    println!(
+                        "[WARN] Failed to persist client mode change for {}",
+                        client_id
+                    );
+                }
+
+                Ok(serde_json::json!({
+                    "message": format!("Super Client disabled for {}", client_id)
+                }))
             }
         }
         "edit" => Ok(
@@ -1190,7 +1343,8 @@ pub async fn reset_client(token: String, client_id: String) -> Result<serde_json
         .cloned()
         .unwrap_or_default();
     let clone = format!("{}/{}-disk", ZFS_POOL, client_id.to_uppercase());
-    let is_fileio = client_info.master.contains("/var/lib/diskless/fileio/") && client_info.master.ends_with(".img");
+    let is_fileio = client_info.master.contains("/var/lib/diskless/fileio/")
+        && client_info.master.ends_with(".img");
 
     // 1. Clean up existing iSCSI resources
     if let Err(e) = cleanup_iscsi_target(&target_iqn, &block_store) {
@@ -1200,8 +1354,12 @@ pub async fn reset_client(token: String, client_id: String) -> Result<serde_json
     // 2. Destroy existing client image (ZFS clone or fileIO copy)
     if is_fileio {
         // For fileIO images, delete the client copy
-        if std::path::Path::new(&client_info.block_device.as_ref().unwrap_or(&String::new())).exists() {
-            if let Err(e) = delete_fileio_image(&client_info.block_device.as_ref().unwrap_or(&String::new())) {
+        if std::path::Path::new(&client_info.block_device.as_ref().unwrap_or(&String::new()))
+            .exists()
+        {
+            if let Err(e) =
+                delete_fileio_image(&client_info.block_device.as_ref().unwrap_or(&String::new()))
+            {
                 return Err(format!("Failed to delete existing fileIO image: {}", e));
             }
         }
@@ -1217,7 +1375,10 @@ pub async fn reset_client(token: String, client_id: String) -> Result<serde_json
     // 3. Create new client image from master
     if is_fileio {
         // For fileIO images, copy from master
-        if let Err(e) = copy_fileio_image(&client_info.master, &client_info.block_device.as_ref().unwrap_or(&String::new())) {
+        if let Err(e) = copy_fileio_image(
+            &client_info.master,
+            &client_info.block_device.as_ref().unwrap_or(&String::new()),
+        ) {
             return Err(format!("Failed to copy fileIO image: {}", e));
         }
     } else {
@@ -1234,11 +1395,15 @@ pub async fn reset_client(token: String, client_id: String) -> Result<serde_json
 
     // 4. Setup new iSCSI target
     let block_device = if is_fileio {
-        client_info.block_device.as_ref().unwrap_or(&String::new()).clone()
+        client_info
+            .block_device
+            .as_ref()
+            .unwrap_or(&String::new())
+            .clone()
     } else {
         format!("/dev/zvol/{}", clone)
     };
-    
+
     if let Err(e) = setup_iscsi_target(&target_iqn, &block_store, &block_device) {
         return Err(format!("Failed to set up iSCSI target: {}", e));
     }
@@ -1249,7 +1414,10 @@ pub async fn reset_client(token: String, client_id: String) -> Result<serde_json
 }
 
 #[tauri::command]
-pub async fn deprovision_client(token: String, req: DeprovisionRequest) -> Result<serde_json::Value, String> {
+pub async fn deprovision_client(
+    token: String,
+    req: DeprovisionRequest,
+) -> Result<serde_json::Value, String> {
     // Validate authentication token
     crate::middleware::validate_auth_token_for_command(&token)
         .map_err(|e| format!("Authentication failed: {}", e.message))?;
@@ -1266,7 +1434,7 @@ pub async fn deprovision_client(token: String, req: DeprovisionRequest) -> Resul
 
     // Build command arguments
     let mut args = vec!["/usr/local/bin/deprovision_client.sh", &mac];
-    
+
     if force {
         args.push("--force");
     }
@@ -1298,14 +1466,19 @@ pub async fn deprovision_client(token: String, req: DeprovisionRequest) -> Resul
 }
 
 #[tauri::command]
-pub async fn deprovision_client_by_id(token: String, client_id: String, force: Option<bool>, keep_zfs: Option<bool>) -> Result<serde_json::Value, String> {
+pub async fn deprovision_client_by_id(
+    token: String,
+    client_id: String,
+    force: Option<bool>,
+    keep_zfs: Option<bool>,
+) -> Result<serde_json::Value, String> {
     // Validate authentication token
     crate::middleware::validate_auth_token_for_command(&token)
         .map_err(|e| format!("Authentication failed: {}", e.message))?;
-        
+
     // Get client by ID to extract MAC address
-    let client = get_client_by_id(&client_id)
-        .ok_or_else(|| format!("Client {} not found", client_id))?;
+    let client =
+        get_client_by_id(&client_id).ok_or_else(|| format!("Client {} not found", client_id))?;
 
     let req = DeprovisionRequest {
         mac: client.mac,
@@ -1319,10 +1492,17 @@ pub async fn deprovision_client_by_id(token: String, client_id: String, force: O
 
     // If deprovisioning was successful, also remove from config
     if let Ok(json_result) = serde_json::from_value::<serde_json::Value>(result.clone()) {
-        if json_result.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if json_result
+            .get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             // Remove client from configuration
             if !delete_client_config(&client_id) {
-                println!("Warning: Failed to remove client {} from configuration", client_id);
+                println!(
+                    "Warning: Failed to remove client {} from configuration",
+                    client_id
+                );
             }
         }
     }
@@ -1336,7 +1516,6 @@ pub async fn get_client_overview() -> Result<serde_json::Value, String> {
     let mut online_clients = 0;
 
     for client in &config.clients {
-        
         if client.status == Some("Online".to_string()) {
             online_clients += 1;
         }
@@ -1349,13 +1528,16 @@ pub async fn get_client_overview() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-pub async fn get_deprovision_status(token: String, mac: String) -> Result<serde_json::Value, String> {
+pub async fn get_deprovision_status(
+    token: String,
+    mac: String,
+) -> Result<serde_json::Value, String> {
     // Validate authentication token
     crate::middleware::validate_auth_token_for_command(&token)
         .map_err(|e| format!("Authentication failed: {}", e.message))?;
     // Check if client exists in various systems
     let mut status = serde_json::Map::new();
-    
+
     // Normalize MAC
     let mac_lc = mac.to_lowercase();
     let mac_hy = mac_lc.replace(':', "-");
@@ -1365,11 +1547,20 @@ pub async fn get_deprovision_status(token: String, mac: String) -> Result<serde_
 
     // Check ZFS clone
     let zfs_exists = Command::new("zfs")
-        .args(&["list", "-H", "-o", "name", &format!("{}/{}", ZFS_POOL, client_vol)])
+        .args(&[
+            "list",
+            "-H",
+            "-o",
+            "name",
+            &format!("{}/{}", ZFS_POOL, client_vol),
+        ])
         .output()
         .map(|output| output.status.success())
         .unwrap_or(false);
-    status.insert("zfs_clone_exists".to_string(), serde_json::Value::Bool(zfs_exists));
+    status.insert(
+        "zfs_clone_exists".to_string(),
+        serde_json::Value::Bool(zfs_exists),
+    );
 
     // Check iSCSI target (targetcli often requires sudo and may write to stderr)
     let iscsi_exists = {
@@ -1379,9 +1570,14 @@ pub async fn get_deprovision_status(token: String, mac: String) -> Result<serde_
             let txt = String::from_utf8_lossy(&o.stdout);
             let err = String::from_utf8_lossy(&o.stderr);
             let combined = format!("{}{}", txt, err);
-            if combined.contains(&target_iqn) { true } else {
+            if combined.contains(&target_iqn) {
+                true
+            } else {
                 // Fallback: sudo targetcli /iscsi ls
-                match Command::new("sudo").args(["targetcli", "/iscsi", "ls"]).output() {
+                match Command::new("sudo")
+                    .args(["targetcli", "/iscsi", "ls"])
+                    .output()
+                {
                     Ok(o2) => {
                         let txt2 = String::from_utf8_lossy(&o2.stdout);
                         let err2 = String::from_utf8_lossy(&o2.stderr);
@@ -1396,11 +1592,17 @@ pub async fn get_deprovision_status(token: String, mac: String) -> Result<serde_
         }
     };
     println!("iscsi_exists: {}", iscsi_exists);
-    status.insert("iscsi_target_exists".to_string(), serde_json::Value::Bool(iscsi_exists));
+    status.insert(
+        "iscsi_target_exists".to_string(),
+        serde_json::Value::Bool(iscsi_exists),
+    );
 
     // Check PXE configuration
     let pxe_exists = std::path::Path::new(&pxe_file).exists();
-    status.insert("pxe_config_exists".to_string(), serde_json::Value::Bool(pxe_exists));
+    status.insert(
+        "pxe_config_exists".to_string(),
+        serde_json::Value::Bool(pxe_exists),
+    );
 
     // Check if client is online
     let online = check_client_online_status(&mac_lc);
@@ -1420,7 +1622,8 @@ fn check_client_online_status(mac: &str) -> bool {
     // Check if client responds to ping (if we can determine IP)
     if let Ok(output) = Command::new("grep")
         .args(&["-A", "10", mac, "/var/lib/dhcp/dhcpd.leases"])
-        .output() {
+        .output()
+    {
         if let Ok(lease_content) = String::from_utf8(output.stdout) {
             if let Some(ip_line) = lease_content.lines().find(|line| line.contains("lease")) {
                 if let Some(ip) = ip_line.split_whitespace().nth(1) {
@@ -1429,7 +1632,8 @@ fn check_client_online_status(mac: &str) -> bool {
                         .args(&["-c", "1", "-W", "2", ip])
                         .output()
                         .map(|output| output.status.success())
-                        .unwrap_or(false) {
+                        .unwrap_or(false)
+                    {
                         return true;
                     }
                 }
@@ -1445,35 +1649,38 @@ pub fn copy_fileio_image(master_path: &str, client_path: &str) -> Result<(), Str
     if !std::path::Path::new(master_path).exists() {
         return Err(format!("Master fileIO image not found: {}", master_path));
     }
-    
+
     // Create directory if it doesn't exist
     let client_dir = std::path::Path::new(client_path).parent().unwrap();
     if !client_dir.exists() {
         std::fs::create_dir_all(client_dir)
             .map_err(|e| format!("Failed to create directory: {}", e))?;
     }
-    
+
     // Copy the file using cp command (preserves sparse file structure)
     let output = Command::new("sudo")
         .args(["cp", "--sparse=always", master_path, client_path])
         .output()
         .map_err(|e| format!("Failed to copy fileIO image: {}", e))?;
-    
+
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!("Failed to copy fileIO image: {}", stderr));
     }
-    
+
     // Set proper permissions
     let chmod_output = Command::new("sudo")
         .args(["chmod", "644", client_path])
         .output()
         .map_err(|e| format!("Failed to set file permissions: {}", e))?;
-    
+
     if !chmod_output.status.success() {
-        println!("Warning: Failed to set file permissions for {}", client_path);
+        println!(
+            "Warning: Failed to set file permissions for {}",
+            client_path
+        );
     }
-    
+
     Ok(())
 }
 
@@ -1483,12 +1690,12 @@ pub fn delete_fileio_image(image_path: &str) -> Result<(), String> {
             .args(["rm", "-f", image_path])
             .output()
             .map_err(|e| format!("Failed to delete fileIO image: {}", e))?;
-        
+
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(format!("Failed to delete fileIO image: {}", stderr));
         }
     }
-    
+
     Ok(())
 }

@@ -72,7 +72,7 @@ const ImageManagement = () => {
     });
     if (ok) {
       const token = localStorage.getItem('authToken') || '';
-      await invoke('delete_master', { token, masterName: selectedImage })
+      await invoke('delete_master', { token, masterName: image })
         .then((response) => {
           if (response.message) showNotification(response.message, 'success');
         }).catch((error) => {

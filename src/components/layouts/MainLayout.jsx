@@ -13,6 +13,7 @@ const MainLayout = () => {
 	const { notification } = useNotification()
 	const navigation = useNavigation();
 	const isNavigating = Boolean(navigation.location);
+	const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
 	useEffect(() => {
 		fetchData()
@@ -20,9 +21,27 @@ const MainLayout = () => {
 
 	return (
 		<div className="flex h-screen bg-gray-900">
-			<Sidebar activeTab={activeTab} onTabChange={setActiveTab} />
+			{/* Sidebar */}
+			<Sidebar
+				activeTab={activeTab}
+				onTabChange={(tab) => {
+					setActiveTab(tab);
+					setIsSidebarOpen(false);
+				}}
+				isOpen={isSidebarOpen}
+				onClose={() => setIsSidebarOpen(false)}
+			/>
+
+			{/* Backdrop on small screens */}
+			{isSidebarOpen && (
+				<div
+					className="fixed inset-0 z-30 bg-black/50 lg:hidden"
+					onClick={() => setIsSidebarOpen(false)}
+				/>
+			)}
+
 			<div className="flex-1 flex flex-col overflow-hidden">
-				<Header />
+				<Header onToggleSidebar={() => setIsSidebarOpen((v) => !v)} />
 				<main className="flex-1 overflow-y-auto">
 					<div className="p-6">
 						{error && <Error error={error} />}

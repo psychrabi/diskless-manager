@@ -26,6 +26,30 @@ export const ContextMenu = ({ isOpen, xPos, yPos, targetClient, onClose, actions
         <li><a onClick={() => { actions.wake(targetClient); onClose(); }}><Play className="w-4 h-4" />Wake Up</a></li>
         <li><a onClick={() => { actions.remote(targetClient); onClose(); }}><ScreenShare className="w-4 h-4" />Remote Control</a></li>
         <div className="divider my-0"></div>
+        {/* Super Client items */}
+        {targetClient?.mode === 'super' && targetClient?.status === 'Offline' ? (
+          <>
+            <li>
+              <a onClick={() => { actions.saveSuper(targetClient); onClose(); }}>
+                {/* using History icon for snapshot save; replace if you prefer a different icon */}
+                <History className="w-4 h-4" />Save Super
+              </a>
+            </li>
+            <li>
+              <a onClick={() => { actions.disableSuper(targetClient); onClose(); }}>
+                <RefreshCw className="w-4 h-4" />Disable Super Client
+              </a>
+            </li>
+          </>
+        ) : (
+          <li>
+            <a onClick={() => { actions.enableSuper(targetClient); onClose(); }}>
+              {/* using RefreshCw icon for toggle; replace if you prefer a star/wand */}
+              <RefreshCw className="w-4 h-4" />Enable Super Client
+            </a>
+          </li>
+        )}
+        <div className="divider my-0"></div>
         <li><a onClick={() => { actions.edit(targetClient); onClose(); }}><Edit className="w-4 h-4" />Edit Client</a></li>
         <li><a onClick={() => { actions.reset(targetClient); onClose(); }}><History className="w-4 h-4" />Reset Writeback</a></li>
         <li><a onClick={() => { actions.deprovision(targetClient); onClose(); }}><XCircle className="w-4 h-4" />Deprovision Client</a></li>

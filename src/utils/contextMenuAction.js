@@ -165,6 +165,75 @@ export const clientContextMenuActions = (fetchData, closeContextMenu, setClient,
         closeContextMenu();
       }
     },
+    enableSuper: async (client) => {
+      if (!client) return;
+      if (client.status !== 'Offline') { showNotification('Client must be offline to enable Super mode.', 'error'); return; }
+      const ok = await confirm({
+        title: 'Enable Super Client',
+        description: `Client "${client.name}" will boot directly from master image. This skips clone/writeback. Continue?`,
+        confirmText: 'Enable Super',
+        cancelText: 'Cancel',
+        confirmVariant: 'primary',
+        size: '2xl'
+      });
+      if (!ok) { showNotification('Enable Super cancelled.', 'info'); return; }
+      const token = localStorage.getItem('authToken') || '';
+      await invoke('control_client', {
+        token,
+        clientId: client.id,
+        req: { action: 'super', make_super: true }
+      }).then((response) => {
+        if (response.message) showNotification(response.message, 'success');
+        fetchData();
+      }).catch((error) => showNotification(error, 'error'));
+    },
+    disableSuper: async (client) => {
+      if (!client) return;
+      if (client.mode !== 'super') { showNotification('Client is not in Super mode.', 'error'); return; }
+      if (client.status !== 'Offline') { showNotification('Client must be offline to disable Super mode.', 'error'); return; }
+      const ok = await confirm({
+        title: 'Disable Super Client',
+        description: `This will point ${client.name} back to its writeback clone. Continue?`,
+        confirmText: 'Disable Super',
+        cancelText: 'Cancel',
+        confirmVariant: 'primary',
+        size: '2xl'
+      });
+      if (!ok) { showNotification('Disable Super cancelled.', 'info'); return; }
+      const token = localStorage.getItem('authToken') || '';
+      await invoke('control_client', {
+        token,
+        clientId: client.id,
+        req: { action: 'super', make_super: false }
+      }).then((response) => {
+        if (response.message) showNotification(response.message, 'success');
+        fetchData();
+        closeContextMenu();
+      }).catch((error) => showNotification(error, 'error'));
+    },
+    saveSuper: async (client) => {
+      if (!client) return;
+      if (client.mode !== 'super') { showNotification('Client is not in Super mode.', 'error'); return; }
+      if (client.status !== 'Offline') { showNotification('Client must be offline to save Super.', 'error'); return; }
+      // Only supported for ZFS masters
+      if (client.master?.includes('/var/lib/diskless/fileio/') && client.master?.endsWith('.img')) {
+        showNotification('Save Super is not supported for FileIO masters.', 'error');
+        return;
+      }
+      const suffix = window.prompt('Enter snapshot name (alphanumeric, _ or -):', `${client.name}-super-${Date.now()}`);
+      if (!suffix) { showNotification('Save Super cancelled.', 'info'); return; }
+      if (!/^[-\w]+$/.test(suffix)) { showNotification('Invalid snapshot name.', 'error'); return; }
+      const snapshotName = `${client.master}@${suffix}`;
+      const token = localStorage.getItem('authToken') || '';
+      await invoke('create_snapshot', { token, snapshotName })
+        .then((response) => {
+          if (response.message) showNotification(response.message, 'success');
+          // refresh list so UI reflects any snapshot changes
+          fetchData();
+          closeContextMenu();
+        })
+        .catch((error) => showNotification(error, 'error'));
+    },
     // deprovision: (client) => {
     //   // Open deprovision modal with client data
     //   setDeprovisionModal({ isOpen: true, client: client });

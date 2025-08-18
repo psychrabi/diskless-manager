@@ -9,7 +9,7 @@ const TableHead = ({ children, className = '' }) => <th className={`h-12 px-4 te
 const TableCell = ({ children, className = '' }) => <td className={`p-4 align-middle ${className}`}>{children}</td>;
 
 const ClientTable = ({ handleClientContextMenu }) => {
-  const {clients} = useAppStore()
+  const { clients } = useAppStore()
 
   return (
   <>
@@ -58,17 +58,16 @@ const ClientTable = ({ handleClientContextMenu }) => {
               })()}
             </TableCell>
             <TableCell>
-              {client.super_client && (
+              {client.mode === 'super' || client.super_client ? (
                 <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200" title="Using the image directly">
                   <Zap className="h-3 w-3 mr-1 text-yellow-500" /> Super Client
                 </span>
-              )}
-              {client.keep_writeback ? (
+              ) : client.keep_writeback ? (
                 <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200" title="Client changes will be kept in the clone">
                   <Layers className="h-3 w-3 mr-1" />Keep Writeback
                 </span>
               ) : (
-                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200" title="Clone will be reset on reboot">
+              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200" title="Clone will be reset on reboot">
                 <Layers className="h-3 w-3 mr-1" />Reset on reboot
               </span>
               )}
@@ -79,6 +78,7 @@ const ClientTable = ({ handleClientContextMenu }) => {
     </Table>
     {clients.length === 0 && <p className="text-center py-4 text-gray-500">No clients configured.</p>}
   </>
-)};
+)
+};
 
 export default ClientTable;
