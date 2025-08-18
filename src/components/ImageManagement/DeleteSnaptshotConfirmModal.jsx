@@ -6,7 +6,6 @@ import { invoke } from '@tauri-apps/api/core';
 const DeleteSnaptshotConfirmModal = ({ openDeleteSnapshotModal, setOpenDeleteSnapshotModal, selectedSnapshot, selectedImage }) => {
   const { showNotification } = useNotification();
 
-
   const confirmDeleteSnapshot = async () => {
     if (!selectedSnapshot) return;
 
@@ -19,7 +18,6 @@ const DeleteSnaptshotConfirmModal = ({ openDeleteSnapshotModal, setOpenDeleteSna
       }).catch((error) => {
         showNotification(error, 'error',)
       })
-
   };
 
   return (

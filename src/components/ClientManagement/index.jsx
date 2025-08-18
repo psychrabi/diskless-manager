@@ -8,6 +8,7 @@ import { ContextMenu } from '../ui/ContextMenu';
 import ClientFormModal from './ClientFormModal';
 import ClientTable from './ClientTable';
 import DeprovisionModal from './DeprovisionModal';
+import ClientDeleteConfirmModal from './ClientDeleteConfirmModal';
 
 const MemoizedClientTable = memo(ClientTable);
 const MemoizedContextMenu = memo(ContextMenu);
@@ -15,6 +16,7 @@ const MemoizedContextMenu = memo(ContextMenu);
 const ClientManagement = () => {
   const { clients, fetchData, masters, startClientStatusPolling, stopClientStatusPolling } = useAppStore();
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [selectedClient, setSelectedClient] = useState([]);
   const [client, setClient] = useState({
     name: '',
     mac: '',
@@ -25,6 +27,7 @@ const ClientManagement = () => {
   });
   const [contextMenu, setContextMenu] = useState({ isOpen: false, x: 0, y: 0, client: null });
   const [deprovisionModal, setDeprovisionModal] = useState({ isOpen: false, client: null });
+  const [openDeleteClientModal, setOpenDeleteClientModal] = useState(false)
 
   const handleClientContextMenu = useCallback((event, client) => {
     event.preventDefault();
@@ -35,7 +38,12 @@ const ClientManagement = () => {
     setContextMenu(prev => ({ ...prev, isOpen: false }));
   }, []);
 
-  const contextActions = clientContextMenuActions(fetchData, closeContextMenu, setClient, setIsModalOpen, setDeprovisionModal);
+  const handleDeleteClient = (client) => {
+    setSelectedClient(client)
+    setOpenDeleteClientModal(true)
+  }
+
+  const contextActions = clientContextMenuActions(fetchData, closeContextMenu, setClient, setIsModalOpen, setDeprovisionModal, handleDeleteClient);
 
   const handleClientFormModalOpen = useCallback(() => {
     let newName = 'pc000'
@@ -95,6 +103,7 @@ const ClientManagement = () => {
           setDeprovisionModal({ isOpen: false, client: null });
         }}
       />
+      {openDeleteClientModal &&<ClientDeleteConfirmModal openDeleteClientModal={openDeleteClientModal} setOpenDeleteClientModal={setOpenDeleteClientModal} selectedClient={selectedClient} />}
     </div>
   );
 };

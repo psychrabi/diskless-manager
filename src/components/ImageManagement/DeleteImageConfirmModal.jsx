@@ -21,7 +21,7 @@ const DeleteImageConfirmModal = ({ openDeleteMasterModal, setOpenDeleteMasterMod
   };
 
   return (
-    <Modal isOpen={openDeleteMasterModal} onClose={() => setOpenDeleteMasterModal(false)} title="Delete Snapshot" size="2xl">
+    <Modal isOpen={openDeleteMasterModal} onClose={() => setOpenDeleteMasterModal(false)} title="Delete Image" size="2xl">
       <div className="space-y-4">
         <p>
           Are you sure you want to delete "{selectedImage}" image? <br />

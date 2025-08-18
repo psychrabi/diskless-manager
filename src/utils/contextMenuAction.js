@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useNotification } from "../contexts/NotificationContext";
 
-export const clientContextMenuActions = (fetchData, closeContextMenu, setClient, setIsModalOpen, setDeprovisionModal) => {
+export const clientContextMenuActions = (fetchData, closeContextMenu, setClient, setIsModalOpen, setDeprovisionModal, handleDeleteClient) => {
   const { showNotification } = useNotification();
 
   return {
@@ -71,24 +71,25 @@ export const clientContextMenuActions = (fetchData, closeContextMenu, setClient,
     },
     delete: (client) => {
       if (client.status !== 'Offline') { showNotification('Client must be offline to delete.', 'error'); return; }
+      handleDeleteClient(client)
+      // showNotification(`Deleting client... ${client.name}`, 'info');
 
-      showNotification(`Deleting client... ${client.name}`, 'info');
-      if (confirm(`Are you sure you want to delete client "${client.name}"? This will destroy their ZFS clone and remove configurations.`)) {
-        // Get token from localStorage
-        const token = localStorage.getItem('authToken') || '';
-        invoke('delete_client', { token, clientId: client.id })
-          .then((response) => {
-            if (response.message) showNotification(response.message, 'success');
-          }).catch((error) => showNotification(error, 'error'))
-          .finally(() => {
-            closeContextMenu();
-            // Refresh the data after deletion
-            fetchData();
-          });
-      } else {
-        showNotification('Client deletion cancelled.', 'info');
-        closeContextMenu();
-      }
+      // if (confirm(`Are you sure you want to delete client "${client.name}"? This will destroy their ZFS clone and remove configurations.`)) {
+      //   // Get token from localStorage
+      //   const token = localStorage.getItem('authToken') || '';
+      //   invoke('delete_client', { token, clientId: client.id })
+      //     .then((response) => {
+      //       if (response.message) showNotification(response.message, 'success');
+      //     }).catch((error) => showNotification(error, 'error'))
+      //     .finally(() => {
+      //       closeContextMenu();
+      //       // Refresh the data after deletion
+      //       fetchData();
+      //     });
+      // } else {
+      //   showNotification('Client deletion cancelled.', 'info');
+      //   closeContextMenu();
+      // }
     },
     deprovision: (client) => {
       // Open deprovision modal with client data
