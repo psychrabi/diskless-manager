@@ -1,12 +1,14 @@
 import { useServiceManager } from "@/hooks/useServiceManager"
 import { Eye, Play, Power, RefreshCw } from "lucide-react"
 import { Button, Card } from "../ui"
+import { useAppStore } from "@/store/useAppStore";
 
-export const ServiceCard = ({key, service}) => {
+export const ServicesList = () => {
+  const { services } = useAppStore();
   const { handleServiceAction, handleServiceConfigView } = useServiceManager()
-
-  return (
-    <Card key={key} title={service.name} className="flex-1" titleClassName="text-base md:text-lg">
+  
+  return services.map((service, index) => (
+    <Card key={index} title={service.name} className="flex-1" titleClassName="text-base md:text-lg">
       <div className="flex items-center justify-between">
         <span className={`px-2 py-0.5 rounded-full text-xs font-semibold capitalize ${service.running ? 'dark:bg-green-300 dark:text-green-900 bg-green-900 text-green-300' :
           'bg-base-300 text-base-content'
@@ -39,6 +41,6 @@ export const ServiceCard = ({key, service}) => {
         </div>
       </div>
     </Card>
-  )
+  ))
 }
 
