@@ -30,8 +30,6 @@ function ServiceConfigModal() {
     setOpen(false)
   }
 
-
-
   return (
     <Modal isOpen={open} onClose={() => setOpen(false)} title={title} size="5xl">
       {loading ? (
@@ -41,14 +39,14 @@ function ServiceConfigModal() {
       ) : (
         editable ? (
           <textarea
-            className="bg-gray-100 dark:bg-gray-900 p-4 rounded-md text-xs overflow-auto h-[80vh] w-full font-mono max-h-[80vh]"
+            className="bg-base-100 p-4 rounded-md text-xs overflow-auto h-[80vh] w-full font-mono max-h-[80vh]"
             value={config}
             onChange={handleChange}
             disabled={saving}
             spellCheck={false}
           />
         ) : (
-          <pre className="bg-gray-100 dark:bg-gray-900 p-4 rounded-md text-xs overflow-auto h-[80vh] max-h-[80vh]" >
+          <pre className="bg-base-100 p-4 rounded-md text-xs overflow-auto h-[80vh] max-h-[80vh]" >
             <code>{config}</code>
           </pre>
         )

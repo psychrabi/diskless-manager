@@ -215,6 +215,16 @@ export const clientContextMenuActions = (fetchData, closeContextMenu, setClient,
       if (!client) return;
       if (client.mode !== 'super') { showNotification('Client is not in Super mode.', 'error'); return; }
       if (client.status !== 'Offline') { showNotification('Client must be offline to save Super.', 'error'); return; }
+      const ok = await confirm({
+        title: 'Save Super Client',
+        description: `This will save the current state of ${client.name} to a snapshot. Continue?`,
+        confirmText: 'Save Super',
+        cancelText: 'Cancel',
+        confirmVariant: 'primary',
+        size: '2xl'
+      });
+      if (!ok) { showNotification('Save Super cancelled.', 'info'); return; }
+
       const suffix = window.prompt('Enter snapshot name (alphanumeric, _ or -):', `${client.name}-super-${Date.now()}`);
       if (!suffix) { showNotification('Save Super cancelled.', 'info'); return; }
       if (!/^[-\w]+$/.test(suffix)) { showNotification('Invalid snapshot name.', 'error'); return; }

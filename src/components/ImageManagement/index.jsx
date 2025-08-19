@@ -14,13 +14,11 @@ const RenameImageModal = lazy(() => import('./RenameImageModal'));
 
 const ImageManagement = () => {
   const { masters, fetchData } = useAppStore();
-  const { showNotification } = useNotification();
-  const { setDefaultMaster } = useMasterManager();
+  const { setDefaultMaster, handleDeleteImage, handleDeleteSnapshot, handleRollbackSnapshot } = useMasterManager();
   const [openImageCreateModal, setOpenImageCreateModal] = useState(false)
   const [openSnapshotCreateModal, setOpenSnapshotCreateModal] = useState(false)
   const [selectedImage, setSelectedImage] = useState('')  
   const [openRenameModal, setOpenRenameModal] = useState(false)
-  const confirm = useConfirm();
 
   const memoizedMasters = useMemo(() => masters, [masters]);
   const memoizedSetDefaultMaster = useCallback(setDefaultMaster, [setDefaultMaster]);
@@ -37,75 +35,6 @@ const ImageManagement = () => {
     setOpenRenameModal(true)
   }
 
-  const handleRollbackSnapshot = async (snapshot, image) => {
-    if (!snapshot || !image) return;
-    const ok = await confirm({
-      title: 'Rollback Snapshot',
-      description: `Are you sure you want to rollback snapshot "${snapshot}" for image "${image}"? This action cannot be undone and might affect clones.`,
-      confirmText: 'Rollback Snapshot',
-      cancelText: 'Cancel',
-      confirmVariant: 'primary',
-      size: '2xl',
-    });
-    if (ok) {
-      const token = localStorage.getItem('authToken') || '';
-      await invoke('rollback_master_snapshot', { token, masterName: image, snapshotName: snapshot })
-        .then((response) => {
-          if (response.message) showNotification(response.message, 'success');
-        }).catch((error) => {
-          showNotification(error, 'error',)
-        })
-    } else {
-      showNotification("Snapshot rollback cancelled", 'error',)
-    }
-  }
-
-  const handleDeleteImage = async (image) => {
-    if (!image) return;
-    const ok = await confirm({
-      title: 'Delete Image',
-      description: `Are you sure you want to delete image "${image}"? This action cannot be undone and might affect clones.`,
-      confirmText: 'Delete Image',
-      cancelText: 'Cancel',
-      confirmVariant: 'primary',
-      size: '2xl',
-    });
-    if (ok) {
-      const token = localStorage.getItem('authToken') || '';
-      await invoke('delete_master', { token, masterName: image })
-        .then((response) => {
-          if (response.message) showNotification(response.message, 'success');
-        }).catch((error) => {
-          showNotification(error, 'error',)
-        })
-    } else {
-      showNotification("Image deletion cancelled", 'error',)
-    }
-  }
-
-  const handleDeleteSnapshot = async (snapshot, image) => {
-    if (!snapshot || !image) return;
-    const ok = await confirm({
-      title: 'Delete Snapshot',
-      description: `Are you sure you want to delete snapshot "${snapshot}" for image "${image}"? This action cannot be undone and might affect clones.`,
-      confirmText: 'Delete Snapshot',
-      cancelText: 'Cancel',
-      confirmVariant: 'primary',
-      size: '2xl',
-    });
-    if (ok) {
-      const token = localStorage.getItem('authToken') || '';
-      await invoke('delete_snapshot', { token, masterName: image, snapshotName: snapshot })
-        .then((response) => {
-          if (response.message) showNotification(response.message, 'success');
-        }).catch((error) => {
-          showNotification(error, 'error',)
-        })
-    } else {
-      showNotification("Snapshot deletion cancelled", 'error',)
-    }
-  }
-
   return (
     <div className="space-y-6">
       <Card title="Image Management" icon={HardDrive} actions={
@@ -113,7 +42,7 @@ const ImageManagement = () => {
       }>
         <div className="space-y-6">
           {memoizedMasters.map((master) => (
-            <div key={master.id} className="p-4 rounded-md bg-base-200 shadow-xl">
+            <Card key={master.id} className="p-4 rounded-md bg-base-300 shadow-xl">
               <div className="flex flex-wrap justify-between items-center mb-3 gap-2 ">
                 <div className="flex items-center gap-2">
                   <h4 className="text-lg font-medium break-all flex items-center gap-1">
@@ -166,7 +95,7 @@ const ImageManagement = () => {
               ) : (
                 <p className="text-sm text-base-content/60">No snapshots found for this master.</p>
               )}
-            </div>
+            </Card>
           ))}
           {memoizedMasters.length === 0 && <p className="text-center py-4 text-base-content/60">No master images found.</p>}
         </div>

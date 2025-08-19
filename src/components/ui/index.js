@@ -8,4 +8,5 @@ export { ContextMenu } from './ContextMenu.jsx';
 export { Loading } from './Loading.jsx';
 export { Notification } from './Notification.jsx';
 export { Error } from './Error.jsx';
+export { ServiceCard } from './ServiceCard.jsx';
 

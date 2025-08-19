@@ -9,7 +9,7 @@ export const NotificationProvider = ({ children }) => {
     setNotification({ message, type });
     setTimeout(() => {
       setNotification({ message: "", type: "" }); // Clear after 10 seconds
-    }, 10000);
+    }, 5000);
   };
 
   const hideNotification = () => {

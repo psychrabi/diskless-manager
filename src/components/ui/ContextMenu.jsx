@@ -1,4 +1,4 @@
-import { Edit, History, Play, Power, RefreshCw, ScreenShare, Trash2, XCircle } from "lucide-react";
+import { Edit, History, Play, Power, RefreshCw, ScreenShare, Star, Trash2, XCircle } from "lucide-react";
 import { useRef } from "react";
 import { useOnClickOutside } from "../../hooks/useOnClickOutside";
 
@@ -17,10 +17,9 @@ export const ContextMenu = ({ isOpen, xPos, yPos, targetClient, onClose, actions
     <div
       ref={menuRef}
       style={menuStyle}
-      className="fixed z-[60] bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md shadow-lg min-w-[180px] animate-fade-in"
+      className="fixed z-[60] bg-base-100 rounded-md shadow-lg min-w-[180px] animate-fade-in"
     >
-      <ul className="menu bg-base-400 rounded-box w-48">        
-        
+      <ul className="menu rounded-box w-52">
         <li><a onClick={() => { actions.reboot(targetClient); onClose(); }}><RefreshCw className="w-4 h-4" />Reboot</a></li>
         <li><a onClick={() => { actions.shutdown(targetClient); onClose(); }} ><Power className="w-4 h-4" />Shutdown</a></li>
         <li><a onClick={() => { actions.wake(targetClient); onClose(); }}><Play className="w-4 h-4" />Wake Up</a></li>
@@ -29,6 +28,11 @@ export const ContextMenu = ({ isOpen, xPos, yPos, targetClient, onClose, actions
         {/* Super Client items */}
         {targetClient?.mode === 'super' && targetClient?.status === 'Offline' ? (
           <>
+            <li>
+              <a onClick={() => { actions.enableSuper(targetClient); onClose(); }}>
+                <Star className="w-4 h-4" />Enable Super Client
+              </a>
+            </li>
             <li>
               <a onClick={() => { actions.saveSuper(targetClient); onClose(); }}>
                 {/* using History icon for snapshot save; replace if you prefer a different icon */}

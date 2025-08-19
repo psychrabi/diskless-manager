@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { useCallback, useState } from 'react';
 import { useNotification } from '../contexts/NotificationContext';
 import { formatBytes, formatDate } from '../utils/helpers';
+import { useConfirm } from '@/contexts/ConfirmDialogContext';
 
 export const useMasterManager = () => {
   const [isCreateSnapshotModalOpen, setIsCreateSnapshotModalOpen] = useState(false);
@@ -14,6 +15,7 @@ export const useMasterManager = () => {
   const [snapshotToDelete, setSnapshotToDelete] = useState(null);
   const [isDeleteMasterModalOpen, setIsDeleteMasterModalOpen] = useState(false);
   const { showNotification } = useNotification();
+  const confirm = useConfirm();
 
   // --- Master/Snapshot Actions ---
   const handleOpenCreateMasterModal = () => {
@@ -52,27 +54,53 @@ export const useMasterManager = () => {
     setIsCreateSnapshotModalOpen(false);
   };
 
-  const handleDeleteSnapshot = (snapshotName) => {
-    setSnapshotToDelete(snapshotName);
-    setIsDeleteSnapshotModalOpen(true);
-  };
+  const handleDeleteSnapshot = async (snapshot, image) => {
+    if (!snapshot || !image) return;
+    const ok = await confirm({
+      title: 'Delete Snapshot',
+      description: `Are you sure you want to delete snapshot "${snapshot}" for image "${image}"? This action cannot be undone and might affect clones.`,
+      confirmText: 'Delete Snapshot',
+      cancelText: 'Cancel',
+      confirmVariant: 'primary',
+      size: '2xl',
+    });
+    if (ok) {
+      const token = localStorage.getItem('authToken') || '';
+      await invoke('delete_snapshot', { token, masterName: image, snapshotName: snapshot })
+        .then((response) => {
+          if (response.message) showNotification(response.message, 'success');
+        }).catch((error) => {
+          showNotification(error, 'error',)
+        })
+    } else {
+      showNotification("Snapshot deletion cancelled", 'error',)
+    }
+  }
 
-  const confirmDeleteSnapshot = () => {
-    if (!snapshotToDelete) return;
+  const handleRollbackSnapshot = async (snapshot, image) => {
+    if (!snapshot || !image) return;
+    const ok = await confirm({
+      title: 'Rollback Snapshot',
+      description: `Are you sure you want to rollback snapshot "${snapshot}" for image "${image}"? This action cannot be undone and might affect clones.`,
+      confirmText: 'Rollback Snapshot',
+      cancelText: 'Cancel',
+      confirmVariant: 'primary',
+      size: '2xl',
+    });
+    if (ok) {
+      const token = localStorage.getItem('authToken') || '';
+      await invoke('rollback_master_snapshot', { token, masterName: image, snapshotName: snapshot })
+        .then((response) => {
+          if (response.message) showNotification(response.message, 'success');
+        }).catch((error) => {
+          showNotification(error, 'error',)
+        })
+    } else {
+      showNotification("Snapshot rollback cancelled", 'error',)
+    }
+  }
 
-    // Get token from localStorage
-    const token = localStorage.getItem('authToken') || '';
-    invoke('delete_snapshot', { token, masterName: selectedMaster, snapshotName: snapshotToDelete })
-      .then((response) => {
-        if (response.message) showNotification(response.message, 'success');
-      }).catch((error) => {
-        showNotification(error, 'error',)
-      }).finally(() => {
-        window.location.reload();
-      });
-    setIsDeleteSnapshotModalOpen(false);
-    setSnapshotToDelete(null);
-  };
+
 
   const setDefaultMaster = async (masterName) => {
     // Get token from localStorage
@@ -87,22 +115,28 @@ export const useMasterManager = () => {
       });
   };
 
-  const confirmDeleteMaster = () => {
-    if (!selectedMaster) return;
-
-    // Get token from localStorage
-    const token = localStorage.getItem('authToken') || '';
-    invoke('delete_master', { token, masterName: selectedMaster })
-      .then((response) => {
-        if (response.message) showNotification(response.message, 'success');
-      }).catch((error) => {
-        showNotification(error, 'error',)
-      }).finally(() => {
-        window.location.reload();
-      });
-    setIsDeleteMasterModalOpen(false);
-    setSelectedMaster(null);
-  };
+  const handleDeleteImage = async (image) => {
+    if (!image) return;
+    const ok = await confirm({
+      title: 'Delete Image',
+      description: `Are you sure you want to delete image "${image}"? This action cannot be undone and might affect clones.`,
+      confirmText: 'Delete Image',
+      cancelText: 'Cancel',
+      confirmVariant: 'primary',
+      size: '2xl',
+    });
+    if (ok) {
+      const token = localStorage.getItem('authToken') || '';
+      await invoke('delete_master', { token, masterName: image })
+        .then((response) => {
+          if (response.message) showNotification(response.message, 'success');
+        }).catch((error) => {
+          showNotification(error, 'error',)
+        })
+    } else {
+      showNotification("Image deletion cancelled", 'error',)
+    }
+  }
 
   const handleOpenDeleteMasterModal = useCallback((master) => {
     setSelectedMaster(master);
@@ -145,12 +179,13 @@ export const useMasterManager = () => {
     formatDate,
     isDeleteSnapshotModalOpen,
     snapshotToDelete,
-    confirmDeleteSnapshot,
+    handleDeleteSnapshot,
     cancelDeleteSnapshot,
     cancelDeleteMaster,
     setDefaultMaster,
     handleOpenDeleteMasterModal,
     isDeleteMasterModalOpen,
-    confirmDeleteMaster
+    handleDeleteImage,
+    handleRollbackSnapshot
   };
 };
