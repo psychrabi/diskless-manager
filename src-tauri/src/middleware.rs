@@ -1,7 +1,6 @@
 //! Middleware for authentication and authorization
 use crate::auth::{validate_token, AuthError, Claims};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AuthRequest {
@@ -20,21 +19,21 @@ pub fn validate_auth(request: AuthRequest) -> Result<AuthResponse, AuthError> {
 }
 
 /// Check if user has required role
-pub fn check_role(claims: &Claims, required_role: &str) -> Result<(), AuthError> {
-    // Admin can access everything
-    if claims.role == "admin" {
-        return Ok(());
-    }
+// pub fn check_role(claims: &Claims, required_role: &str) -> Result<(), AuthError> {
+//     // Admin can access everything
+//     if claims.role == "admin" {
+//         return Ok(());
+//     }
     
-    // Check if user has required role
-    if claims.role == required_role {
-        return Ok(());
-    }
+//     // Check if user has required role
+//     if claims.role == required_role {
+//         return Ok(());
+//     }
     
-    Err(AuthError {
-        message: "Insufficient permissions".to_string(),
-    })
-}
+//     Err(AuthError {
+//         message: "Insufficient permissions".to_string(),
+//     })
+// }
 
 /// Middleware for Tauri commands that require authentication
 #[tauri::command]
@@ -44,19 +43,19 @@ pub fn authenticate(request: AuthRequest) -> Result<AuthResponse, AuthError> {
 
 /// Example of how to protect a command with authentication
 /// This would be used in command implementations
-pub fn protected_command_example(token: &str) -> Result<String, AuthError> {
-    // Validate token
-    let auth_request = AuthRequest {
-        token: token.to_string(),
-    };
-    let auth_response = validate_auth(auth_request)?;
+// pub fn protected_command_example(token: &str) -> Result<String, AuthError> {
+//     // Validate token
+//     let auth_request = AuthRequest {
+//         token: token.to_string(),
+//     };
+//     let auth_response = validate_auth(auth_request)?;
     
-    // Check if user has required role (example: admin)
-    check_role(&auth_response.claims, "admin")?;
+//     // Check if user has required role (example: admin)
+//     check_role(&auth_response.claims, "admin")?;
     
-    // Perform the actual command logic here
-    Ok("Command executed successfully".to_string())
-}
+//     // Perform the actual command logic here
+//     Ok("Command executed successfully".to_string())
+// }
 
 /// Function to validate authentication token for Tauri commands
 pub fn validate_auth_token_for_command(token: &str) -> Result<Claims, AuthError> {
@@ -64,21 +63,21 @@ pub fn validate_auth_token_for_command(token: &str) -> Result<Claims, AuthError>
 }
 
 /// Function to check if user has required role for command
-pub fn check_user_role(claims: &Claims, required_role: &str) -> Result<(), AuthError> {
-    // Admin can access everything
-    if claims.role == "admin" {
-        return Ok(());
-    }
+// pub fn check_user_role(claims: &Claims, required_role: &str) -> Result<(), AuthError> {
+//     // Admin can access everything
+//     if claims.role == "admin" {
+//         return Ok(());
+//     }
     
-    // Check if user has required role
-    if claims.role == required_role {
-        return Ok(());
-    }
+//     // Check if user has required role
+//     if claims.role == required_role {
+//         return Ok(());
+//     }
     
-    Err(AuthError {
-        message: "Insufficient permissions".to_string(),
-    })
-}
+//     Err(AuthError {
+//         message: "Insufficient permissions".to_string(),
+//     })
+// }
 
 #[cfg(test)]
 mod tests {

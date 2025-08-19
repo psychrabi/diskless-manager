@@ -5,6 +5,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { useNavigate } from 'react-router-dom';
 import { Card, Input, Button } from '@/components/ui';
 import { useState } from 'react';
+import { useAuth } from '@/contexts/AuthContext';
 
 // Define validation schema
 const loginSchema = z.object({
@@ -16,11 +17,12 @@ const Login = () => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+  const { login: setAuth } = useAuth();
 
   const {
     register,
     handleSubmit,
-    formState: { errors },
+    formState: { errors, isSubmitting },
     reset
   } = useForm({
     resolver: zodResolver(loginSchema),
@@ -39,8 +41,8 @@ const Login = () => {
         request: { username: data.username, password: data.password }
       });
 
-      localStorage.setItem('authToken', response.token);
-      localStorage.setItem('user', JSON.stringify(response.user));
+      // Set auth context immediately so ProtectedRoute sees it
+      setAuth(response.user, response.token);
       navigate('/');
     } catch (err) {
       setError(err.message || 'Login failed');
@@ -51,22 +53,22 @@ const Login = () => {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 p-4">
+    <div className="min-h-screen flex items-center justify-center bg-base-200 text-base-content p-4">
       <Card className="w-full max-w-md">
         <div className="text-center mb-6">
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Diskless Manager</h1>
-          <p className="text-gray-600 dark:text-gray-400 mt-2">Sign in to your account</p>
+          <h1 className="text-2xl font-bold text-base-content">Diskless Manager</h1>
+          <p className="text-base-content/70 mt-2">Sign in to your account</p>
         </div>
 
         {error && (
-          <div className="mb-4 p-3 bg-red-100 text-red-700 rounded-md dark:bg-red-900 dark:text-red-200">
+          <div className="mb-4 p-3 rounded-md bg-error/10 text-error">
             {error}
           </div>
         )}
 
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           <div>
-            <label htmlFor="username" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label htmlFor="username" className="block text-sm font-medium text-base-content mb-1">
               Username
             </label>
             <Input
@@ -78,12 +80,12 @@ const Login = () => {
               error={errors.username?.message}
             />
             {errors.username && (
-              <p className="mt-1 text-sm text-red-600 dark:text-red-400">{errors.username.message}</p>
+              <p className="mt-1 text-sm text-error">{errors.username.message}</p>
             )}
           </div>
 
           <div>
-            <label htmlFor="password" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label htmlFor="password" className="block text-sm font-medium text-base-content mb-1">
               Password
             </label>
             <Input
@@ -95,21 +97,21 @@ const Login = () => {
               error={errors.password?.message}
             />
             {errors.password && (
-              <p className="mt-1 text-sm text-red-600 dark:text-red-400">{errors.password.message}</p>
+              <p className="mt-1 text-sm text-error">{errors.password.message}</p>
             )}
           </div>
 
           <Button
             type="submit"
-            disabled={loading}
+            disabled={isSubmitting}
             className="w-full"
             variant="primary"
           >
-            {loading ? 'Signing in...' : 'Sign in'}
+            {isSubmitting ? 'Signing in...' : 'Sign in'}
           </Button>
         </form>
 
-        <div className="mt-6 text-center text-sm text-gray-600 dark:text-gray-400">
+        <div className="mt-6 text-center text-sm text-base-content/70">
           <p>Default credentials: admin / admin123</p>
         </div>
       </Card>

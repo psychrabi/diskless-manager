@@ -2,7 +2,6 @@
 
 use regex::Regex;
 use std::fs;
-use std::process::Command;
 
 pub fn update_dhcp_config(client_id: &str, dhcp_entry: &str, is_new: bool) -> Result<(), String> {
     use crate::DHCP_CONFIG_PATH;

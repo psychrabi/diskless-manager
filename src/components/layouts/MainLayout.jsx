@@ -20,7 +20,7 @@ const MainLayout = () => {
 	}, [fetchData]);
 
 	return (
-		<div className="flex h-screen bg-gray-900">
+		<div className="flex h-screen bg-base-200 text-base-content">
 			{/* Sidebar */}
 			<Sidebar
 				activeTab={activeTab}
@@ -42,7 +42,7 @@ const MainLayout = () => {
 
 			<div className="flex-1 flex flex-col overflow-hidden">
 				<Header onToggleSidebar={() => setIsSidebarOpen((v) => !v)} />
-				<main className="flex-1 overflow-y-auto">
+				<main className="flex-1 overflow-y-auto bg-base-200">
 					<div className="p-6">
 						{error && <Error error={error} />}
 						{notification && <Notification />}

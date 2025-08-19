@@ -2,6 +2,7 @@ import ErrorBoundary from '@/components/ErrorBoundary'
 import { Loading } from '@/components/ui'
 import { NotificationProvider } from '@/contexts/NotificationContext.jsx'
 import { AuthProvider } from '@/contexts/AuthContext.jsx'
+import { ThemeProvider } from '@/contexts/ThemeContext.jsx'
 import '@/index.css'
 import { router } from '@/router/router'
 import { StrictMode, Suspense } from 'react'
@@ -16,7 +17,9 @@ createRoot(document.getElementById('root')).render(
         <AuthProvider>
           <NotificationProvider>
             <ConfirmDialogProvider>
-              <RouterProvider router={router} />
+              <ThemeProvider>
+                <RouterProvider router={router} />
+              </ThemeProvider>
             </ConfirmDialogProvider>
           </NotificationProvider>
         </AuthProvider>

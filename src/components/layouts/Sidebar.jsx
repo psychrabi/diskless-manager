@@ -33,14 +33,14 @@ const Sidebar = ({ activeTab, onTabChange, isOpen = false, onClose }) => {
   return (
     <div
       className={cn(
-        'fixed inset-y-0 left-0 z-40 w-64 flex h-full flex-col bg-gray-800 text-gray-100 shadow-mg transform transition-transform duration-200 ease-in-out',
+        'fixed inset-y-0 left-0 z-40 w-64 flex h-full flex-col bg-base-100 text-base-content shadow-md transform transition-transform duration-200 ease-in-out',
         'lg:static lg:translate-x-0',
         isOpen ? 'translate-x-0' : '-translate-x-full'
       )}
       role="navigation"
       aria-label="Sidebar"
     >
-      <div className="flex h-16 items-center px-6 gap-2">
+      <div className="flex h-16 items-center px-6 gap-2 border-b border-base-300">
         <Gamepad /><h1 className="text-xl font-bold">Hak3r'z Cafe</h1>
       </div>
       <div className="flex-1 px-3">
@@ -55,8 +55,8 @@ const Sidebar = ({ activeTab, onTabChange, isOpen = false, onClose }) => {
                 className={({ isActive }) => cn(
                   'w-full justify-start gap-3 text-left flex items-center p-2 rounded-md',
                   isActive
-                    ? 'bg-gray-800 text-white'
-                    : 'text-gray-300 hover:bg-gray-800 hover:text-white'
+                    ? 'bg-base-200 text-base-content'
+                    : 'text-base-content/70 hover:bg-base-200 hover:text-base-content'
                 )}
                 onClick={() => {
                   onTabChange(item.id);
@@ -72,10 +72,10 @@ const Sidebar = ({ activeTab, onTabChange, isOpen = false, onClose }) => {
           })}
         </nav>
       </div>
-      <div className="p-3">
+      <div className="p-3 border-t border-base-300">
         <Button
           variant="ghost"
-          className="w-full justify-start gap-3 text-gray-300 hover:bg-gray-800 hover:text-white"
+          className="w-full justify-start gap-3 text-base-content/70 hover:bg-base-200 hover:text-base-content"
           onClick={() => {
             if (onClose) onClose();
             handleExit();

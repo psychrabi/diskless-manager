@@ -114,19 +114,14 @@ const ImageManagement = () => {
         <div className="space-y-6">
           {memoizedMasters.map((master) => (
             <div key={master.id} className="p-4 border border-gray-200 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-700/50">
-              <div className="flex flex-wrap justify-between items-center mb-3 gap-2">
+              <div className="flex flex-wrap justify-between items-center mb-3 gap-2 ">
                 <div className="flex items-center gap-2">
                   <h4 className="text-lg font-medium break-all flex items-center gap-1">
                     {master.name} {`(${master.size})`}
                     {master.is_default && <StarIcon className="h-4 w-4 text-yellow-500 fill-yellow-500" />}
-                    {master.name.includes('/var/lib/diskless/fileio/') && (
-                      <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">
-                        FileIO
-                      </span>
-                    )}
                   </h4>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex gap-2 ">
                   <Button variant={master.is_default ? 'accent' : 'success'} size="sm" onClick={() => memoizedSetDefaultMaster(master.name)}
                     className={master.is_default ? 'text-green-500 border-green-500' : ''} disabled={master.is_default} >
                     {master.is_default ? (
@@ -140,8 +135,7 @@ const ImageManagement = () => {
                     onClick={() => handleCreateSnapshot(master.name)}
                     size="sm"
                     icon={PlusCircle}
-                    disabled={master.name.includes('/var/lib/diskless/fileio/')}
-                    title={master.name.includes('/var/lib/diskless/fileio/') ? 'Snapshots not supported for FileIO images' : 'Create Snapshot'}
+                    title={'Create Snapshot'}
                   >
                     Create Snapshot
                   </Button>
@@ -149,10 +143,8 @@ const ImageManagement = () => {
                   <Button variant="destructive" onClick={() => handleDeleteImage(master.name)} size="sm" icon={Trash2}>Delete Image</Button>
                 </div>
               </div>
-              <h5 className="text-sm font-semibold mb-2 text-gray-600 dark:text-gray-400">Available Snapshots:</h5>
-              {master.name.includes('/var/lib/diskless/fileio/') ? (
-                <p className="text-sm text-gray-500 dark:text-gray-400">Snapshots are not supported for FileIO images.</p>
-              ) : master.snapshots && master.snapshots.length > 0 ? (
+              <h5 className="text-sm font-semibold mb-2 text-gray-600 dark:text-gray-900">Available Snapshots:</h5>
+              {master.snapshots && master.snapshots.length > 0 ? (
                 <ul className="space-y-2 text-sm">
                   {master.snapshots.map((snap) => (
                     <li key={snap.id || snap.name} className="flex flex-wrap justify-between items-center gap-2 p-2 rounded hover:bg-gray-100 dark:hover:bg-gray-600/50">

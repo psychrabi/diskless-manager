@@ -215,11 +215,6 @@ export const clientContextMenuActions = (fetchData, closeContextMenu, setClient,
       if (!client) return;
       if (client.mode !== 'super') { showNotification('Client is not in Super mode.', 'error'); return; }
       if (client.status !== 'Offline') { showNotification('Client must be offline to save Super.', 'error'); return; }
-      // Only supported for ZFS masters
-      if (client.master?.includes('/var/lib/diskless/fileio/') && client.master?.endsWith('.img')) {
-        showNotification('Save Super is not supported for FileIO masters.', 'error');
-        return;
-      }
       const suffix = window.prompt('Enter snapshot name (alphanumeric, _ or -):', `${client.name}-super-${Date.now()}`);
       if (!suffix) { showNotification('Save Super cancelled.', 'info'); return; }
       if (!/^[-\w]+$/.test(suffix)) { showNotification('Invalid snapshot name.', 'error'); return; }

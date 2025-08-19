@@ -1,13 +1,10 @@
-use crate::config::{get_config, reload_config_from_disk, set_config, write_config, Config};
+use crate::config::{get_config, set_config, write_config, Config};
 use crate::utils::run_command;
 use async_process::Command as AsyncCommand;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::fs;
-use std::io::Write;
 use std::process::Command;
-use chrono;
 
 #[derive(Deserialize)]
 pub struct ServiceControlRequest {
@@ -51,7 +48,9 @@ pub struct DHCPConfig {
     pub dns_server1: String,
     pub dns_server2: String,
     pub broadcast_ip: String,
+    pub next_server_ip: String,
     pub boot_server_ip: String,
+    pub boot_script: String,
     pub boot_file_legacy: String,
     pub boot_file_uefi32: String,
     pub boot_file_uefi64: String,
@@ -233,9 +232,16 @@ pub async fn get_service_config(token: String, service_key: String) -> Result<se
             return Err(format!("Configuration path is not a file: {}", config_path));
         }
 
-        let content = fs::read_to_string(config_path)
-            .map_err(|e| format!("Error reading config file {}: {}", config_path, e))?;
-
+        // Read using sudo cat to avoid direct Rust file I/O
+        let output = AsyncCommand::new("sudo")
+            .args(["cat", config_path])
+            .output()
+            .await
+            .map_err(|e| format!("Failed to read config via sudo cat: {}", e))?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).to_string());
+        }
+        let content = String::from_utf8_lossy(&output.stdout).to_string();
         Ok(serde_json::json!({ "text": content }))
     }
 }
@@ -347,8 +353,9 @@ pub async fn save_service_config(token: String, service_key: String, content: St
         .map_err(|e| format!("Failed to spawn sudo tee: {}", e))?;
 
     if let Some(stdin) = child.stdin.as_mut() {
+        use std::io::Write;
         stdin
-            .write_all(content.as_bytes())
+            .write(content.as_bytes())
             .map_err(|e| format!("Failed to write to stdin: {}", e))?;
     }
     let output = child
@@ -511,28 +518,6 @@ pub async fn restart_service(service: &str) -> Result<(), String> {
     }
 }
 
-fn backup_file(file_path: &str) -> Result<(), String> {
-    if !std::path::Path::new(file_path).exists() {
-        return Ok(()); // No need to backup if file doesn't exist
-    }
-    
-    let backup_dir = "/srv/tftp/backups";
-    std::fs::create_dir_all(backup_dir)
-        .map_err(|e| format!("Failed to create backup directory: {}", e))?;
-    
-    let file_name = std::path::Path::new(file_path)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .ok_or_else(|| "Invalid file path".to_string())?;
-    
-    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
-    let backup_path = format!("{}/{}_{}", backup_dir, timestamp, file_name);
-    
-    std::fs::copy(file_path, &backup_path)
-        .map(|_| ())
-        .map_err(|e| format!("Failed to create backup of {}: {}", file_path, e))
-}
-
 #[tauri::command]
 pub async fn configure_dhcp_server(token: String, config: DHCPConfig) -> Result<String, String> {
     // Validate authentication token
@@ -545,10 +530,6 @@ pub async fn configure_dhcp_server(token: String, config: DHCPConfig) -> Result<
     settings.insert("dhcp".to_string(), serde_json::to_value(&config).map_err(|e| e.to_string())?);
     cfg.settings = serde_json::Value::Object(settings);
     crate::config::write_config(&cfg).map_err(|e| format!("Failed to save DHCP config: {}", e))?;
-
-    // Create backup of existing config
-    let dhcp_config_path = "/etc/dhcp/dhcpd.conf";
-    backup_file(dhcp_config_path)?;
 
     let dhcp_config = format!(
         r#"# Global Config
@@ -594,7 +575,7 @@ option ipxe.vlan code 38 = unsigned integer 8;
 option ipxe.menu code 39 = unsigned integer 8;
 option ipxe.sdi code 40 = unsigned integer 8;
 option ipxe.nfs code 41 = unsigned integer 8;
-
+option client-architecture code 93 = unsigned integer 16;
 option ipxe.no-pxedhcp 1;
 
 # DHCP Server Configuration
@@ -637,13 +618,13 @@ subnet {} netmask {} {{
     
     # PXE Boot Configuration
     next-server {};
-      if substring (option vendor-class-identifier, 15, 5) = "00000" {{
+    if exists user-class and option user-class = "iPXE" {{
+        filename "http://{}/{}";
+    }} elsif option client-architecture = 00:00 {{
         filename "{}";
-    }}
-    elsif substring (option vendor-class-identifier, 15, 5) = "00006" {{
+    }} elsif option client-architecture = 00:06 {{
         filename "{}";
-    }}
-    else {{
+    }} elsif option client-architecture = 00:07 {{
         filename "{}";
     }}
 }}
@@ -658,21 +639,42 @@ subnet {} netmask {} {{
         config.dns_server1,
         config.dns_server2,
         config.broadcast_ip,
+        config.next_server_ip, 
         config.boot_server_ip,
+        config.boot_script,
         config.boot_file_legacy,
         config.boot_file_uefi32,
         config.boot_file_uefi64,
     );
 
-    
-    match fs::write("/etc/dhcp/dhcpd.conf", dhcp_config) {
-        Ok(_) => {
-            // Restart DHCP service
-            restart_service("isc-dhcp-server").await?;
-            Ok("DHCP server configured successfully".to_string())
-        }
-        Err(e) => Err(format!("Failed to write DHCP config: {}", e)),
+    // Write with sudo tee instead of fs::write
+    let mut child = Command::new("sudo")
+        .arg("tee")
+        .arg("/etc/dhcp/dhcpd.conf")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to spawn sudo tee: {}", e))?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        use std::io::Write;
+        stdin
+            .write(dhcp_config.as_bytes())
+            .map_err(|e| format!("Failed to write to stdin: {}", e))?;
     }
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("Failed to wait for tee: {}", e))?;
+    if !output.status.success() {
+        return Err(format!(
+            "Failed to write DHCP config: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    // Restart DHCP service
+    restart_service("isc-dhcp-server").await?;
+    Ok("DHCP server configured successfully".to_string())
 }
 
 #[tauri::command]
@@ -681,9 +683,12 @@ pub async fn configure_tftp_server(token: String, tftp_config: TFTPConfig) -> Re
     crate::middleware::validate_auth_token_for_command(&token)
         .map_err(|e| format!("Authentication failed: {}", e.message))?;
 
-    // Create backup of existing config
-    let tftp_config_path = "/etc/default/tftpd-hpa";
-    backup_file(tftp_config_path)?;
+    // Save to config
+    let mut cfg = crate::config::read_config();
+    let mut settings = cfg.settings.as_object().cloned().unwrap_or_default();
+    settings.insert("tftp".to_string(), serde_json::to_value(&tftp_config).map_err(|e| e.to_string())?);
+    cfg.settings = serde_json::Value::Object(settings);
+    crate::config::write_config(&cfg).map_err(|e| format!("Failed to save TFTP config: {}", e))?;
 
     let tftp_content = format!(
         r#"# Defaults for tftpd-hpa
@@ -696,24 +701,37 @@ TFTP_OPTIONS="{}"
     );
 
     // Create TFTP directory if it doesn't exist
-    if let Err(e) = fs::create_dir_all(&tftp_config.tftp_root) {
+    if let Err(e) = std::fs::create_dir_all(&tftp_config.tftp_root) {
         return Err(format!("Failed to create TFTP directory: {}", e));
     }
 
-    // Save to config
-    let mut cfg = crate::config::read_config();
-    let mut settings = cfg.settings.as_object().cloned().unwrap_or_default();
-    settings.insert("tftp".to_string(), serde_json::to_value(&tftp_config).map_err(|e| e.to_string())?);
-    cfg.settings = serde_json::Value::Object(settings);
-    crate::config::write_config(&cfg).map_err(|e| format!("Failed to save TFTP config: {}", e))?;
-
-    match fs::write("/etc/default/tftpd-hpa", tftp_content) {
-        Ok(_) => {
-            restart_service("tftpd-hpa").await?;
-            Ok("TFTP server configured successfully".to_string())
-        }
-        Err(e) => Err(format!("Failed to write TFTP config: {}", e)),
+    // Write with sudo tee instead of fs::write
+    let mut child = Command::new("sudo")
+        .arg("tee")
+        .arg("/etc/default/tftpd-hpa")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to spawn sudo tee: {}", e))?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        use std::io::Write;
+        stdin
+            .write(tftp_content.as_bytes())
+            .map_err(|e| format!("Failed to write to stdin: {}", e))?;
     }
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("Failed to wait for tee: {}", e))?;
+    if !output.status.success() {
+        return Err(format!(
+            "Failed to write TFTP config: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    restart_service("tftpd-hpa").await?;
+    Ok("TFTP server configured successfully".to_string())
 }
 
 #[tauri::command]
@@ -722,9 +740,12 @@ pub async fn configure_apache_server(token: String, http_config: HTTPConfig) -> 
     crate::middleware::validate_auth_token_for_command(&token)
         .map_err(|e| format!("Authentication failed: {}", e.message))?;
 
-    // Create backup of existing config
-    let apache_config_path = "/etc/apache2/sites-available/diskless-server.conf";
-    backup_file(apache_config_path)?;
+    // Save to config
+    let mut cfg = crate::config::read_config();
+    let mut settings = cfg.settings.as_object().cloned().unwrap_or_default();
+    settings.insert("http".to_string(), serde_json::to_value(&http_config).map_err(|e| e.to_string())?);
+    cfg.settings = serde_json::Value::Object(settings);
+    crate::config::write_config(&cfg).map_err(|e| format!("Failed to save HTTP config: {}", e))?;
 
     let apache_config = format!(
         r#"<VirtualHost {}:{}>
@@ -748,33 +769,43 @@ pub async fn configure_apache_server(token: String, http_config: HTTPConfig) -> 
     );
 
     // Create HTTP directory if it doesn't exist
-    if let Err(e) = fs::create_dir_all(&http_config.http_root) {
+    if let Err(e) = std::fs::create_dir_all(&http_config.http_root) {
         return Err(format!("Failed to create HTTP directory: {}", e));
     }
 
-    // Save to config
-    let mut cfg = crate::config::read_config();
-    let mut settings = cfg.settings.as_object().cloned().unwrap_or_default();
-    settings.insert("http".to_string(), serde_json::to_value(&http_config).map_err(|e| e.to_string())?);
-    cfg.settings = serde_json::Value::Object(settings);
-    crate::config::write_config(&cfg).map_err(|e| format!("Failed to save HTTP config: {}", e))?;
-
-    match fs::write(
-        "/etc/apache2/sites-available/diskless-server.conf",
-        apache_config,
-    ) {
-        Ok(_) => {
-            // Enable the site and restart Apache
-            let _ = AsyncCommand::new("sudo")
-                .args(&["a2ensite", "diskless-server.conf"])
-                .output()
-                .await;
-
-            restart_service("apache2").await?;
-            Ok("Apache server configured successfully".to_string())
-        }
-        Err(e) => Err(format!("Failed to write Apache config: {}", e)),
+    // Write with sudo tee instead of fs::write
+    let mut child = Command::new("sudo")
+        .arg("tee")
+        .arg("/etc/apache2/sites-available/diskless-server.conf")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to spawn sudo tee: {}", e))?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        use std::io::Write;
+        stdin
+            .write(apache_config.as_bytes())
+            .map_err(|e| format!("Failed to write to stdin: {}", e))?;
     }
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("Failed to wait for tee: {}", e))?;
+    if !output.status.success() {
+        return Err(format!(
+            "Failed to write Apache config: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    // Enable the site and restart Apache
+    let _ = AsyncCommand::new("sudo")
+        .args(&["a2ensite", "diskless-server.conf"]) 
+        .output()
+        .await;
+
+    restart_service("apache2").await?;
+    Ok("Apache server configured successfully".to_string())
 }
 
 #[tauri::command]
@@ -812,7 +843,7 @@ pub async fn configure_samba_server(token: String, shares: Vec<SambaShare>) -> R
         ));
 
         // Create share directory if it doesn't exist
-        if let Err(e) = fs::create_dir_all(&share.path) {
+        if let Err(e) = std::fs::create_dir_all(&share.path) {
             return Err(format!(
                 "Failed to create share directory {}: {}",
                 share.path, e
@@ -820,31 +851,32 @@ pub async fn configure_samba_server(token: String, shares: Vec<SambaShare>) -> R
         }
     }
 
-    match fs::write("/etc/samba/smb.conf", samba_config) {
-        Ok(_) => {
-            restart_service("smbd").await?;
-            restart_service("nmbd").await?;
-            Ok("Samba server configured successfully".to_string())
-        }
-        Err(e) => Err(format!("Failed to write Samba config: {}", e)),
+    // Write with sudo tee instead of fs::write
+    let mut child = Command::new("sudo")
+        .arg("tee")
+        .arg("/etc/samba/smb.conf")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to spawn sudo tee: {}", e))?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        use std::io::Write;
+        stdin
+            .write(samba_config.as_bytes())
+            .map_err(|e| format!("Failed to write to stdin: {}", e))?;
     }
-}
-async fn get_server_ip() -> Result<String, String> {
-    match AsyncCommand::new("hostname").args(&["-I"]).output().await {
-        Ok(output) => {
-            let ip_list = String::from_utf8_lossy(&output.stdout);
-            let first_ip = ip_list.split_whitespace().next().unwrap_or("192.168.1.1");
-            Ok(first_ip.to_string())
-        }
-        Err(_) => Ok("192.168.1.1".to_string()),
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("Failed to wait for tee: {}", e))?;
+    if !output.status.success() {
+        return Err(format!(
+            "Failed to write Samba config: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
     }
-}
 
-fn calculate_broadcast(subnet: &str, _netmask: &str) -> String {
-    // Simplified broadcast calculation - in production, use proper IP calculation
-    if subnet.starts_with("192.168.1") {
-        "192.168.1.255".to_string()
-    } else {
-        format!("{}.255", &subnet[..subnet.rfind('.').unwrap_or(0)])
-    }
+    restart_service("smbd").await?;
+    restart_service("nmbd").await?;
+    Ok("Samba server configured successfully".to_string())
 }

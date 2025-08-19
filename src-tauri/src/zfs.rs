@@ -4,7 +4,6 @@ use chrono::Local;
 use regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::fs;
 use std::process::Command;
 
 use crate::{
@@ -169,85 +168,6 @@ pub fn create_master(token: String, name: String, size: String) -> Result<Value,
 }
 
 #[tauri::command]
-pub fn create_fileio_master(token: String, name: String, size: String) -> Result<Value, String> {
-    // Validate authentication token
-    crate::middleware::validate_auth_token_for_command(&token)
-        .map_err(|e| format!("Authentication failed: {}", e.message))?;
-    if !regex::Regex::new(r"^[\w-]+$").unwrap().is_match(&name) {
-        return Err("Invalid master base name format (use alphanumeric, _, -).".to_string());
-    }
-    if name.contains(' ') {
-        return Err("Master base name cannot contain spaces.".to_string());
-    }
-    if !regex::Regex::new(r"^\d+[KMGTP]$")
-        .unwrap()
-        .is_match(&size.to_uppercase())
-    {
-        return Err("Invalid size format (e.g., '50G')".to_string());
-    }
-
-    // Create fileio directory if it doesn't exist
-    let fileio_dir = "/var/lib/diskless/fileio";
-    let create_dir_status = Command::new("sudo")
-        .args(["mkdir", "-p", fileio_dir])
-        .status()
-        .map_err(|e| format!("Failed to create fileio directory: {}", e))?;
-    
-    if !create_dir_status.success() {
-        return Err("Failed to create fileio directory".to_string());
-    }
-
-    let fileio_path = format!("{}/{}-master.img", fileio_dir, name);
-    
-    // Check if file already exists
-    if std::path::Path::new(&fileio_path).exists() {
-        return Err(format!("FileIO image '{}' already exists.", fileio_path));
-    }
-
-    // Create sparse file with specified size
-    let create_status = Command::new("sudo")
-        .args(["truncate", "-s", &size, &fileio_path])
-        .status()
-        .map_err(|e| format!("Failed to create fileio image: {}", e))?;
-    
-    if !create_status.success() {
-        return Err(format!("Failed to create fileio image '{}'", fileio_path));
-    }
-
-    // Set proper permissions
-    let chmod_status = Command::new("sudo")
-        .args(["chmod", "644", &fileio_path])
-        .status()
-        .map_err(|e| format!("Failed to set file permissions: {}", e))?;
-    
-    if !chmod_status.success() {
-        return Err("Failed to set file permissions".to_string());
-    }
-
-    let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    let master_data = MasterData {
-        name: fileio_path.clone(),
-        size: size.clone(),
-        snapshots: vec![],
-        created_at: now.clone(),
-        last_modified: now,
-    };
-    
-    if !save_master_config(&master_data) {
-        return Err("Failed to update config.json".to_string());
-    }
-
-    Ok(json!({
-        "message": format!("FileIO master image '{}' created successfully.", fileio_path),
-        "master": {
-            "id": fileio_path,
-            "name": fileio_path,
-            "snapshots": []
-        }
-    }))
-}
-
-#[tauri::command]
 pub async fn get_masters(token: String, zfs_pool: String) -> Result<Vec<Master>, String> {
     // Validate authentication token
     crate::middleware::validate_auth_token_for_command(&token)
@@ -346,46 +266,6 @@ pub async fn get_masters(token: String, zfs_pool: String) -> Result<Vec<Master>,
         });
     }
 
-    // 5. Add fileIO masters
-    let fileio_dir = "/var/lib/diskless/fileio";
-    if std::path::Path::new(fileio_dir).exists() {
-        if let Ok(entries) = std::fs::read_dir(fileio_dir) {
-            for entry in entries {
-                if let Ok(entry) = entry {
-                    let path = entry.path();
-                    if let Some(file_name) = path.file_name() {
-                        if let Some(name_str) = file_name.to_str() {
-                            if name_str.ends_with("-master.img") {
-                                let master_name = path.to_string_lossy().to_string();
-                                let file_size = if let Ok(metadata) = std::fs::metadata(&path) {
-                                    let bytes = metadata.len();
-                                    if bytes >= 1024 * 1024 * 1024 {
-                                        format!("{}G", bytes / (1024 * 1024 * 1024))
-                                    } else if bytes >= 1024 * 1024 {
-                                        format!("{}M", bytes / (1024 * 1024))
-                                    } else if bytes >= 1024 {
-                                        format!("{}K", bytes / 1024)
-                                    } else {
-                                        format!("{}B", bytes)
-                                    }
-                                } else {
-                                    "-".to_string()
-                                };
-
-                                masters_data.push(Master {
-                                    id: master_name.clone(),
-                                    name: master_name.clone(),
-                                    is_default: master_name == default_master,
-                                    size: file_size,
-                                    snapshots: vec![], // FileIO doesn't support snapshots yet
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
     // --- Update config.json with the current masters list ---
     config.masters = serde_json::to_value(&masters_data).unwrap_or(json!({}));
     if let Err(e) = write_config(&config) {
@@ -440,38 +320,22 @@ pub async fn delete_master(token: String, master_name: String) -> Result<serde_j
             }
         }
     }
-    // Check if this is a fileIO image
-    if master_name.contains("/var/lib/diskless/fileio/") && master_name.ends_with(".img") {
-        // Delete fileIO image
-        let delete_status = Command::new("sudo")
-            .args(["rm", "-f", &master_name])
-            .status()
-            .map_err(|e| format!("Failed to delete fileIO image: {}", e))?;
-        
-        if !delete_status.success() {
+    // Always treat master as ZFS and attempt destroy
+    let output = Command::new("sudo")
+        .args(["zfs", "destroy", &master_name])
+        .output()
+        .map_err(|e| format!("Failed to run zfs destroy: {}", e))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("has dependent clones") {
             return Ok(json!({
-                "error": "Failed to delete fileIO image",
-                "message": format!("Failed to delete fileIO image '{}'", master_name)
+                "error": "Master has dependent clones",
+                "message": format!("Cannot delete master '{}': It has dependent clones.", master_name)
             }));
-        }
-    } else {
-        // Delete ZFS volume
-        let output = Command::new("sudo")
-            .args(["zfs", "destroy", &master_name])
-            .output()
-            .map_err(|e| format!("Failed to run zfs destroy: {}", e))?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            if stderr.contains("has dependent clones") {
-                return Ok(json!({
-                    "error": "Master has dependent clones",
-                    "message": format!("Cannot delete master '{}': It has dependent clones.", master_name)
-                }));
-            } else {
-                return Ok(json!({
-                    "error": format!("Failed to delete master: {}", stderr)
-                }));
-            }
+        } else {
+            return Ok(json!({
+                "error": format!("Failed to delete master: {}", stderr)
+            }));
         }
     }
     if !delete_master_config(&master_name) {
@@ -719,7 +583,7 @@ pub fn set_default_master(token: String, name: &str) -> Result<bool, String> {
 
 
 #[tauri::command]
-pub async fn rollback_master_snapshot(token: String, master_name: String, snapshot_name: String) -> Result<serde_json::Value, String> {
+pub async fn rollback_master_snapshot(token: String, _master_name: String, snapshot_name: String) -> Result<serde_json::Value, String> {
     // Validate authentication token
     crate::middleware::validate_auth_token_for_command(&token)
         .map_err(|e| format!("Authentication failed: {}", e.message))?;
