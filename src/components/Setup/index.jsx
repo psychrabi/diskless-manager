@@ -61,6 +61,7 @@ const Setup = () => {
             <thead>
               <tr>
                 <th>Service Name</th>
+                <th>Version</th>
                 <th>Status</th>
                 <th>Action</th>
               </tr>
@@ -71,6 +72,7 @@ const Setup = () => {
                   <td>{svc.name}</td>
                   <td>{svc.installed ? "Installed" : "Not Installed"}</td>
                   <td>{svc.running? "Running" : "Stopped"}</td>
+                  <td>{svc.version}</td>
                   <td>
                     {!svc.installed && (
                       <button className="btn btn-success btn-sm" disabled={installing === key} onClick={() => handleInstallService(svc.name)}>

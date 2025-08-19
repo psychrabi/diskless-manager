@@ -371,8 +371,8 @@ pub async fn check_package_status() -> Result<Vec<PackageStatus>, String> {
         ("target", "targetcli-fb"),
         ("apache2", "apache2"),
         ("smbd", "samba"),
-        // ("wakeonlan", "wakeonlan"),
-        // ("zfsutils-linux", "zfsutils-linux"),
+        ("wakeonlan", "wakeonlan"),
+        ("zfsutils-linux", "zfsutils-linux"),
     ];
 
     let mut status_list = Vec::new();

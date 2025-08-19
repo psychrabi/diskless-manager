@@ -152,3 +152,15 @@ pub fn clear_ram_cache() -> Result<serde_json::Value, String> {
 
     Ok(serde_json::json!({ "message": "Ram Cleared successfully" }))
 }
+
+#[tauri::command]
+pub fn get_service_logs(unit: String, lines: Option<u32>) -> Result<String, String> {
+  let num = lines.unwrap_or(200).to_string();
+  match Command::new("journalctl").args(["-u", &unit, "-n", &num, "--no-pager"]).output() {
+    Ok(out) => {
+      if out.status.success() { Ok(String::from_utf8_lossy(&out.stdout).to_string()) }
+      else { Err(String::from_utf8_lossy(&out.stderr).to_string()) }
+    }
+    Err(e) => Err(e.to_string()),
+  }
+}

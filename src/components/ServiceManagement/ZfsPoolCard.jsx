@@ -6,7 +6,7 @@ const ZfsPoolCard = ({ loading }) => {
   const [zpoolStats, setZpoolStats] = useState(null);
 
   useEffect(() => {
-    invoke("get_zpool_stats")
+    invoke("get_zpool_list")
       .then((stats) => {
         setZpoolStats(stats);
       })
@@ -25,9 +25,12 @@ const ZfsPoolCard = ({ loading }) => {
               <span className="font-semibold">Size:</span> {zpoolStats.size}
             </li>
             <li className='flex justify-between'>
-              <span className="font-semibold">Used:</span> {zpoolStats.used}</li>
+              <span className="font-semibold">Used:</span> {zpoolStats.alloc}</li>
             <li className='flex justify-between'>
-              <span className="font-semibold">Available:</span> {zpoolStats.available}
+              <span className="font-semibold">Available:</span> {zpoolStats.free}
+            </li>
+            <li className='flex justify-between'>
+              <span className="font-semibold">Health:</span> {zpoolStats.health}
             </li>
           </div>
         </ul>

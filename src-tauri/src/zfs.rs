@@ -616,24 +616,38 @@ pub async fn delete_snapshot(token: String, snapshot_name: String) -> Result<Val
     }))
 }
 
+#[derive(Debug, Serialize)]
+pub struct ZpoolInfo {
+  name: String,
+  size: String,
+  alloc: String,
+  free: String,
+  health: String,
+}
+
 #[tauri::command]
-pub async fn get_zpool_stats() -> Result<serde_json::Value, String> {
-    let output = Command::new("zpool")
-        .args(["list", "-H", "-o", "name,size,alloc,free"])
-        .output()
-        .map_err(|e| format!("Failed to run zpool list: {}", e))?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let line = stdout.lines().next().ok_or("No zpool found")?;
-    let parts: Vec<&str> = line.split_whitespace().collect();
-    if parts.len() < 4 {
-        return Err("Unexpected zpool output".to_string());
+pub fn get_zpool_list() -> Vec<ZpoolInfo> {
+  let mut pools: Vec<ZpoolInfo> = Vec::new();
+  if Command::new("which").arg("zpool").output().is_ok() {
+    if let Ok(out) = Command::new("zpool").args(["list", "-H", "-o", "name,size,alloc,free,health"]).output() {
+      if out.status.success() {
+        let s = String::from_utf8_lossy(&out.stdout);
+        for line in s.lines() {
+          let parts: Vec<&str> = line.split_whitespace().collect();
+          if parts.len() >= 5 {
+            pools.push(ZpoolInfo {
+              name: parts[0].to_string(),
+              size: parts[1].to_string(),
+              alloc: parts[2].to_string(),
+              free: parts[3].to_string(),
+              health: parts[4].to_string(),
+            });
+          }
+        }
+      }
     }
-    Ok(json!({
-        "name": parts[0],
-        "size": parts[1],
-        "used": parts[2],
-        "available": parts[3],
-    }))
+  }
+  pools
 }
 
 #[tauri::command]
@@ -722,9 +736,9 @@ pub async fn rollback_master_snapshot(token: String, master_name: String, snapsh
     }
 
     // 2. Find all clients that were using this snapshot as their base
-    let clients_json = get_clients("".to_string(), None).await.map_err(|e| format!("Failed to get clients: {}", e))?;
+    let clients_result = get_clients("".to_string(), None).await.map_err(|e| format!("Failed to get clients: {}", e))?;
     let mut recreated = vec![];
-    if let Some(clients) = clients_json.as_array() {
+    if let Some(clients) = clients_result.as_array() {
         for client in clients {
             let client_snapshot = client.get("snapshot").and_then(|v| v.as_str()).unwrap_or("");
             let client_id = client.get("id").and_then(|v| v.as_str()).unwrap_or("");

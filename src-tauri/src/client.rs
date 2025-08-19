@@ -97,7 +97,7 @@ pub struct DeprovisionRequest {
 //     let handles: Vec<_> = client_tuples
 //         .into_iter()
 //         .map(|(i, mac, ip)| {
-//             tokio::task::spawn_blocking(move || (i, get_client_status_realtime(&mac, &ip)))
+//             tokio::task::spawn_blocking(move || (i, get_client_status_realtime(&ip)))
 //         })
 //         .collect();
 
@@ -127,7 +127,7 @@ pub struct DeprovisionRequest {
 //     for mut c in discovered {
 //         if !existing_macs.contains(&c.mac.to_lowercase()) {
 //             // compute status for the discovered client
-//             let status = get_client_status_realtime(&c.mac, &c.ip);
+//             let status = get_client_status_realtime(&c.ip);
 //             c.status = Some(status);
 //             // Queue for persistence with transient status cleared (status is computed on read)
 //             let mut to_save = c.clone();
@@ -180,7 +180,7 @@ pub async fn get_clients(
     let mut config: Config = read_config();
 
     for client in config.clients.iter_mut() {
-        client.status = Some(get_client_status_realtime(&client.mac, &client.ip));
+        client.status = Some(get_client_status_realtime(&client.ip));
     }
 
     if let Some(id) = client_id {
@@ -195,10 +195,7 @@ pub async fn get_clients(
 }
 
 // Helper function for status
-fn get_client_status_realtime(mac: &str, ip: &str) -> String {
-    let mac_norm = mac.to_lowercase();
-    // let has_lease = has_active_dhcp_lease(&mac_norm, if ip.is_empty() { None } else { Some(ip) });
-
+fn get_client_status_realtime(ip: &str) -> String {
     // Consider ping reachability as Online
     let online = if ip.is_empty() || ip == "N/A" {
         false
@@ -214,9 +211,6 @@ fn get_client_status_realtime(mac: &str, ip: &str) -> String {
 
     if online {
         "Online".to_string()
-    // } else if has_lease {
-    //     // Lease present, but ping not responding yet
-    //     "Leased".to_string()
     } else {
         "Offline".to_string()
     }
@@ -515,7 +509,7 @@ pub async fn remote_client(token: String, client_id: String) -> Result<serde_jso
     }
 
     // 2. Check if client is online
-    let status = get_client_status_realtime(&client.mac, &client_ip);
+    let status = get_client_status_realtime(&client_ip);
     if status != "Online" {
         return Err("Client is not online".to_string());
     }
@@ -1184,7 +1178,7 @@ pub async fn control_client(
         }
         "super" => {
             // Super mode toggle requires client to be offline
-            let status = get_client_status_realtime(&client.mac, &client.ip);
+            let status = get_client_status_realtime(&client.ip);
             if status != "Offline" {
                 return Err("Client must be offline to toggle Super mode".to_string());
             }
