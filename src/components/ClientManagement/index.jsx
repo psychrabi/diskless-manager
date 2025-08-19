@@ -81,7 +81,7 @@ const ClientManagement = () => {
     <div className="mb-2 md:mb-4">
       <Card title="Client Management" icon={Users} actions={
         <Button variant="primary" onClick={handleClientFormModalOpen} icon={PlusCircle} disabled={masters.length === 0}>
-          Add Client {masters.length === 0 && <span className="text-xs text-red-500 ml-2 self-center">(Requires Master Image)</span>}
+          Add Client {masters.length === 0 && <span className="text-xs text-error ml-2 self-center">(Requires Master Image)</span>}
         </Button>
       }>
         <MemoizedClientTable handleClientContextMenu={handleClientContextMenu} />

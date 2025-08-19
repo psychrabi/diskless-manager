@@ -113,17 +113,17 @@ const ImageManagement = () => {
       }>
         <div className="space-y-6">
           {memoizedMasters.map((master) => (
-            <div key={master.id} className="p-4 border border-gray-200 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-700/50">
+            <div key={master.id} className="p-4 rounded-md bg-base-200 shadow-xl">
               <div className="flex flex-wrap justify-between items-center mb-3 gap-2 ">
                 <div className="flex items-center gap-2">
                   <h4 className="text-lg font-medium break-all flex items-center gap-1">
                     {master.name} {`(${master.size})`}
-                    {master.is_default && <StarIcon className="h-4 w-4 text-yellow-500 fill-yellow-500" />}
+                    {master.is_default && <StarIcon className="h-4 w-4 text-warning fill-warning" />}
                   </h4>
                 </div>
                 <div className="flex gap-2 ">
                   <Button variant={master.is_default ? 'accent' : 'success'} size="sm" onClick={() => memoizedSetDefaultMaster(master.name)}
-                    className={master.is_default ? 'text-green-500 border-green-500' : ''} disabled={master.is_default} >
+                    disabled={master.is_default} >
                     {master.is_default ? (
                       <span className="flex items-center gap-1">
                         <Star className="h-4 w-4" /> Default
@@ -143,20 +143,20 @@ const ImageManagement = () => {
                   <Button variant="destructive" onClick={() => handleDeleteImage(master.name)} size="sm" icon={Trash2}>Delete Image</Button>
                 </div>
               </div>
-              <h5 className="text-sm font-semibold mb-2 text-gray-600 dark:text-gray-900">Available Snapshots:</h5>
+              <h5 className="text-sm font-semibold mb-2 text-base-content/70">Available Snapshots:</h5>
               {master.snapshots && master.snapshots.length > 0 ? (
                 <ul className="space-y-2 text-sm">
                   {master.snapshots.map((snap) => (
-                    <li key={snap.id || snap.name} className="flex flex-wrap justify-between items-center gap-2 p-2 rounded hover:bg-gray-100 dark:hover:bg-gray-600/50">
+                    <li key={snap.id || snap.name} className="flex flex-wrap justify-between items-center gap-2 p-2 rounded hover:bg-base-200">
                       <div className="flex-1 min-w-0">
                         <span className="font-mono text-xs break-all">{snap.name}</span>
-                        <span className="text-gray-500 dark:text-gray-400 text-xs ml-2 whitespace-nowrap">({snap.created}, {snap.used})</span>
+                        <span className="text-base-content/60 text-xs ml-2 whitespace-nowrap">({snap.created}, {snap.used})</span>
                       </div>
                       <div className="flex space-x-1 flex-shrink-0">
-                        <Button onClick={() => handleRollbackSnapshot(snap.name, master.name)} variant="info" size="icon" className="h-7 w-7 text-blue-500 hover:bg-blue-100 dark:hover:bg-blue-900/50" title={`Rollback ${snap.name}`}>
+                        <Button onClick={() => handleRollbackSnapshot(snap.name, master.name)} variant="info" size="icon" className="h-7 w-7" title={`Rollback ${snap.name}`}>
                           <RotateCcw className="h-4 w-4" />
                         </Button>
-                        <Button onClick={() => handleDeleteSnapshot(snap.name, master.name)} variant="destructive" size="icon" className="h-7 w-7 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/50" title={`Delete ${snap.name}`}>
+                        <Button onClick={() => handleDeleteSnapshot(snap.name, master.name)} variant="destructive" size="icon" className="h-7 w-7" title={`Delete ${snap.name}`}>
                           <Trash2 className="h-4 w-4" />
                         </Button>
                       </div>
@@ -164,11 +164,11 @@ const ImageManagement = () => {
                   ))}
                 </ul>
               ) : (
-                <p className="text-sm text-gray-500 dark:text-gray-400">No snapshots found for this master.</p>
+                <p className="text-sm text-base-content/60">No snapshots found for this master.</p>
               )}
             </div>
           ))}
-          {memoizedMasters.length === 0 && <p className="text-center py-4 text-gray-500">No master images found.</p>}
+          {memoizedMasters.length === 0 && <p className="text-center py-4 text-base-content/60">No master images found.</p>}
         </div>
       </Card>
       {openImageCreateModal && <CreateImageModal openImageCreateModal={openImageCreateModal} setOpenImageCreateModal={setOpenImageCreateModal} />}

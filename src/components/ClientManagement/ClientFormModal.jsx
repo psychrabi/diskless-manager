@@ -108,19 +108,19 @@ const ClientFormModal = ({ client, setClient, masters, isOpen, setIsOpen, refres
         <fieldset className={`fieldset`}>
           <legend htmlFor='snapshotName' className='fieldset-legend'>Client Name</legend>
           <input {...register('name')} type='text' id='snapshotName' placeholder="enter client name" className='input w-full' />
-          {errors.name && <div className="text-red-500 text-xs">{errors.name.message}</div>}
+          {errors.name && <div className="text-error text-xs">{errors.name.message}</div>}
         </fieldset>
 
         <fieldset className={`fieldset`}>
           <legend htmlFor='mac' className='fieldset-legend'>MAC Address</legend>
           <input {...register('mac')} type='text' id='mac' placeholder="XX:XX:XX:XX:XX:XX" className='input w-full' />
-          {errors.mac && <div className="text-red-500 text-xs">{errors.mac.message}</div>}
+          {errors.mac && <div className="text-error text-xs">{errors.mac.message}</div>}
 
         </fieldset>
         <fieldset className={`fieldset`}>
           <legend htmlFor='ip' className='fieldset-legend'>IP Address</legend>
           <input {...register('ip')} type='text' id='ip' placeholder="X.X.X.X" className='input w-full' />
-          {errors.ip && <div className="text-red-500 text-xs">{errors.ip.message}</div>}
+          {errors.ip && <div className="text-error text-xs">{errors.ip.message}</div>}
 
         </fieldset>
 
@@ -134,7 +134,7 @@ const ClientFormModal = ({ client, setClient, masters, isOpen, setIsOpen, refres
                 {master.name}
               </option>
             ))}    </select>
-          {errors.master && <div className="text-red-500 text-xs">{errors.master.message}</div>}
+          {errors.master && <div className="text-error text-xs">{errors.master.message}</div>}
 
         </fieldset>
         <fieldset className={`fieldset`}>
@@ -149,7 +149,7 @@ const ClientFormModal = ({ client, setClient, masters, isOpen, setIsOpen, refres
               </option>
             ))}
           </select>
-          {errors.snapshot && <div className="text-red-500 text-xs">{errors.snapshot.message}</div>}
+          {errors.snapshot && <div className="text-error text-xs">{errors.snapshot.message}</div>}
         </fieldset>
         <fieldset className={`fieldset`}>
           <legend htmlFor="pxeMode" className='fieldset-legend'>PXE Boot Mode</legend>
@@ -162,7 +162,7 @@ const ClientFormModal = ({ client, setClient, masters, isOpen, setIsOpen, refres
             <option value="uefi">UEFI (ipxe.efi)</option>
             <option value="secureboot">Secure Boot (secureboot.efi)</option>
           </select>
-          {errors.pxeMode && <div className="text-red-500 text-xs">{errors.pxeMode.message}</div>}
+          {errors.pxeMode && <div className="text-error text-xs">{errors.pxeMode.message}</div>}
         </fieldset>
 
         <div className="flex justify-end space-x-3">

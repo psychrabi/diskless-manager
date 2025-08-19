@@ -2,10 +2,10 @@ import { Layers, Monitor, Power, PowerOff, Zap } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 
 const Table = ({ children, className = '' }) => <div className={`w-full overflow-x-auto ${className}`}><table className="min-w-full caption-bottom text-sm">{children}</table></div>;
-const TableHeader = ({ children, className = '' }) => <thead className={`[&_tr]:border-b border-gray-200 dark:border-gray-700 ${className}`}>{children}</thead>;
+const TableHeader = ({ children, className = '' }) => <thead className={`[&_tr]:border-b border-base-300 ${className}`}>{children}</thead>;
 const TableBody = ({ children, className = '' }) => <tbody className={`[&_tr:last-child]:border-0 ${className}`}>{children}</tbody>;
-const TableRow = ({ children, className = '', onContextMenu }) => <tr onContextMenu={onContextMenu} className={`border-b border-gray-200 dark:border-gray-700 transition-colors hover:bg-gray-100/50 dark:hover:bg-gray-800/50 ${className}`}>{children}</tr>;
-const TableHead = ({ children, className = '' }) => <th className={`h-12 px-4 text-left align-middle font-medium text-gray-500 dark:text-gray-400 ${className}`}>{children}</th>;
+const TableRow = ({ children, className = '', onContextMenu }) => <tr onContextMenu={onContextMenu} className={`border-b border-base-300 transition-colors hover:bg-base-200 ${className}`}>{children}</tr>;
+const TableHead = ({ children, className = '' }) => <th className={`h-12 px-4 text-left align-middle font-medium text-base-content/60 ${className}`}>{children}</th>;
 const TableCell = ({ children, className = '' }) => <td className={`p-4 align-middle ${className}`}>{children}</td>;
 
 const ClientTable = ({ handleClientContextMenu }) => {
@@ -13,7 +13,7 @@ const ClientTable = ({ handleClientContextMenu }) => {
 
   return (
   <>
-    <Table className='border border-gray-200 dark:border-gray-700'>
+    <Table className='border border-base-300'>
       <TableHeader>
         <TableRow>
           <TableHead>Name</TableHead>
@@ -44,14 +44,14 @@ const ClientTable = ({ handleClientContextMenu }) => {
                 const isOnline = status === 'Online';
                 const isLeased = status === 'Leased';
                 const badgeClass = isOnline
-                  ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
+                  ? 'badge-success'
                   : isLeased
-                  ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200'
-                  : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300';
+                  ? 'badge-warning'
+                  : 'badge-neutral';
                 const Icon = isOnline ? Power : PowerOff;
                 return (
-                  <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${badgeClass}`}>
-                    <Icon className={`h-3 w-3 mr-1 ${isOnline ? 'text-green-500' : isLeased ? 'text-yellow-500' : 'text-gray-500'}`} />
+                  <span className={`badge ${badgeClass} gap-1`}>
+                    <Icon className={`h-3 w-3`} />
                     {status}
                   </span>
                 );
@@ -59,16 +59,16 @@ const ClientTable = ({ handleClientContextMenu }) => {
             </TableCell>
             <TableCell>
               {client.mode === 'super' || client.super_client ? (
-                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200" title="Using the image directly">
-                  <Zap className="h-3 w-3 mr-1 text-yellow-500" /> Super Client
+                <span className="badge badge-error gap-1" title="Using the image directly">
+                  <Zap className="h-3 w-3" /> Super Client
                 </span>
               ) : client.keep_writeback ? (
-                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200" title="Client changes will be kept in the clone">
-                  <Layers className="h-3 w-3 mr-1" />Keep Writeback
+                <span className="badge badge-success gap-1" title="Client changes will be kept in the clone">
+                  <Layers className="h-3 w-3" />Keep Writeback
                 </span>
               ) : (
-              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200" title="Clone will be reset on reboot">
-                <Layers className="h-3 w-3 mr-1" />Reset on reboot
+              <span className="badge badge-info gap-1" title="Clone will be reset on reboot">
+                <Layers className="h-3 w-3" />Reset on reboot
               </span>
               )}
             </TableCell>
@@ -76,7 +76,7 @@ const ClientTable = ({ handleClientContextMenu }) => {
         ))}
       </TableBody>
     </Table>
-    {clients.length === 0 && <p className="text-center py-4 text-gray-500">No clients configured.</p>}
+    {clients.length === 0 && <p className="text-center py-4 text-base-content/60">No clients configured.</p>}
   </>
 )
 };
