@@ -197,9 +197,9 @@ diskless/
 ## iSCSI Configuration
 
 ### 1. Target Naming Convention
-**Format**: `iqn.2025-04.com.nsboot:<mac>`
+**Format**: `iqn.2025-04.local.diskless:<mac>`
 
-**Example**: `iqn.2025-04.com.nsboot:70-5a-0f-07-6f-75`
+**Example**: `iqn.2025-04.local.diskless:70-5a-0f-07-6f-75`
 
 ### 2. Target Attributes
 - `generate_node_acls=1` - Dynamic ACL generation
@@ -220,7 +220,7 @@ diskless/
 DEFAULT linux
 LABEL linux
   KERNEL ipxe.lkrn
-  APPEND dhcp && sanboot iscsi:192.168.1.250:3260::::iqn.2025-04.com.nsboot:<mac>
+  APPEND dhcp && sanboot iscsi:192.168.1.250:3260::::iqn.2025-04.local.diskless:<mac>
 ```
 
 ### 2. Boot Process

@@ -91,7 +91,7 @@ FileIO images are exposed via iSCSI using fileio backstores (not block backstore
 
 - **Backstore Type**: `fileio` (not `block`)
 - **Backstore Path**: Points to the client's fileIO image file
-- **Target IQN**: `iqn.2025-04.com.nsboot:{mac-address}`
+- **Target IQN**: `iqn.2025-04.local.diskless:{mac-address}`
 - **LUN**: Maps the fileio backstore to the target
 - **Portal**: Standard iSCSI portal (3260)
 
@@ -101,7 +101,7 @@ FileIO images are exposed via iSCSI using fileio backstores (not block backstore
 sudo targetcli backstores/fileio create block_pc103 /var/lib/diskless/fileio/pc103-70-5a-0f-07-6f-75-client.img
 
 # Create LUN mapping
-sudo targetcli iscsi/iqn.2025-04.com.nsboot:70-5a-0f-07-6f-75/tpg1/luns create /backstores/fileio/block_pc103
+sudo targetcli iscsi/iqn.2025-04.local.diskless:70-5a-0f-07-6f-75/tpg1/luns create /backstores/fileio/block_pc103
 ```
 
 ### PXE Boot Process

@@ -9,7 +9,7 @@ use crate::{
     ZFS_POOL,
 };
 
-const IQN_BASE: &str = "iqn.2025-04.com.nsboot";
+const IQN_BASE: &str = "iqn.2025-04.local.diskless";
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -380,7 +380,7 @@ fn check_duplicate_client(name: &str, mac: &str, ip: &str) -> Option<String> {
 pub fn get_client_paths(client_id: &str, client_mac: &str) -> HashMap<String, String> {
     let clone = format!("{}/{}-disk", crate::ZFS_POOL, client_id.to_uppercase());
     let target_iqn = format!(
-        "iqn.2025-04.com.nsboot:{}",
+        "iqn.2025-04.local.diskless:{}",
         client_mac.to_lowercase().replace(':', "-")
     );
     let block_store = format!("block_{}", client_id.to_lowercase());
@@ -397,7 +397,7 @@ pub fn get_client_paths_with_master(
     _master: &str,
 ) -> HashMap<String, String> {
     let target_iqn = format!(
-        "iqn.2025-04.com.nsboot:{}",
+        "iqn.2025-04.local.diskless:{}",
         client_mac.to_lowercase().replace(':', "-")
     );
     let block_store = format!("block_{}", client_id.to_lowercase());

@@ -148,10 +148,10 @@ sudo apt install \
 1. **Backend Settings** (`/etc/diskless-manager/config.json`):
    ```json
    {
-     "zfs_pool": "nsboot0",
-     "master_dataset": "nsboot0/Windows11-master",
-     "clients_dataset": "nsboot0",
-     "iscsi_target_prefix": "iqn.2025-05.com.nsboot",
+     "zfs_pool": "diskless",
+     "master_dataset": "diskless/Windows11-master",
+     "clients_dataset": "diskless",
+     "iscsi_target_prefix": "iqn.2025-05.local.diskless",
      "tftp_dir": "/srv/tftp",
      "network_subnet": "192.168.1.0/24"
    }

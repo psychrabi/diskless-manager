@@ -9,7 +9,7 @@ export PATH=/usr/sbin:/usr/bin:/sbin:/bin
 
 # --- config ---
 ZPOOL="diskless"
-IQN_BASE="iqn.2025-04.com.nsboot"
+IQN_BASE="iqn.2025-04.local.diskless"
 TARGETCLI_BIN="/usr/bin/targetcli"
 PXE_DIR="/srv/tftp/pxelinux.cfg"
 LOGFILE="/var/log/provision.log"

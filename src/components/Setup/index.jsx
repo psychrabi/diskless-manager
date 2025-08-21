@@ -2,7 +2,16 @@ import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAppStore } from "../../store/useAppStore";
-import { Card } from "../ui";
+import { Button, Card, Input, Select } from "../ui";
+import { TableConfig } from "lucide-react";
+
+
+const Table = ({ children, className = '' }) => <div className={`w-full overflow-x-auto ${className}`}><table className="min-w-full">{children}</table></div>;
+const TableHeader = ({ children, className = '' }) => <thead className={`[&_tr]:border-b border-base-100 ${className}`}>{children}</thead>;
+const TableBody = ({ children, className = '' }) => <tbody className={`[&_tr:last-child]:border-0 ${className}`}>{children}</tbody>;
+const TableRow = ({ children, className = '', onContextMenu }) => <tr onContextMenu={onContextMenu} className={`border-b border-base-300 transition-colors hover:bg-base-300 ${className}`}>{children}</tr>;
+const TableHead = ({ children, className = '' }) => <th className={`h-12 px-4 align-middle font-bold text-base-content/60 ${className} text-left`}>{children}</th>;
+const TableCell = ({ children, className = '' }) => <td className={`p-4 align-middle ${className}`}>{children}</td>;
 
 const Setup = () => {
   const navigate = useNavigate();
@@ -22,9 +31,9 @@ const Setup = () => {
       service => !service.installed
     );
 
-    // if (!hasUninstalledServices) {
-    //   navigate('/');
-    // }
+    if (!hasUninstalledServices) {
+      navigate('/');
+    }
   }, [services, navigate]);
 
   const handleCreatePool = async () => {
@@ -40,52 +49,56 @@ const Setup = () => {
   };
 
   return (
-    <Card title="Initial Setup">
-      {!poolExists && (<div className="mb-4">
-        <label className="block mb-2">Select disk to create ZFS pool:</label>
-        <select className="border p-2 w-full" value={selectedDisk} onChange={e => setSelectedDisk(e.target.value)}>
-          <option value="">-- Select Disk --</option>
-          {disks.map(disk => (
-            <option key={disk.name} value={disk.name}> {disk.name} ({disk.size}) </option>
-          ))}
-        </select>
-        <input className="border p-2 mt-2 w-full" value={poolName} onChange={e => setPoolName(e.target.value)} placeholder="ZFS Pool Name" />
-        <button className="mt-2 px-4 py-2 bg-blue-600 text-white rounded" disabled={!selectedDisk} onClick={handleCreatePool} >
-          Create Pool
-        </button>
-      </div>)}
-      <div>
+    <Card title="Initial Setup" icon={TableConfig} className="">
+      <Card title="ZFS Pool Create" className="bg-base-200">
+        <form>
+          <div className="space-y-4">
+            <Select defaultValue={selectedDisk} onChange={e => setSelectedDisk(e.target.value)} label="Select a disk to create ZFS Pool:">
+              <option value="">-- Select Disk --</option>
+              {disks.map(disk => (
+                <option key={disk.name} value={disk.name}> {disk.name} ({disk.size}) </option>
+              ))}
+            </Select>
+            <Input value={poolName} onChange={e => setPoolName(e.target.value)} placeholder="ZFS Pool Name" label="ZFS Pool Name" />
+            <Button variant="primary" type="submit" disabled={!selectedDisk} onClick={handleCreatePool} >
+              Create ZFS Pool
+            </Button>
+          </div>
+        </form>
+      </Card>
+      <Card title="Requires Services" className="bg-base-200 mt-4">
         <h3 className="font-semibold mb-2">Required Services</h3>
         <div className="overflow-x-auto">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Service Name</th>
-                <th>Version</th>
-                <th>Status</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody>
+          <Table className='border border-base-300'>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Service Name</TableHead>
+                <TableHead>Version</TableHead>
+                <TableHead>Installed</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Action</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {Object.entries(services).map(([key, svc]) => (
-                <tr key={key}>
-                  <td>{svc.name}</td>
-                  <td>{svc.installed ? "Installed" : "Not Installed"}</td>
-                  <td>{svc.running? "Running" : "Stopped"}</td>
-                  <td>{svc.version}</td>
-                  <td>
-                    {!svc.installed && (
+                <TableRow key={key}>
+                  <TableCell>{svc.name}</TableCell>
+                  <TableCell>{svc.version}</TableCell>
+                  <TableCell>{svc.installed ? "Installed" : "Not Installed"}</TableCell>
+                  <TableCell>{svc.running ? "Running" : "Stopped"}</TableCell>
+                  <TableCell>
+                    {!svc.installed ? (
                       <button className="btn btn-success btn-sm" disabled={installing === key} onClick={() => handleInstallService(svc.name)}>
                         {installing === key ? "Installing..." : "Install"}
                       </button>
-                    )}
-                  </td>
-                </tr>
+                    ) : "No Action Required"}
+                  </TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         </div>
-      </div>
+      </Card>
     </Card>
   );
 }
