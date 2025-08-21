@@ -1110,7 +1110,7 @@ pub async fn reset_client(token: String, client_id: String) -> Result<serde_json
     }
 
     // Fetch client info
-    let client_info = match get_client_by_id(&client_id) {
+    let mut client_info = match get_client_by_id(&client_id) {
         Some(info) => info,
         None => return Err(format!("Client {} not found", client_id)),
     };
@@ -1149,6 +1149,31 @@ pub async fn reset_client(token: String, client_id: String) -> Result<serde_json
         return Err(format!("Failed to set up iSCSI target: {}", e));
     }
 
+    // 5. Update config.json and dhcp.conf
+    // Reuse and update the client_info struct, persist it and update DHCP
+    client_info.target_iqn = Some(target_iqn.clone());
+    client_info.block_store = Some(block_store.clone());
+    client_info.block_device = Some(block_device.clone());
+    client_info.writeback = Some(clone.clone());
+    client_info.last_modified = Some(Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
+    client_info.status = Some("Offline".to_string()); // transient
+
+    // Update DHCP entry and restart dhcp service (best-effort)
+    let dhcp_entry = create_dhcp_entry(&client_info.name, &client_info.mac, &client_info.ip, &target_iqn);
+    if let Err(e) = update_dhcp_config(&client_id, &dhcp_entry, false) {
+        println!("[WARN] Failed to update DHCP config after reset: {}", e);
+    } else if let Err(e) = run_command(&["systemctl", "restart", "isc-dhcp-server.service"]) {
+        println!("[WARN] Failed to restart DHCP service: {}", e);
+    }
+
+    // Persist updated client info
+    if !save_client_config(&client_info) {
+        println!("[WARN] Failed to persist client after reset: {}", client_id);
+    } else {
+        // Refresh in-memory config cache
+        // best-effort: set_config expects Config from crate::config; call set_config with read_config()
+        crate::config::set_config(&read_config());
+    }
     Ok(serde_json::json!({
         "message": format!("Client {} reset successfully", client_id.to_uppercase())
     }))

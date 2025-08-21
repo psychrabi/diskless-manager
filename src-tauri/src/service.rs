@@ -631,6 +631,7 @@ subnet {} netmask {} {{
 }}
 
 # Static leases will be added here
+include "/etc/dhcp/clients.conf";
 "#,
         config.subnet_ip,
         config.subnet_mask,

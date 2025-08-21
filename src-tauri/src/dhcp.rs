@@ -1,13 +1,13 @@
 // DHCP-related logic for config file management and helpers.
 
 use regex::Regex;
-use std::fs;
+use std::{fs, process::Command};
+use crate::DHCP_CLIENT_CONFIG_PATH;
 
 pub fn update_dhcp_config(client_id: &str, dhcp_entry: &str, is_new: bool) -> Result<(), String> {
-    use crate::DHCP_CONFIG_PATH;
-    let content = fs::read_to_string(DHCP_CONFIG_PATH)
+    let content = fs::read_to_string(DHCP_CLIENT_CONFIG_PATH)
         .map_err(|e| format!("Failed to read DHCP config: {}", e))?;
-    let dhcp_backup_path = format!("{}.bak", DHCP_CONFIG_PATH);
+    let dhcp_backup_path = format!("{}.bak", DHCP_CLIENT_CONFIG_PATH);
     fs::write(&dhcp_backup_path, &content)
         .map_err(|e| format!("Failed to backup DHCP config: {}", e))?;
     let mut new_content = content.clone();
@@ -54,12 +54,12 @@ pub fn update_dhcp_config(client_id: &str, dhcp_entry: &str, is_new: bool) -> Re
         new_content = re_blank.replace_all(&new_content, "\n\n").to_string();
     }
     new_content = new_content.trim_end().to_string() + "\n\n" + dhcp_entry;
-    let temp_path = format!("{}.tmp", DHCP_CONFIG_PATH);
+    let temp_path = format!("{}.tmp", DHCP_CLIENT_CONFIG_PATH);
     match fs::write(&temp_path, &new_content) {
         Ok(_) => {
             // Use sudo to move the temporary file to the actual config path
-            let output = std::process::Command::new("sudo")
-                .args(&["mv", &temp_path, DHCP_CONFIG_PATH])
+            let output = Command::new("sudo")
+                .args(&["mv", &temp_path, DHCP_CLIENT_CONFIG_PATH])
                 .output()
                 .map_err(|e| format!("Failed to move DHCP config with sudo: {}", e))?;
 
