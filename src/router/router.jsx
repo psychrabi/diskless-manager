@@ -1,3 +1,4 @@
+import { Logs } from "@/components/Logs";
 import { lazy } from "react";
 import { createBrowserRouter } from "react-router-dom";
 
@@ -34,6 +35,10 @@ export const router = createBrowserRouter([
 			{
 				path: "/settings",
 				element: <SettingManagement />,
+			},
+			{
+				path: "/logs",
+				element: <Logs />,
 			},
 			{
 				path: "/setup",

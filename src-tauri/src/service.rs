@@ -1,5 +1,6 @@
 use crate::config::{get_config, set_config, write_config, Config};
 use crate::utils::run_command;
+use crate::DHCP_CONFIG_PATH;
 use async_process::Command as AsyncCommand;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -169,7 +170,7 @@ pub async fn get_service_config(token: String, service_key: String) -> Result<se
         .map_err(|e| format!("Authentication failed: {}", e.message))?;
     // Map service keys to config file paths
     let config_file_map: HashMap<&str, &str> = [
-        ("isc-dhcp-server", "/etc/dhcp/dhcpd.conf"),
+        ("isc-dhcp-server", DHCP_CONFIG_PATH),
         ("tftpd-hpa", "/etc/default/tftpd-hpa"),
         ("apache2", "/etc/apache2/sites-available/000-default.conf"),
         ("smbd", "/etc/samba/smb.conf"),
@@ -327,7 +328,7 @@ pub async fn save_service_config(token: String, service_key: String, content: St
     crate::middleware::validate_auth_token_for_command(&token)
         .map_err(|e| format!("Authentication failed: {}", e.message))?;
     let config_file_map: HashMap<&str, &str> = [
-        ("isc-dhcp-server", "/etc/dhcp/dhcpd.conf"),
+        ("isc-dhcp-server", DHCP_CONFIG_PATH),
         ("tftpd-hpa", "/etc/default/tftpd-hpa"),
         ("target", "/etc/rtslib-fb-target/saveconfig.json"),
         ("apache2", "/etc/apache2/sites-available/000-default.conf"),
@@ -650,7 +651,7 @@ subnet {} netmask {} {{
     // Write with sudo tee instead of fs::write
     let mut child = Command::new("sudo")
         .arg("tee")
-        .arg("/etc/dhcp/dhcpd.conf")
+        .arg(DHCP_CONFIG_PATH)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
