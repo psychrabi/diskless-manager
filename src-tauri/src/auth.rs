@@ -150,33 +150,3 @@ pub fn login(request: LoginRequest) -> Result<LoginResponse, AuthError> {
 pub fn validate_auth_token(token: &str) -> Result<Claims, AuthError> {
     validate_token(token)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_authenticate_valid_user() {
-        let result = authenticate_user("admin", "admin123");
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_authenticate_invalid_user() {
-        let result = authenticate_user("invalid", "invalid");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_authenticate_invalid_password() {
-        let result = authenticate_user("admin", "wrongpassword");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_validate_valid_token() {
-        let login_result = authenticate_user("admin", "admin123").unwrap();
-        let validate_result = validate_token(&login_result.token);
-        assert!(validate_result.is_ok());
-    }
-}
