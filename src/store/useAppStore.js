@@ -74,7 +74,7 @@ export const useAppStore = create()(
           } catch (err) {
             // ignore transient errors
           }
-        }, 5000);
+        }, 30000);
         set({ _pollIntervalId: id });
       },
       stopClientStatusPolling: () => {

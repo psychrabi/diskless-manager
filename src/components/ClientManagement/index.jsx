@@ -8,14 +8,12 @@ import ClientFormModal from './ClientFormModal';
 import ClientTable from './ClientTable';
 import DeprovisionModal from './DeprovisionModal';
 
-
 const MemoizedClientTable = memo(ClientTable);
 const MemoizedContextMenu = memo(ContextMenu);
 
 const ClientManagement = () => {
   const { clients, fetchData, masters, startClientStatusPolling, stopClientStatusPolling } = useAppStore();
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [selectedClient, setSelectedClient] = useState([]);
   const [client, setClient] = useState({
     name: '',
     mac: '',
@@ -25,9 +23,7 @@ const ClientManagement = () => {
     clone: ''
   });
   const [contextMenu, setContextMenu] = useState({ isOpen: false, x: 0, y: 0, client: null });
-  const [deprovisionModal, setDeprovisionModal] = useState({ isOpen: false, client: null });
-  const [openDeleteClientModal, setOpenDeleteClientModal] = useState(false)
-
+  const [deprovisionModal, setDeprovisionModal] = useState({ isOpen: false, client: null });  
   const handleClientContextMenu = useCallback((event, client) => {
     event.preventDefault();
     setContextMenu({ isOpen: true, x: event.clientX, y: event.clientY, client: client });
@@ -78,6 +74,7 @@ const ClientManagement = () => {
 
 
   return (
+    <div className="space-y-6">
     <div className="mb-2 md:mb-4">
       <Card title="Client Management" icon={Users} actions={
         <Button variant="primary" onClick={handleClientFormModalOpen} icon={PlusCircle} disabled={masters.length === 0}>
@@ -88,6 +85,7 @@ const ClientManagement = () => {
         <MemoizedContextMenu isOpen={contextMenu.isOpen} xPos={contextMenu.x} yPos={contextMenu.y} targetClient={contextMenu.client} onClose={closeContextMenu} actions={contextActions} />
       </Card>
       <ClientFormModal client={client} setClient={setClient} masters={masters} isOpen={isModalOpen} setIsOpen={setIsModalOpen} refresh={fetchData} />
+      {deprovisionModal && 
       <DeprovisionModal 
         isOpen={deprovisionModal.isOpen} 
         onClose={() => setDeprovisionModal({ isOpen: false, client: null })}
@@ -97,6 +95,8 @@ const ClientManagement = () => {
           setDeprovisionModal({ isOpen: false, client: null });
         }}
       />
+      }
+    </div>
     </div>
   );
 };

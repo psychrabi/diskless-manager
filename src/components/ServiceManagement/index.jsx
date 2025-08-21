@@ -1,4 +1,6 @@
+import { Server } from 'lucide-react';
 import { RAMUsage } from '../RAMUsage';
+import { Card } from '../ui';
 import ClientOverviewCard from './ClientOverviewCard';
 import MasterImageOverviewCard from './MasterImageOverviewCard';
 import ServerInfoCard from './ServerInfoCard';
@@ -8,7 +10,7 @@ import ZfsPoolCard from './ZfsPoolCard';
 
 const ServiceManagement = () => {
   return (
-    <div className="space-y-6">
+    <Card title="Dashboard" icon={Server} className='bg-base-300 '>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         <ServerInfoCard />
         <RAMUsage />
@@ -22,7 +24,7 @@ const ServiceManagement = () => {
         <MasterImageOverviewCard />
       </div>
       <ServiceConfigModal />
-    </div>
+    </Card>
   );
 };
 

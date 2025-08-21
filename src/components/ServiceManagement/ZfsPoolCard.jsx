@@ -8,7 +8,7 @@ const ZfsPoolCard = ({ loading }) => {
   useEffect(() => {
     invoke("get_zpool_list")
       .then((stats) => {
-        setZpoolStats(stats);
+        setZpoolStats(stats[0]);
       })
   }, []);
   return (
@@ -30,7 +30,7 @@ const ZfsPoolCard = ({ loading }) => {
               <span className="font-semibold">Available:</span> {zpoolStats.free}
             </li>
             <li className='flex justify-between'>
-              <span className="font-semibold">Health:</span> {zpoolStats.health}
+              <span className="font-semibold">Health:</span> <span className='badge badge-success rounded-full'>{zpoolStats.health}</span>
             </li>
           </div>
         </ul>
