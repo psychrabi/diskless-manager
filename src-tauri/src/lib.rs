@@ -16,7 +16,9 @@ use tauri::tray::TrayIconBuilder;
 
 const ZFS_POOL: &str = "diskless"; // Adjust to your ZFS pool name
 const DHCP_CONFIG_PATH: &str = "/etc/dhcp/dhcpd.conf"; // Adjust as needed
-const DHCP_CLIENT_CONFIG_PATH: &str = "/etc/dhcp/clients.conf";
+const DHCP_CLIENTS_PATH: &str = "/etc/dhcp/clients.conf"; // Adjust as needed
+// Path to the TFTP autoexec.ipxe file (adjust to your TFTP root)
+pub const TFTP_AUTOEXEC_PATH: &str = "/srv/tftp/autoexec.ipxe";
 
 pub static SERVER_IP: Lazy<String> = Lazy::new(|| {
     let ip = utils::get_server_ip();

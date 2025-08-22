@@ -1,6 +1,8 @@
 use crate::config::{get_config, set_config, write_config, Config};
 use crate::utils::run_command;
 use crate::DHCP_CONFIG_PATH;
+use crate::DHCP_CLIENTS_PATH;
+use crate::TFTP_AUTOEXEC_PATH;
 use async_process::Command as AsyncCommand;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -171,6 +173,10 @@ pub async fn get_service_config(token: String, service_key: String) -> Result<se
     // Map service keys to config file paths
     let config_file_map: HashMap<&str, &str> = [
         ("isc-dhcp-server", DHCP_CONFIG_PATH),
+        // DHCP static client leases (separate include file)
+        ("dhcp-clients", DHCP_CLIENTS_PATH),
+        // TFTP autoexec (IPXE) editable file
+        ("tftp-autoexec", TFTP_AUTOEXEC_PATH),
         ("tftpd-hpa", "/etc/default/tftpd-hpa"),
         ("apache2", "/etc/apache2/sites-available/000-default.conf"),
         ("smbd", "/etc/samba/smb.conf"),
@@ -329,6 +335,8 @@ pub async fn save_service_config(token: String, service_key: String, content: St
         .map_err(|e| format!("Authentication failed: {}", e.message))?;
     let config_file_map: HashMap<&str, &str> = [
         ("isc-dhcp-server", DHCP_CONFIG_PATH),
+        ("dhcp-clients", DHCP_CLIENTS_PATH),
+        ("tftp-autoexec", TFTP_AUTOEXEC_PATH),
         ("tftpd-hpa", "/etc/default/tftpd-hpa"),
         ("target", "/etc/rtslib-fb-target/saveconfig.json"),
         ("apache2", "/etc/apache2/sites-available/000-default.conf"),
