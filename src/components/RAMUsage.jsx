@@ -37,7 +37,7 @@ export const RAMUsage = () => {
     const interval = setInterval(() => {
       fetchRamUsage();
       fetchArcStat();
-    }, 300000);
+    }, 10000);
     return () => clearInterval(interval);
   }, []);
 
