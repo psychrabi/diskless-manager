@@ -6,12 +6,13 @@ import { useAppStore } from "@/store/useAppStore";
 const ServicesList = () => {  
   const { services } = useAppStore();
   const { handleServiceAction, handleServiceConfigView } = useServiceManager()
+  const list = Array.isArray(services) ? services : (services ? Object.values(services) : []);
 
   return (
-    services.length === 0 ? (
+    list.length === 0 ? (
       <div className="text-sm text-muted">No services available</div>
     ) : (
-      services.map((service, index) => (
+      list.map((service, index) => (
     <Card key={service.service || index} title={service.name} className="flex-1" titleClassName="text-base md:text-lg">
       <div className="flex items-center justify-between">
         <span className={`px-2 py-0.5 rounded-full text-xs font-semibold capitalize ${service.running ? 'dark:bg-green-300 dark:text-green-900 bg-green-900 text-green-300' :

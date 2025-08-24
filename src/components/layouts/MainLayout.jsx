@@ -1,4 +1,4 @@
-import { Loading, Notification } from '@/components/ui'
+import { Loading, Notification, Error } from '@/components/ui'
 import { useNotification } from '@/contexts/NotificationContext'
 import { useAppStore } from '@/store/useAppStore'
 import { lazy, useEffect, useState } from 'react'

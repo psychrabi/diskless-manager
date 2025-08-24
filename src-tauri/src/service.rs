@@ -178,6 +178,7 @@ pub async fn get_service_config(token: String, service_key: String) -> Result<se
         // TFTP autoexec (IPXE) editable file
         ("tftp-autoexec", TFTP_AUTOEXEC_PATH),
         ("tftpd-hpa", "/etc/default/tftpd-hpa"),
+        ("target", "/etc/rtslib-fb-target/saveconfig.json"),
         ("apache2", "/etc/apache2/sites-available/000-default.conf"),
         ("smbd", "/etc/samba/smb.conf"),
         // Add more as needed
@@ -394,14 +395,14 @@ pub async fn check_package_status() -> Result<Vec<PackageStatus>, String> {
     let mut status_list = Vec::new();
 
     for (service, package) in packages {
-        let installed = check_package_installed(package).await;
+        let installed = check_package_installed(package).await?;
         let running = if installed {
-            check_service_running(service).await
+            check_service_running(service).await?
         } else {
             false
         };
         let version = if installed {
-            get_package_version(package).await
+            get_package_version(package).await?
         } else {
             None
         };
@@ -419,51 +420,44 @@ pub async fn check_package_status() -> Result<Vec<PackageStatus>, String> {
     Ok(status_list)
 }
 
-async fn check_package_installed(package: &str) -> bool {
-    match AsyncCommand::new("dpkg")
+async fn check_package_installed(package: &str) -> Result<bool, String> {
+    let output = AsyncCommand::new("dpkg")
         .args(&["-l", package])
         .output()
         .await
-    {
-        Ok(output) => output.status.success(),
-        Err(_) => false,
-    }
+        .map_err(|e| format!("Failed to run 'dpkg -l {}': {}", package, e))?;
+    Ok(output.status.success())
 }
 
-async fn check_service_running(service: &str) -> bool {
+async fn check_service_running(service: &str) -> Result<bool, String> {
     let service_name = match service {
         "isc-dhcp-server" => "isc-dhcp-server",
         "tftpd-hpa" => "tftpd-hpa",
         "apache2" => "apache2",
         "samba" => "smbd",
-
         _ => service,
     };
 
-    match AsyncCommand::new("systemctl")
+    let output = AsyncCommand::new("systemctl")
         .args(&["is-active", "--quiet", service_name])
         .output()
         .await
-    {
-        Ok(output) => output.status.success(),
-        Err(_) => false,
-    }
+        .map_err(|e| format!("Failed to run 'systemctl is-active {}': {}", service_name, e))?;
+    // Non-zero exit means not active, not an execution error
+    Ok(output.status.success())
 }
 
-async fn get_package_version(package: &str) -> Option<String> {
-    match AsyncCommand::new("dpkg-query")
+async fn get_package_version(package: &str) -> Result<Option<String>, String> {
+    let output = AsyncCommand::new("dpkg-query")
         .args(&["-W", "-f=${Version}", package])
         .output()
         .await
-    {
-        Ok(output) => {
-            if output.status.success() {
-                String::from_utf8(output.stdout).ok()
-            } else {
-                None
-            }
-        }
-        Err(_) => None,
+        .map_err(|e| format!("Failed to run 'dpkg-query' for {}: {}", package, e))?;
+
+    if output.status.success() {
+        Ok(String::from_utf8(output.stdout).ok())
+    } else {
+        Ok(None)
     }
 }
 

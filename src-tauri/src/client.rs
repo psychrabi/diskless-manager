@@ -653,6 +653,7 @@ pub async fn add_client(token: String, req: AddClientRequest) -> Result<serde_js
     if !snapshot.is_empty() {
         // Use provided snapshot
         run_command(&["zfs", "clone", &snapshot, &paths["clone"]])?;
+        run_command(&["zfs", "set", "primarycache=metadata", &paths["clone"]])?;
     } else {
         // Check if base snapshot exists
         let base_snapshot = format!("{}@base", master);
@@ -662,6 +663,7 @@ pub async fn add_client(token: String, req: AddClientRequest) -> Result<serde_js
             let snapshot_name = format!("{}@{}_base", master, name);
             run_command(&["zfs", "snapshot", &snapshot_name])?;
             run_command(&["zfs", "clone", &snapshot_name, &paths["clone"]])?;
+            run_command(&["zfs", "set", "primarycache=metadata", &paths["clone"]])?;
         } else {
             // Use master volume directly
             paths.insert("clone".to_string(), master.clone());
