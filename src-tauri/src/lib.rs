@@ -12,9 +12,8 @@ use serde::Serialize;
 use sysinfo::System;
 use tauri::Manager;
 use tauri::tray::TrayIconBuilder;
+use dirs;
 
-
-const ZFS_POOL: &str = "diskless"; // Adjust to your ZFS pool name
 const DHCP_CONFIG_PATH: &str = "/etc/dhcp/dhcpd.conf"; // Adjust as needed
 const DHCP_CLIENTS_PATH: &str = "/etc/dhcp/clients.conf"; // Adjust as needed
 // Path to the TFTP autoexec.ipxe file (adjust to your TFTP root)
@@ -111,6 +110,20 @@ pub fn run() {
             zfs::get_master_image_overview
         ])
         .setup(|app| {
+            // Ensure config.json exists on first run
+            if let Some(base) = dirs::config_dir() {
+                let config_dir = base.join("com.diskless.local");
+                let config_path = config_dir.join("config.json");
+                if !config_path.exists() {
+                    if let Err(e) = std::fs::create_dir_all(&config_dir) {
+                        eprintln!("[WARN] Failed to create config directory: {}", e);
+                    } else if let Err(e) = config::write_config(&config::Config::default()) {
+                        eprintln!("[WARN] Failed to create default config.json: {}", e);
+                    } else {
+                        println!("Created default config at {}", config_path.display());
+                    }
+                }
+            }
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
@@ -118,9 +131,9 @@ pub fn run() {
                         .build(),
                 )?;
             }
-let _tray = TrayIconBuilder::new()
-  .icon(app.default_window_icon().unwrap().clone())
-  .build(app)?;        
+            let _tray = TrayIconBuilder::new()
+              .icon(app.default_window_icon().unwrap().clone())
+              .build(app)?;        
             Ok(())
         })
         .run(tauri::generate_context!())

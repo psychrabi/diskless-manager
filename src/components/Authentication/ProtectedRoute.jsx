@@ -4,27 +4,23 @@ import { useNavigate } from 'react-router-dom';
 import { Loading } from '@/components/ui';
 
 const ProtectedRoute = ({ children }) => {
-  const { user, token, loading } = useAuth();
+  const { user, token, loading: authLoading } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
-    // If not loading and no user/token, redirect to login
-    if (!loading && (!user || !token)) {
+    if (!authLoading && (!user || !token)) {
       navigate('/login');
     }
-  }, [user, token, loading, navigate]);
+  }, [user, token, authLoading, navigate]);
 
-  // Show loading spinner while checking auth state
-  if (loading) {
+  if (authLoading) {
     return <Loading />;
   }
 
-  // If user and token exist, render children
   if (user && token) {
     return children;
   }
 
-  // This shouldn't be reached due to the redirect, but just in case
   return null;
 };
 

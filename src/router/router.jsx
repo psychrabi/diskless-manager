@@ -16,34 +16,34 @@ export const router = createBrowserRouter([
     path: "/login",
     element: <Login />,
   },
-	{
-		path: "/",
-		element: <ProtectedRoute><MainLayout /></ProtectedRoute>,
-		children: [
-			{
-				index: true,
-				element: <ServiceManagement />,
-			},
-			{
-				path: "/clients",
-				element: <ClientManagement />,
-			},
-			{
-				path: "/masters",
-				element: <ImageManagement />,
-			},
-			{
-				path: "/settings",
-				element: <SettingManagement />,
-			},
-			{
-				path: "/logs",
-				element: <Logs />,
-			},
-			{
-				path: "/setup",
-				element: <Setup />,
-			},
-		],
-	},
+  {
+    path: "/setup",
+    element: <Setup />,
+  },
+  {
+    path: "/",
+    element: <ProtectedRoute><MainLayout /></ProtectedRoute>,
+    children: [
+      {
+        index: true,
+        element: <ServiceManagement />,
+      },
+      {
+        path: "/clients",
+        element: <ClientManagement />,
+      },
+      {
+        path: "/masters",
+        element: <ImageManagement />,
+      },
+      {
+        path: "/settings",
+        element: <SettingManagement />,
+      },
+      {
+        path: "/logs",
+        element: <Logs />,
+      },
+    ],
+  },
 ])

@@ -24,10 +24,11 @@ export const ContextMenu = ({ isOpen, xPos, yPos, targetClient, onClose, actions
         <li><a onClick={() => { actions.reboot(targetClient); onClose(); }}><RefreshCw className="w-4 h-4" />Reboot</a></li>
         <li><a onClick={() => { actions.shutdown(targetClient); onClose(); }} ><Power className="w-4 h-4" />Shutdown</a></li>        
         <li><a onClick={() => { actions.remote(targetClient); onClose(); }}><ScreenShare className="w-4 h-4" />Remote Control</a></li>
-        <div className="divider my-0"></div>
         {/* Super Client items */}
         {targetClient?.status === 'Offline' ? (
-          targetClient?.mode === 'super' ? (
+          <>
+          <div className="divider my-0"></div>
+          {targetClient?.mode === 'super' ? (
             <>           
               <li>
                 <a onClick={() => { actions.saveSuper(targetClient); onClose(); }}>
@@ -48,7 +49,8 @@ export const ContextMenu = ({ isOpen, xPos, yPos, targetClient, onClose, actions
                 <RefreshCw className="w-4 h-4" />Enable Super Client
               </a>
             </li>
-          )
+          )}
+          </>
         ) : null}
         <div className="divider my-0"></div>
         <li><a onClick={() => { actions.edit(targetClient); onClose(); }}><Edit className="w-4 h-4" />Edit Client</a></li>

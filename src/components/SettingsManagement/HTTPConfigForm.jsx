@@ -15,7 +15,7 @@ export default function HTTPConfigForm() {
     reset,
   } = useForm({
     defaultValues: {
-      http_root: "/srv/http",
+      http_root: "/srv/tftp",
       http_server_ip: "*",
       http_server_port: "80"
     }

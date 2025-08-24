@@ -3,9 +3,10 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { invoke } from '@tauri-apps/api/core';
 import { useNavigate } from 'react-router-dom';
-import { Card, Input, Button } from '@/components/ui';
-import { useState } from 'react';
+import { Card, Input, Button, Loading } from '@/components/ui';
+import { useEffect, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
+import { useAppStore } from '@/store/useAppStore';
 
 // Define validation schema
 const loginSchema = z.object({
@@ -18,6 +19,8 @@ const Login = () => {
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
   const { login: setAuth } = useAuth();
+  const { setServices } = useAppStore();
+  const [preflightLoading, setPreflightLoading] = useState(true);
 
   const {
     register,
@@ -31,6 +34,40 @@ const Login = () => {
       password: ''
     }
   });
+
+  // Preflight check before showing login
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await invoke('check_package_status');
+        const list = Array.isArray(res) ? res : (res ? Object.values(res) : []);
+        if (!cancelled) {
+          setServices(list);
+          const allServicesInstalled = list.every(svc => svc?.installed);
+          const poolExists = await invoke('zfs_pool_exists', { poolName: null });
+
+          // Only redirect to setup if services are not installed
+          if (!allServicesInstalled || !poolExists) {
+            navigate('/setup');
+          }
+        }
+      } catch (e) {
+        console.warn('Preflight check failed:', e);
+        // Proceed to login UI even if preflight fails
+      } finally {
+        if (!cancelled) setPreflightLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [navigate, setServices]);
+
+
+  if (preflightLoading) {
+    return <Loading />;
+  }
 
   const onSubmit = async (data) => {
     setLoading(true);

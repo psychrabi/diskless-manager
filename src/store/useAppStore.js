@@ -38,8 +38,8 @@ export const useAppStore = create()(
           // Get token from localStorage
           const token = localStorage.getItem('authToken') || '';
           const [servicesRes, mastersRes, clientsRes] = await Promise.all([
-            invoke('check_package_status'),
-            invoke('get_masters', { token, 'zfsPool': 'diskless' }),
+            invoke('check_package_status', { token }),
+            invoke('get_masters', { token }),
             invoke('get_clients', { token }),
           ]);
           set({

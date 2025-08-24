@@ -20,7 +20,7 @@ const MasterImageOverviewCard = () => {
   }, []);
 
   return (
-    <Card title="Master Image Overview" icon={HardDrive}>
+    <Card title="Default Image Overview" icon={HardDrive}>
       {loading ? (
         <div>Loading...</div>
       ) : overview ? (
@@ -35,7 +35,7 @@ const MasterImageOverviewCard = () => {
           </li>
         </ul>
       ) : (
-        <div className="text-red-500">Failed to load master image overview.</div>
+        <div className="text-red-500">Set a default image first.</div>
       )}
     </Card>
   );

@@ -1,8 +1,8 @@
-export const Select = ({ label, id, value, onChange, children, className = '', required = false }) => (
+export const Select = ({ label, id, register, value, onChange, children, className = '', required = false, disabled = false }) => (
   <fieldset className={`fieldset ${className}`}>
     {label && <legend htmlFor={id} className='fieldset-legend'>{label}</legend>}
-    <select id={id} defaultValue={value} onChange={onChange} className='select w-full' required={required} >
+    <select id={id} {...register} defaultValue={value} onChange={onChange} className='select w-full' required={required} disabled={disabled}>
       {children}
     </select>
   </fieldset>
-);
+); 

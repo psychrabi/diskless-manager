@@ -6,9 +6,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::process::Command;
 
+use crate::utils::run_command;
 use crate::{
     client::get_clients,
-    config::{get_config, write_config, Config},
+    config::{get_config, get_zpool_name, write_config, Config},
 };
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -77,8 +78,7 @@ pub fn zfs_clone(snapshot: &str, clone: &str) -> Result<(), String> {
     } else {
         Err(format!(
             "Failed to clone ZFS snapshot {} to {}",
-            snapshot,
-            clone
+            snapshot, clone
         ))
     }
 }
@@ -119,7 +119,7 @@ pub fn create_master(token: String, name: String, size: String) -> Result<Value,
     {
         return Err("Invalid size format (e.g., '50G')".to_string());
     }
-    let master_zvol_name = format!("{}/{}-master", crate::ZFS_POOL, name);
+    let master_zvol_name = format!("{}/{}-master", get_zpool_name(), name);
     let status = Command::new("sudo")
         .args(["zfs", "list", "-H", &master_zvol_name])
         .status()
@@ -168,7 +168,7 @@ pub fn create_master(token: String, name: String, size: String) -> Result<Value,
 }
 
 #[tauri::command]
-pub async fn get_masters(token: String, zfs_pool: String) -> Result<Vec<Master>, String> {
+pub async fn get_masters(token: String) -> Result<Vec<Master>, String> {
     // Validate authentication token
     crate::middleware::validate_auth_token_for_command(&token)
         .map_err(|e| format!("Authentication failed: {}", e.message))?;
@@ -182,6 +182,7 @@ pub async fn get_masters(token: String, zfs_pool: String) -> Result<Vec<Master>,
         .to_string();
 
     // 2. List all datasets
+    let zfs_pool = get_zpool_name();
     let output = Command::new("sudo")
         .args([
             "zfs",
@@ -291,7 +292,10 @@ pub fn save_master_config(master_data: &MasterData) -> bool {
 }
 
 #[tauri::command]
-pub async fn delete_master(token: String, master_name: String) -> Result<serde_json::Value, String> {
+pub async fn delete_master(
+    token: String,
+    master_name: String,
+) -> Result<serde_json::Value, String> {
     // Validate authentication token
     crate::middleware::validate_auth_token_for_command(&token)
         .map_err(|e| format!("Authentication failed: {}", e.message))?;
@@ -364,10 +368,11 @@ pub fn create_snapshot(token: String, snapshot_name: String) -> Result<Value, St
     // Validate authentication token
     crate::middleware::validate_auth_token_for_command(&token)
         .map_err(|e| format!("Authentication failed: {}", e.message))?;
-    if !snapshot_name.contains('@') || !snapshot_name.starts_with(&format!("{}/", crate::ZFS_POOL)) {
+    let zpool_name = get_zpool_name();
+    if !snapshot_name.contains('@') || !snapshot_name.starts_with(&format!("{}/", zpool_name)) {
         return Err(format!(
             "Invalid snapshot name. Expected {}/master@snapname",
-            crate::ZFS_POOL
+            zpool_name
         ));
     }
     let master_name = snapshot_name.split('@').next().unwrap();
@@ -417,7 +422,8 @@ pub async fn delete_snapshot(token: String, snapshot_name: String) -> Result<Val
     // Validate authentication token
     crate::middleware::validate_auth_token_for_command(&token)
         .map_err(|e| format!("Authentication failed: {}", e.message))?;
-    if !snapshot_name.contains('@') || !snapshot_name.starts_with(&format!("{}/", crate::ZFS_POOL)) {
+    let zpool_name = get_zpool_name();
+    if !snapshot_name.contains('@') || !snapshot_name.starts_with(&format!("{}/", zpool_name)) {
         return Err("Invalid snapshot name format.".to_string());
     }
     let clients_result = get_clients("".to_string(), None).await;
@@ -482,56 +488,77 @@ pub async fn delete_snapshot(token: String, snapshot_name: String) -> Result<Val
 
 #[derive(Debug, Serialize)]
 pub struct ZpoolInfo {
-  name: String,
-  size: String,
-  alloc: String,
-  free: String,
-  health: String,
+    name: String,
+    size: String,
+    alloc: String,
+    free: String,
+    health: String,
 }
 
 #[tauri::command]
 pub fn get_zpool_list() -> Vec<ZpoolInfo> {
-  let mut pools: Vec<ZpoolInfo> = Vec::new();
-  if Command::new("which").arg("zpool").output().is_ok() {
-    if let Ok(out) = Command::new("zpool").args(["list", "-H", "-o", "name,size,alloc,free,health"]).output() {
-      if out.status.success() {
-        let s = String::from_utf8_lossy(&out.stdout);
-        for line in s.lines() {
-          let parts: Vec<&str> = line.split_whitespace().collect();
-          if parts.len() >= 5 {
-            pools.push(ZpoolInfo {
-              name: parts[0].to_string(),
-              size: parts[1].to_string(),
-              alloc: parts[2].to_string(),
-              free: parts[3].to_string(),
-              health: parts[4].to_string(),
-            });
-          }
+    let mut pools: Vec<ZpoolInfo> = Vec::new();
+    if Command::new("which").arg("zpool").output().is_ok() {
+        if let Ok(out) = Command::new("zpool")
+            .args(["list", "-H", "-o", "name,size,alloc,free,health"])
+            .output()
+        {
+            if out.status.success() {
+                let s = String::from_utf8_lossy(&out.stdout);
+                for line in s.lines() {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 5 {
+                        pools.push(ZpoolInfo {
+                            name: parts[0].to_string(),
+                            size: parts[1].to_string(),
+                            alloc: parts[2].to_string(),
+                            free: parts[3].to_string(),
+                            health: parts[4].to_string(),
+                        });
+                    }
+                }
+            }
         }
-      }
     }
-  }
-  pools
+    pools
 }
 
 #[tauri::command]
-pub fn zfs_pool_exists(pool_name: String) -> Result<bool, String> {
-    let status = Command::new("zpool")
-        .args(&["list", pool_name.as_str()])
-        .status()
-        .map_err(|e| e.to_string())?;
+pub fn zfs_pool_exists(pool_name: Option<String>) -> Result<bool, String> {
+    if pool_name.is_none() {
+        let output = Command::new("zpool")
+            .args(["list", "-H"])
+            .output()
+            .map_err(|e| format!("Failed to list ZFS pools: {}", e))?;
+
+        return Ok(output.status.success() && !output.stdout.is_empty());
+    }
+
+    // If pool name is provided, check that specific pool
+    let pool = pool_name.unwrap(); // Safe to unwrap since we checked is_none
+    let status = match Command::new("zpool").args(["list", &pool]).status() {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!(
+                "Warning: 'zpool' not available when checking pool '{}': {}",
+                pool, e
+            );
+            return Ok(false);
+        }
+    };
 
     let exists = status.success();
 
     if exists {
-        // Update config.json settings.zpool_name
+        // Update config.json settings with both keys for compatibility
         let mut config: Config = get_config();
         if !config.settings.is_object() {
             config.settings = json!({});
         }
-        config.settings["zpool_name"] = json!(pool_name);
+        config.settings["zpool_name"] = json!(pool.clone());
+        config.settings["zfsPool"] = json!(pool.clone());
         if let Err(e) = write_config(&config) {
-            println!("Error updating zpool_name in config: {}", e);
+            println!("Error updating zpool_name/zfsPool in config: {}", e);
         }
     }
 
@@ -541,14 +568,12 @@ pub fn zfs_pool_exists(pool_name: String) -> Result<bool, String> {
 #[tauri::command]
 pub fn create_zfs_pool(name: String, disk: String) -> Result<(), String> {
     // WARNING: This will destroy data on the disk!
-    let status = Command::new("sudo")
-        .args(&["zpool", "create", &name, &format!("/dev/{}", disk)])
-        .status()
-        .map_err(|e| e.to_string())?;
-    if status.success() {
+    let status = run_command(&["zpool", "create", &name, &format!("/dev/{}", disk)]);
+    if let Ok(_) = status {
         let mut cfg = get_config();
         let mut settings = cfg.settings.as_object().cloned().unwrap_or_default();
-        settings.insert("zpool_name".to_string(), json!(name));
+        settings.insert("zpool_name".to_string(), json!(name.clone()));
+        settings.insert("zfsPool".to_string(), json!(name));
         cfg.settings = json!(settings);
         if let Err(e) = write_config(&cfg) {
             return Err(format!(
@@ -581,9 +606,12 @@ pub fn set_default_master(token: String, name: &str) -> Result<bool, String> {
     }
 }
 
-
 #[tauri::command]
-pub async fn rollback_master_snapshot(token: String, _master_name: String, snapshot_name: String) -> Result<serde_json::Value, String> {
+pub async fn rollback_master_snapshot(
+    token: String,
+    _master_name: String,
+    snapshot_name: String,
+) -> Result<serde_json::Value, String> {
     // Validate authentication token
     crate::middleware::validate_auth_token_for_command(&token)
         .map_err(|e| format!("Authentication failed: {}", e.message))?;
@@ -596,21 +624,31 @@ pub async fn rollback_master_snapshot(token: String, _master_name: String, snaps
     }
     let rollback_output = rollback_output.unwrap();
     if !rollback_output.status.success() {
-        return Err(format!("Failed to rollback snapshot: {}", String::from_utf8_lossy(&rollback_output.stderr)));
+        return Err(format!(
+            "Failed to rollback snapshot: {}",
+            String::from_utf8_lossy(&rollback_output.stderr)
+        ));
     }
 
     // 2. Find all clients that were using this snapshot as their base
-    let clients_result = get_clients("".to_string(), None).await.map_err(|e| format!("Failed to get clients: {}", e))?;
+    let clients_result = get_clients("".to_string(), None)
+        .await
+        .map_err(|e| format!("Failed to get clients: {}", e))?;
     let mut recreated = vec![];
     if let Some(clients) = clients_result.as_array() {
         for client in clients {
-            let client_snapshot = client.get("snapshot").and_then(|v| v.as_str()).unwrap_or("");
+            let client_snapshot = client
+                .get("snapshot")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let client_id = client.get("id").and_then(|v| v.as_str()).unwrap_or("");
             let client_name = client.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            let client_clone = format!("{}/{}-disk", crate::ZFS_POOL, client_name.to_uppercase());
+            let client_clone = format!("{}/{}-disk", get_zpool_name(), client_name.to_uppercase());
             if client_snapshot == snapshot_name {
                 // Destroy the old clone if it exists
-                let _ = Command::new("sudo").args(["zfs", "destroy", &client_clone]).output();
+                let _ = Command::new("sudo")
+                    .args(["zfs", "destroy", &client_clone])
+                    .output();
                 // Re-create the clone from the rolled-back snapshot
                 let clone_output = Command::new("sudo")
                     .args(["zfs", "clone", &snapshot_name, &client_clone])
@@ -643,13 +681,25 @@ pub async fn get_zfs_arcstat() -> Result<serde_json::Value, String> {
     let mut size = 0u64;
     for line in content.lines() {
         if line.starts_with("hits ") {
-            hits = line.split_whitespace().nth(2).and_then(|v| v.parse().ok()).unwrap_or(0);
+            hits = line
+                .split_whitespace()
+                .nth(2)
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
         }
         if line.starts_with("misses ") {
-            misses = line.split_whitespace().nth(2).and_then(|v| v.parse().ok()).unwrap_or(0);
+            misses = line
+                .split_whitespace()
+                .nth(2)
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
         }
         if line.starts_with("size ") {
-            size = line.split_whitespace().nth(2).and_then(|v| v.parse().ok()).unwrap_or(0);
+            size = line
+                .split_whitespace()
+                .nth(2)
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
         }
     }
     let hit_percent = if hits + misses > 0 {
@@ -663,19 +713,29 @@ pub async fn get_zfs_arcstat() -> Result<serde_json::Value, String> {
     }))
 }
 
-
-
 #[tauri::command]
 pub async fn get_master_image_overview() -> Result<serde_json::Value, String> {
     let config = get_config();
-    let master_dataset = config.settings.get("default_master").and_then(|s| s.as_str()).unwrap_or("");
+    let master_dataset = config
+        .settings
+        .get("default_master")
+        .and_then(|s| s.as_str())
+        .unwrap_or("");
 
     if master_dataset.is_empty() {
         return Err("Default master image not set in config".to_string());
     }
 
     let output = Command::new("sudo")
-        .args(["zfs", "get", "creation,clones", "-o", "value", "-H", master_dataset])
+        .args([
+            "zfs",
+            "get",
+            "creation,clones",
+            "-o",
+            "value",
+            "-H",
+            master_dataset,
+        ])
         .output()
         .map_err(|e| format!("Failed to get master image info: {}", e))?;
 
@@ -697,7 +757,11 @@ pub async fn get_master_image_overview() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-pub async fn rename_master(token: String, old_name: String, new_name: String) -> Result<serde_json::Value, String> {
+pub async fn rename_master(
+    token: String,
+    old_name: String,
+    new_name: String,
+) -> Result<serde_json::Value, String> {
     // Validate authentication token
     crate::middleware::validate_auth_token_for_command(&token)
         .map_err(|e| format!("Authentication failed: {}", e.message))?;
@@ -715,7 +779,7 @@ pub async fn rename_master(token: String, old_name: String, new_name: String) ->
     }
 
     // Check if new master name already exists
-    let new_master_zvol_name = format!("{}/{}-master", crate::ZFS_POOL, new_name);
+    let new_master_zvol_name = format!("{}/{}-master", get_zpool_name(), new_name);
     if zfs_exists(&new_master_zvol_name) {
         return Err(format!("Master '{}' already exists.", new_master_zvol_name));
     }

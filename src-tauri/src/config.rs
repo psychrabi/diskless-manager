@@ -23,6 +23,7 @@ pub fn reload_config_from_disk() {
     let config = read_config();
     set_config(&config);
 }
+
 use std::fs;
 
 use serde::{Deserialize, Serialize};
@@ -81,7 +82,7 @@ pub fn write_config(cfg: &Config) -> Result<(), String> {
             )
             .map_err(|e| e.to_string())
         })?;
-        reload_config_from_disk();
+    reload_config_from_disk();
     Ok(())
 }
 
@@ -90,7 +91,27 @@ pub fn save_config(pool_name: String) -> Result<(), String> {
     let mut cfg = get_config();
     // Ensure settings is an object
     let mut settings = cfg.settings.as_object().cloned().unwrap_or_default();
+    settings.insert("zpool_name".to_string(), json!(pool_name.clone()));
     settings.insert("zfsPool".to_string(), json!(pool_name));
     cfg.settings = json!(settings);
     write_config(&cfg)
+}
+
+/// Returns the configured ZFS pool name from config.settings.
+/// Prefers 'zpool_name' and falls back to legacy 'zfsPool'. Defaults to 'diskless'.
+pub fn get_zpool_name() -> String {
+    let cfg = get_config();
+    let settings = cfg.settings.as_object();
+    let from_new = settings
+        .and_then(|s| s.get("zpool_name"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let from_legacy = settings
+        .and_then(|s| s.get("zfsPool"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    from_new
+        .or(from_legacy)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "diskless".to_string())
 }

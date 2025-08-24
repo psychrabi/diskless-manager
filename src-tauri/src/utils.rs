@@ -64,10 +64,13 @@ pub struct Disk {
 #[tauri::command]
 pub fn list_disks() -> Result<Vec<Disk>, String> {
     // Use lsblk to list disks (Linux only)
-    let output = Command::new("lsblk")
-        .args(&["-dn", "-o", "NAME,SIZE,TYPE"])
-        .output()
-        .map_err(|e| e.to_string())?;
+    let output = match Command::new("lsblk").args(["-dn", "-o", "NAME,SIZE,TYPE"]).output() {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("Warning: 'lsblk' not available: {}", e);
+            return Ok(vec![]);
+        }
+    };
     let stdout = String::from_utf8_lossy(&output.stdout);
     let disks = stdout
         .lines()

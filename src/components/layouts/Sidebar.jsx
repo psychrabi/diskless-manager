@@ -19,8 +19,7 @@ const menuItems = [
   { id: 'clients', to: '/clients', label: 'Client Management', icon: Monitor },
   { id: 'masters', to: '/masters', label: 'Image Management', icon: HardDrive },
   { id: 'settings', to: '/settings', label: 'System Settings', icon: Settings },
-  { id: 'logs', to: '/logs', label: 'Logs', icon: File },
-  { id: 'setup', to: '/setup', label: 'Setup', icon: Wrench },
+  { id: 'logs', to: '/logs', label: 'Logs', icon: File }  
 ];
 
 const handleExit = async () => {

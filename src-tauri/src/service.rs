@@ -116,8 +116,8 @@ pub async fn get_services(token: String, zfs_pool: String) -> Result<Value, Stri
             }),
         );
     }
-    let zfs_status = match AsyncCommand::new("zpool")
-        .args(["status", &zfs_pool])
+    let zfs_status = match AsyncCommand::new("sudo")
+        .args(["zpool", "status", &zfs_pool])
         .output()
         .await
     {
@@ -298,12 +298,7 @@ pub async fn check_services() -> Result<Value, String> {
     ];
     let mut statuses = HashMap::new();
     for (key, svc) in required {
-        let installed = AsyncCommand::new("which")
-            .arg(key)
-            .output()
-            .await
-            .map(|s| s.status.success())
-            .unwrap_or(false);
+        let installed = check_package_installed(svc).await?;
         statuses.insert(
             key,
             json!({
@@ -316,7 +311,10 @@ pub async fn check_services() -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub async fn install_service(service: String) -> Result<(), String> {
+pub async fn install_service(service: String, token: String) -> Result<(), String> {
+    // Validate authentication token
+    crate::middleware::validate_auth_token_for_command(&token)
+        .map_err(|e| format!("Authentication failed: {}", e.message))?;
     let status = AsyncCommand::new("sudo")
         .args(&["apt-get", "install", "-y", &service])
         .status()
@@ -381,7 +379,10 @@ pub async fn save_service_config(token: String, service_key: String, content: St
 }
 
 #[tauri::command]
-pub async fn check_package_status() -> Result<Vec<PackageStatus>, String> {
+pub async fn check_package_status(token: String) -> Result<Vec<PackageStatus>, String> {
+    // Validate authentication token
+    crate::middleware::validate_auth_token_for_command(&token)
+        .map_err(|e| format!("Authentication failed: {}", e.message))?;
     let packages = vec![
         ("isc-dhcp-server", "isc-dhcp-server"),
         ("tftpd-hpa", "tftpd-hpa"),
@@ -421,12 +422,24 @@ pub async fn check_package_status() -> Result<Vec<PackageStatus>, String> {
 }
 
 async fn check_package_installed(package: &str) -> Result<bool, String> {
-    let output = AsyncCommand::new("dpkg")
-        .args(&["-l", package])
+    match AsyncCommand::new("dpkg-query")
+        .args(&["-W", "-f=${Status}", package])
         .output()
         .await
-        .map_err(|e| format!("Failed to run 'dpkg -l {}': {}", package, e))?;
-    Ok(output.status.success())
+    {
+        Ok(output) => {
+            if !output.status.success() {
+                // Package unknown or not installed
+                return Ok(false);
+            }
+            let status = String::from_utf8_lossy(&output.stdout);
+            Ok(status.trim() == "install ok installed")
+        }
+        Err(e) => {
+            eprintln!("Warning: dpkg-query not available for check_package_installed({}): {}", package, e);
+            Ok(false)
+        }
+    }
 }
 
 async fn check_service_running(service: &str) -> Result<bool, String> {
@@ -448,16 +461,22 @@ async fn check_service_running(service: &str) -> Result<bool, String> {
 }
 
 async fn get_package_version(package: &str) -> Result<Option<String>, String> {
-    let output = AsyncCommand::new("dpkg-query")
+    match AsyncCommand::new("dpkg-query")
         .args(&["-W", "-f=${Version}", package])
         .output()
         .await
-        .map_err(|e| format!("Failed to run 'dpkg-query' for {}: {}", package, e))?;
-
-    if output.status.success() {
-        Ok(String::from_utf8(output.stdout).ok())
-    } else {
-        Ok(None)
+    {
+        Ok(output) => {
+            if output.status.success() {
+                Ok(String::from_utf8(output.stdout).ok())
+            } else {
+                Ok(None)
+            }
+        }
+        Err(e) => {
+            eprintln!("Warning: dpkg-query not available for get_package_version({}): {}", package, e);
+            Ok(None)
+        }
     }
 }
 
