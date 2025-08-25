@@ -6,6 +6,7 @@ use crate::TFTP_AUTOEXEC_PATH;
 use async_process::Command as AsyncCommand;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use crate::utils::append_log;
 use std::collections::HashMap;
 use std::process::Command;
 
@@ -166,7 +167,8 @@ pub async fn get_services(token: String, zfs_pool: String) -> Result<Value, Stri
 }
 
 #[tauri::command]
-pub async fn get_service_config(token: String, service_key: String) -> Result<serde_json::Value, String> {
+pub async fn get_service_config(token: String, service_key: String) -> Result<Value, String> {
+    append_log("INFO", &format!("get_service_config start: key={}", service_key));
     // Validate authentication token
     crate::middleware::validate_auth_token_for_command(&token)
         .map_err(|e| format!("Authentication failed: {}", e.message))?;
@@ -245,11 +247,14 @@ pub async fn get_service_config(token: String, service_key: String) -> Result<se
             .args(["cat", config_path])
             .output()
             .await
-            .map_err(|e| format!("Failed to read config via sudo cat: {}", e))?;
+            .map_err(|e| format!("Failed to read config via sudo: {}", e))?;
         if !output.status.success() {
-            return Err(String::from_utf8_lossy(&output.stderr).to_string());
-        }
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            append_log("ERROR", &format!("get_service_config sudo failed for {}: {}", config_path, stderr));
+            return Err(format!("Failed to read config via sudo: {}", stderr));
+        };
         let content = String::from_utf8_lossy(&output.stdout).to_string();
+        append_log("INFO", &format!("get_service_config success: key={} bytes={}", service_key, content.len()));
         Ok(serde_json::json!({ "text": content }))
     }
 }
@@ -282,32 +287,6 @@ pub async fn control_service(
     Ok(json!({
         "message": format!("Service '{}' {} command issued successfully.", service_name, &req.action)
     }))
-}
-
-#[tauri::command]
-pub async fn check_services() -> Result<Value, String> {
-    let required = vec![
-        ("zfs", "zfsutils-linux"),
-        ("targetcli", "targetcli-fb"),
-        ("dhcpd", "isc-dhcp-server"),
-        ("in.tftpd", "tftpd-hpa"),
-        ("apache2", "apache2"),
-        ("smbd", "samba"),
-        ("wakeonlan", "wakeonlan"),
-        // ("zfsutils-linux", "zfsutils-linux"),
-    ];
-    let mut statuses = HashMap::new();
-    for (key, svc) in required {
-        let installed = check_package_installed(svc).await?;
-        statuses.insert(
-            key,
-            json!({
-                "name": svc,
-                "installed": installed
-            }),
-        );
-    }
-    Ok(serde_json::to_value(statuses).unwrap())
 }
 
 #[tauri::command]
@@ -379,7 +358,7 @@ pub async fn save_service_config(token: String, service_key: String, content: St
 }
 
 #[tauri::command]
-pub async fn check_package_status(token: String) -> Result<Vec<PackageStatus>, String> {
+pub async fn check_package_status(token: String) -> Result<Value, String> {
     // Validate authentication token
     crate::middleware::validate_auth_token_for_command(&token)
         .map_err(|e| format!("Authentication failed: {}", e.message))?;
@@ -418,7 +397,19 @@ pub async fn check_package_status(token: String) -> Result<Vec<PackageStatus>, S
         });
     }
 
-    Ok(status_list)
+    // Convert discovered package/service statuses to a serde_json::Value
+    let services_value: Value = serde_json::to_value(&status_list)
+        .map_err(|e| format!("Failed to serialize package status for persistence: {}", e))?;
+
+    // Persist services state so it's stored in config.json and visible across restarts.
+    if let Err(e) = save_services_state(&services_value) {
+        println!("[WARN] Failed to persist services state: {}", e);
+    } else {
+        append_log("INFO", "Persisted services state to config.json");
+    }
+
+    // Return the package status to the caller
+    Ok(services_value)
 }
 
 async fn check_package_installed(package: &str) -> Result<bool, String> {
@@ -902,4 +893,32 @@ pub async fn configure_samba_server(token: String, shares: Vec<SambaShare>) -> R
     restart_service("smbd").await?;
     restart_service("nmbd").await?;
     Ok("Samba server configured successfully".to_string())
+}
+
+// Persist services object into the main Config and refresh in-memory cache
+pub fn save_services_state(services: &Value) -> Result<(), String> {
+    // ensure we have a baseline config value
+    let mut cfg_val: Value = match serde_json::to_value(get_config()) {
+        Ok(v) => v,
+        Err(_) => json!({
+            "clients": [],
+            "masters": {},
+            "services": {},
+            "settings": {}
+        }),
+    };
+
+    // replace/insert services key
+    cfg_val["services"] = services.clone();
+
+    // convert back to typed Config and write
+    let config_struct: Config = serde_json::from_value(cfg_val)
+        .map_err(|e| format!("Failed to convert merged config to struct: {}", e))?;
+    write_config(&config_struct)
+        .map_err(|e| format!("Failed to write config.json: {}", e))?;
+
+    // refresh the in-memory cache used by the app
+    crate::config::set_config(&config_struct);
+
+    Ok(())
 }

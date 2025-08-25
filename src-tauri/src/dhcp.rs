@@ -2,11 +2,19 @@
 
 use regex::Regex;
 use std::{fs, process::Command};
-use crate::DHCP_CLIENTS_PATH;
+use crate::{utils::{get_server_ip, append_log}, DHCP_CLIENTS_PATH};
 
 pub fn update_dhcp_config(client_id: &str, dhcp_entry: &str, is_new: bool) -> Result<(), String> {
-    let content = fs::read_to_string(DHCP_CLIENTS_PATH)
-        .map_err(|e| format!("Failed to read DHCP config: {}", e))?;
+    append_log("INFO", &format!("update_dhcp_config start: client_id={}, is_new={}", client_id, is_new));
+
+    let content = match fs::read_to_string(DHCP_CLIENTS_PATH) {
+        Ok(c) => c,
+        Err(e) => {
+            let msg = format!("Failed to read DHCP config: {}", e);
+            append_log("ERROR", &msg);
+            return Err(msg);
+        }
+    };
     let dhcp_backup_path = format!("{}.bak", DHCP_CLIENTS_PATH);
     fs::write(&dhcp_backup_path, &content)
         .map_err(|e| format!("Failed to backup DHCP config: {}", e))?;
@@ -64,19 +72,23 @@ pub fn update_dhcp_config(client_id: &str, dhcp_entry: &str, is_new: bool) -> Re
                 .map_err(|e| format!("Failed to move DHCP config with sudo: {}", e))?;
 
             if output.status.success() {
-                println!("Finished writing DHCP config");
+                append_log("INFO", &format!("DHCP config updated for client {}", client_id));
                 let _ = fs::remove_file(&dhcp_backup_path);
                 Ok(())
             } else {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 let _ = fs::remove_file(&dhcp_backup_path);
-                Err(format!("Failed to write DHCP config (sudo mv failed): {}\n{}", stderr, stdout))
+                let msg = format!("Failed to write DHCP config (sudo mv failed): {}\n{}", stderr, stdout);
+                append_log("ERROR", &msg);
+                Err(msg)
             }
         }
         Err(e) => {
             let _ = fs::remove_file(&dhcp_backup_path);
-            Err(format!("Failed to write temporary DHCP config: {}", e))
+            let msg = format!("Failed to write temporary DHCP config: {}", e);
+            append_log("ERROR", &msg);
+            Err(msg)
         }
     }
 }
@@ -91,10 +103,8 @@ pub fn format_client_name(name: &str) -> String {
 }
 
 pub fn create_dhcp_entry(name: &str, mac: &str, ip: &str, target_iqn: &str) -> String {
-    use crate::SERVER_IP;
-
     let formatted_name = format_client_name(name);
-    format!(
+    let entry = format!(
         r#"host {formatted_name} {{
     hardware ethernet {mac};
     fixed-address {ip};
@@ -105,6 +115,8 @@ pub fn create_dhcp_entry(name: &str, mac: &str, ip: &str, target_iqn: &str) -> S
         mac = mac,
         ip = ip,
         target_iqn = target_iqn,
-        server_ip = SERVER_IP.to_string(),
-    )
+        server_ip = get_server_ip(),
+    );
+    append_log("DEBUG", &format!("create_dhcp_entry for {} -> {} bytes", name, entry.len()));
+    entry
 }

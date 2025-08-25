@@ -1,5 +1,8 @@
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::PathBuf;
 use std::process::Command;
-
+use dirs;
 use serde::Serialize;
 
 pub fn run_command(args: &[&str]) -> Result<(), String> {
@@ -166,4 +169,42 @@ pub fn get_service_logs(unit: String, lines: Option<u32>) -> Result<String, Stri
     }
     Err(e) => Err(e.to_string()),
   }
+}
+
+
+pub fn log_file_path() -> PathBuf {
+    // Use config dir (e.g. ~/.config/com.diskless.local/diskless-manager.log)
+    let mut base = dirs::config_dir().unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")));
+    base.push("com.diskless.local");
+    let _ = std::fs::create_dir_all(&base);
+    base.push("diskless-manager.log");
+    base
+}
+
+/// Append a single line with level and timestamp to the log file.
+/// This is best-effort and should not panic.
+pub fn append_log(level: &str, msg: &str) {
+    let path = log_file_path();
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
+        let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        let _ = writeln!(f, "[{}] {}: {}", ts, level, msg);
+    }
+}
+
+/// Read the whole log file as a string (returns empty string on error)
+pub fn read_logs() -> String {
+    let path = log_file_path();
+    fs::read_to_string(&path).unwrap_or_default()
+}
+
+/// Clear the log file (best-effort)
+pub fn clear_logs() -> Result<(), String> {
+    let path = log_file_path();
+    OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .create(true)
+        .open(&path)
+        .map(|_| ())
+        .map_err(|e| format!("Failed to clear log file: {}", e))
 }

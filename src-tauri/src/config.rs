@@ -30,6 +30,7 @@ use serde::{Deserialize, Serialize};
 extern crate dirs;
 use crate::client::Client;
 use serde_json::{json, Value};
+use crate::utils::append_log;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Config {
@@ -53,10 +54,10 @@ impl Default for Config {
 #[tauri::command]
 // Read config.json, or return default
 pub fn read_config() -> Config {
+    append_log("DEBUG", "read_config called");
     dirs::config_dir()
         .map(|path| {
-            let config_path = path.join("com.diskless.local").join("config.json");
-            print!("Reading config from: {}\n", config_path.display());
+            let config_path = path.join("com.diskless.local").join("config.json");            
             if let Ok(content) = fs::read_to_string(config_path) {
                 serde_json::from_str(&content).unwrap_or_default()
             } else {
@@ -68,6 +69,7 @@ pub fn read_config() -> Config {
 
 // Write config.json
 pub fn write_config(cfg: &Config) -> Result<(), String> {
+    append_log("INFO", "write_config called");
     dirs::config_dir()
         .ok_or("Could not find config directory".to_string())
         .and_then(|path| {
@@ -83,6 +85,7 @@ pub fn write_config(cfg: &Config) -> Result<(), String> {
             .map_err(|e| e.to_string())
         })?;
     reload_config_from_disk();
+    append_log("INFO", "write_config success");
     Ok(())
 }
 

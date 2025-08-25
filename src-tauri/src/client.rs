@@ -1,15 +1,17 @@
 // Client management logic: helpers for client lookup, config, and deduplication.
 
 use crate::{
-    config::{get_config, read_config, write_config, Config, get_zpool_name},
+    config::{get_config, get_zpool_name, read_config, write_config, Config},
     dhcp::{create_dhcp_entry, update_dhcp_config},
     iscsi::{cleanup_iscsi_target, setup_iscsi_target},
-    utils::{run_command, run_command_check},
+    utils::{append_log, run_command, run_command_check},
     zfs::{zfs_clone, zfs_destroy, zfs_exists},
 };
 
 const IQN_BASE: &str = "iqn.2025-04.local.diskless";
 use chrono::Local;
+use futures::future::join_all;
+use tokio::task;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::process::Stdio;
@@ -178,8 +180,26 @@ pub async fn get_clients(
         .map_err(|e| format!("Authentication failed: {}", e.message))?;
     let mut config: Config = read_config();
 
-    for client in config.clients.iter_mut() {
-        client.status = Some(get_client_status_realtime(&client.ip));
+    // Read config once, compute statuses concurrently to avoid serial ping waits.
+    // Note: get_client_status_realtime uses blocking `ping` command — run it in spawn_blocking.
+    let client_ips: Vec<String> = config.clients.iter().map(|c| c.ip.clone()).collect();
+
+    let handles = client_ips
+        .into_iter()
+        .map(|ip| {
+            task::spawn_blocking(move || get_client_status_realtime(&ip))
+        })
+        .collect::<Vec<_>>();
+
+    let results = join_all(handles).await;
+    for (i, r) in results.into_iter().enumerate() {
+        let status = match r {
+            Ok(s) => s,
+            Err(_) => "Offline".to_string(),
+        };
+        if let Some(c) = config.clients.get_mut(i) {
+            c.status = Some(status);
+        }
     }
 
     if let Some(id) = client_id {
@@ -322,10 +342,11 @@ fn get_client_status_realtime(ip: &str) -> String {
 // }
 
 fn get_client_by_id(client_id: &str) -> Option<Client> {
+    // Borrow config to avoid moving the vector out of the global cache.
     let config = get_config();
-    for c in config.clients {
+    for c in &config.clients {
         if c.id.eq_ignore_ascii_case(client_id) {
-            return Some(c);
+            return Some(c.clone());
         }
     }
     None
@@ -410,66 +431,27 @@ pub fn get_client_paths_with_master(
 }
 
 pub fn save_client_config(client_data: &Client) -> bool {
-    let mut config: Value = match serde_json::to_value(get_config()) {
-        Ok(val) => val,
-        Err(_) => json!({
-            "clients": [],
-            "masters": {},
-            "services": {},
-            "settings": {}
-        }),
-    };
-
-    // Ensure all required fields exist
-    if !config.is_object() {
-        config = json!({
-            "clients": [],
-            "masters": {},
-            "services": {},
-            "settings": {}
-        });
-    }
-    if !config.get("clients").is_some() {
-        config["clients"] = json!([]);
-    }
-    if !config.get("masters").is_some() {
-        config["masters"] = json!({});
-    }
-    if !config.get("services").is_some() {
-        config["services"] = json!({});
-    }
-    if !config.get("settings").is_some() {
-        config["settings"] = json!({});
-    }
-
-    let clients = config.get_mut("clients").and_then(|v| v.as_array_mut());
-    let mut updated = false;
-
-    if let Some(clients_arr) = clients {
-        for c in clients_arr.iter_mut() {
-            if c.get("id") == Some(&json!(client_data.id)) {
-                *c = serde_json::to_value(client_data).unwrap();
-                updated = true;
-                break;
-            }
+    // Operate directly on the Config struct to avoid multiple serde conversions.
+    let mut cfg = get_config();
+    let mut found = false;
+    // match case-insensitively
+    for c in cfg.clients.iter_mut() {
+        if c.id.eq_ignore_ascii_case(&client_data.id) {
+            *c = client_data.clone();
+            found = true;
+            break;
         }
-        if !updated {
-            clients_arr.push(serde_json::to_value(client_data).unwrap());
-        }
-    } else {
-        config["clients"] = json!([client_data]);
+    }
+    if !found {
+        cfg.clients.push(client_data.clone());
     }
 
-    // Convert serde_json::Value back to Config before writing
-    let config_struct: Config = match serde_json::from_value(config) {
-        Ok(cfg) => cfg,
-        Err(e) => {
-            println!("Error converting config to struct: {}", e);
-            return false;
+    match write_config(&cfg) {
+        Ok(_) => {
+            // update in-memory cache
+            crate::config::set_config(&cfg);
+            true
         }
-    };
-    match write_config(&config_struct) {
-        Ok(_) => true,
         Err(e) => {
             println!("Error saving client config: {}", e);
             false
@@ -576,39 +558,19 @@ fn launch_remote_desktop(client_ip: &str, username: &str) -> Result<(), String> 
 
 pub fn delete_client_config(client_id: &str) -> bool {
     println!("Deleting client config: {}", client_id);
-    let mut config: Value = match serde_json::to_value(get_config()) {
-        Ok(cfg) => cfg,
-        Err(e) => {
-            println!("Error serializing config: {}", e);
-            return false;
-        }
-    };
-    let clients = config.get_mut("clients").and_then(|v| v.as_array_mut());
-    if clients.is_none() {
+    // Work with the typed Config directly and perform case-insensitive remove.
+    let mut cfg = get_config();
+    let before = cfg.clients.len();
+    cfg.clients.retain(|c| !c.id.eq_ignore_ascii_case(client_id));
+    if cfg.clients.len() == before {
+        // nothing removed
         return true;
     }
-    let client_id_lower = client_id.to_lowercase();
-    let new_clients: Vec<Value> = clients
-        .unwrap()
-        .drain(..)
-        .filter(|c| {
-            c.get("id")
-                .and_then(|id| id.as_str())
-                .map(|id| id.to_lowercase())
-                != Some(client_id_lower.clone())
-        })
-        .collect();
-    config["clients"] = Value::Array(new_clients);
-    // Convert serde_json::Value back to Config before writing
-    let config_struct: Config = match serde_json::from_value(config) {
-        Ok(cfg) => cfg,
-        Err(e) => {
-            println!("Error converting config to struct: {}", e);
-            return false;
+    match write_config(&cfg) {
+        Ok(_) => {
+            crate::config::set_config(&cfg);
+            true
         }
-    };
-    match write_config(&config_struct) {
-        Ok(_) => true,
         Err(e) => {
             println!("Error writing config file: {}", e);
             false
@@ -1099,6 +1061,7 @@ pub async fn control_client(
 
 #[tauri::command]
 pub async fn reset_client(token: String, client_id: String) -> Result<serde_json::Value, String> {
+    append_log("INFO", &format!("reset_client start: client_id={}", client_id));
     // Validate authentication token
     crate::middleware::validate_auth_token_for_command(&token)
         .map_err(|e| format!("Authentication failed: {}", e.message))?;
@@ -1155,7 +1118,7 @@ pub async fn reset_client(token: String, client_id: String) -> Result<serde_json
     client_info.block_device = Some(block_device.clone());
     client_info.writeback = Some(clone.clone());
     client_info.last_modified = Some(Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
-    client_info.status = Some("Offline".to_string()); // transient
+    client_info.status = None; // transient
 
     // Update DHCP entry and restart dhcp service (best-effort)
     let dhcp_entry = create_dhcp_entry(&client_info.name, &client_info.mac, &client_info.ip, &target_iqn);
@@ -1165,14 +1128,11 @@ pub async fn reset_client(token: String, client_id: String) -> Result<serde_json
         println!("[WARN] Failed to restart DHCP service: {}", e);
     }
 
-    // Persist updated client info
+    // Persist updated client info (save_client_config will refresh in-memory cache)
     if !save_client_config(&client_info) {
-        println!("[WARN] Failed to persist client after reset: {}", client_id);
-    } else {
-        // Refresh in-memory config cache
-        // best-effort: set_config expects Config from crate::config; call set_config with read_config()
-        crate::config::set_config(&read_config());
+        append_log("ERROR", &format!("Failed to persist client after reset: {}", client_id));
     }
+    append_log("INFO", &format!("reset_client completed: client_id={}", client_id));
     Ok(serde_json::json!({
         "message": format!("Client {} reset successfully", client_id.to_uppercase())
     }))

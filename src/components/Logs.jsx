@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useAppStore } from '../store/useAppStore'
 import { Card, Select } from './ui';
+import AppLogs from './Logs/AppLogs';
 
 export const Logs = () => {
   const [logUnit, setLogUnit] = useState('');
@@ -32,6 +33,7 @@ export const Logs = () => {
       ))}
     </Select>}>
       <pre className="bg-base-300 p-3 rounded max-h-[calc(100vh-14rem)] overflow-auto text-xs whitespace-pre-wrap">{logs}</pre>
+      {!logs && <AppLogs />}
     </Card>
   )
 }

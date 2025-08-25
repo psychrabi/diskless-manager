@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::process::Command;
 
-use crate::utils::run_command;
+use crate::utils::{append_log, run_command};
 use crate::{
     client::get_clients,
     config::{get_config, get_zpool_name, write_config, Config},
@@ -157,6 +157,7 @@ pub fn create_master(token: String, name: String, size: String) -> Result<Value,
     if !save_master_config(&master_data) {
         return Err("Failed to update config.json".to_string());
     }
+    append_log("INFO", &format!("create_master start: {}", name));
     Ok(json!({
         "message": format!("Master ZVOL '{}' created successfully.", master_zvol_name),
         "master": {
@@ -345,6 +346,7 @@ pub async fn delete_master(
     if !delete_master_config(&master_name) {
         print!("Failed to remove master from config.json");
     }
+    append_log("INFO", &format!("delete_master start: {}", master_name));
     Ok(json!({
         "message": format!("Master {} deleted successfully", master_name)
     }))

@@ -5,6 +5,8 @@ use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation}
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::utils::append_log;
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct User {
     pub id: String,
@@ -27,13 +29,13 @@ pub struct LoginRequest {
     pub password: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LoginResponse {
     pub token: String,
     pub user: UserResponse,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct UserResponse {
     pub id: String,
     pub username: String,
@@ -142,7 +144,26 @@ pub fn validate_token(token: &str) -> Result<Claims, AuthError> {
 // Tauri command for login
 #[tauri::command]
 pub fn login(request: LoginRequest) -> Result<LoginResponse, AuthError> {
-    authenticate_user(&request.username, &request.password)
+    let username = request.username.clone();
+    let password = request.password.clone();
+
+    append_log("INFO", &format!("login attempt: user={}", username));
+
+    let auth_result = authenticate_user(&username, &password);
+
+    match &auth_result {
+        Ok(response) => {
+            append_log("INFO", &format!("login success: user={}", username));
+            // response is a &LoginResponse — return an owned value
+            Ok(response.clone())
+        }
+        Err(_) => {
+            append_log("WARN", &format!("login failed: user={}", username));
+            Err(AuthError {
+                message: "Invalid username or password".to_string(),
+            })
+        }
+    }
 }
 
 // Tauri command for token validation

@@ -26,7 +26,7 @@ const ClientStatusBadge = ({ status }) => {
 };
 
 const ClientModeBadge = (client) => {
-  return client.mode === 'super' || client.super_client ? (
+  return client.mode === 'super' || !client.snapshot ? (
     <span className="badge badge-error gap-1" title="Using the image directly">
       <Zap className="h-3 w-3" /> Super Client
     </span>
