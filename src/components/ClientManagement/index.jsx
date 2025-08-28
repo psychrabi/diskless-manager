@@ -1,7 +1,7 @@
 import { PlusCircle, Users } from 'lucide-react';
 import { memo, useCallback, useEffect, useState } from 'react';
 import { useAppStore } from '../../store/useAppStore';
-import { clientContextMenuActions } from '../../utils/contextMenuAction';
+import { useClientContextMenuActions } from '../../utils/contextMenuAction';
 import { Button, Card } from '../ui';
 import { ContextMenu } from '../ui/ContextMenu';
 import ClientFormModal from './ClientFormModal';
@@ -33,7 +33,7 @@ const ClientManagement = () => {
     setContextMenu(prev => ({ ...prev, isOpen: false }));
   }, []);
 
-  const contextActions = clientContextMenuActions(fetchData, closeContextMenu, setClient, setIsModalOpen, setDeprovisionModal);
+  const contextActions = useClientContextMenuActions(fetchData, closeContextMenu, setClient, setIsModalOpen, setDeprovisionModal);
 
   const handleClientFormModalOpen = useCallback(() => {
     let newName = 'pc000'

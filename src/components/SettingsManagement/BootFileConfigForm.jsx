@@ -1,7 +1,7 @@
 import { File } from 'lucide-react'
 import { Button, Card } from '../ui'
 import { useForm } from 'react-hook-form';
-import { useNotification } from '@/contexts/NotificationContext';
+import { useNotification } from '@/contexts/notification';
 import { invoke } from '@tauri-apps/api/core';
 
 export default function BootFileConfigForm() {
@@ -10,10 +10,6 @@ export default function BootFileConfigForm() {
   const {
     register,
     handleSubmit,
-    formState: { errors },
-    setValue,
-    reset,
-    watch,
   } = useForm();
 
   const onSubmit = async (data) => {

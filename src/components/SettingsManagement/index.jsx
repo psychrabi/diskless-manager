@@ -6,7 +6,7 @@ import DHCPConfigForm from './DHCPConfigForm';
 import HTTPConfigForm from './HTTPConfigForm';
 import TFTPConfigForm from './TFTPConfigForm';
 
-const SettingManagement = ({ dhcp = {}, refresh }) => {
+const SettingManagement = () => {
 
   return (
     <Card title="System Settings" icon={Settings} className='bg-base-300'>   

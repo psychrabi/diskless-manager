@@ -19,12 +19,12 @@ const Setup = () => {
   const [poolExists, setPoolExists] = useState(null);
   const [installing, setInstalling] = useState('');
   const { services, setServices } = useAppStore();
-  const {poolName, setPoolName} = useAppStore();
+  const {poolName} = useAppStore();
 
   const {
     register,
     handleSubmit,
-    formState: { errors, isSubmitting }
+    formState: { isSubmitting }
   } = useForm();
 
   // Fetch initial data and re-check zpool when poolName changes

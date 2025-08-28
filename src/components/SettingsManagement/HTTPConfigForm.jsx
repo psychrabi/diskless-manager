@@ -1,7 +1,7 @@
-import { useForm, useFormContext } from "react-hook-form";
+import { useForm } from "react-hook-form";
 import { Button, Card, Input } from "../ui";
 import { Network } from "lucide-react";
-import { useNotification } from "@/contexts/NotificationContext";
+import { useNotification } from "@/contexts/notification";
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect } from "react";
 
@@ -11,7 +11,6 @@ export default function HTTPConfigForm() {
   const {
     register,
     handleSubmit,
-    formState: { errors },
     reset,
   } = useForm({
     defaultValues: {

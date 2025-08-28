@@ -1,7 +1,6 @@
-import React, { createContext, useCallback, useContext, useRef, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { Modal, Button } from '@/components/ui';
-
-const ConfirmDialogContext = createContext();
+import { ConfirmDialogContext } from './confirmDialog';
 
 export const ConfirmDialogProvider = ({ children }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -62,8 +61,4 @@ export const ConfirmDialogProvider = ({ children }) => {
   );
 };
 
-export const useConfirm = () => {
-  const ctx = useContext(ConfirmDialogContext);
-  if (!ctx) throw new Error('useConfirm must be used within ConfirmDialogProvider');
-  return ctx.confirm;
-};
+

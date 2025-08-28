@@ -1,6 +1,5 @@
-import { createContext, useContext, useEffect, useMemo, useState } from 'react';
-
-const ThemeContext = createContext({ theme: 'light', setTheme: () => {} });
+import { useEffect, useMemo, useState } from 'react';
+import { ThemeContext } from './theme';
 
 const applyTheme = (theme) => {
   const root = document.documentElement;
@@ -23,14 +22,14 @@ export const ThemeProvider = ({ children }) => {
       const initial = stored || (prefersDark ? 'dark' : 'light');
       setThemeState(initial);
       applyTheme(initial);
-    } catch (_) {}
+    } catch { /* ignore */ }
   }, []);
 
   const setTheme = (next) => {
     setThemeState(next);
     try {
       localStorage.setItem('theme', next);
-    } catch (_) {}
+    } catch { /* ignore */ }
     applyTheme(next);
   };
 
@@ -39,4 +38,4 @@ export const ThemeProvider = ({ children }) => {
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
 };
 
-export const useTheme = () => useContext(ThemeContext);
+

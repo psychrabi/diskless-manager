@@ -1,5 +1,5 @@
 import { Loading, Notification, Error } from '@/components/ui'
-import { useNotification } from '@/contexts/NotificationContext'
+import { useNotification } from '@/contexts/notification';
 import { useAppStore } from '@/store/useAppStore'
 import { lazy, useEffect, useState } from 'react'
 import { Outlet, useNavigation } from 'react-router'

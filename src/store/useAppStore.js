@@ -71,7 +71,7 @@ export const useAppStore = create()(
             const token = localStorage.getItem('authToken') || '';
             const clientsRes = await invoke('get_clients', { token });
             set({ clients: clientsRes ? Object.values(clientsRes) : [] });
-          } catch (err) {
+          } catch {
             // ignore transient errors
           }
         }, 30000);

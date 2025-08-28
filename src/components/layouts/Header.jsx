@@ -1,8 +1,8 @@
 import { Button } from '@/components/ui';
 import { Shield, User, LogOut, Menu, Sun, Moon } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '@/contexts/AuthContext';
-import { useTheme } from '@/contexts/ThemeContext.jsx';
+import { useAuth } from '@/contexts/auth';
+import { useTheme } from '@/contexts/theme';
 
 const Header = ({ onToggleSidebar }) => {
   const navigate = useNavigate();

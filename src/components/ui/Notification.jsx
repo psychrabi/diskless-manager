@@ -1,6 +1,5 @@
 import { X } from 'lucide-react';
-import { useNotification } from '../../contexts/NotificationContext';
-
+import { useNotification } from '@/contexts/notification';
 export const Notification = () => {
 	const { notification, hideNotification } = useNotification();
 

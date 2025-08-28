@@ -1,12 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useDeprovisioning } from '../../hooks/useDeprovisioning';
 import { Button, Modal, Input, Card } from '../ui';
 
-export const DeprovisionModal = ({ 
-  isOpen, 
-  onClose, 
-  client = null, 
-  onSuccess 
+export const DeprovisionModal = ({
+  isOpen,
+  onClose,
+  client = null,
+  onSuccess
 }) => {
   const [mac, setMac] = useState('');
   const [force, setForce] = useState(false);
@@ -15,42 +15,34 @@ export const DeprovisionModal = ({
   const [status, setStatus] = useState(null);
   const [showStatus, setShowStatus] = useState(false);
 
-  const { 
-    deprovisionClient, 
-    deprovisionClientById, 
-    getDeprovisionStatus, 
-    loading, 
-    error, 
-    clearError 
+  const {
+    deprovisionClient,
+    deprovisionClientById,
+    getDeprovisionStatus,
+    loading,
+    error,
+    clearError
   } = useDeprovisioning();
 
-  useEffect(() => {
-    if (client) {
-      setMac(client.mac);
-    }
-  }, [client]);
 
-  useEffect(() => {
-    if (isOpen && mac) {
-      loadStatus();
-    }
-  }, [isOpen, mac]);
-
-  const loadStatus = async () => {
+  const loadStatus = useCallback(async () => {
     if (!mac) return;
-    
+
     const result = await getDeprovisionStatus(mac);
     if (result.success) {
       setStatus(result.data);
       setShowStatus(true);
     }
-  };
+  }, [mac, getDeprovisionStatus]);
+
+
+
 
   const handleDeprovision = async () => {
     if (!mac) return;
 
     clearError();
-    
+
     const options = {
       force,
       keep_zfs: keepZfs,
@@ -84,6 +76,18 @@ export const DeprovisionModal = ({
   };
 
   const canDeprovision = mac && !loading;
+
+    useEffect(() => {
+    if (client) {
+      setMac(client.mac);
+    }
+  }, [client]);
+
+  useEffect(() => {
+    if (isOpen && mac) {
+      loadStatus();
+    }
+  }, [isOpen, mac, loadStatus]);
 
   return (
     <Modal isOpen={isOpen} onClose={handleClose} title="Deprovision Client">

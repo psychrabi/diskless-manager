@@ -26,12 +26,12 @@ const ClientStatusBadge = ({ status }) => {
 };
 
 const ClientModeBadge = (client) => {
-  return client.mode === 'super' || !client.snapshot ? (
-    <span className="badge badge-error gap-1" title="Using the image directly">
+  return client.super ? (
+    <span className="badge badge-warning gap-1" title="Using the image directly">
       <Zap className="h-3 w-3" /> Super Client
     </span>
   ) : (
-    <span className="badge badge-success gap-1" title="Client changes will be kept in the clone">
+    <span className="badge badge-info gap-1" title="Client changes will be kept in the clone">
       <Layers className="h-3 w-3" />Writeback
     </span>
   )
@@ -65,7 +65,7 @@ const ClientTable = ({ handleClientContextMenu }) => {
               <TableCell className="hidden md:table-cell text-xs font-mono">{client.mac}</TableCell>
               <TableCell className='font-mono text-xs'>{client.ip}</TableCell>
               <TableCell className="hidden md:table-cell text-xs font-mono break-all">{client.master}</TableCell>
-              <TableCell className="hidden xl:table-cell text-xs font-mono break-all">{client.snapshot}</TableCell>
+              <TableCell className="hidden xl:table-cell text-xs font-mono break-all">{client.snapshot ?? "-"}</TableCell>
               <TableCell className="hidden xl:table-cell text-xs font-mono break-all">{client.block_device}</TableCell>              
               <TableCell>
                 <ClientStatusBadge status={client.status} />

@@ -4,7 +4,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import z from 'zod';
 import { Save } from 'lucide-react';
-import { useNotification } from '@/contexts/NotificationContext';
+import { useNotification } from '@/contexts/notification';
 import { invoke } from '@tauri-apps/api/core';
 
 const imageSchema = z.object({
@@ -18,7 +18,6 @@ const CreateImageModal = ({ openImageCreateModal, setOpenImageCreateModal }) => 
     register,
     handleSubmit,
     formState: { errors },
-    reset,
   } = useForm({
     resolver: zodResolver(imageSchema),
     defaultValues: {

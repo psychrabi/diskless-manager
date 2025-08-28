@@ -1,6 +1,6 @@
 import React from 'react';
 import { Button, Input, Modal } from '../ui';
-import { useNotification } from '@/contexts/NotificationContext';
+import { useNotification } from '@/contexts/notification';
 import z from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
@@ -11,15 +11,12 @@ const snapshotSchema = z.object({
   name: z.string().min(1, 'Snapshot name is required'),
 });
 
-const CreateSnapshotModal = ({ openSnapshotCreateModal, setOpenSnapshotCreateModal, refresh, selectedImage }) => {
+const CreateSnapshotModal = ({ openSnapshotCreateModal, setOpenSnapshotCreateModal, selectedImage }) => {
   const { showNotification } = useNotification();
   const {
     register,
     handleSubmit,
     formState: { errors },
-    setValue,
-    reset,
-    watch,
   } = useForm({
     resolver: zodResolver(snapshotSchema),
     defaultValues: {

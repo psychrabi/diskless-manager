@@ -1,28 +1,27 @@
 import { invoke } from '@tauri-apps/api/core';
 import { RefreshCw } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Button, Card } from '../components/ui';
-import { useNotification } from '../contexts/NotificationContext';
-
+import { useNotification } from '@/contexts/notification';
 export const RAMUsage = () => {
   const [ramUsage, setRamUsage] = useState(null);
   const [arcStat, setArcStat] = useState(null);
   const [loading, setLoading] = useState(true);
   const { showNotification } = useNotification();
 
-  const fetchRamUsage = async () => {
+  const fetchRamUsage = useCallback(async () => {
     await invoke('get_ram_usage').then((response) => {
       setRamUsage(response);
       setLoading(false);
       if (response.message) showNotification(response.message, 'success');
     }).catch((err) => showNotification(err, 'error'));
-  };
+  }, [showNotification]);
 
-  const fetchArcStat = async () => {
+  const fetchArcStat = useCallback(async () => {
     await invoke('get_zfs_arcstat').then((response) => {
       setArcStat(response);
     }).catch(() => setArcStat(null));
-  };
+  }, []);
 
   const clearRamCache = async () => {
     await invoke('clear_ram_cache').then((response) => {
@@ -39,7 +38,7 @@ export const RAMUsage = () => {
       fetchArcStat();
     }, 10000);
     return () => clearInterval(interval);
-  }, []);
+  }, [fetchRamUsage, fetchArcStat]);
 
   if (loading) {
     return (

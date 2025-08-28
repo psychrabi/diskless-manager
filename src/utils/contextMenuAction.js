@@ -1,8 +1,7 @@
-import { useConfirm } from "@/contexts/ConfirmDialogContext";
+import { useConfirm } from "@/contexts/confirmDialog";
 import { invoke } from "@tauri-apps/api/core";
-import { useNotification } from "../contexts/NotificationContext";
-
-export const clientContextMenuActions = (fetchData, closeContextMenu, setClient, setIsModalOpen) => {
+import { useNotification } from '@/contexts/notification';
+export const useClientContextMenuActions = (fetchData, closeContextMenu, setClient, setIsModalOpen) => {
   const { showNotification } = useNotification();
   const confirm = useConfirm()
 

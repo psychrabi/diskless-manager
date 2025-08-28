@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { useCallback } from 'react';
-import { useNotification } from '../contexts/NotificationContext';
+import { useNotification } from '@/contexts/notification';
 import { useAppStore } from '../store/useAppStore';
 
 export const useServiceManager = () => {
@@ -46,7 +46,7 @@ export const useServiceManager = () => {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [setTitle, setOpen, setLoading, setServiceKey, setConfig]);
 
   const handleConfigSave = async (serviceKey, content) => {
     setSaving(true);

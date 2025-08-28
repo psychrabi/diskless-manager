@@ -4,8 +4,8 @@ export const Error = ({ error }) => {
     if (typeof err === 'string') return err;
     if (Array.isArray(err)) return err.map(toMessage).join(', ');
     if (typeof err?.message === 'string') return err.message;
-    try { return String(err); } catch (_) {}
-    try { return JSON.stringify(err); } catch (_) {}
+    try { return String(err); } catch { /* ignore */ }
+    try { return JSON.stringify(err); } catch { /* ignore */ }
     return 'Unknown error';
   };
 

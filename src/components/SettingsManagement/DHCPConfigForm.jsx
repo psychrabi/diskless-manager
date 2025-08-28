@@ -1,7 +1,7 @@
 import z from 'zod';
 import { Button, Card } from '../ui';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useNotification } from '@/contexts/NotificationContext';
+import { useNotification } from '@/contexts/notification';
 import { useForm } from 'react-hook-form';
 import { HardDrive, Network } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';

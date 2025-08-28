@@ -9,7 +9,7 @@ async function testTauriIntegration() {
   // Test 1: Check if Tauri app builds
   console.log('1️⃣ Testing Tauri build...');
   try {
-    const result = await runCommand('cd', ['src-tauri', '&&', 'cargo', 'check']);
+    await runCommand('cd', ['src-tauri', '&&', 'cargo', 'check']);
     console.log('✅ Tauri build test passed');
   } catch (error) {
     console.log('❌ Tauri build test failed:', error.message);
@@ -28,7 +28,7 @@ async function testTauriIntegration() {
   // Test 3: Test deprovisioning script with sudo
   console.log('\n3️⃣ Testing deprovisioning script execution...');
   try {
-    const result = await runCommand('sudo', ['/usr/local/bin/deprovision_client.sh', '--help']);
+    await runCommand('sudo', ['/usr/local/bin/deprovision_client.sh', '--help']);
     console.log('✅ Script execution test passed');
   } catch (error) {
     console.log('❌ Script execution test failed:', error.message);
@@ -37,7 +37,7 @@ async function testTauriIntegration() {
   // Test 4: Check sudoers configuration
   console.log('\n4️⃣ Testing sudoers configuration...');
   try {
-    const result = await runCommand('sudo', ['-u', 'dhcpd', 'sudo', '-n', '/usr/local/bin/deprovision_client.sh', '--help']);
+    await runCommand('sudo', ['-u', 'dhcpd', 'sudo', '-n', '/usr/local/bin/deprovision_client.sh', '--help']);
     console.log('✅ Sudoers configuration test passed');
   } catch (error) {
     console.log('❌ Sudoers configuration test failed:', error.message);

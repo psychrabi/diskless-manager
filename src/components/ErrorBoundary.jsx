@@ -23,7 +23,7 @@ class ErrorBoundary extends React.Component {
     if (this.state.hasError) {
       return (
         <div className="min-h-screen bg-gray-100 dark:bg-gray-900 flex items-center justify-center p-4">
-          <div className="max-w-md w-full bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6">
+          <div className="max-w-7xl mx-auto w-full bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6">
             <h2 className="text-2xl font-bold text-red-600 dark:text-red-400 mb-4">
               Something went wrong
             </h2>
@@ -36,7 +36,7 @@ class ErrorBoundary extends React.Component {
             >
               Reload Page
             </button>
-            {process.env.NODE_ENV === 'development' && (
+            {import.meta.env.DEV && (
               <details className="mt-4 text-sm text-gray-500 dark:text-gray-400">
                 <summary>Error Details</summary>
                 <pre className="mt-2 p-2 bg-gray-100 dark:bg-gray-700 rounded overflow-auto">

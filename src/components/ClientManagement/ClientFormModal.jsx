@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import { useNotification } from '../../contexts/NotificationContext';
+import { useNotification } from '@/contexts/notification';
 import { Button, Input, Modal, Select } from '../ui';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
@@ -17,7 +17,7 @@ const clientSchema = z.object({
   })
 });
 
-const ClientFormModal = ({ client, setClient, masters, isOpen, setIsOpen, refresh }) => {
+const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
   const { showNotification } = useNotification();
 
   const {
@@ -50,6 +50,8 @@ const ClientFormModal = ({ client, setClient, masters, isOpen, setIsOpen, refres
       pxeMode: client?.pxeMode || 'uefi',
     });
   }, [client, reset]);
+
+ 
 
   const onSubmit = async (data) => {
     setIsOpen(false);
@@ -99,7 +101,13 @@ const ClientFormModal = ({ client, setClient, masters, isOpen, setIsOpen, refres
   };
 
   const selectedMaster = watch('master');
-  
+
+   // When master selection changes, clear snapshot to avoid stale selections
+  useEffect(() => {
+    // clear snapshot when master changes so options and value stay in sync
+    setValue('snapshot', '');
+  }, [selectedMaster, setValue]);
+
   return (
     <Modal isOpen={isOpen} onClose={() => setIsOpen(false)} title={client.id ? 'Edit Client' : 'Add Client'}>
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-2">
@@ -126,7 +134,7 @@ const ClientFormModal = ({ client, setClient, masters, isOpen, setIsOpen, refres
 
         <fieldset className={`fieldset`}>
           <legend htmlFor="master" className='fieldset-legend'>Select Image</legend>
-          <select   {...register('master')} id="master" defaultValue={client.master || ''} className='select w-full' >
+          <select {...register('master')} id="master" className='select w-full' >
             <option value="">Select image ...</option>
 
             {masters.map((master) => (
@@ -139,8 +147,8 @@ const ClientFormModal = ({ client, setClient, masters, isOpen, setIsOpen, refres
         </fieldset>
         <fieldset className={`fieldset`}>
           <legend htmlFor="snapshot" className='fieldset-legend'>Select Snapshot</legend>
-          <select   {...register('snapshot')} value={watch('snapshot')} onChange={e => setValue('snapshot', e.target.value)}
-            id="snapshot" defaultValue={client.master || ''} className='select w-full' disabled={!selectedMaster}
+          <select {...register('snapshot')}
+            id="snapshot" className='select w-full' disabled={!selectedMaster}
           >
             <option value="">Use master directly</option>
             {masters.find(m => m.name === selectedMaster)?.snapshots?.map((snap) => (
@@ -153,9 +161,10 @@ const ClientFormModal = ({ client, setClient, masters, isOpen, setIsOpen, refres
         </fieldset>
         <fieldset className={`fieldset`}>
           <legend htmlFor="pxeMode" className='fieldset-legend'>PXE Boot Mode</legend>
-          <select 
-            {...register('pxeMode')} 
-            id="pxeMode" 
+          <select
+            defaultValue={client.pxeMode || 'uefi'} 
+            {...register('pxeMode')}
+            id="pxeMode"
             className='select w-full'
           >
             <option value="legacy">Legacy BIOS (undionly.kpxe)</option>

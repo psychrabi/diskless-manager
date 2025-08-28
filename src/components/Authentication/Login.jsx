@@ -5,7 +5,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { useNavigate } from 'react-router-dom';
 import { Card, Input, Button, Loading } from '@/components/ui';
 import { useEffect, useState } from 'react';
-import { useAuth } from '@/contexts/AuthContext';
+import { useAuth } from '@/contexts/auth';
 import { useAppStore } from '@/store/useAppStore';
 
 // Define validation schema
@@ -16,7 +16,6 @@ const loginSchema = z.object({
 
 const Login = () => {
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
   const { login: setAuth } = useAuth();
   const { setServices } = useAppStore();
@@ -70,7 +69,6 @@ const Login = () => {
   }
 
   const onSubmit = async (data) => {
-    setLoading(true);
     setError('');
 
     try {
@@ -84,8 +82,6 @@ const Login = () => {
     } catch (err) {
       setError(err.message || 'Login failed');
       reset({ password: '' }); // Clear password field on error
-    } finally {
-      setLoading(false);
     }
   };
 

@@ -1,8 +1,9 @@
 import { invoke } from '@tauri-apps/api/core';
 import { useCallback, useState } from 'react';
-import { useNotification } from '../contexts/NotificationContext';
+
 import { formatBytes, formatDate } from '../utils/helpers';
-import { useConfirm } from '@/contexts/ConfirmDialogContext';
+import { useConfirm } from '@/contexts/confirmDialog';
+import { useNotification } from '@/contexts/notification';
 
 export const useMasterManager = () => {
   const [isCreateSnapshotModalOpen, setIsCreateSnapshotModalOpen] = useState(false);
@@ -179,7 +180,6 @@ export const useMasterManager = () => {
     formatDate,
     isDeleteSnapshotModalOpen,
     snapshotToDelete,
-    handleDeleteSnapshot,
     cancelDeleteSnapshot,
     cancelDeleteMaster,
     setDefaultMaster,
