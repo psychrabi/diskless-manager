@@ -491,17 +491,16 @@ pub async fn remote_client(token: String, client_id: String) -> Result<serde_jso
 // Helper: Launch xfreerdp with fallback
 fn launch_remote_desktop(client_ip: &str, username: &str) -> Result<(), String> {
     let rdp_command = [
-        "xfreerdp",
+        "xfreerdp3",
         &format!("/v:{}", client_ip),
         &format!("/u:{}", username),
         "/p:1",
-        "/cert-ignore",
+        "/cert:ignore",
         "/w:1920",
         "/h:1080",
         "/dynamic-resolution",
-        "+clipboard",
-        "/gdi:sw",
-        "/network:auto",
+        "/gdi:hw",
+        "/network:lan",
         "/bpp:32",
         "/sec:nla",
         "/timeout:20000",
@@ -519,17 +518,16 @@ fn launch_remote_desktop(client_ip: &str, username: &str) -> Result<(), String> 
         if !status.success() {
             // Try fallback
             let fallback_command = [
-                "xfreerdp",
+                "xfreerdp3",
                 &format!("/v:{}", client_ip),
                 &format!("/u:{}", username),
                 "/p:1",
-                "/cert-ignore",
+                "/cert:ignore",
                 "/w:1366",
                 "/h:768",
-                "/dynamic-resolution",
-                "+clipboard",
-                "/gdi:sw",
-                "/network:auto",
+                "/clipboard:off",
+                "/gdi:hw",
+                "/network:lan",
                 "/bpp:24",
                 "/sec:nla",
                 "/timeout:20000",
@@ -636,7 +634,7 @@ pub async fn add_client(token: String, req: AddClientRequest) -> Result<serde_js
 
     // Create DHCP entry
     let dhcp_entry = create_dhcp_entry(&name, &mac, &ip, &paths["target_iqn"]);
-    update_dhcp_config(&name, &dhcp_entry, true)?;
+    update_dhcp_config(&name, &dhcp_entry, true).await?;
 
     // Save client configuration to JSON file
     let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -744,7 +742,7 @@ pub async fn edit_client(
 
         // Update DHCP config
         let dhcp_entry = create_dhcp_entry(&new_name, &new_mac, &new_ip, &current_paths["target_iqn"]);
-        update_dhcp_config(&client_id, &dhcp_entry, false)?;
+        update_dhcp_config(&client_id, &dhcp_entry, false).await?;
 
         // Save updated config
         save_client_config(&client_info);
@@ -825,7 +823,7 @@ pub async fn edit_client(
 
         // Update DHCP config
         let dhcp_entry = create_dhcp_entry(&new_name, &new_mac, &new_ip, &new_target_iqn);
-        update_dhcp_config(&client_id, &dhcp_entry, false)?;
+        update_dhcp_config(&client_id, &dhcp_entry, false).await?;
 
         setup_iscsi_target(&new_target_iqn, &new_block_store, &block_device)?;
 
@@ -865,7 +863,7 @@ pub async fn delete_client(token: String, client_id: String) -> Result<serde_jso
     let paths = get_client_paths(&client_id, &client_info.mac);
 
     // Clean up DHCP configuration
-    if let Err(e) = update_dhcp_config(&client_id, "", false)
+    if let Err(e) = update_dhcp_config(&client_id, "", false).await
         .and_then(|_| run_command(&["systemctl", "restart", "isc-dhcp-server.service"]))
     {
         errors.push(format!("Failed to clean up DHCP config: {}", e));
@@ -1122,7 +1120,7 @@ pub async fn reset_client(token: String, client_id: String) -> Result<serde_json
 
     // Update DHCP entry and restart dhcp service (best-effort)
     let dhcp_entry = create_dhcp_entry(&client_info.name, &client_info.mac, &client_info.ip, &target_iqn);
-    if let Err(e) = update_dhcp_config(&client_id, &dhcp_entry, false) {
+    if let Err(e) = update_dhcp_config(&client_id, &dhcp_entry, false).await {
         println!("[WARN] Failed to update DHCP config after reset: {}", e);
     } else if let Err(e) = run_command(&["systemctl", "restart", "isc-dhcp-server.service"]) {
         println!("[WARN] Failed to restart DHCP service: {}", e);

@@ -90,7 +90,7 @@ pub async fn get_services(token: String, zfs_pool: String) -> Result<Value, Stri
     let mut statuses = HashMap::new();
     print!("Getting services status... \n");
     let service_map = vec![
-        ("iscsi", "target.service"),
+        ("iscsi", "targetclid.service"),
         ("dhcp", "isc-dhcp-server.service"),
         ("tftp", "tftpd-hpa.service"),
         ("http", "apache2.service"),
@@ -269,7 +269,7 @@ pub async fn control_service(
     crate::middleware::validate_auth_token_for_command(&token)
         .map_err(|e| format!("Authentication failed: {}", e.message))?;
     let service_map: HashMap<&str, &str> = [
-        ("target", "target.service"),
+        ("targetclid", "targetclid.service"),
         ("isc-dhcp-server", "isc-dhcp-server.service"),
         ("tftpd-hpa", "tftpd-hpa.service"),
         ("apache2", "apache2.service"),
@@ -365,7 +365,7 @@ pub async fn check_package_status(token: String) -> Result<Value, String> {
     let packages = vec![
         ("isc-dhcp-server", "isc-dhcp-server"),
         ("tftpd-hpa", "tftpd-hpa"),
-        ("target", "targetcli-fb"),
+        ("targetclid", "targetcli-fb"),
         ("apache2", "apache2"),
         ("smbd", "samba"),
         ("wakeonlan", "wakeonlan"),

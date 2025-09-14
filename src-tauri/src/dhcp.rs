@@ -2,20 +2,35 @@
 
 use regex::Regex;
 use std::{fs, process::Command};
+use async_process::Command as AsyncCommand;
 use crate::{utils::{get_server_ip, append_log}, DHCP_CLIENTS_PATH};
 
-pub fn update_dhcp_config(client_id: &str, dhcp_entry: &str, is_new: bool) -> Result<(), String> {
+pub async fn update_dhcp_config(client_id: &str, dhcp_entry: &str, is_new: bool) -> Result<(), String> {
     append_log("INFO", &format!("update_dhcp_config start: client_id={}, is_new={}", client_id, is_new));
 
-    let content = match fs::read_to_string(DHCP_CLIENTS_PATH) {
-        Ok(c) => c,
-        Err(e) => {
-            let msg = format!("Failed to read DHCP config: {}", e);
-            append_log("ERROR", &msg);
-            return Err(msg);
-        }
-    };
-    let dhcp_backup_path = format!("{}.bak", DHCP_CLIENTS_PATH);
+    // Read DHCP config using sudo cat to avoid permission issues
+    let output = AsyncCommand::new("sudo")
+        .args(["cat", DHCP_CLIENTS_PATH])
+        .output()
+        .await
+        .map_err(|e| format!("Failed to read DHCP config via sudo: {}", e))?;
+    
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let msg = format!("Failed to read DHCP config via sudo: {}", stderr);
+        append_log("ERROR", &msg);
+        return Err(msg);
+    }
+    
+    let content = String::from_utf8_lossy(&output.stdout).to_string();
+    let backup_dir = "/srv/tftp/backups";
+    let dhcp_backup_path = format!("{}/dhcp_clients_{}.bak", backup_dir, std::process::id());
+    
+    // Create backup directory if it doesn't exist
+    if let Err(e) = std::fs::create_dir_all(backup_dir) {
+        return Err(format!("Failed to create backup directory: {}", e));
+    }
+    
     fs::write(&dhcp_backup_path, &content)
         .map_err(|e| format!("Failed to backup DHCP config: {}", e))?;
     let mut new_content = content.clone();
@@ -62,7 +77,7 @@ pub fn update_dhcp_config(client_id: &str, dhcp_entry: &str, is_new: bool) -> Re
         new_content = re_blank.replace_all(&new_content, "\n\n").to_string();
     }
     new_content = new_content.trim_end().to_string() + "\n\n" + dhcp_entry;
-    let temp_path = format!("{}.tmp", DHCP_CLIENTS_PATH);
+    let temp_path = format!("{}/dhcp_clients_{}.tmp", backup_dir, std::process::id());
     match fs::write(&temp_path, &new_content) {
         Ok(_) => {
             // Use sudo to move the temporary file to the actual config path
