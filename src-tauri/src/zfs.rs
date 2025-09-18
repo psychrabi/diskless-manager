@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::process::Command;
 
-use crate::utils::{append_log, run_command};
+use crate::utils::{append_log, run_command, run_command_check};
 use crate::{
     client::get_clients,
     config::{get_config, get_zpool_name, write_config, Config},
@@ -45,42 +45,17 @@ struct Settings {
 
 // Check if a ZFS dataset exists
 pub fn zfs_exists(dataset: &str) -> bool {
-    let output = Command::new("sudo")
-        .args(["zfs", "list", "-H", dataset])
-        .output();
-    match output {
-        Ok(out) => out.status.success(),
-        Err(_) => false,
-    }
+    run_command_check(&["zfs", "list", "-H", dataset]) == 0
 }
 
 // Destroy a ZFS dataset
 pub fn zfs_destroy(dataset: &str) -> Result<(), String> {
-    let status = Command::new("sudo")
-        .args(["zfs", "destroy", dataset])
-        .status()
-        .map_err(|e| format!("Failed to run zfs destroy: {}", e))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("Failed to destroy ZFS dataset: {}", dataset))
-    }
+    run_command(&["zfs", "destroy", dataset])
 }
 
 // Clone a ZFS snapshot to a new dataset
 pub fn zfs_clone(snapshot: &str, clone: &str) -> Result<(), String> {
-    let status = Command::new("sudo")
-        .args(["zfs", "clone", snapshot, clone])
-        .status()
-        .map_err(|e| format!("Failed to run zfs clone: {}", e))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "Failed to clone ZFS snapshot {} to {}",
-            snapshot, clone
-        ))
-    }
+    run_command(&["zfs", "clone", snapshot, clone])
 }
 
 // Helper: Parse output of 'zfs list -H -o name,creation,used'
@@ -120,32 +95,20 @@ pub fn create_master(token: String, name: String, size: String) -> Result<Value,
         return Err("Invalid size format (e.g., '50G')".to_string());
     }
     let master_zvol_name = format!("{}/{}-master", get_zpool_name(), name);
-    let status = Command::new("sudo")
-        .args(["zfs", "list", "-H", &master_zvol_name])
-        .status()
-        .map_err(|e| format!("Failed to check ZFS volume: {}", e))?;
-    if status.success() {
+    let status_code = run_command_check(&["zfs", "list", "-H", &master_zvol_name]);
+    if status_code == 0 {
         return Err(format!("ZFS volume '{}' already exists.", master_zvol_name));
     }
-    let create_status = Command::new("sudo")
-        .args([
-            "zfs",
-            "create",
-            "-s",
-            "-V",
-            &size,
-            "-o",
-            "volblocksize=64k",
-            &master_zvol_name,
-        ])
-        .status()
-        .map_err(|e| format!("Failed to create ZFS volume: {}", e))?;
-    if !create_status.success() {
-        return Err(format!(
-            "Failed to create ZFS volume '{}'",
-            master_zvol_name
-        ));
-    }
+    run_command(&[
+        "zfs",
+        "create",
+        "-s",
+        "-V",
+        &size,
+        "-o",
+        "volblocksize=64k",
+        &master_zvol_name,
+    ])?;
     let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let master_data = MasterData {
         name: master_zvol_name.clone(),
@@ -378,11 +341,8 @@ pub fn create_snapshot(token: String, snapshot_name: String) -> Result<Value, St
         ));
     }
     let master_name = snapshot_name.split('@').next().unwrap();
-    let status = Command::new("sudo")
-        .args(["zfs", "list", "-H", master_name])
-        .status()
-        .map_err(|e| format!("Error validating master: {}", e))?;
-    if !status.success() {
+    let status_code = run_command_check(&["zfs", "list", "-H", master_name]);
+    if status_code != 0 {
         return Err(format!("Master '{}' not found.", master_name));
     }
     let output = Command::new("sudo")
@@ -648,20 +608,14 @@ pub async fn rollback_master_snapshot(
             let client_clone = format!("{}/{}-disk", get_zpool_name(), client_name.to_uppercase());
             if client_snapshot == snapshot_name {
                 // Destroy the old clone if it exists
-                let _ = Command::new("sudo")
-                    .args(["zfs", "destroy", &client_clone])
-                    .output();
+                let _ = run_command(&["zfs", "destroy", &client_clone]);
                 // Re-create the clone from the rolled-back snapshot
-                let clone_output = Command::new("sudo")
-                    .args(["zfs", "clone", &snapshot_name, &client_clone])
-                    .output();
-                if let Ok(clone_out) = clone_output {
-                    if clone_out.status.success() {
+                let clone_output = run_command(&["zfs", "clone", &snapshot_name, &client_clone]);
+                if clone_output.is_ok() {
                         recreated.push(client_id.to_string());
                         // Optionally update the client config's block_device
                         // (Assumes block_device is /dev/zvol/{clone})
                         // You may want to reload and update the client config here
-                    }
                 }
             }
         }
