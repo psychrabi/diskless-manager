@@ -16,7 +16,7 @@ const ImageManagement = () => {
       <Card title="Image Management" icon={HardDrive} actions={
         <Button variant="primary" onClick={() => handleCreateImage()} icon={PlusCircle}>Create Image</Button>
       }>
-        <div className="space-y-6">
+        <div className="space-y-6 min-h-[calc(100vh-14rem)]">
           <ImagesList masters={masters} />
         </div>
       </Card>

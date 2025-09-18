@@ -9,23 +9,25 @@ import TFTPConfigForm from './TFTPConfigForm';
 const SettingManagement = () => {
 
   return (
-    <Card title="System Settings" icon={Settings} className='bg-base-300'>   
-      <div className="grid gap-6 md:grid-cols-2">
-
-        {/* DHCP Server Configuration */}
+    <Card title="System Settings" icon={Settings} className='bg-base-300'>
+      <div className="min-h-[calc(100vh-14rem)] space-y-6">
         <DHCPConfigForm />
+        <div className="grid gap-6 md:grid-cols-2">
 
-        {/* Boot File Configuration */}
-        <BootFileConfigForm />
+          {/* DHCP Server Configuration */}
 
-        {/* TFTP Server Configuration */}
-        <TFTPConfigForm />
 
-        {/* TFTP Server Configuration */}
-        <HTTPConfigForm />
+          {/* Boot File Configuration */}
+          {/* <BootFileConfigForm /> */}
 
-        {/* Samba Server Configuration */}
-        {/* <Card title="Samba Server Configuration" icon={Shield} >
+          {/* TFTP Server Configuration */}
+          <TFTPConfigForm />
+
+          {/* TFTP Server Configuration */}
+          <HTTPConfigForm />
+
+          {/* Samba Server Configuration */}
+          {/* <Card title="Samba Server Configuration" icon={Shield} >
           <div className="space-y-4">
             <div>
               <label className="label">
@@ -55,8 +57,8 @@ const SettingManagement = () => {
           </div>
         </Card> */}
 
-        {/* Security Settings */}
-        {/* <Card title="Security Settings" icon={Shield} >
+          {/* Security Settings */}
+          {/* <Card title="Security Settings" icon={Shield} >
           <div className="space-y-4">
             <div>
               <label className="label">
@@ -83,8 +85,8 @@ const SettingManagement = () => {
           </div>
         </Card> */}
 
-        {/* Notification Settings */}
-        {/* <Card title="Notifications" icon={Bell} >
+          {/* Notification Settings */}
+          {/* <Card title="Notifications" icon={Bell} >
 
           <div className="space-y-4">
             <div>
@@ -111,6 +113,7 @@ const SettingManagement = () => {
             <Button variant="primary">Save Notification Settings</Button>
           </div>
         </Card> */}
+        </div>
       </div>
       {/* System Information */}
       {/* <Card title="System Information" icon={Bell} >
