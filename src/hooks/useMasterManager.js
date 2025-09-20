@@ -71,7 +71,7 @@ export const useMasterManager = () => {
         .then((response) => {
           if (response.message) showNotification(response.message, 'success');
         }).catch((error) => {
-          showNotification(error, 'error',)
+          showNotification(error.error, 'error',)
         })
     } else {
       showNotification("Snapshot deletion cancelled", 'error',)
@@ -94,7 +94,7 @@ export const useMasterManager = () => {
         .then((response) => {
           if (response.message) showNotification(response.message, 'success');
         }).catch((error) => {
-          showNotification(error, 'error',)
+          showNotification(error.error, 'error',)
         })
     } else {
       showNotification("Snapshot rollback cancelled", 'error',)
@@ -110,7 +110,7 @@ export const useMasterManager = () => {
       .then((response) => {
         if (response.message) showNotification(response.message, 'success');
       }).catch((error) => {
-        showNotification(error, 'error',)
+        showNotification(error.error, 'error',)
       }).finally(() => {
         window.location.reload();
       });
@@ -131,8 +131,9 @@ export const useMasterManager = () => {
       await invoke('delete_master', { token, masterName: image })
         .then((response) => {
           if (response.message) showNotification(response.message, 'success');
+          if (response.error) showNotification(response.error, 'error');
         }).catch((error) => {
-          showNotification(error, 'error',)
+          showNotification(error.error, 'error',)
         })
     } else {
       showNotification("Image deletion cancelled", 'error',)

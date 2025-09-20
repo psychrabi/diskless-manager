@@ -90,7 +90,7 @@ pub async fn get_services(token: String, zfs_pool: String) -> Result<Value, Stri
     let mut statuses = HashMap::new();
     print!("Getting services status... \n");
     let service_map = vec![
-        ("iscsi", "targetclid.service"),
+        ("iscsi", "rtslib-fb-targetctl.service"),
         ("dhcp", "isc-dhcp-server.service"),
         ("tftp", "tftpd-hpa.service"),
         ("http", "apache2.service"),
@@ -269,7 +269,7 @@ pub async fn control_service(
     crate::middleware::validate_auth_token_for_command(&token)
         .map_err(|e| format!("Authentication failed: {}", e.message))?;
     let service_map: HashMap<&str, &str> = [
-        ("targetclid", "targetclid.service"),
+        ("rtslib-fb-targetctl", "rtslib-fb-targetctl.service"),
         ("isc-dhcp-server", "isc-dhcp-server.service"),
         ("tftpd-hpa", "tftpd-hpa.service"),
         ("apache2", "apache2.service"),
@@ -316,7 +316,6 @@ pub async fn save_service_config(token: String, service_key: String, content: St
         ("dhcp-clients", DHCP_CLIENTS_PATH),
         ("tftp-autoexec", TFTP_AUTOEXEC_PATH),
         ("tftpd-hpa", "/etc/default/tftpd-hpa"),
-        ("target", "/etc/rtslib-fb-target/saveconfig.json"),
         ("apache2", "/etc/apache2/sites-available/000-default.conf"),
         ("smbd", "/etc/samba/smb.conf"),
         // Add more as needed
@@ -365,7 +364,7 @@ pub async fn check_package_status(token: String) -> Result<Value, String> {
     let packages = vec![
         ("isc-dhcp-server", "isc-dhcp-server"),
         ("tftpd-hpa", "tftpd-hpa"),
-        ("targetclid", "targetcli-fb"),
+        ("rtslib-fb-targetctl", "targetcli-fb"),
         ("apache2", "apache2"),
         ("smbd", "samba"),
         ("wakeonlan", "wakeonlan"),

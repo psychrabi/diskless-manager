@@ -106,7 +106,7 @@ pub fn create_master(token: String, name: String, size: String) -> Result<Value,
         "-V",
         &size,
         "-o",
-        "volblocksize=64k",
+        "volblocksize=4K",
         &master_zvol_name,
     ])?;
     let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
