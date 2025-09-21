@@ -11,7 +11,7 @@ mod zfs;
 use dirs;
 use serde::Serialize;
 use sysinfo::System;
-use tauri::tray::TrayIconBuilder;
+
 use tauri::Manager;
 
 use crate::utils::{get_server_ip, append_log};
@@ -130,9 +130,7 @@ pub fn run() {
                 )?;
             }
             append_log("INFO", "Tauri setup completed");
-             let _tray = TrayIconBuilder::new()
-                 .icon(app.default_window_icon().unwrap().clone())
-                 .build(app)?;
+   
              Ok(())
          })
         .run(tauri::generate_context!())
