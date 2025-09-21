@@ -10,11 +10,8 @@ const clientSchema = z.object({
   name: z.string().min(1, 'Client name is required'),
   mac: z.string().regex(/^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/, "Invalid MAC address format"),
   ip: z.string().regex(/^([\d]{1,3}\.){3}\d{1,3}$/, 'Invalid IP address format. Use X.X.X.X'),
-  master: z.string().min(1, 'Master image is required'),
-  snapshot: z.string().optional().nullable(),
-  pxeMode: z.enum(['legacy', 'uefi', 'secureboot'], {
-    errorMap: () => ({ message: 'Please select a PXE boot mode' })
-  })
+  master: z.string().optional(),
+  snapshot: z.string().optional().nullable(), 
 });
 
 const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
@@ -35,18 +32,17 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
       ip: client?.ip || '',
       master: client?.master || '',
       snapshot: client?.snapshot || '',
-      pxeMode: client?.pxeMode || 'uefi',
     },
   });
 
   // Keep form in sync with client prop
-  useEffect(() => {
+  useEffect(() => {    
     reset({
       name: client?.name || '',
       mac: client?.mac || '',
       ip: client?.ip || '',
       master: client?.master || '',
-      snapshot: client?.snapshot || '',
+      snapshot: client?.snapshot || null,
       pxeMode: client?.pxeMode || 'uefi',
     });
   }, [client, reset]);
@@ -55,15 +51,11 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
 
   const onSubmit = async (data) => {
     setIsOpen(false);
-    const clientData = {
-      ...data,
-      pxeMode: data.pxeMode || 'uefi' // Ensure pxeMode is always set
-    };
 
     if (!client.id) {
       showNotification(`Adding new client ${data.name}`, 'info');
       const token = localStorage.getItem('authToken') || '';
-      await invoke('add_client', { token, req: clientData })
+      await invoke('add_client', { token, req: data })
         .then((response) => {
           if (response.message) showNotification(response.message, 'success');
         })
@@ -80,12 +72,11 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
         token,
         clientId: client.id,
         data: {
-          name: clientData.name,
-          mac: clientData.mac,
-          ip: clientData.ip,
-          master: clientData.master,
-          snapshot: clientData.snapshot || null,
-          pxeMode: clientData.pxeMode
+          name: data.name,
+          mac: data.mac,
+          ip: data.ip,
+          master: data.master,
+          snapshot: data.snapshot || null,
         }
       })
         .then((response) => {
@@ -104,9 +95,11 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
 
    // When master selection changes, clear snapshot to avoid stale selections
   useEffect(() => {
-    // clear snapshot when master changes so options and value stay in sync
-    setValue('snapshot', '');
-  }, [selectedMaster, setValue]);
+    // Only clear snapshot if we're not in edit mode or if the master actually changed
+    if (!client?.id || selectedMaster !== client?.master) {
+      setValue('snapshot', '');
+    }
+  }, [selectedMaster, setValue, client?.id, client?.master]);
 
   return (
     <Modal isOpen={isOpen} onClose={() => setIsOpen(false)} title={client.id ? 'Edit Client' : 'Add Client'}>
@@ -147,8 +140,15 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
         </fieldset>
         <fieldset className={`fieldset`}>
           <legend htmlFor="snapshot" className='fieldset-legend'>Select Snapshot</legend>
-          <select {...register('snapshot')}
-            id="snapshot" className='select w-full' disabled={!selectedMaster}
+          <select
+            {...register('snapshot')}
+            id="snapshot" 
+            className='select w-full' 
+            disabled={!selectedMaster}
+            onChange={(e) => {
+              console.log('DEBUG: Snapshot changed to:', e.target.value);
+              setValue('snapshot', e.target.value);
+            }}
           >
             <option value="">Use master directly</option>
             {masters.find(m => m.name === selectedMaster)?.snapshots?.map((snap) => (
@@ -157,22 +157,13 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
               </option>
             ))}
           </select>
+          <div className="text-xs text-gray-500 mt-1">
+            DEBUG: Current snapshot value: {watch('snapshot') || 'empty'}<br/>
+            DEBUG: Available snapshots: {masters.find(m => m.name === selectedMaster)?.snapshots?.map(s => s.name).join(', ') || 'none'}
+          </div>
           {errors.snapshot && <div className="text-error text-xs">{errors.snapshot.message}</div>}
         </fieldset>
-        <fieldset className={`fieldset`}>
-          <legend htmlFor="pxeMode" className='fieldset-legend'>PXE Boot Mode</legend>
-          <select
-            defaultValue={client.pxeMode || 'uefi'} 
-            {...register('pxeMode')}
-            id="pxeMode"
-            className='select w-full'
-          >
-            <option value="legacy">Legacy BIOS (undionly.kpxe)</option>
-            <option value="uefi">UEFI (ipxe.efi)</option>
-            <option value="secureboot">Secure Boot (secureboot.efi)</option>
-          </select>
-          {errors.pxeMode && <div className="text-error text-xs">{errors.pxeMode.message}</div>}
-        </fieldset>
+     
 
         <div className="flex justify-end space-x-3">
           <Button type="submit" variant="primary">{client.id ? 'Update Client' : 'Add Client'}</Button>

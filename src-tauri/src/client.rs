@@ -459,6 +459,72 @@ pub fn save_client_config(client_data: &Client) -> bool {
     }
 }
 
+fn get_latest_snapshot(master_name: &str) -> Result<String, String> {
+    println!("DEBUG: Looking for snapshots of master: {}", master_name);
+    
+    // Get all snapshots for the master image, sorted by creation time
+    // Try without -r flag first, then with it if needed
+    let output = Command::new("sudo")
+        .args([
+            "zfs", "list", "-H", "-t", "snapshot", "-o", "name,creation", master_name,
+        ])
+        .output()
+        .map_err(|e| format!("Failed to list snapshots: {}", e))?;
+
+    let output = if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        println!("DEBUG: First attempt failed: {}", stderr);
+        
+        // Try with -r flag as fallback
+        let output = Command::new("sudo")
+            .args([
+                "zfs", "list", "-H", "-t", "snapshot", "-o", "name,creation", "-r", master_name,
+            ])
+            .output()
+            .map_err(|e| format!("Failed to list snapshots with -r flag: {}", e))?;
+            
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("Failed to list snapshots for {}: {}", master_name, stderr));
+        }
+        output
+    } else {
+        output
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    println!("DEBUG: ZFS list output for {}: {}", master_name, stdout);
+
+    let snapshots: Vec<(String, u64)> = stdout
+        .lines()
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.split('\t').collect();
+            if parts.len() >= 2 {
+                let name = parts[0].to_string();
+                let creation = parts[1].parse::<u64>().ok()?;
+                println!("DEBUG: Found snapshot: {} (creation: {})", name, creation);
+                Some((name, creation))
+            } else {
+                println!("DEBUG: Skipping malformed line: {}", line);
+                None
+            }
+        })
+        .collect();
+
+    if snapshots.is_empty() {
+        return Err(format!("No snapshots found for master {}", master_name));
+    }
+
+    // Find the snapshot with the highest creation timestamp (latest)
+    let latest = snapshots
+        .into_iter()
+        .max_by_key(|(_, creation)| *creation)
+        .ok_or_else(|| "No valid snapshots found".to_string())?;
+
+    println!("DEBUG: Selected latest snapshot: {}", latest.0);
+    Ok(latest.0)
+}
+
 #[tauri::command]
 pub async fn remote_client(token: String, client_id: String) -> Result<serde_json::Value, String> {
     // Validate authentication token
@@ -595,13 +661,36 @@ pub async fn add_client(token: String, req: AddClientRequest) -> Result<serde_js
     if name.is_empty() || mac.is_empty() || ip.is_empty() {
         return Err("Missing required fields: name, mac, ip".to_string());
     }
-    if master.is_empty() {
-        return Err("Master image is required".to_string());
-    }
 
     // Check for duplicates (implement as needed)
     if let Some(dup) = check_duplicate_client(&name, &mac, &ip) {
         return Err(dup);
+    }
+
+    // If no master image is selected, only save to config files
+    if master.is_empty() {
+        let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        let client_data = Client {
+            id: name.clone(),
+            name: name.to_uppercase(),
+            mac: mac.clone(),
+            ip: ip.clone(),
+            master: master.clone(),
+            snapshot: if snapshot.is_empty() { None } else { Some(snapshot.clone()) },
+            target_iqn: None,
+            block_device: None,
+            block_store: None,
+            writeback: None,
+            created_at: Some(now.clone()),
+            last_modified: Some(now.clone()),
+            status: None,
+            mode: None,
+            pxe_mode: Some("uefi".to_string()),
+        };
+        if !save_client_config(&client_data) {
+            return Err(format!("Failed to save client configuration for {}", name));
+        }
+        return Ok(serde_json::json!({ "message": format!("Client {} added to configuration (no image selected)", name) }));
     }
 
     // Compute ZFS paths
@@ -644,11 +733,11 @@ pub async fn add_client(token: String, req: AddClientRequest) -> Result<serde_js
         mac: mac.clone(),
         ip: ip.clone(),
         master: master.clone(),
-        snapshot: if snapshot.is_empty() { None } else { Some(snapshot.clone()) },
+        snapshot: if used_master_directly { None } else { if snapshot.is_empty() { None } else { Some(snapshot.clone()) } },
         target_iqn: Some(paths["target_iqn"].clone()),
         block_device: Some(block_device.clone()),
         block_store: Some(paths["block_store"].clone()),
-        writeback: Some(paths["clone"].clone()),
+        writeback: if used_master_directly { None } else { Some(paths["clone"].clone()) },
         created_at: Some(now.clone()),
         last_modified: Some(now.clone()),
         status: None,
@@ -723,9 +812,6 @@ pub async fn edit_client(
     if new_name.is_empty() || new_mac.is_empty() || new_ip.is_empty() {
         return Err("Missing required fields: name, mac, ip".to_string());
     }
-    if new_master.is_empty() {
-        return Err("Master image is required".to_string());
-    }
 
     // Detect changes
     let name_changed = new_name != client_info.name;
@@ -733,6 +819,46 @@ pub async fn edit_client(
     let ip_changed = new_ip != client_info.ip;
     let master_changed = new_master != client_info.master;
     let snapshot_changed = new_snapshot != client_info.snapshot.clone().unwrap_or_default();
+
+    // If no master image is selected, only update config files
+    if new_master.is_empty() {
+        // If client previously had an image, clean up existing resources
+        if !client_info.master.is_empty() {
+            // Clean up existing iSCSI target
+            if let Some(ref target_iqn) = client_info.target_iqn {
+                if let Some(ref block_store) = client_info.block_store {
+                    if let Err(e) = cleanup_iscsi_target(target_iqn, block_store) {
+                        println!("Warning: Failed to cleanup iSCSI target {}: {}", target_iqn, e);
+                    }
+                }
+            }
+
+            // Clean up existing ZFS clone if it exists and is not the master directly
+            if let Some(ref writeback) = client_info.writeback {
+                if client_info.mode.as_deref() != Some("super") && zfs_exists(writeback) {
+                    if let Err(e) = zfs_destroy(writeback) {
+                        println!("Warning: Failed to destroy ZFS clone {}: {}", writeback, e);
+                    }
+                }
+            }
+        }
+
+        client_info.name = new_name.clone();
+        client_info.mac = new_mac.clone();
+        client_info.ip = new_ip.clone();
+        client_info.master = new_master.clone();
+        client_info.snapshot = if new_snapshot.is_empty() { None } else { Some(new_snapshot.clone()) };
+        client_info.target_iqn = None;
+        client_info.block_device = None;
+        client_info.block_store = None;
+        client_info.writeback = None;
+        client_info.last_modified = Some(Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
+        client_info.mode = None;
+
+        // Save updated config
+        save_client_config(&client_info);
+        return Ok(serde_json::json!({"message": format!("Client {} updated in configuration (no image selected, resources cleaned up)", client_id)}));
+    }
 
     // Case 1: Only MAC or IP changed
     if (mac_changed || ip_changed) && !(name_changed || master_changed || snapshot_changed) {
@@ -989,19 +1115,32 @@ pub async fn control_client(
                 // Promote: point iSCSI target to master directly (ZFS)
                 let block_device = format!("/dev/zvol/{}", client.master);
 
-                // Recreate iSCSI target pointing to master
+                // Clean up existing iSCSI target
                 let target_iqn = paths.get("target_iqn").cloned().unwrap_or_default();
                 let block_store = paths.get("block_store").cloned().unwrap_or_default();
                 if let Some(tiqn) = client.target_iqn.as_ref() {
                     let _ = cleanup_iscsi_target(tiqn, &block_store);
                 }
+
+                // Delete existing ZFS clone if it exists (not using master directly)
+                if let Some(ref writeback) = client.writeback {
+                    if client.mode.as_deref() != Some("super") && zfs_exists(writeback) {
+                        if let Err(e) = zfs_destroy(writeback) {
+                            println!("Warning: Failed to destroy ZFS clone {}: {}", writeback, e);
+                        }
+                    }
+                }
+
+                // Set up iSCSI target pointing to master
                 setup_iscsi_target(&target_iqn, &block_store, &block_device)
                     .map_err(|e| format!("Failed to set iSCSI to master: {}", e))?;
 
-                // Persist mode = super and block_device
+                // Persist mode = super and block_device, clear snapshot and writeback
                 let mut updated = client.clone();
                 updated.mode = Some("super".to_string());
                 updated.block_device = Some(block_device);
+                updated.snapshot = None; // Clear snapshot when using master directly
+                updated.writeback = None; // Clear writeback when using master directly
                 if !save_client_config(&updated) {
                     println!(
                         "[WARN] Failed to persist client mode change for {}",
@@ -1016,14 +1155,86 @@ pub async fn control_client(
                 // Demote: point iSCSI back to client's writeback clone (ZFS)
                 let clone_path = format!("{}/{}-disk", get_zpool_name(), client.id.to_uppercase());
 
-                // Ensure ZFS clone exists; create from client's snapshot if needed
-                if !zfs_exists(&clone_path) {
-                    let snapshot = client.snapshot.as_ref().ok_or_else(|| {
-                        "Client has no base snapshot to recreate clone".to_string()
-                    })?;
-                    zfs_clone(snapshot, &clone_path)
-                        .map_err(|e| format!("Failed to recreate ZFS clone: {}", e))?;
+                // Debug: Let's also try a simple zfs list command to see what's available
+                println!("DEBUG: Testing ZFS list command for master: {}", client.master);
+                let test_output = Command::new("sudo")
+                    .args(["zfs", "list", "-t", "snapshot", &client.master])
+                    .output();
+                if let Ok(output) = test_output {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    println!("DEBUG: Simple ZFS list output: {}", stdout);
                 }
+
+                // Get the latest snapshot for the master image, or create one if none exist
+                let latest_snapshot = match get_latest_snapshot(&client.master) {
+                    Ok(snapshot) => {
+                        println!("DEBUG: Found existing snapshot: {}", snapshot);
+                        snapshot
+                    },
+                    Err(e) => {
+                        println!("DEBUG: Failed to find existing snapshots: {}", e);
+                        
+                        // Try to find any snapshot manually using a simpler approach
+                        let manual_output = Command::new("sudo")
+                            .args(["zfs", "list", "-H", "-t", "snapshot", "-o", "name", &client.master])
+                            .output();
+                        
+                        if let Ok(output) = manual_output {
+
+                                let stdout = String::from_utf8_lossy(&output.stdout);
+                                println!("DEBUG: Manual snapshot search output: {}", stdout);
+                                
+                                // Find the first snapshot that contains the master name
+                                if let Some(first_snapshot) = stdout.lines()
+                                    .find(|line| line.contains(&client.master) && line.contains('@')) {
+                                    println!("DEBUG: Found snapshot manually: {}", first_snapshot);
+                                    first_snapshot.to_string()
+                                } else {
+                                    // No snapshots found - cannot disable super mode without snapshots
+                                    return Ok(serde_json::json!({
+                                        "message": format!("Cannot disable super mode for {}: No snapshots found for master {}. Client will remain in super mode.", client_id, client.master)
+                                    }));
+                                }
+
+                        } else {
+                            // Manual search failed - cannot disable super mode without snapshots
+                            return Ok(serde_json::json!({
+                                "message": format!("Cannot disable super mode for {}: Unable to find snapshots for master {}. Client will remain in super mode.", client_id, client.master)
+                            }));
+                        }
+                    }
+                };
+                
+                // Create clone from the snapshot
+                println!("DEBUG: Creating ZFS clone from {} to {}", latest_snapshot, clone_path);
+                
+                // Verify snapshot exists
+                if !zfs_exists(&latest_snapshot) {
+                    return Err(format!("Snapshot {} does not exist", latest_snapshot));
+                }
+                println!("DEBUG: Snapshot {} exists, proceeding with clone", latest_snapshot);
+                
+                // Check if target already exists
+                if zfs_exists(&clone_path) {
+                    println!("DEBUG: Target clone {} already exists, destroying it first", clone_path);
+                    zfs_destroy(&clone_path)
+                        .map_err(|e| format!("Failed to destroy existing clone {}: {}", clone_path, e))?;
+                }
+                
+                // Use a more detailed command execution for better error reporting
+                let clone_output = Command::new("sudo")
+                    .args(["zfs", "clone", &latest_snapshot, &clone_path])
+                    .output()
+                    .map_err(|e| format!("Failed to execute zfs clone command: {}", e))?;
+                
+                if !clone_output.status.success() {
+                    let stderr = String::from_utf8_lossy(&clone_output.stderr);
+                    let stdout = String::from_utf8_lossy(&clone_output.stdout);
+                    return Err(format!("ZFS clone failed: {}\nStderr: {}\nStdout: {}", 
+                        format!("zfs clone {} {}", latest_snapshot, clone_path), stderr, stdout));
+                }
+                
+                println!("DEBUG: Successfully created ZFS clone from {} to {}", latest_snapshot, clone_path);
 
                 let block_device = format!("/dev/zvol/{}", clone_path);
 
@@ -1036,10 +1247,12 @@ pub async fn control_client(
                 setup_iscsi_target(&target_iqn, &block_store, &block_device)
                     .map_err(|e| format!("Failed to set iSCSI to client writeback: {}", e))?;
 
-                // Persist mode cleared
+                // Persist mode cleared and update snapshot/writeback info
                 let mut updated = client.clone();
                 updated.mode = None;
                 updated.block_device = Some(block_device);
+                updated.snapshot = Some(latest_snapshot);
+                updated.writeback = Some(clone_path);
                 if !save_client_config(&updated) {
                     println!(
                         "[WARN] Failed to persist client mode change for {}",
