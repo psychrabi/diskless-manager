@@ -51,14 +51,12 @@ export default function HTTPConfigForm() {
   };
 
   return (
-    <Card title="HTTP Server Configuration" icon={Network} className=''>
+    <Card title="HTTP Configuration" icon={Network} className=''>
       <form onSubmit={handleSubmit(onSubmit)}>
-        <div className="space-y-4">
-          <div className='grid grid-cols-2 gap-2'>
-            <Input id="http_root" register={register("http_root")} label="HTTP Root Directory" className="w-full" placeholder="/srv/http"/>          
-            <Input id="http_server_ip" register={register("http_server_ip")} label="HTTP Server IP" className="w-full" placeholder="*"/>            
-            <Input id="http_server_port" register={register("http_server_port")} label="HTTP Server Port" className="w-full" placeholder="80"/>
-          </div>
+        <div className="space-y-4">          
+            <Input id="http_root" register={register("http_root")} label="HTTP Root Directory" placeholder="/srv/http"/>          
+            <Input id="http_server_ip" register={register("http_server_ip")} label="HTTP Server IP"  placeholder="*"/>            
+            <Input id="http_server_port" register={register("http_server_port")} label="HTTP Server Port"  placeholder="80"/>          
           <Button variant="primary" type="submit">Save HTTP Settings</Button>
         </div>
       </form>

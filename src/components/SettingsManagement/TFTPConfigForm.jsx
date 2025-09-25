@@ -51,14 +51,12 @@ export default function TFTPConfigForm() {
   };
 
   return (
-    <Card title="TFTP Server Configuration" icon={Network} className=''>
+    <Card title="TFTP Configuration" icon={Network} className=''>
       <form onSubmit={handleSubmit(onSubmit)}>
-        <div className="space-y-4">
-          <div className='grid grid-cols-2 gap-2'>
+        <div className="space-y-4">          
             <Input id="tftp_root" register={register("tftp_root")} label="TFTP Root Directory" className="w-full" placeholder="/srv/tftp" />
             <Input id="tftp_server_ip" register={register("tftp_server_ip")} label="TFTP Server IP" className="w-full" placeholder="0.0.0.0" />
-            <Input id="tftp_options" register={register("tftp_options")} label="TFTP Options" className="w-full" placeholder="--secure" />
-          </div>
+            <Input id="tftp_options" register={register("tftp_options")} label="TFTP Options" className="w-full" placeholder="--secure" />          
           <Button variant="primary" type="submit">Save TFTP Settings</Button>
         </div>
       </form>

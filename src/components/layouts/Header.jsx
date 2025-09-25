@@ -32,7 +32,7 @@ const Header = ({ onToggleSidebar }) => {
             {theme === 'dark' ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}            
           </Button>
           <Button variant="success" className="flex items-center gap-2 capitalize">
-            <Shield className="h-4 w-4" />{user.username}
+            <Shield className="h-4 w-4" />{user.role}
           </Button>
           <Button
             variant="destructive"

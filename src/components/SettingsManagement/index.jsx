@@ -1,7 +1,7 @@
 
 import { GitPullRequestArrow, Settings } from 'lucide-react';
 import { Card } from '../ui';
-import AdminPassword from './AdminPassword';
+import AdminPassword from './AdminPasswordForm';
 import DHCPConfigForm from './DHCPConfigForm';
 import HTTPConfigForm from './HTTPConfigForm';
 import TFTPConfigForm from './TFTPConfigForm';
@@ -12,7 +12,7 @@ const SettingManagement = () => {
     <Card title="System Settings" icon={Settings} className='bg-base-300'>
       <div className="min-h-[calc(100vh-14rem)] space-y-6">
         <DHCPConfigForm />
-        <div className="grid gap-6 md:grid-cols-2">
+        <div className="grid gap-6 md:grid-cols-3">
 
           {/* DHCP Server Configuration */}
 
