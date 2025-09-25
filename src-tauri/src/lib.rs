@@ -60,6 +60,7 @@ pub fn run() {
             get_server_info,
             auth::login,
             auth::validate_auth_token,
+            auth::update_admin_password,
             middleware::authenticate,
             client::get_clients,
             client::add_client,

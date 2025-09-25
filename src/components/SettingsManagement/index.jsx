@@ -1,7 +1,7 @@
 
 import { GitPullRequestArrow, Settings } from 'lucide-react';
 import { Card } from '../ui';
-import BootFileConfigForm from './BootFileConfigForm';
+import AdminPassword from './AdminPassword';
 import DHCPConfigForm from './DHCPConfigForm';
 import HTTPConfigForm from './HTTPConfigForm';
 import TFTPConfigForm from './TFTPConfigForm';
@@ -18,7 +18,7 @@ const SettingManagement = () => {
 
 
           {/* Boot File Configuration */}
-          {/* <BootFileConfigForm /> */}
+          <AdminPassword />
 
           {/* TFTP Server Configuration */}
           <TFTPConfigForm />
