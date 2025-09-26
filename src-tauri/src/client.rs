@@ -460,7 +460,7 @@ pub fn save_client_config(client_data: &Client) -> bool {
 }
 
 fn get_latest_snapshot(master_name: &str) -> Result<String, String> {
-    println!("DEBUG: Looking for snapshots of master: {}", master_name);
+    append_log("DEBUG:", &format!(" Looking for snapshots of master: {}", master_name));
     
     // Get all snapshots for the master image, sorted by creation time
     // Try without -r flag first, then with it if needed
@@ -473,7 +473,7 @@ fn get_latest_snapshot(master_name: &str) -> Result<String, String> {
 
     let output = if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        println!("DEBUG: First attempt failed: {}", stderr);
+        append_log("DEBUG:", &format!(" First attempt failed: {}", stderr));
         
         // Try with -r flag as fallback
         let output = Command::new("sudo")
@@ -493,7 +493,7 @@ fn get_latest_snapshot(master_name: &str) -> Result<String, String> {
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    println!("DEBUG: ZFS list output for {}: {}", master_name, stdout);
+    append_log("DEBUG:", &format!(" ZFS list output for {}: {}", master_name, stdout));
 
     let snapshots: Vec<(String, u64)> = stdout
         .lines()
@@ -502,10 +502,10 @@ fn get_latest_snapshot(master_name: &str) -> Result<String, String> {
             if parts.len() >= 2 {
                 let name = parts[0].to_string();
                 let creation = parts[1].parse::<u64>().ok()?;
-                println!("DEBUG: Found snapshot: {} (creation: {})", name, creation);
+                append_log("DEBUG:", &format!(" Found snapshot: {} (creation: {})", name, creation));
                 Some((name, creation))
             } else {
-                println!("DEBUG: Skipping malformed line: {}", line);
+                append_log("DEBUG:", &format!(" Skipping malformed line: {}", line));
                 None
             }
         })
@@ -521,7 +521,7 @@ fn get_latest_snapshot(master_name: &str) -> Result<String, String> {
         .max_by_key(|(_, creation)| *creation)
         .ok_or_else(|| "No valid snapshots found".to_string())?;
 
-    println!("DEBUG: Selected latest snapshot: {}", latest.0);
+    append_log("DEBUG:", &format!(" Selected latest snapshot: {}", latest.0));
     Ok(latest.0)
 }
 
@@ -1156,23 +1156,23 @@ pub async fn control_client(
                 let clone_path = format!("{}/{}-disk", get_zpool_name(), client.id.to_uppercase());
 
                 // Debug: Let's also try a simple zfs list command to see what's available
-                println!("DEBUG: Testing ZFS list command for master: {}", client.master);
+                append_log("DEBUG:", &format!(" Testing ZFS list command for master: {}", client.master));
                 let test_output = Command::new("sudo")
                     .args(["zfs", "list", "-t", "snapshot", &client.master])
                     .output();
                 if let Ok(output) = test_output {
                     let stdout = String::from_utf8_lossy(&output.stdout);
-                    println!("DEBUG: Simple ZFS list output: {}", stdout);
+                    append_log("DEBUG:", &format!(" Simple ZFS list output: {}", stdout));
                 }
 
                 // Get the latest snapshot for the master image, or create one if none exist
                 let latest_snapshot = match get_latest_snapshot(&client.master) {
                     Ok(snapshot) => {
-                        println!("DEBUG: Found existing snapshot: {}", snapshot);
+                        append_log("DEBUG:", &format!(" Found existing snapshot: {}", snapshot));
                         snapshot
                     },
                     Err(e) => {
-                        println!("DEBUG: Failed to find existing snapshots: {}", e);
+                        append_log("DEBUG:", &format!(" Failed to find existing snapshots: {}", e));
                         
                         // Try to find any snapshot manually using a simpler approach
                         let manual_output = Command::new("sudo")
@@ -1182,12 +1182,12 @@ pub async fn control_client(
                         if let Ok(output) = manual_output {
 
                                 let stdout = String::from_utf8_lossy(&output.stdout);
-                                println!("DEBUG: Manual snapshot search output: {}", stdout);
+                                append_log("DEBUG:", &format!(" Manual snapshot search output: {}", stdout));
                                 
                                 // Find the first snapshot that contains the master name
                                 if let Some(first_snapshot) = stdout.lines()
                                     .find(|line| line.contains(&client.master) && line.contains('@')) {
-                                    println!("DEBUG: Found snapshot manually: {}", first_snapshot);
+                                    append_log("DEBUG:", &format!(" Found snapshot manually: {}", first_snapshot));
                                     first_snapshot.to_string()
                                 } else {
                                     // No snapshots found - cannot disable super mode without snapshots
@@ -1206,17 +1206,17 @@ pub async fn control_client(
                 };
                 
                 // Create clone from the snapshot
-                println!("DEBUG: Creating ZFS clone from {} to {}", latest_snapshot, clone_path);
+                append_log("DEBUG:", &format!(" Creating ZFS clone from {} to {}", latest_snapshot, clone_path));
                 
                 // Verify snapshot exists
                 if !zfs_exists(&latest_snapshot) {
                     return Err(format!("Snapshot {} does not exist", latest_snapshot));
                 }
-                println!("DEBUG: Snapshot {} exists, proceeding with clone", latest_snapshot);
+                append_log("DEBUG:", &format!(" Snapshot {} exists, proceeding with clone", latest_snapshot));
                 
                 // Check if target already exists
                 if zfs_exists(&clone_path) {
-                    println!("DEBUG: Target clone {} already exists, destroying it first", clone_path);
+                    append_log("DEBUG:", &format!(" Target clone {} already exists, destroying it first", clone_path));
                     zfs_destroy(&clone_path)
                         .map_err(|e| format!("Failed to destroy existing clone {}: {}", clone_path, e))?;
                 }
@@ -1234,7 +1234,7 @@ pub async fn control_client(
                         format!("zfs clone {} {}", latest_snapshot, clone_path), stderr, stdout));
                 }
                 
-                println!("DEBUG: Successfully created ZFS clone from {} to {}", latest_snapshot, clone_path);
+                append_log("DEBUG:", &format!(" Successfully created ZFS clone from {} to {}", latest_snapshot, clone_path));
 
                 let block_device = format!("/dev/zvol/{}", clone_path);
 

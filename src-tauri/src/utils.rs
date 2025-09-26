@@ -29,6 +29,19 @@ pub fn run_command_check(args: &[&str]) -> i32 {
         .unwrap_or(-1)
 }
 
+// add a function to run command with output
+pub fn run_command_output(args: &[&str]) -> Result<String, String> {
+    let output = Command::new("sudo")
+        .arg("-n")
+        .args(args)
+        .output()
+        .map_err(|e| format!("Failed to run command: {}: {}", args.join(" "), e))?;
+    if !output.status.success() {
+        return Err(format!("Command failed: {}", args.join(" ")));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
 pub fn get_server_ip() -> String {
     // Try to get the server's IP address using `ip route get 1`
     match Command::new("ip").args(&["route", "get", "1"]).output() {
