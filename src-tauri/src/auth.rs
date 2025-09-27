@@ -3,7 +3,9 @@ use bcrypt::{hash, verify, DEFAULT_COST};
 use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
+use std::env;
 
 use crate::utils::append_log;
 
@@ -78,7 +80,41 @@ lazy_static::lazy_static! {
     };
 }
 
-const SECRET_KEY: &str = "diskless_manager_secret_key_2025"; // In production, use a more secure secret
+/// Returns the JWT secret sourced from env or config. If not found, generates and persists one.
+fn get_or_init_jwt_secret() -> String {
+    // 1) Environment override
+    if let Ok(s) = env::var("DISKLESS_JWT_SECRET") {
+        if !s.is_empty() { return s; }
+    }
+
+    // 2) Config settings
+    let mut cfg = crate::config::read_config();
+    if let Some(obj) = cfg.settings.as_object() {
+        if let Some(Value::String(s)) = obj.get("jwt_secret") {
+            if !s.is_empty() { return s.to_string(); }
+        }
+    }
+
+    // 3) Generate a new secret and persist
+    let secret: String = {
+        use rand::{distributions::Alphanumeric, Rng};
+        rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(64)
+            .map(char::from)
+            .collect()
+    };
+
+    let mut settings = cfg.settings.as_object().cloned().unwrap_or_default();
+    settings.insert("jwt_secret".to_string(), Value::String(secret.clone()));
+    cfg.settings = Value::Object(settings);
+    if let Err(e) = crate::config::write_config(&cfg) {
+        append_log("WARN", &format!("Failed to persist generated jwt_secret: {}", e));
+    } else {
+        append_log("INFO", "Generated and persisted new jwt_secret");
+    }
+    secret
+}
 
 pub fn authenticate_user(username: &str, password: &str) -> Result<LoginResponse, AuthError> {
     // Find user by username in the in-memory store (base data)
@@ -128,10 +164,11 @@ pub fn authenticate_user(username: &str, password: &str) -> Result<LoginResponse
         exp: expiration,
     };
 
+    let secret = get_or_init_jwt_secret();
     let token = encode(
         &Header::default(),
         &claims,
-        &EncodingKey::from_secret(SECRET_KEY.as_ref()),
+        &EncodingKey::from_secret(secret.as_bytes()),
     )
     .map_err(|_| AuthError {
         message: "Failed to generate token".to_string(),
@@ -149,9 +186,10 @@ pub fn authenticate_user(username: &str, password: &str) -> Result<LoginResponse
 
 pub fn validate_token(token: &str) -> Result<Claims, AuthError> {
     let validation = Validation::default();
+    let secret = get_or_init_jwt_secret();
     let decoded = decode::<Claims>(
         token,
-        &DecodingKey::from_secret(SECRET_KEY.as_ref()),
+        &DecodingKey::from_secret(secret.as_bytes()),
         &validation,
     )
     .map_err(|_| AuthError {

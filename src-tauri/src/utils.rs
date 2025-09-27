@@ -43,34 +43,64 @@ pub fn run_command_output(args: &[&str]) -> Result<String, String> {
 }
 
 pub fn get_server_ip() -> String {
-    // Try to get the server's IP address using `ip route get 1`
-    match Command::new("ip").args(&["route", "get", "1"]).output() {
-        Ok(output) => {
-            if !output.status.success() {
-                eprintln!(
-                    "Warning: Failed to get server IP: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                );
-                return "192.168.1.200".to_string();
-            }
+    // Prefer the IP used for default route, then fallback to enumerating interfaces
+    if let Ok(output) = Command::new("ip").args(["route", "get", "1"]).output() {
+        if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
-            for line in stdout.lines() {
-                if let Some(idx) = line.find("src") {
-                    let ip_part = &line[idx + 3..].trim();
-                    let ip = ip_part.split_whitespace().next().unwrap_or("");
-                    if ip.starts_with("192.168.") || ip.starts_with("10.") {
+            if let Some(ip) = parse_src_ip_from_ip_route(&stdout) {
+                return ip;
+            }
+        }
+    }
+
+    // Fallback: parse `ip -4 addr show` and pick first private IPv4
+    if let Ok(output) = Command::new("ip").args(["-4", "addr", "show"]).output() {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for token in stdout.split_whitespace() {
+                if token.contains('/') && token.chars().any(|c| c.is_ascii_digit()) {
+                    let ip = token.split('/').next().unwrap_or("");
+                    if is_private_ipv4(ip) {
                         return ip.to_string();
                     }
                 }
             }
-            eprintln!("Warning: Could not find valid server IP address in output");
-            "192.168.1.200".to_string()
-        }
-        Err(e) => {
-            eprintln!("Warning: Failed to detect server IP: {}", e);
-            "192.168.1.200".to_string()
         }
     }
+
+    // Final fallback
+    "192.168.1.200".to_string()
+}
+
+fn parse_src_ip_from_ip_route(output: &str) -> Option<String> {
+    for line in output.lines() {
+        if let Some(idx) = line.find("src ") {
+            let ip = line[idx + 4..].split_whitespace().next().unwrap_or("");
+            if is_private_ipv4(ip) {
+                return Some(ip.to_string());
+            } else if ip.parse::<std::net::Ipv4Addr>().is_ok() {
+                // If not private but valid, still use it as last-resort for this parser
+                return Some(ip.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn is_private_ipv4(ip: &str) -> bool {
+    // 10.0.0.0/8
+    if ip.starts_with("10.") { return true; }
+    // 172.16.0.0/12 -> 172.16.0.0 - 172.31.255.255
+    if let Some(rest) = ip.strip_prefix("172.") {
+        if let Some(second) = rest.split('.').next() {
+            if let Ok(n) = second.parse::<u8>() {
+                if (16..=31).contains(&n) { return true; }
+            }
+        }
+    }
+    // 192.168.0.0/16
+    if ip.starts_with("192.168.") { return true; }
+    false
 }
 
 #[derive(Serialize)]
