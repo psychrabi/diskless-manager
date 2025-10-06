@@ -8,6 +8,7 @@ import ServerInfoCard from './ServerInfoCard';
 import ServiceConfigModal from './ServiceConfigModal';
 import ServicesList from './ServicesList';
 import ZfsPoolCard from './ZfsPoolCard';
+import LicenseCard from './LicenseCard';
 
 const ServiceManagement = () => {
   return (
@@ -27,6 +28,7 @@ const ServiceManagement = () => {
         <MasterImageOverviewCard />
       </div>
       <ServiceConfigModal />
+      <LicenseCard />
       </div>
     </Card>
   );

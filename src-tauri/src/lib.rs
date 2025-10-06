@@ -8,6 +8,7 @@ mod middleware;
 mod service;
 mod utils;
 mod zfs;
+mod license;
 use dirs;
 use serde::Serialize;
 use sysinfo::System;
@@ -93,6 +94,8 @@ pub fn run() {
             utils::get_service_logs,
             logs::get_logs,
             logs::clear_logs,
+            license::activate_license,
+            license::get_license_info,
             zfs::get_zfs_arcstat,
             zfs::get_masters,
             zfs::create_zfs_pool,
