@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { Card } from '../ui';
 
 export default function LicenseCard() {
   const [license, setLicense] = useState({
@@ -28,11 +29,12 @@ export default function LicenseCard() {
   if (error) return <div className="text-error">Error: {error}</div>;
 
   return (
-    <div className="card">
-      <h3>License</h3>
-      <div><strong>Status:</strong> {license.license_status || 'not activated'}</div>
-      <div><strong>Key:</strong> {license.license_key ? license.license_key : '—'}</div>
-      <div><strong>Expires:</strong> {license.license_expires || '—'}</div>
-    </div>
+    <Card title="License Information" icon={null}  className='col-span-2'>
+      <ul>
+        <li><strong>Status:</strong> {license.license_status || 'not activated'}</li>
+        <li><strong>Expires:</strong> {license.license_expires || '—'}</li>
+        <li><strong>Key:</strong> {license.license_key ? license.license_key : '—'}</li>
+      </ul>
+    </Card>
   );
 }
