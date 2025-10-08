@@ -9,6 +9,7 @@ mod service;
 mod utils;
 mod zfs;
 mod license;
+mod disks;
 use dirs;
 use serde::Serialize;
 use sysinfo::System;
@@ -76,6 +77,11 @@ pub fn run() {
             client::get_client_overview,
             config::read_config,
             config::save_config,
+            disks::list_zpools,
+            disks::list_datasets,
+            disks::create_zfs_dataset,
+            disks::delete_zfs_dataset,
+            disks::rename_zfs_dataset,
             service::get_services,
             service::control_service,
             service::install_service,

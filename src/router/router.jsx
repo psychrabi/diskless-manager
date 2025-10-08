@@ -1,3 +1,4 @@
+import DisksManagement from "@/components/Disks Management";
 import { Logs } from "@/components/Logs";
 import { lazy } from "react";
 import { createBrowserRouter } from "react-router-dom";
@@ -31,6 +32,10 @@ export const router = createBrowserRouter([
       {
         path: "/clients",
         element: <ClientManagement />,
+      },
+      {
+        path: "/disks",
+        element: <DisksManagement />,
       },
       {
         path: "/masters",

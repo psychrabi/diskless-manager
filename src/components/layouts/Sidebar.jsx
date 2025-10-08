@@ -17,6 +17,7 @@ import { NavLink } from 'react-router-dom';
 const menuItems = [
   { id: 'dashboard', to: '/', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'clients', to: '/clients', label: 'Client Management', icon: Monitor },
+  { id: 'disks', to: '/disks', label: 'Disk Management', icon: HardDrive },
   { id: 'masters', to: '/masters', label: 'Image Management', icon: HardDrive },
   { id: 'settings', to: '/settings', label: 'System Settings', icon: Settings },
   { id: 'setup', to: '/setup', label: 'System Setup', icon: Wrench },
