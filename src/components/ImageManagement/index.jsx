@@ -12,16 +12,14 @@ const ImageManagement = () => {
   const handleCreateImage = () => setOpenImageCreateModal(true)
 
   return (
-    <div className="space-y-6">
-      <Card title="Image Management" icon={HardDrive} actions={
-        <Button variant="primary" onClick={() => handleCreateImage()} icon={PlusCircle}>Create Image</Button>
-      }>
-        <div className="space-y-6 min-h-[calc(100vh-14rem)]">
-          <ImagesList masters={masters} />
-        </div>
-      </Card>
+    <Card title="Image Management" className='bg-base-300' icon={HardDrive} actions={
+      <Button variant="primary" onClick={() => handleCreateImage()} icon={PlusCircle}>Create Image</Button>
+    }>
+      <div className="space-y-6 min-h-[calc(100vh-14rem)]">
+        <ImagesList masters={masters} />
+      </div>
       {openImageCreateModal && <CreateImageModal openImageCreateModal={openImageCreateModal} setOpenImageCreateModal={setOpenImageCreateModal} />}
-    </div>
+    </Card>
   );
 };
 

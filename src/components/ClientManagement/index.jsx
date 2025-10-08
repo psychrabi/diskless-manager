@@ -74,32 +74,28 @@ const ClientManagement = () => {
 
 
   return (
-    <div className="space-y-6">
-      <div className="mb-2 md:mb-4">
-        <Card title="Client Management" icon={Users} actions={
-          <Button variant="primary" onClick={handleClientFormModalOpen} icon={PlusCircle} disabled={masters.length === 0}>
-            Add Client {masters.length === 0 && <span className="text-xs text-error ml-2 self-center">(Requires Master Image)</span>}
-          </Button>
-        } >
-          <div className="min-h-[calc(100vh-15rem)]">
-            <MemoizedClientTable handleClientContextMenu={handleClientContextMenu} />
-            <MemoizedContextMenu isOpen={contextMenu.isOpen} xPos={contextMenu.x} yPos={contextMenu.y} targetClient={contextMenu.client} onClose={closeContextMenu} actions={contextActions} />
-          </div>
-        </Card>
-        <ClientFormModal client={client} setClient={setClient} masters={masters} isOpen={isModalOpen} setIsOpen={setIsModalOpen} refresh={fetchData} />
-        {deprovisionModal &&
-          <DeprovisionModal
-            isOpen={deprovisionModal.isOpen}
-            onClose={() => setDeprovisionModal({ isOpen: false, client: null })}
-            client={deprovisionModal.client}
-            onSuccess={() => {
-              fetchData();
-              setDeprovisionModal({ isOpen: false, client: null });
-            }}
-          />
-        }
+    <Card title="Client Management" icon={Users} className="bg-base-300" actions={
+      <Button variant="primary" onClick={handleClientFormModalOpen} icon={PlusCircle} disabled={masters.length === 0}>
+        Add Client {masters.length === 0 && <span className="text-xs text-error ml-2 self-center">(Requires Master Image)</span>}
+      </Button>
+    } >
+      <div className="min-h-[calc(100vh-15rem)]">
+        <MemoizedClientTable handleClientContextMenu={handleClientContextMenu} />
+        <MemoizedContextMenu isOpen={contextMenu.isOpen} xPos={contextMenu.x} yPos={contextMenu.y} targetClient={contextMenu.client} onClose={closeContextMenu} actions={contextActions} />
       </div>
-    </div>
+      <ClientFormModal client={client} setClient={setClient} masters={masters} isOpen={isModalOpen} setIsOpen={setIsModalOpen} refresh={fetchData} />
+      {deprovisionModal &&
+        <DeprovisionModal
+          isOpen={deprovisionModal.isOpen}
+          onClose={() => setDeprovisionModal({ isOpen: false, client: null })}
+          client={deprovisionModal.client}
+          onSuccess={() => {
+            fetchData();
+            setDeprovisionModal({ isOpen: false, client: null });
+          }}
+        />
+      }
+    </Card>
   );
 };
 

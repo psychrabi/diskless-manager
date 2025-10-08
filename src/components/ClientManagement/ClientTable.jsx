@@ -42,7 +42,7 @@ const ClientTable = ({ handleClientContextMenu }) => {
 
   return (
     <>
-      <Table className='border border-base-300'>
+      <Table className='bg-base-100 rounded-lg'>
         <TableHeader>
           <TableRow>
             <TableHead>Name</TableHead>

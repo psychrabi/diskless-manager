@@ -27,7 +27,7 @@ export const ImagesList = ({ masters }) => {
   }
 
   return (masters.map((master) => (
-    <Card key={master.id} className="rounded-lg bg-base-300 pt-2">
+    <Card key={master.id} className="rounded-lg pt-2">
       <div className="flex flex-wrap justify-between items-center mb-3 gap-2">
         <div className="flex items-center gap-2">
           <h4 className="text-lg font-medium break-all flex items-center gap-1">
