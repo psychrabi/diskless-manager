@@ -181,7 +181,7 @@ pub async fn get_service_config(token: String, service_key: String) -> Result<Va
         ("tftp-autoexec", TFTP_AUTOEXEC_PATH),
         ("tftpd-hpa", "/etc/default/tftpd-hpa"),
         ("target", "/etc/rtslib-fb-target/saveconfig.json"),
-        ("apache2", "/etc/apache2/sites-available/000-default.conf"),
+        ("apache2", "/etc/apache2/sites-available/diskless-server.conf"),
         ("smbd", "/etc/samba/smb.conf"),
         // Add more as needed
     ]
@@ -316,7 +316,7 @@ pub async fn save_service_config(token: String, service_key: String, content: St
         ("dhcp-clients", DHCP_CLIENTS_PATH),
         ("tftp-autoexec", TFTP_AUTOEXEC_PATH),
         ("tftpd-hpa", "/etc/default/tftpd-hpa"),
-        ("apache2", "/etc/apache2/sites-available/000-default.conf"),
+        ("apache2", "/etc/apache2/sites-available/diskless-server.conf"),
         ("smbd", "/etc/samba/smb.conf"),
         // Add more as needed
     ]
@@ -772,7 +772,7 @@ pub async fn configure_apache_server(token: String, http_config: HTTPConfig) -> 
     </Directory>
     
     # Enable directory browsing for boot files
-    <Directory {}/boot>
+    <Directory {}>
         Options +Indexes
         IndexOptions +FancyIndexing
     </Directory>
