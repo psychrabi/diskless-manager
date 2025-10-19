@@ -103,18 +103,19 @@ pub fn run() {
             license::activate_license,
             license::get_license_info,
             zfs::get_zfs_arcstat,
-            zfs::get_masters,
+            zfs::get_images,
             zfs::create_zfs_pool,
             zfs::get_zpool_list,
-            zfs::create_master,
-            zfs::delete_master,
-            zfs::rename_master,
+            zfs::create_image,
+            zfs::create_game_disk,
+            zfs::delete_image,
+            zfs::rename_image,
             zfs::create_snapshot,
             zfs::delete_snapshot,
             zfs::zfs_pool_exists,
-            zfs::set_default_master,
-            zfs::rollback_master_snapshot,
-            zfs::get_master_image_overview
+            zfs::set_default_image,
+            zfs::rollback_image_snapshot,
+            zfs::get_default_image_overview
         ])
         .setup(|app| {
             append_log("INFO", "Application startup");

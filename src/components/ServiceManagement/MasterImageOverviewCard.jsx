@@ -8,7 +8,7 @@ const MasterImageOverviewCard = () => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    invoke('get_master_image_overview')
+    invoke('get_default_image_overview')
       .then(data => {
         setOverview(data);
         setLoading(false);

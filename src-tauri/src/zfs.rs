@@ -78,7 +78,7 @@ fn parse_zfs_list(output: &str) -> Vec<Snapshot> {
 }
 
 #[tauri::command]
-pub fn create_master(token: String, name: String, size: String) -> Result<Value, String> {
+pub fn create_image(token: String, name: String, size: String) -> Result<Value, String> {
     // Validate authentication token
     crate::middleware::validate_auth_token_for_command(&token)
         .map_err(|e| format!("Authentication failed: {}", e.message))?;
@@ -106,7 +106,7 @@ pub fn create_master(token: String, name: String, size: String) -> Result<Value,
         "-V",
         &size,
         "-o",
-        "volblocksize=4K",
+        "volblocksize=128K",
         &master_zvol_name,
     ])?;
     let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -120,7 +120,7 @@ pub fn create_master(token: String, name: String, size: String) -> Result<Value,
     if !save_master_config(&master_data) {
         return Err("Failed to update config.json".to_string());
     }
-    append_log("INFO", &format!("create_master start: {}", name));
+    append_log("INFO", &format!("create_image start: {}", name));
     Ok(json!({
         "message": format!("Master ZVOL '{}' created successfully.", master_zvol_name),
         "master": {
@@ -131,8 +131,82 @@ pub fn create_master(token: String, name: String, size: String) -> Result<Value,
     }))
 }
 
+
 #[tauri::command]
-pub async fn get_masters(token: String) -> Result<Vec<Master>, String> {
+pub fn create_game_disk(token: String, name: String, size: String) -> Result<Value, String> {
+    // Validate authentication token
+    crate::middleware::validate_auth_token_for_command(&token)
+        .map_err(|e| format!("Authentication failed: {}", e.message))?;
+
+    // Validate provided name (no slashes, only alnum, underscore, hyphen)
+    if !regex::Regex::new(r"^[\w-]+$").unwrap().is_match(&name) {
+        return Err("Invalid game disk name format (use alphanumeric, _, -).".to_string());
+    }
+    if name.contains(' ') || name.contains('/') {
+        return Err("Game disk name cannot contain spaces or '/'.".to_string());
+    }
+
+    // Validate size format (e.g., 50G)
+    if !regex::Regex::new(r"^\d+[KMGTP]$")
+        .unwrap()
+        .is_match(&size.to_uppercase())
+    {
+        return Err("Invalid disk size format (e.g., '50G')".to_string());
+    }
+
+    // Ensure the games parent dataset exists: <zpool>/games
+    let games_parent = format!("{}/games", get_zpool_name());
+    if run_command_check(&["zfs", "list", "-H", &games_parent]) != 0 {
+        // create the parent dataset if missing
+        run_command(&["zfs", "create", &games_parent])?;
+    }
+
+    // Use given name for the zvol under <zpool>/games/<name>
+    let disk_name = format!("{}/{}-games", games_parent, name);
+    let status_code = run_command_check(&["zfs", "list", "-H", &disk_name]);
+    if status_code == 0 {
+        return Err(format!("Disk with the name '{}' already exists.", disk_name));
+    }
+
+    // Create the zvol
+    run_command(&[
+        "zfs",
+        "create",
+        "-s",
+        "-V",
+        &size,
+        "-o",
+        "volblocksize=128K",
+        &disk_name,
+    ])?;
+
+    let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let master_data = MasterData {
+        name: disk_name.clone(),
+        size: size.clone(),
+        snapshots: vec![],
+        created_at: now.clone(),
+        last_modified: now,
+    };
+
+    // Save to config (same behavior as create_image)
+    if !save_master_config(&master_data) {
+        return Err("Failed to update config.json".to_string());
+    }
+
+    append_log("INFO", &format!("create_game_disk start: {}", disk_name));
+    Ok(json!({
+        "message": format!("Game Disk '{}' created successfully.", disk_name),
+        "master": {
+            "id": disk_name,
+            "name": disk_name,
+            "snapshots": []
+        }
+    }))
+}
+
+#[tauri::command]
+pub async fn get_images(token: String) -> Result<Vec<Master>, String> {
     // Validate authentication token
     crate::middleware::validate_auth_token_for_command(&token)
         .map_err(|e| format!("Authentication failed: {}", e.message))?;
@@ -256,7 +330,7 @@ pub fn save_master_config(master_data: &MasterData) -> bool {
 }
 
 #[tauri::command]
-pub async fn delete_master(
+pub async fn delete_image(
     token: String,
     master_name: String,
 ) -> Result<serde_json::Value, String> {
@@ -306,16 +380,16 @@ pub async fn delete_master(
             }));
         }
     }
-    if !delete_master_config(&master_name) {
+    if !delete_image_config(&master_name) {
         print!("Failed to remove master from config.json");
     }
-    append_log("INFO", &format!("delete_master start: {}", master_name));
+    append_log("INFO", &format!("delete_image start: {}", master_name));
     Ok(json!({
         "message": format!("Master {} deleted successfully", master_name)
     }))
 }
 
-pub fn delete_master_config(master_name: &str) -> bool {
+pub fn delete_image_config(master_name: &str) -> bool {
     let mut config = get_config();
     if let Some(masters) = config.masters.as_object_mut() {
         if masters.remove(master_name).is_some() {
@@ -550,7 +624,7 @@ pub fn create_zfs_pool(name: String, disk: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn set_default_master(token: String, name: &str) -> Result<bool, String> {
+pub fn set_default_image(token: String, name: &str) -> Result<bool, String> {
     // Validate authentication token
     crate::middleware::validate_auth_token_for_command(&token)
         .map_err(|e| format!("Authentication failed: {}", e.message))?;
@@ -569,7 +643,7 @@ pub fn set_default_master(token: String, name: &str) -> Result<bool, String> {
 }
 
 #[tauri::command]
-pub async fn rollback_master_snapshot(
+pub async fn rollback_image_snapshot(
     token: String,
     _master_name: String,
     snapshot_name: String,
@@ -670,7 +744,7 @@ pub async fn get_zfs_arcstat() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-pub async fn get_master_image_overview() -> Result<serde_json::Value, String> {
+pub async fn get_default_image_overview() -> Result<serde_json::Value, String> {
     let config = get_config();
     let master_dataset = config
         .settings
@@ -713,7 +787,7 @@ pub async fn get_master_image_overview() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-pub async fn rename_master(
+pub async fn rename_image(
     token: String,
     old_name: String,
     new_name: String,

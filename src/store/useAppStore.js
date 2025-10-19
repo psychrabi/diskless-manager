@@ -39,7 +39,7 @@ export const useAppStore = create()(
           const token = localStorage.getItem('authToken') || '';
           const [servicesRes, mastersRes, clientsRes] = await Promise.all([
             invoke('check_package_status', { token }),
-            invoke('get_masters', { token }),
+            invoke('get_images', { token }),
             invoke('get_clients', { token }),
           ]);
           set({

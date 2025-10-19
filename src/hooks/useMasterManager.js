@@ -30,7 +30,7 @@ export const useMasterManager = () => {
     setIsCreateMasterModalOpen(false); // Close modal
     // Get token from localStorage
     const token = localStorage.getItem('authToken') || '';
-    await invoke('create_master', { token, name: newMasterName, size: newMasterSize })
+    await invoke('create_image', { token, name: newMasterName, size: newMasterSize })
       .then((response) => {
         if (response.message) showNotification(response.message, 'success');
       }).catch((error) => {
@@ -90,7 +90,7 @@ export const useMasterManager = () => {
     });
     if (ok) {
       const token = localStorage.getItem('authToken') || '';
-      await invoke('rollback_master_snapshot', { token, masterName: image, snapshotName: snapshot })
+      await invoke('rollback_image_snapshot', { token, masterName: image, snapshotName: snapshot })
         .then((response) => {
           if (response.message) showNotification(response.message, 'success');
         }).catch((error) => {
@@ -106,7 +106,7 @@ export const useMasterManager = () => {
   const setDefaultMaster = async (masterName) => {
     // Get token from localStorage
     const token = localStorage.getItem('authToken') || '';
-    invoke('set_default_master', { token, name: masterName })
+    invoke('set_default_image', { token, name: masterName })
       .then((response) => {
         if (response.message) showNotification(response.message, 'success');
       }).catch((error) => {
@@ -128,7 +128,7 @@ export const useMasterManager = () => {
     });
     if (ok) {
       const token = localStorage.getItem('authToken') || '';
-      await invoke('delete_master', { token, masterName: image })
+      await invoke('delete_image', { token, masterName: image })
         .then((response) => {
           if (response.message) showNotification(response.message, 'success');
           if (response.error) showNotification(response.error, 'error');
