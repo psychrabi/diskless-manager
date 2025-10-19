@@ -36,7 +36,7 @@ const ClientManagement = () => {
   const contextActions = useClientContextMenuActions(fetchData, closeContextMenu, setClient, setIsModalOpen, setDeprovisionModal);
 
   const handleClientFormModalOpen = useCallback(() => {
-    let newName = 'pc000'
+    let newName = 'PC101'
     let newIp = '192.168.1.101'
     if (clients.length > 0) {
       const lastClient = clients[clients.length - 1]
