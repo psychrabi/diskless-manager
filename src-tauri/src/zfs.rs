@@ -94,7 +94,7 @@ pub fn create_master(token: String, name: String, size: String) -> Result<Value,
     {
         return Err("Invalid size format (e.g., '50G')".to_string());
     }
-    let master_zvol_name = format!("{}/{}-master", get_zpool_name(), name);
+    let master_zvol_name = format!("{}/images/{}-master", get_zpool_name(), name);
     let status_code = run_command_check(&["zfs", "list", "-H", &master_zvol_name]);
     if status_code == 0 {
         return Err(format!("ZFS volume '{}' already exists.", master_zvol_name));

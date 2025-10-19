@@ -60,8 +60,9 @@ const Setup = () => {
 
   // Navigate to dashboard when everything is ready
   useEffect(() => {
-    const needsSetup = (services || []).some((svc) => !svc?.installed);
-    if (!needsSetup) {
+    const allServicesInstalled = !(services || []).some((svc) => !svc?.installed);
+    // only go to dashboard when services are installed AND zpool exists
+    if (allServicesInstalled && poolExists) {
       navigate('/');
     }
   }, [services, navigate]);

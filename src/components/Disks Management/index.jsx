@@ -58,7 +58,7 @@ export default function DisksManagement() {
   const onSubmit = async (data) => {
     setErr(null); setMsg(null); setLoading(true);
     try {
-      const resp = await invoke('create_zfs_dataset', { zpool: data.zpool, name: data.name, usage_type: data.usage_type });
+      const resp = await invoke('create_zfs_dataset', { zpool: data.zpool, name: data.name, usageType: data.usage_type });
       setMsg(String(resp));
       await fetchDatasets(data.zpool);
       reset({ zpool: data.zpool, name: '', usage_type: 'image' });

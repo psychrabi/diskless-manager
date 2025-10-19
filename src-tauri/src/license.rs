@@ -89,37 +89,37 @@ pub fn ensure_license_valid() -> Result<(), AuthError> {
         }
         // removed stray early return so remote re-check can run if license_key exists
         if let Some(val) = obj.get("license_key") {            
-            if let Some(key) = val.as_str() {
+            if let Some(_key) = val.as_str() {
                 // try to verify remote (best-effort)
                 return Ok(());
-                match verify_license_remote(key) {
-                    Ok(r) => {
-                        if r.valid {
-                            // persist valid status
-                            let mut cfg2 = config::read_config();
-                            let mut settings = cfg2.settings.as_object().cloned().unwrap_or_default();
-                            settings.insert("license_status".to_string(), serde_json::to_value("valid").unwrap_or_else(|_| serde_json::Value::String("valid".into())));
-                            if let Some(ex) = r.expires_at {
-                                settings.insert("license_expires".to_string(), serde_json::to_value(ex).unwrap_or(serde_json::Value::Null));
-                            }
-                            cfg2.settings = serde_json::Value::Object(settings);
-                            let _ = config::write_config(&cfg2);
-                            return Ok(());
-                        } else {
-                            return Err(AuthError { message: r.message.unwrap_or_else(|| "License invalid".to_string()) });
-                        }
-                    }
-                    Err(e) => {
-                        // If remote check fails, allow local cached valid status only.
-                        if let Some(val) = obj.get("license_status") {
-                            if val.as_str() == Some("valid") {
-                                append_log("WARN", "License server unreachable, using cached license status");
-                                return Ok(());
-                            }
-                        }
-                        return Err(AuthError { message: format!("License verification failed: {}", e) });
-                    }
-                }
+                // match verify_license_remote(key) {
+                //     Ok(r) => {
+                //         if r.valid {
+                //             // persist valid status
+                //             let mut cfg2 = config::read_config();
+                //             let mut settings = cfg2.settings.as_object().cloned().unwrap_or_default();
+                //             settings.insert("license_status".to_string(), serde_json::to_value("valid").unwrap_or_else(|_| serde_json::Value::String("valid".into())));
+                //             if let Some(ex) = r.expires_at {
+                //                 settings.insert("license_expires".to_string(), serde_json::to_value(ex).unwrap_or(serde_json::Value::Null));
+                //             }
+                //             cfg2.settings = serde_json::Value::Object(settings);
+                //             let _ = config::write_config(&cfg2);
+                //             return Ok(());
+                //         } else {
+                //             return Err(AuthError { message: r.message.unwrap_or_else(|| "License invalid".to_string()) });
+                //         }
+                //     }
+                //     Err(e) => {
+                //         // If remote check fails, allow local cached valid status only.
+                //         if let Some(val) = obj.get("license_status") {
+                //             if val.as_str() == Some("valid") {
+                //                 append_log("WARN", "License server unreachable, using cached license status");
+                //                 return Ok(());
+                //             }
+                //         }
+                //         return Err(AuthError { message: format!("License verification failed: {}", e) });
+                //     }
+                // }
             }
         }
     }
