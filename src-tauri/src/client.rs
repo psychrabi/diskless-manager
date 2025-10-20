@@ -4,7 +4,7 @@ use crate::{
     config::{get_config, get_zpool_name, read_config, write_config, Config},
     dhcp::{create_dhcp_entry, update_dhcp_config},
     iscsi::{cleanup_iscsi_target, setup_iscsi_target},
-    utils::{append_log, run_command, run_command_check},
+    utils::{append_log, run_command, run_command_check, run_command_output},
     zfs::{zfs_clone, zfs_destroy, zfs_exists},
 };
 
@@ -430,6 +430,20 @@ pub fn get_client_paths_with_master(
     map
 }
 
+// Helper: find a dataset marked org.diskless:type=writeback and return its name
+fn find_writeback_parent() -> Option<String> {
+    if let Ok(pool_list) = run_command_output(&["zfs", "list", "-H", "-o", "name", "-r", &get_zpool_name()]) {
+        for ds in pool_list.lines().filter(|l| !l.is_empty()) {
+            if let Ok(v) = run_command_output(&["zfs", "get", "-H", "-o", "value", "org.diskless:type", ds]) {
+                if v.trim() == "writeback" {
+                    return Some(ds.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 pub fn save_client_config(client_data: &Client) -> bool {
     // Operate directly on the Config struct to avoid multiple serde conversions.
     let mut cfg = get_config();
@@ -695,7 +709,29 @@ pub async fn add_client(token: String, req: AddClientRequest) -> Result<serde_js
 
     // Compute ZFS paths
     let mut paths = get_client_paths_with_master(&name, &mac, &master);
-
+    
+    // If a dataset with org.diskless:type=writeback exists, use it as the parent for client clones.
+    if let Ok(pool_list) = run_command_output(&["zfs", "list", "-H", "-o", "name", "-r", &get_zpool_name()]) {
+        if let Some(parent) = pool_list
+            .lines()
+            .filter(|l| !l.is_empty())
+            .find_map(|ds| {
+                match run_command_output(&["zfs", "get", "-H", "-o", "value", "org.diskless:type", ds]) {
+                    Ok(v) if v.trim() == "writeback" => Some(ds.to_string()),
+                    _ => None,
+                }
+            })
+        {
+            // Use found writeback dataset as parent for the clone path (preserve existing naming convention)
+            paths.insert("clone".to_string(), format!("{}/{}-disk", parent, name.to_uppercase()));
+            
+        } else {
+            // ensure default clone path exists in paths (fallback)
+            paths.insert("clone".to_string(), format!("{}/{}-disk", get_zpool_name(), name.to_uppercase()));
+        }
+    }
+    println!("Client paths: {:?}", paths);
+    
     // Create client image (ZFS clone or use master directly)
     let mut used_master_directly = false;
     if !snapshot.is_empty() {

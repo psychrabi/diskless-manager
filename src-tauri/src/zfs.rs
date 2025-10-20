@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::process::Command;
 
-use crate::utils::{append_log, run_command, run_command_check};
+use crate::utils::{append_log, run_command, run_command_check, run_command_output};
 use crate::{
     client::get_clients,
     config::{get_config, get_zpool_name, write_config, Config},
@@ -94,11 +94,40 @@ pub fn create_image(token: String, name: String, size: String) -> Result<Value, 
     {
         return Err("Invalid size format (e.g., '50G')".to_string());
     }
-    let master_zvol_name = format!("{}/images/{}-master", get_zpool_name(), name);
+
+
+
+      // Determine parent dataset for image zvols:
+    // If any existing dataset has property org.diskless:type=image, use that dataset as parent.
+    // Otherwise fallback to <zpool>/images and create it if missing.
+    let zpool = get_zpool_name();
+    let mut parent_dataset = format!("{}/images", zpool);
+
+    if let Ok(list_out) = run_command_output(&["zfs", "list", "-H", "-o", "name", "-r", &zpool]) {
+        for line in list_out.lines().map(|l| l.trim()).filter(|l| !l.is_empty()) {
+            if let Ok(prop) =
+                run_command_output(&["zfs", "get", "-H", "-o", "value", "org.diskless:type", line])
+            {
+                if prop.trim() == "image" {
+                    parent_dataset = line.to_string();
+                    break;
+                }
+            }
+        }
+    }
+
+    // Ensure parent exists (if we fell back to <zpool>/images)
+    if parent_dataset == format!("{}/images", zpool) && run_command_check(&["zfs", "list", "-H", &parent_dataset]) != 0 {
+        run_command(&["zfs", "create", &parent_dataset])?;
+    }
+
+    let master_zvol_name = format!("{}/{}", parent_dataset, name);
     let status_code = run_command_check(&["zfs", "list", "-H", &master_zvol_name]);
     if status_code == 0 {
-        return Err(format!("ZFS volume '{}' already exists.", master_zvol_name));
+        return Err(format!("Image '{}' already exists.", master_zvol_name));
     }
+
+
     run_command(&[
         "zfs",
         "create",
@@ -243,7 +272,7 @@ pub async fn get_images(token: String) -> Result<Vec<Master>, String> {
     // 3. Find master datasets and master snapshots
     let mut master_names = vec![];
     for ds in &all_datasets {
-        if ds.name.to_lowercase().ends_with("-master") {
+        if !ds.name.to_lowercase().ends_with("-disk") {
             master_names.push(ds.name.clone());
             continue;
         }
@@ -269,6 +298,19 @@ pub async fn get_images(token: String) -> Result<Vec<Master>, String> {
     // 4. For each master, get its snapshots
     let mut masters_data = vec![];
     for master_name in &master_names {
+        // Only include masters whose parent dataset has org.diskless:type=image
+        let parent = if let Some(p) = master_name.rfind('/') {
+            &master_name[..p]
+        } else {
+            // no parent -> skip
+            continue;
+        };
+        // try to read the custom property; if missing or not "image", skip this master
+        match run_command_output(&["zfs", "get", "-H", "-o", "value", "org.diskless:type", parent]) {
+            Ok(val) if val.trim() == "image" => { /* ok, include */ }
+            _ => continue,
+        }
+
         let mut snapshots = vec![];
         let snap_out = Command::new("sudo")
             .args([

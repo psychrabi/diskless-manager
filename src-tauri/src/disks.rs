@@ -1,7 +1,8 @@
 // New ZFS management commands: list_zpools, list_datasets, create_zfs_dataset
 
-use crate::utils::{run_command, run_command_output};
+use crate::utils::{run_command, run_command_output, run_command_check};
 use serde::Serialize;
+use regex::Regex;
 
 #[derive(Serialize)]
 pub struct DatasetInfo {
@@ -25,24 +26,52 @@ pub fn list_zpools() -> Result<Vec<String>, String> {
 pub fn list_datasets(zpool: &str) -> Result<Vec<DatasetInfo>, String> {
     // list datasets under the zpool and fetch org.diskless:type if set
     let out = run_command_output(&["zfs", "list", "-H", "-o", "name", "-r", zpool])?;
-    let mut res = Vec::new();
+    let mut with_type: Vec<DatasetInfo> = Vec::new();
+
     for line in out.lines().filter(|l| !l.is_empty()) {
         let name = line.to_string();
-        // try to read the custom property; if missing/failed, keep None
+        // try to read the custom property; if missing/failed, treat as not set
         let disk_type = match run_command_output(&["zfs", "get", "-H", "-o", "value", "org.diskless:type", &name]) {
             Ok(v) => {
                 let v = v.trim();
-                if v.is_empty() { None } else { Some(v.to_string()) }
+                // treat '-' or 'none' (zfs placeholder) as not set
+                if v.is_empty() || v == "-" || v.eq_ignore_ascii_case("none") {
+                    None
+                } else {
+                    Some(v.to_string())
+                }
             }
             Err(_) => None,
         };
-        res.push(DatasetInfo { name, disk_type });
+
+        if let Some(dt) = disk_type {
+            with_type.push(DatasetInfo { name, disk_type: Some(dt) });
+        }
     }
-    Ok(res)
+
+    // Exclude any dataset that is a child of another dataset in the list.
+    // e.g. if "pool/images" is present, do not include "pool/images/foo"
+    let names: Vec<String> = with_type.iter().map(|d| d.name.clone()).collect();
+    let mut result: Vec<DatasetInfo> = Vec::new();
+
+    'outer: for ds in with_type.into_iter() {
+        for parent in &names {
+            if parent == &ds.name {
+                continue;
+            }
+            if ds.name.starts_with(&format!("{}/", parent)) {
+                // ds is a child of `parent` which is also marked -> skip ds
+                continue 'outer;
+            }
+        }
+        result.push(ds);
+    }
+
+    Ok(result)
 }
 
 #[tauri::command]
-pub fn create_zfs_dataset(zpool: &str, name: &str, usage_type: &str) -> Result<String, String> {
+pub fn create_zfs_dataset(zpool: &str, name: &str, usage_type: &str, size: &str) -> Result<String, String> {
     // usage_type must be one of these
     let allowed = ["image", "writeback", "game"];
     if !allowed.contains(&usage_type) {
@@ -53,8 +82,55 @@ pub fn create_zfs_dataset(zpool: &str, name: &str, usage_type: &str) -> Result<S
         return Err("zpool and name are required".into());
     }
 
-    let dataset = format!("{}/{}", zpool, name);
+    let dataset = format!("{}/{}-disk", zpool, name);
 
+    if usage_type == "game" {
+        // size is required for game (zvol)
+        let size_trim = size.trim();
+        if size_trim.is_empty() {
+            return Err("size is required for game (zvol) disks, e.g. 20G".into());
+        }
+
+        // Validate size format (e.g., 50G)
+        if !Regex::new(r"^\d+[KMGTP]$")
+            .map_err(|e| format!("regex error: {}", e))?
+            .is_match(&size_trim.to_uppercase())
+        {
+            return Err("Invalid size format (e.g., '50G')".into());
+        }
+
+        // Ensure the games parent dataset exists: <zpool>/games
+        let games_parent = format!("{}/games", zpool);
+        if run_command_check(&["zfs", "list", "-H", &games_parent]) != 0 {
+            // create the parent dataset if missing
+            run_command(&["zfs", "create", &games_parent])?;
+        }
+
+        // Use given name for the zvol under <zpool>/games/<name>
+        let zvol_name = format!("{}/{}", games_parent, name);
+        let status_code = run_command_check(&["zfs", "list", "-H", &zvol_name]);
+        if status_code == 0 {
+            return Err(format!("ZFS volume '{}' already exists.", zvol_name));
+        }
+
+        // Create the zvol
+        run_command(&[
+            "zfs",
+            "create",
+            "-s",
+            "-V",
+            size_trim,
+            "-o",
+            "volblocksize=4K",
+            &zvol_name,
+        ])?;
+
+        // tag it with our custom property
+        let _ = run_command(&["zfs", "set", &format!("org.diskless:type={}", usage_type), &zvol_name]);
+
+        return Ok(format!("Created zvol {}", zvol_name));
+    }
+    
     // create dataset
     run_command(&["zfs", "create", &dataset])?;
     // tag it with our custom property

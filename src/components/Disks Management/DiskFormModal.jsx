@@ -32,7 +32,7 @@ const DiskFormModal = ({ zpools, isOpen, setIsOpen, refresh }) => {
 		setIsOpen(false);
 		showNotification(`Adding new disk ${data.name}`, 'info');
 		const token = localStorage.getItem('authToken') || '';
-		await invoke('create_zfs_dataset', { zpool: data.zpool, name: data.name, usageType: data.usage_type })
+		await invoke('create_zfs_dataset', { zpool: data.zpool, name: data.name, usageType: data.usage_type, size: data.size ?? ''})
 			.then((response) => {
 				if (response.message) showNotification(response.message, 'success');
 				reset({ zpool: data.zpool, name: '', usage_type: 'image', size: '' });
