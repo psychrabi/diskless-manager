@@ -16,13 +16,15 @@ export const ThemeProvider = ({ children }) => {
   const [theme, setThemeState] = useState('light');
 
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem('theme');
-      const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-      const initial = stored || (prefersDark ? 'dark' : 'light');
-      setThemeState(initial);
-      applyTheme(initial);
-    } catch { /* ignore */ }
+    (() => {
+      try {
+        const stored = localStorage.getItem('theme');
+        const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        const initial = stored || (prefersDark ? 'dark' : 'light');
+        setThemeState(initial);
+        applyTheme(initial);
+      } catch { /* ignore */ }
+    })();
   }, []);
 
   const setTheme = (next) => {

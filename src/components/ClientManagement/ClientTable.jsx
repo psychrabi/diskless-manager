@@ -1,13 +1,15 @@
 import { Layers, Monitor, Power, PowerOff, Zap } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 
-const Table = ({ children, className = '' }) => <div className={`w-full overflow-x-auto ${className}`}><table className="min-w-full">{children}</table></div>;
-const TableHeader = ({ children, className = '' }) => <thead className={`[&_tr]:border-b border-base-100 ${className}`}>{children}</thead>;
-const TableBody = ({ children, className = '' }) => <tbody className={`[&_tr:last-child]:border-0 ${className}`}>{children}</tbody>;
-const TableRow = ({ children, className = '', onContextMenu }) => <tr onContextMenu={onContextMenu} className={`border-b border-base-300 transition-colors hover:bg-base-300 ${className}`}>{children}</tr>;
-const TableHead = ({ children, className = '' }) => <th className={`h-12 px-4 align-middle font-bold text-base-content/60 ${className} `}>{children}</th>;
-const TableCell = ({ children, className = '' }) => <td className={`p-4 align-middle ${className} text-center`}>{children}</td>;
-const ClientStatusBadge = ({ status }) => {
+import React from 'react';
+
+const Table = React.memo(({ children, className = '' }) => <div className={`w-full overflow-x-auto ${className}`}><table className="min-w-full">{children}</table></div>);
+const TableHeader = React.memo(({ children, className = '' }) => <thead className={`[&_tr]:border-b border-base-100 ${className}`}>{children}</thead>);
+const TableBody = React.memo(({ children, className = '' }) => <tbody className={`[&_tr:last-child]:border-0 ${className}`}>{children}</tbody>);
+const TableRow = React.memo(({ children, className = '', onContextMenu }) => <tr onContextMenu={onContextMenu} className={`border-b border-base-300 transition-colors hover:bg-base-300 ${className}`}>{children}</tr>);
+const TableHead = React.memo(({ children, className = '' }) => <th className={`h-12 px-4 align-middle font-bold text-base-content/60 ${className} `}>{children}</th>);
+const TableCell = React.memo(({ children, className = '' }) => <td className={`p-4 align-middle ${className} text-center`}>{children}</td>);
+const ClientStatusBadge = React.memo(({ status }) => {
   const currentStatus = status || 'Offline';
   const isOnline = currentStatus === 'Online';
   const isLeased = currentStatus === 'Leased';
@@ -23,9 +25,9 @@ const ClientStatusBadge = ({ status }) => {
       {currentStatus}
     </span>
   );
-};
+});
 
-const ClientModeBadge = (client) => {
+const ClientModeBadge = React.memo(({ client }) => {
   return client.super ? (
     <span className="badge badge-warning gap-1" title="Using the image directly">
       <Zap className="h-3 w-3" /> Super Client
@@ -35,7 +37,27 @@ const ClientModeBadge = (client) => {
       <Layers className="h-3 w-3" />Writeback
     </span>
   )
-}
+});
+
+const ClientRow = React.memo(({ client, handleClientContextMenu }) => (
+  <TableRow key={client.id} onContextMenu={(e) => handleClientContextMenu(e, client)} className="cursor-context-menu">
+    <TableCell className="font-bold font-mono">
+      <Monitor className="inline mr-2 h-4 w-4" />
+      {client.name}
+    </TableCell>
+    <TableCell className="hidden md:table-cell text-xs font-mono">{client.mac}</TableCell>
+    <TableCell className='font-mono text-xs'>{client.ip}</TableCell>
+    <TableCell className="hidden md:table-cell text-xs font-mono break-all">{client.master}</TableCell>
+    <TableCell className="hidden xl:table-cell text-xs font-mono break-all">{client.snapshot ?? "-"}</TableCell>
+    <TableCell className="hidden xl:table-cell text-xs font-mono break-all">{client.block_device}</TableCell>              
+    <TableCell>
+      <ClientStatusBadge status={client.status} />
+    </TableCell>
+    <TableCell>
+      <ClientModeBadge client={client} />
+    </TableCell>
+  </TableRow>
+));
 
 const ClientTable = ({ handleClientContextMenu }) => {
   const { clients } = useAppStore()
@@ -57,23 +79,7 @@ const ClientTable = ({ handleClientContextMenu }) => {
         </TableHeader>
         <TableBody>
           {clients.map((client) => (
-            <TableRow key={client.id} onContextMenu={(e) => handleClientContextMenu(e, client)} className="cursor-context-menu">
-              <TableCell className="font-bold font-mono">
-                <Monitor className="inline mr-2 h-4 w-4" />
-                {client.name}
-              </TableCell>
-              <TableCell className="hidden md:table-cell text-xs font-mono">{client.mac}</TableCell>
-              <TableCell className='font-mono text-xs'>{client.ip}</TableCell>
-              <TableCell className="hidden md:table-cell text-xs font-mono break-all">{client.master}</TableCell>
-              <TableCell className="hidden xl:table-cell text-xs font-mono break-all">{client.snapshot ?? "-"}</TableCell>
-              <TableCell className="hidden xl:table-cell text-xs font-mono break-all">{client.block_device}</TableCell>              
-              <TableCell>
-                <ClientStatusBadge status={client.status} />
-              </TableCell>
-              <TableCell>
-                <ClientModeBadge client={client} />
-              </TableCell>
-            </TableRow>
+            <ClientRow key={client.id} client={client} handleClientContextMenu={handleClientContextMenu} />
           ))}
         </TableBody>
       </Table>

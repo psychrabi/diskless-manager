@@ -8,7 +8,7 @@ export const DeprovisionModal = ({
   client = null,
   onSuccess
 }) => {
-  const [mac, setMac] = useState('');
+  const [mac, setMac] = useState(client?.mac || '');
   const [force, setForce] = useState(false);
   const [keepZfs, setKeepZfs] = useState(false);
   const [dryRun, setDryRun] = useState(false);
@@ -24,14 +24,20 @@ export const DeprovisionModal = ({
     clearError
   } = useDeprovisioning();
 
-
-  const loadStatus = useCallback(async () => {
+  const loadStatus = useCallback(async (signal) => { // Accept signal
     if (!mac) return;
 
-    const result = await getDeprovisionStatus(mac);
-    if (result.success) {
-      setStatus(result.data);
-      setShowStatus(true);
+    try {
+      const result = await getDeprovisionStatus(mac);
+      if (signal.aborted) return; // Check if aborted
+
+      if (result.success) {
+        setStatus(result.data);
+        setShowStatus(true);
+      }
+    } catch (error) {
+      if (signal.aborted) return; // Check if aborted
+      console.error("Failed to load deprovision status:", error);
     }
   }, [mac, getDeprovisionStatus]);
 
@@ -65,7 +71,6 @@ export const DeprovisionModal = ({
   };
 
   const handleClose = () => {
-    setMac('');
     setForce(false);
     setKeepZfs(false);
     setDryRun(false);
@@ -77,15 +82,19 @@ export const DeprovisionModal = ({
 
   const canDeprovision = mac && !loading;
 
-    useEffect(() => {
-    if (client) {
-      setMac(client.mac);
-    }
-  }, [client]);
-
   useEffect(() => {
     if (isOpen && mac) {
-      loadStatus();
+      const abortController = new AbortController();
+      const signal = abortController.signal;
+
+      const fetchStatus = async () => {
+        await loadStatus(signal);
+      };
+      fetchStatus();
+
+      return () => {
+        abortController.abort();
+      };
     }
   }, [isOpen, mac, loadStatus]);
 

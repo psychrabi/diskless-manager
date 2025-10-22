@@ -65,7 +65,7 @@ const Setup = () => {
     if (allServicesInstalled && poolExists) {
       navigate('/');
     }
-  }, [services, navigate]);
+  }, [services, navigate, poolExists]);
 
   const handleCreatePool = (async (data) => {
     console.log(data);

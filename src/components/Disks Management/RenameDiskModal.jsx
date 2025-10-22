@@ -34,10 +34,7 @@ const RenameDiskModal = ({ openRenameModal, setOpenRenameModal, selectedDisk, re
 
     // Get token from localStorage
     const token = localStorage.getItem('authToken') || '';
-    await invoke('rename_zfs_dataset', {
-      old: selectedDisk.name,
-      new: data.newName
-    })
+    		await invoke('rename_zfs_dataset', { token, old: selectedDisk.name, new: data.newName })
       .then((response) => {
         if (response.message) showNotification(response.message, 'success');
         reset();

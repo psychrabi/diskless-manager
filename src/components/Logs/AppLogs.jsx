@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { Button, Card } from "../ui";
 
 export default function AppLogs({ tokenProp }) {
   const [logs, setLogs] = useState("");
@@ -36,24 +37,21 @@ export default function AppLogs({ tokenProp }) {
   }, []);
 
   return (
-    <div className="p-4">
-      <div className="flex items-center justify-between mb-2">
-        <h2 className="text-lg font-semibold">Application Logs</h2>
-        <div className="space-x-2">
-          <button onClick={load} className="btn btn-ghost" disabled={loading}>
+    <Card title="Application Logs" actions={<>
+     <Button onClick={load} className="btn btn-ghost" disabled={loading}>
             {loading ? "Loading…" : "Refresh"}
-          </button>
-          <button onClick={clearLogs} className="btn btn-error" disabled={loading}>
+          </Button>
+          <Button onClick={clearLogs} className="btn btn-error" disabled={loading}>
             Clear
-          </button>
-        </div>
-      </div>
-
-      <div className="border rounded p-2 bg-base-200">
-        <pre className="whitespace-pre-wrap break-words text-sm" style={{ maxHeight: "60vh", overflow: "auto" }}>
+          </Button>
+    </>}>
+      
+        <pre className="bg-base-300 p-3 rounded overflow-auto text-xs whitespace-pre-warp" style={{ maxHeight: "calc(100vh-14rem)", overflow: "auto" }}>
           {logs || "(no logs yet)"}
         </pre>
-      </div>
-    </div>
+      
+    
+
+    </Card>
   );
 }

@@ -26,25 +26,24 @@ export const AuthProvider = ({ children }) => {
   }, [logout]);
 
   useEffect(() => {
-    // Check if user is already logged in
-    const storedToken = localStorage.getItem('authToken');
-    const storedUser = localStorage.getItem('user');
+    (async () => {
+      const storedToken = localStorage.getItem('authToken');
+      const storedUser = localStorage.getItem('user');
 
-    if (storedToken && storedUser) {
-      try {
-        const parsedUser = JSON.parse(storedUser);
-        setToken(storedToken);
-        setUser(parsedUser);
-        
-        // Validate the token
-        validateToken(storedToken);
-      } catch {
-        // If parsing fails, clear the storage
-        localStorage.removeItem('authToken');
-        localStorage.removeItem('user');
+      if (storedToken && storedUser) {
+        try {
+          const parsedUser = JSON.parse(storedUser);
+          setToken(storedToken);
+          setUser(parsedUser);
+          
+          await validateToken(storedToken);
+        } catch {
+          localStorage.removeItem('authToken');
+          localStorage.removeItem('user');
+        }
       }
-    }
-    setLoading(false);
+      setLoading(false);
+    })();
   }, [validateToken]);
 
   const login = (userData, authToken) => {

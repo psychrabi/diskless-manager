@@ -35,7 +35,7 @@ const DiskTable = ({ disks }) => {
 		});
 		if (ok) {
 			const token = localStorage.getItem('authToken') || '';
-			await invoke('delete_zfs_dataset', { dataset: dataset.name, recursive: true })
+			await invoke('delete_zfs_dataset', { token, dataset: dataset.name, recursive: true })
 				.then((response) => {
 					if (response.message) showNotification(response.message, 'success');
 				}).catch((error) => {

@@ -17,7 +17,7 @@ export default function DisksManagement() {
     setIsModalOpen(true)
   }, [])
 
-  async function fetchZpools() {
+  const fetchZpools = useCallback(async () => {
     try {
       const res = await invoke('list_zpools');
       setZpools(res || []);
@@ -27,9 +27,9 @@ export default function DisksManagement() {
     } catch (e) {
       console.error(String(e));
     }
-  }
+  }, [selectedPool]);
 
-  async function fetchDatasets(pool) {
+  const fetchDatasets = useCallback(async (pool) => {
     if (!pool) {
       setDatasets([]);
       return;
@@ -40,15 +40,23 @@ export default function DisksManagement() {
     } catch (e) {
       console.error(String(e));
     }
-  }
+  }, []);
 
-  useEffect(() => { fetchZpools(); }, []);
+  useEffect(() => {
+    const getZpools = async () => {
+      await fetchZpools();
+    };
+    getZpools();
+  }, [fetchZpools]);
 
   useEffect(() => {
     if (selectedPool) {
-      fetchDatasets(selectedPool);
+      const getDatasets = async () => {
+        await fetchDatasets(selectedPool);
+      };
+      getDatasets();
     }
-  }, [selectedPool]);
+  }, [selectedPool, fetchDatasets]);
 
 
   return (

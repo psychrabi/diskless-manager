@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useForm } from 'react-hook-form';
 import { invoke } from '@tauri-apps/api/core';
 import { Card } from '../ui';
@@ -19,7 +19,7 @@ export default function LicenseActivation() {
   const [msg, setMsg] = useState(null);
   const [err, setErr] = useState(null);
 
-  async function fetchInfo() {
+  const fetchInfo = useCallback(async () => {
     try {
       const res = await invoke('get_license_info');
       console.log(res)
@@ -30,11 +30,11 @@ export default function LicenseActivation() {
     } catch (e) {
       setErr(String(e));
     }
-  }
+  }, [reset]);
 
   useEffect(() => {
     fetchInfo();
-  }, []);
+  }, [fetchInfo]);
 
   const onSubmit = async (data) => {
     setErr(null);
