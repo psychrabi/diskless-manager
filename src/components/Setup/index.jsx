@@ -1,10 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
+import { TableConfig } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useForm } from "react-hook-form";
 import { useNavigate } from "react-router-dom";
 import { useAppStore } from "../../store/useAppStore";
 import { Button, Card, Input, Select } from "../ui";
-import { TableConfig, X } from "lucide-react";
-import { useForm } from "react-hook-form";
 
 const Table = ({ children, className = '' }) => <div className={`w-full overflow-x-auto ${className}`}><table className="min-w-full">{children}</table></div>;
 const TableHeader = ({ children, className = '' }) => <thead className={`[&_tr]:border-b border-base-100 ${className}`}>{children}</thead>;
@@ -19,7 +19,7 @@ const Setup = () => {
   const [poolExists, setPoolExists] = useState(null);
   const [installing, setInstalling] = useState('');
   const { services, setServices } = useAppStore();
-  const {poolName} = useAppStore();
+  const { poolName } = useAppStore();
 
   const {
     register,
@@ -91,18 +91,18 @@ const Setup = () => {
   };
 
   const isZfsInstalled = services?.some(s => s.name === 'zfsutils-linux' && s.installed);
-const zfsNotInstalledMessage = !isZfsInstalled && (
-  <div className="alert alert-warning  relative my-4 transition-opacity duration-300">
-    <span>zfsutils-linux package is not installed. Please install it to create ZFS pools.</span>		
-  </div>
-);
+  const zfsNotInstalledMessage = !isZfsInstalled && (
+    <div className="alert alert-warning  relative my-4 transition-opacity duration-300">
+      <span>zfsutils-linux package is not installed. Please install it to create ZFS pools.</span>
+    </div>
+  );
 
   return (
     <Card title="Initial Setup" icon={TableConfig}>
       <Card title="ZFS Pool Create" className={`bg-base-300 ${poolExists ? 'hidden' : ''}`}>
         <form onSubmit={handleSubmit(handleCreatePool)}>
           <div className="space-y-4">
-            <Select register={register('disk')} disabled={!isZfsInstalled} label="Select a disk to create ZFS Pool:"> 
+            <Select register={register('disk')} disabled={!isZfsInstalled} label="Select a disk to create ZFS Pool:">
               <option value="">-- Select Disk --</option>
               {disks.map(disk => (
                 <option key={disk.name} value={disk.name}> {disk.name} ({disk.size}) </option>

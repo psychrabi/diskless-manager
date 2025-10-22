@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { useEffect, useState } from "react";
 import { Button, Card } from "../ui";
 
 export default function AppLogs({ tokenProp }) {
@@ -37,21 +37,17 @@ export default function AppLogs({ tokenProp }) {
   }, []);
 
   return (
-    <Card title="Application Logs" actions={<>
-     <Button onClick={load} className="btn btn-ghost" disabled={loading}>
-            {loading ? "Loading…" : "Refresh"}
-          </Button>
-          <Button onClick={clearLogs} className="btn btn-error" disabled={loading}>
-            Clear
-          </Button>
+    <Card title="Application Logs" className="bg-base-200" actions={<>
+      <Button onClick={load} className="btn btn-info" disabled={loading}>
+        {loading ? "Loading…" : "Refresh"}
+      </Button>
+      <Button onClick={clearLogs} className="btn btn-error" disabled={loading}>
+        Clear
+      </Button>
     </>}>
-      
-        <pre className="bg-base-300 p-3 rounded overflow-auto text-xs whitespace-pre-warp" style={{ maxHeight: "calc(100vh-14rem)", overflow: "auto" }}>
-          {logs || "(no logs yet)"}
-        </pre>
-      
-    
-
+      <pre className="bg-base-300 p-3 rounded overflow-auto text-xs whitespace-pre-wrap max-h-[calc(100vh-20rem)]">
+        {logs || "(no logs yet)"}
+      </pre>
     </Card>
   );
 }

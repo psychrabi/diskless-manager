@@ -1,11 +1,11 @@
 //! Authentication module for JWT-based authentication
+use crate::license::ensure_license_valid;
+use crate::utils::append_log;
 use bcrypt::{hash, verify, DEFAULT_COST};
 use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-
-use crate::utils::append_log;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct User {
@@ -55,7 +55,9 @@ impl From<String> for AuthError {
 
 impl From<&str> for AuthError {
     fn from(s: &str) -> Self {
-        AuthError { message: s.to_string() }
+        AuthError {
+            message: s.to_string(),
+        }
     }
 }
 
@@ -82,11 +84,9 @@ const SECRET_KEY: &str = "diskless_manager_secret_key_2025"; // In production, u
 
 pub fn authenticate_user(username: &str, password: &str) -> Result<LoginResponse, AuthError> {
     // Find user by username in the in-memory store (base data)
-    let user = USERS
-        .get(username)
-        .ok_or_else(|| AuthError {
-            message: "Invalid username or password".to_string(),
-        })?;
+    let user = USERS.get(username).ok_or_else(|| AuthError {
+        message: "Invalid username or password".to_string(),
+    })?;
 
     // Determine which password hash to use:
     // - If username is "admin" and a hashed admin_password exists in config.json, use that.
@@ -178,7 +178,7 @@ pub fn login(request: LoginRequest) -> Result<LoginResponse, AuthError> {
     append_log("INFO", &format!("login attempt: user={}", username));
 
     // gate login behind activated license
-    // crate::license::ensure_license_valid()?;
+    ensure_license_valid()?;
 
     let auth_result = authenticate_user(&username, &password);
 
@@ -205,7 +205,11 @@ pub fn validate_auth_token(token: &str) -> Result<Claims, AuthError> {
 
 // Tauri command for updating admin password
 #[tauri::command]
-pub fn update_admin_password(token: &str, old_password: &str, new_password: &str) -> Result<String, AuthError> {
+pub fn update_admin_password(
+    token: &str,
+    old_password: &str,
+    new_password: &str,
+) -> Result<String, AuthError> {
     // validate token and ensure caller is admin
     let claims = validate_token(token)?;
     if claims.role != "admin" {
@@ -244,20 +248,23 @@ pub fn update_admin_password(token: &str, old_password: &str, new_password: &str
     }
 
     // hash the new password server-side
-    let hashed = hash(new_password, DEFAULT_COST)
-        .map_err(|e| AuthError { message: format!("Failed to hash password: {}", e) })?;
+    let hashed = hash(new_password, DEFAULT_COST).map_err(|e| AuthError {
+        message: format!("Failed to hash password: {}", e),
+    })?;
 
     // update config with the hashed password
     let mut cfg = crate::config::read_config();
     let mut settings = cfg.settings.as_object().cloned().unwrap_or_default();
     settings.insert(
         "admin_password".to_string(),
-        serde_json::to_value(&hashed)
-            .map_err(|e| AuthError { message: format!("Failed to serialize password: {}", e) })?,
+        serde_json::to_value(&hashed).map_err(|e| AuthError {
+            message: format!("Failed to serialize password: {}", e),
+        })?,
     );
     cfg.settings = serde_json::Value::Object(settings);
-    crate::config::write_config(&cfg)
-        .map_err(|e| AuthError { message: format!("Failed to save admin password: {}", e) })?;
+    crate::config::write_config(&cfg).map_err(|e| AuthError {
+        message: format!("Failed to save admin password: {}", e),
+    })?;
 
     append_log("INFO", "admin password updated");
     Ok("Admin password updated successfully".to_string())

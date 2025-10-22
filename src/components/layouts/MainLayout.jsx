@@ -1,8 +1,8 @@
-import { Loading, Notification, Error } from '@/components/ui'
+import { Error, Loading, Notification } from '@/components/ui';
 import { useNotification } from '@/contexts/notification';
-import { useAppStore } from '@/store/useAppStore'
-import { lazy, useEffect, useState } from 'react'
-import { Outlet, useNavigation } from 'react-router'
+import { useAppStore } from '@/store/useAppStore';
+import { Activity, lazy, useEffect, useState } from 'react';
+import { Outlet, useNavigation } from 'react-router';
 
 const Sidebar = lazy(() => import("@/components/layouts/Sidebar"));
 const Header = lazy(() => import("@/components/layouts/Header"));
@@ -14,11 +14,11 @@ const MainLayout = () => {
 	const navigation = useNavigation();
 	const isNavigating = Boolean(navigation.location);
 	const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-    const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+	const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
-    const toggleSidebarCollapse = () => {
-        setIsSidebarCollapsed(prevState => !prevState);
-    };
+	const toggleSidebarCollapse = () => {
+		setIsSidebarCollapsed(prevState => !prevState);
+	};
 
 	useEffect(() => {
 		fetchData()
@@ -35,17 +35,17 @@ const MainLayout = () => {
 				}}
 				isOpen={isSidebarOpen}
 				onClose={() => setIsSidebarOpen(false)}
-                isCollapsed={isSidebarCollapsed}
-                onToggleCollapse={toggleSidebarCollapse}
+				isCollapsed={isSidebarCollapsed}
+				onToggleCollapse={toggleSidebarCollapse}
 			/>
 
 			{/* Backdrop on small screens */}
-			{isSidebarOpen && (
+			<Activity mode={isSidebarOpen ? 'visible' : 'hidden'}>
 				<div
 					className="fixed inset-0 z-30 bg-black/50 lg:hidden"
 					onClick={() => setIsSidebarOpen(false)}
 				/>
-			)}
+			</Activity>
 
 			<div className="flex-1 flex flex-col overflow-hidden">
 				<Header onToggleSidebar={() => setIsSidebarOpen((v) => !v)} />
