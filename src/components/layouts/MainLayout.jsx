@@ -14,6 +14,11 @@ const MainLayout = () => {
 	const navigation = useNavigation();
 	const isNavigating = Boolean(navigation.location);
 	const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+    const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+
+    const toggleSidebarCollapse = () => {
+        setIsSidebarCollapsed(prevState => !prevState);
+    };
 
 	useEffect(() => {
 		fetchData()
@@ -30,6 +35,8 @@ const MainLayout = () => {
 				}}
 				isOpen={isSidebarOpen}
 				onClose={() => setIsSidebarOpen(false)}
+                isCollapsed={isSidebarCollapsed}
+                onToggleCollapse={toggleSidebarCollapse}
 			/>
 
 			{/* Backdrop on small screens */}
