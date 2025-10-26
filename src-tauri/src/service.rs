@@ -1,14 +1,13 @@
-use crate::config::{get_config, set_config, write_config, Config};
-use crate::utils::run_command;
-use crate::DHCP_CONFIG_PATH;
-use crate::DHCP_CLIENTS_PATH;
-use crate::TFTP_AUTOEXEC_PATH;
+use crate::config::{get_config, set_config, write_config};
+use crate::{DHCP_CONFIG_PATH, DHCP_CLIENTS_PATH, TFTP_AUTOEXEC_PATH};
 use async_process::Command as AsyncCommand;
+use futures::io::AsyncWriteExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use crate::utils::append_log;
+use crate::utils::{append_log, run_command, run_command_output};
 use std::collections::HashMap;
-use std::process::Command;
+
+use std::process::Stdio;
 
 #[derive(Deserialize)]
 pub struct ServiceControlRequest {
@@ -23,23 +22,6 @@ pub struct PackageStatus {
     configured: bool,
     running: bool,
     version: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct InstallationProgress {
-    package: String,
-    status: String,
-    progress: u8,
-    message: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct DHCPLease {
-    ip: String,
-    mac: String,
-    hostname: String,
-    lease_time: String,
-    status: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -82,286 +64,280 @@ pub struct SambaShare {
     guest_ok: bool,
 }
 
+// Common auth validator
+fn validate_token(token: &str) -> Result<(), String> {
+    match crate::middleware::validate_auth_token_for_command(token) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(format!("Authentication failed: {}", e.message)),
+    }
+}
+
+// Helper: Write content to path using sudo tee (async)
+async fn write_with_sudo_tee(path: &str, content: &str) -> Result<(), String> {
+    let mut child = AsyncCommand::new("sudo")
+        .arg("tee")
+        .arg(path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to spawn sudo tee for {}: {}", path, e))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(content.as_bytes()).await
+            .map_err(|e| format!("Failed to write to stdin for {}: {}", path, e))?;
+    }
+
+    let output = child.output().await
+        .map_err(|e| format!("Failed to wait for tee on {}: {}", path, e))?;
+
+    if !output.status.success() {
+        Err(format!("Failed to write {}: {}", path, String::from_utf8_lossy(&output.stderr)))
+    } else {
+        Ok(())
+    }
+}
+
+// Helper: Restart service async
+async fn restart_service_async(service: &str) -> Result<(), String> {
+    match run_command(["systemctl", "restart", service]) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(format!("Failed to restart {}: {}", service, e))
+    }
+}
+
+// Helper: Check package installed
+async fn check_package_installed(package: &str) -> Result<bool, String> {
+    let output = AsyncCommand::new("dpkg-query")
+        .args(["-W", "-f=${Status}", package])
+        .output()
+        .await
+        .map_err(|e| format!("dpkg-query failed for {}: {}", package, e))?;
+
+    Ok(output.status.success() && String::from_utf8_lossy(&output.stdout).trim() == "install ok installed")
+}
+
+// Helper: Check service running
+async fn check_service_running(service: &str) -> Result<bool, String> {
+    let service_name = match service {
+        "isc-dhcp-server" => "isc-dhcp-server.service".to_string(),
+        "tftpd-hpa" => "tftpd-hpa.service".to_string(),
+        "apache2" => "apache2.service".to_string(),
+        "samba" => "smbd.service".to_string(),
+        _ => format!("{}.service", service),
+    };
+
+    let output = AsyncCommand::new("systemctl")
+        .args(["is-active", "--quiet", &service_name])
+        .output()
+        .await
+        .map_err(|e| format!("systemctl check failed for {}: {}", service, e))?;
+
+    Ok(output.status.success())
+}
+
+// Helper: Get package version
+async fn get_package_version(package: &str) -> Result<Option<String>, String> {
+    let output = AsyncCommand::new("dpkg-query")
+        .args(["-W", "-f=${Version}", package])
+        .output()
+        .await
+        .map_err(|e| format!("dpkg-query version failed for {}: {}", package, e))?;
+
+    if output.status.success() {
+        Ok(String::from_utf8(output.stdout).ok().map(|s| s.trim().to_string()))
+    } else {
+        Ok(None)
+    }
+}
+
+// Helper: Save config section
+fn save_config_section(key: &str, value: Value) -> Result<(), String> {
+    let mut cfg = get_config();
+    if let Some(settings) = cfg.settings.as_object_mut() {
+        settings.insert(key.to_string(), value);
+    } else {
+        cfg.settings = json!({ (key): value });
+    }
+    write_config(&cfg)?;
+    set_config(&cfg);
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn get_services(token: String, zfs_pool: String) -> Result<Value, String> {
-    // Validate authentication token
-    crate::middleware::validate_auth_token_for_command(&token)
-        .map_err(|e| format!("Authentication failed: {}", e.message))?;
-    let mut statuses = HashMap::new();
-    print!("Getting services status... \n");
-    let service_map = vec![
+    validate_token(&token)?;
+    append_log("INFO", "get_services called");
+
+    let service_map = [
         ("iscsi", "rtslib-fb-targetctl.service"),
         ("dhcp", "isc-dhcp-server.service"),
         ("tftp", "tftpd-hpa.service"),
         ("http", "apache2.service"),
         ("share", "smbd.service"),
     ];
+
+    let mut statuses = HashMap::new();
     for (key, service_name) in service_map {
         let output = AsyncCommand::new("systemctl")
             .args(["is-active", service_name])
             .output()
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("systemctl is-active failed for {}: {}", service_name, e))?;
+
         let status = if output.status.success() {
             String::from_utf8_lossy(&output.stdout).trim().to_string()
         } else {
             "inactive".to_string()
         };
-        print!("Service {} status: {} \n", service_name, status);
-        statuses.insert(
-            key,
-            json!({
-                "name": key,
-                "service": service_name.trim_end_matches(".service"),
-                "status": status
-            }),
-        );
+
+        statuses.insert(key.to_string(), json!({
+            "name": key,
+            "service": service_name.trim_end_matches(".service"),
+            "status": status
+        }));
     }
-    let zfs_status = match AsyncCommand::new("sudo")
-        .args(["zpool", "status", &zfs_pool])
-        .output()
-        .await
-    {
-        Ok(output) if output.status.success() => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let pool_state = stdout
-                .lines()
+
+    // ZFS status
+    let zfs_status = match run_command_output(["zpool", "status", &zfs_pool]) {
+        Ok(stdout) => {
+            let pool_state = stdout.lines()
                 .find_map(|line| {
                     if line.trim_start().starts_with("state:") {
-                        Some(line.split(':').nth(1).unwrap_or("").trim())
+                        line.split(':').nth(1).map(|s| s.trim().to_string())
                     } else {
                         None
                     }
                 })
-                .unwrap_or("unknown");
-            let status = if pool_state == "ONLINE" {
-                "active"
-            } else {
-                "degraded"
-            };
-            status.to_string()
+                .unwrap_or("unknown".to_string());
+            if pool_state == "ONLINE" { "active" } else { "degraded" }.to_string()
         }
-        Ok(_) => "error".to_string(),
-        Err(_) => "error".to_string(),
+        _ => "error".to_string(),
     };
-    statuses.insert(
-        "zfs",
-        json!({
-            "name": format!("ZFS Pool ({})", zfs_pool),
-            "service": "zfs",
-            "status": zfs_status
-        }),
-    );
 
-    // --- Update config.json with the new statuses using config cache ---
-    let mut config: Config = get_config();
-    config.services = serde_json::to_value(&statuses).unwrap_or(json!({}));
-    if let Err(e) = write_config(&config) {
-        println!("Error writing services status to config: {}", e);
-        // Optionally: return an error here if you want to fail the command
-    } else {
-        set_config(&config); // update cache after write
-    }
+    statuses.insert("zfs".to_string(), json!({
+        "name": format!("ZFS Pool ({})", zfs_pool),
+        "service": "zfs",
+        "status": zfs_status
+    }));
 
-    Ok(serde_json::to_value(statuses).unwrap())
+    save_config_section("services", serde_json::to_value(&statuses).map_err(|e| e.to_string())?)?;
+
+    Ok(serde_json::to_value(statuses).map_err(|e| e.to_string())?)
 }
 
 #[tauri::command]
 pub async fn get_service_config(token: String, service_key: String) -> Result<Value, String> {
-    append_log("INFO", &format!("get_service_config start: key={}", service_key));
-    // Validate authentication token
-    crate::middleware::validate_auth_token_for_command(&token)
-        .map_err(|e| format!("Authentication failed: {}", e.message))?;
-    // Map service keys to config file paths
-    let config_file_map: HashMap<&str, &str> = [
-        ("isc-dhcp-server", DHCP_CONFIG_PATH),
-        // DHCP static client leases (separate include file)
-        ("dhcp-clients", DHCP_CLIENTS_PATH),
-        // TFTP autoexec (IPXE) editable file
-        ("tftp-autoexec", TFTP_AUTOEXEC_PATH),
-        ("tftpd-hpa", "/etc/default/tftpd-hpa"),
-        ("target", "/etc/rtslib-fb-target/saveconfig.json"),
-        ("apache2", "/etc/apache2/sites-available/diskless-server.conf"),
-        ("smbd", "/etc/samba/smb.conf"),
-        // Add more as needed
-    ]
-    .iter()
-    .cloned()
-    .collect();
+    validate_token(&token)?;
+    append_log("INFO", &format!("get_service_config: {}", service_key));
 
-    if service_key == "zfs" {
-        // Get ZFS pool and dataset info
-        let zpool_status = AsyncCommand::new("sudo")
-            .args(["zpool", "status"])
-            .output()
-            .await
-            .map_err(|e| format!("Failed to run zpool status: {e}"))?;
-        let zpool_status_str = String::from_utf8_lossy(&zpool_status.stdout);
+    match service_key.as_str() {
+        "zfs" => {
+            let zpool = run_command_output(["zpool", "status"])
+                .map_err(|e| format!("zpool status failed: {}", e))?;
+            let zfs_list = run_command_output(["zfs", "list", "-t", "all", "-o", "name,type,used,avail,refer,mountpoint"])
+                .map_err(|e| format!("zfs list failed: {}", e))?;
 
-        let zfs_list = AsyncCommand::new("sudo")
-            .args([
-                "zfs",
-                "list",
-                "-t",
-                "all",
-                "-o",
-                "name,type,used,avail,refer,mountpoint",
-            ])
-            .output()
-            .await
-            .map_err(|e| format!("Failed to run zfs list: {e}"))?;
-        let zfs_list_str = String::from_utf8_lossy(&zfs_list.stdout);
-
-        let content = format!(
-            "=== ZFS Pool Status ===\n{}\n\n=== ZFS Datasets ===\n{}",
-            zpool_status_str, zfs_list_str
-        );
-        Ok(serde_json::json!({ "text": content }))
-    } else if service_key == "target" {
-        // Only return the output of 'sudo targetcli ls'
-        let iscsi_output = AsyncCommand::new("sudo")
-            .args(["targetcli", "ls"])
-            .output()
-            .await
-            .map_err(|e| format!("Failed to get targetcli ls: {e}"))?;
-
-        let iscsi_config = String::from_utf8_lossy(&iscsi_output.stdout);
-        let content = format!("=== TargetCLI Config ===\n\n\n{}", iscsi_config);
-        Ok(serde_json::json!({ "text": content }))
-    } else {
-        // Look up config file path
-        let config_path = config_file_map
-            .get(service_key.as_str())
-            .ok_or_else(|| format!("Unknown service key: {}", service_key))?;
-
-        // Check file existence and type
-        if !std::path::Path::new(config_path).exists() {
-            return Err(format!("Configuration file not found: {}", config_path));
+            let content = format!(
+                "=== ZFS Pool Status ===\n{}\n\n=== ZFS Datasets ===\n{}",
+                zpool, zfs_list
+            );
+            Ok(json!({ "text": content }))
         }
-        if !std::path::Path::new(config_path).is_file() {
-            return Err(format!("Configuration path is not a file: {}", config_path));
+        "target" => {
+            let output = run_command_output(["targetcli", "ls"])
+                .map_err(|e| format!("targetcli ls failed: {}", e))?;
+            let content = format!("=== TargetCLI Config ===\n\n{}", output);
+            Ok(json!({ "text": content }))
         }
+        _ => {
+            let config_file_map = [
+                ("isc-dhcp-server", DHCP_CONFIG_PATH),
+                ("dhcp-clients", DHCP_CLIENTS_PATH),
+                ("tftp-autoexec", TFTP_AUTOEXEC_PATH),
+                ("tftpd-hpa", "/etc/default/tftpd-hpa"),
+                ("target", "/etc/rtslib-fb-target/saveconfig.json"),
+                ("apache2", "/etc/apache2/sites-available/diskless-server.conf"),
+                ("smbd", "/etc/samba/smb.conf"),
+            ];
 
-        // Read using sudo cat to avoid direct Rust file I/O
-        let output = AsyncCommand::new("sudo")
-            .args(["cat", config_path])
-            .output()
-            .await
-            .map_err(|e| format!("Failed to read config via sudo: {}", e))?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            append_log("ERROR", &format!("get_service_config sudo failed for {}: {}", config_path, stderr));
-            return Err(format!("Failed to read config via sudo: {}", stderr));
-        };
-        let content = String::from_utf8_lossy(&output.stdout).to_string();
-        append_log("INFO", &format!("get_service_config success: key={} bytes={}", service_key, content.len()));
-        Ok(serde_json::json!({ "text": content }))
+            let path = config_file_map.iter()
+                .find_map(|&(k, v)| if k == service_key.as_str() { Some(v) } else { None })
+                .ok_or_else(|| format!("Unknown service: {}", service_key))?;
+
+            if !std::path::Path::new(path).exists() {
+                return Err(format!("Config not found: {}", path));
+            }
+
+            match run_command_output(["cat", path]) {
+                Ok(content) => {
+                    append_log("INFO", &format!("Read {}: {} bytes", service_key, content.len()));
+                    Ok(json!({ "text": content }))
+                },
+                Err(e) => Err(format!("Failed to read {}: {}", path, e))
+            }
+        }
     }
 }
 
 #[tauri::command]
-pub async fn control_service(
-    token: String,
-    service_key: String,
-    req: ServiceControlRequest,
-) -> Result<Value, String> {
-    // Validate authentication token
-    crate::middleware::validate_auth_token_for_command(&token)
-        .map_err(|e| format!("Authentication failed: {}", e.message))?;
-    let service_map: HashMap<&str, &str> = [
+pub async fn control_service(token: String, service_key: String, req: ServiceControlRequest) -> Result<Value, String> {
+    validate_token(&token)?;
+
+    let service_map = [
         ("rtslib-fb-targetctl", "rtslib-fb-targetctl.service"),
         ("isc-dhcp-server", "isc-dhcp-server.service"),
         ("tftpd-hpa", "tftpd-hpa.service"),
         ("apache2", "apache2.service"),
         ("smbd", "smbd.service"),
-    ]
-    .iter()
-    .cloned()
-    .collect();
-    let Some(&service_name) = service_map.get(service_key.as_str()) else {
-        return Err(format!("Unknown service key: {}", service_key));
-    };
+    ];
 
-    run_command(&["systemctl", &req.action, service_name])?;
+    let service_name = service_map.iter()
+        .find_map(|&(k, v)| if k == service_key.as_str() { Some(v) } else { None })
+        .ok_or_else(|| format!("Unknown service: {}", service_key))?;
+
+    crate::utils::run_command(&["systemctl", &req.action, service_name])?;
 
     Ok(json!({
-        "message": format!("Service '{}' {} command issued successfully.", service_name, &req.action)
+        "message": format!("Service '{}' {} issued successfully.", service_name, &req.action)
     }))
 }
 
 #[tauri::command]
 pub async fn install_service(service: String, token: String) -> Result<(), String> {
-    // Validate authentication token
-    crate::middleware::validate_auth_token_for_command(&token)
-        .map_err(|e| format!("Authentication failed: {}", e.message))?;
-    let status = AsyncCommand::new("sudo")
-        .args(&["apt-get", "install", "-y", &service])
-        .status()
-        .await
-        .map_err(|e| e.to_string())?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("Failed to install {}", service))
+    validate_token(&token)?;
+
+    match run_command(["apt-get", "install", "-y", &service]) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(format!("Failed to install {}: {}", service, e))
     }
 }
 
 #[tauri::command]
 pub async fn save_service_config(token: String, service_key: String, content: String) -> Result<(), String> {
-    // Validate authentication token
-    crate::middleware::validate_auth_token_for_command(&token)
-        .map_err(|e| format!("Authentication failed: {}", e.message))?;
-    let config_file_map: HashMap<&str, &str> = [
+    validate_token(&token)?;
+
+    let config_file_map = [
         ("isc-dhcp-server", DHCP_CONFIG_PATH),
         ("dhcp-clients", DHCP_CLIENTS_PATH),
         ("tftp-autoexec", TFTP_AUTOEXEC_PATH),
         ("tftpd-hpa", "/etc/default/tftpd-hpa"),
         ("apache2", "/etc/apache2/sites-available/diskless-server.conf"),
         ("smbd", "/etc/samba/smb.conf"),
-        // Add more as needed
-    ]
-    .iter()
-    .cloned()
-    .collect();
+    ];
 
-    let config_path = config_file_map
-        .get(service_key.as_str())
-        .ok_or_else(|| format!("Unknown service key: {}", service_key))?;
+    let path = config_file_map.iter()
+        .find_map(|&(k, v)| if k == service_key.as_str() { Some(v) } else { None })
+        .ok_or_else(|| format!("Unknown service: {}", service_key))?;
 
-    // Write using sudo tee for protected files
-    let mut child = Command::new("sudo")
-        .arg("tee")
-        .arg(config_path)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to spawn sudo tee: {}", e))?;
-
-    if let Some(stdin) = child.stdin.as_mut() {
-        use std::io::Write;
-        stdin
-            .write(content.as_bytes())
-            .map_err(|e| format!("Failed to write to stdin: {}", e))?;
-    }
-    let output = child
-        .wait_with_output()
-        .map_err(|e| format!("Failed to wait for tee: {}", e))?;
-    if !output.status.success() {
-        return Err(format!(
-            "Failed to write config: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-    Ok(())
+    write_with_sudo_tee(path, &content).await
 }
 
 #[tauri::command]
 pub async fn check_package_status(token: String) -> Result<Value, String> {
-    // Validate authentication token
-    crate::middleware::validate_auth_token_for_command(&token)
-        .map_err(|e| format!("Authentication failed: {}", e.message))?;
-    let packages = vec![
+    validate_token(&token)?;
+
+    let packages = [
         ("isc-dhcp-server", "isc-dhcp-server"),
         ("tftpd-hpa", "tftpd-hpa"),
         ("rtslib-fb-targetctl", "targetcli-fb"),
@@ -372,118 +348,39 @@ pub async fn check_package_status(token: String) -> Result<Value, String> {
     ];
 
     let mut status_list = Vec::new();
-
     for (service, package) in packages {
         let installed = check_package_installed(package).await?;
-        let running = if installed {
-            check_service_running(service).await?
-        } else {
-            false
-        };
-        let version = if installed {
-            get_package_version(package).await?
-        } else {
-            None
-        };
+        let running = if installed { check_service_running(service).await? } else { false };
+        let version = if installed { get_package_version(package).await? } else { None };
 
         status_list.push(PackageStatus {
             name: package.to_string(),
             service: service.to_string(),
             installed,
-            configured: running, // Simplified - running implies configured
+            configured: running,
             running,
             version,
         });
     }
 
-    // Convert discovered package/service statuses to a serde_json::Value
-    let services_value: Value = serde_json::to_value(&status_list)
-        .map_err(|e| format!("Failed to serialize package status for persistence: {}", e))?;
+    let services_value = serde_json::to_value(&status_list)
+        .map_err(|e| format!("Serialization failed: {}", e))?;
 
-    // Persist services state so it's stored in config.json and visible across restarts.
-    if let Err(e) = save_services_state(&services_value) {
-        println!("[WARN] Failed to persist services state: {}", e);
+    if let Err(e) = save_config_section("services", services_value.clone()) {
+        append_log("WARN", &format!("Persist services failed: {}", e));
     } else {
-        append_log("INFO", "Persisted services state to config.json");
+        append_log("INFO", "Persisted services state");
     }
 
-    // Return the package status to the caller
     Ok(services_value)
-}
-
-async fn check_package_installed(package: &str) -> Result<bool, String> {
-    match AsyncCommand::new("dpkg-query")
-        .args(&["-W", "-f=${Status}", package])
-        .output()
-        .await
-    {
-        Ok(output) => {
-            if !output.status.success() {
-                // Package unknown or not installed
-                return Ok(false);
-            }
-            let status = String::from_utf8_lossy(&output.stdout);
-            Ok(status.trim() == "install ok installed")
-        }
-        Err(e) => {
-            eprintln!("Warning: dpkg-query not available for check_package_installed({}): {}", package, e);
-            Ok(false)
-        }
-    }
-}
-
-async fn check_service_running(service: &str) -> Result<bool, String> {
-    let service_name = match service {
-        "isc-dhcp-server" => "isc-dhcp-server",
-        "tftpd-hpa" => "tftpd-hpa",
-        "apache2" => "apache2",
-        "samba" => "smbd",
-        _ => service,
-    };
-
-    let output = AsyncCommand::new("systemctl")
-        .args(&["is-active", "--quiet", service_name])
-        .output()
-        .await
-        .map_err(|e| format!("Failed to run 'systemctl is-active {}': {}", service_name, e))?;
-    // Non-zero exit means not active, not an execution error
-    Ok(output.status.success())
-}
-
-async fn get_package_version(package: &str) -> Result<Option<String>, String> {
-    match AsyncCommand::new("dpkg-query")
-        .args(&["-W", "-f=${Version}", package])
-        .output()
-        .await
-    {
-        Ok(output) => {
-            if output.status.success() {
-                Ok(String::from_utf8(output.stdout).ok())
-            } else {
-                Ok(None)
-            }
-        }
-        Err(e) => {
-            eprintln!("Warning: dpkg-query not available for get_package_version({}): {}", package, e);
-            Ok(None)
-        }
-    }
 }
 
 #[tauri::command]
 pub async fn install_packages() -> Result<String, String> {
-    // Update package list first
-    let update_result = AsyncCommand::new("sudo")
-        .args(&["apt", "update"])
-        .output()
-        .await;
+    // Update
+    let _ = run_command(["apt", "update"]);
 
-    if update_result.is_err() {
-        return Err("Failed to update package list".to_string());
-    }
-
-    // Install all required packages
-    let packages = vec![
+    let packages = [
         "isc-dhcp-server",
         "tftpd-hpa",
         "targetcli-fb",
@@ -492,56 +389,26 @@ pub async fn install_packages() -> Result<String, String> {
         "samba-common-bin",
     ];
 
-    let mut install_cmd = AsyncCommand::new("sudo");
-    install_cmd.args(&["apt", "install", "-y"]);
-    for package in &packages {
-        install_cmd.arg(package);
-    }
-
-    match install_cmd.output().await {
-        Ok(output) => {
-            if output.status.success() {
-                Ok("All packages installed successfully".to_string())
-            } else {
-                let error = String::from_utf8_lossy(&output.stderr);
-                Err(format!("Installation failed: {}", error))
-            }
-        }
-        Err(e) => Err(format!("Failed to run installation: {}", e)),
+    // Prepare args: ["apt", "install", "-y", pkg1, pkg2, ...]
+    let mut args = vec!["apt", "install", "-y"];
+    args.extend(packages);
+    
+    match run_command(&args) {
+        Ok(_) => Ok("Packages installed successfully".to_string()),
+        Err(e) => Err(format!("Installation failed: {}", e))
     }
 }
 
 #[tauri::command]
 pub async fn restart_service(service: &str) -> Result<(), String> {
-    match AsyncCommand::new("sudo")
-        .args(&["systemctl", "restart", service])
-        .output()
-        .await
-    {
-        Ok(output) => {
-            if output.status.success() {
-                Ok(())
-            } else {
-                let error = String::from_utf8_lossy(&output.stderr);
-                Err(format!("Failed to restart {}: {}", service, error))
-            }
-        }
-        Err(e) => Err(format!("Failed to restart {}: {}", service, e)),
-    }
+    restart_service_async(service).await
 }
 
 #[tauri::command]
 pub async fn configure_dhcp_server(token: String, config: DHCPConfig) -> Result<String, String> {
-    // Validate authentication token
-    crate::middleware::validate_auth_token_for_command(&token)
-        .map_err(|e| format!("Authentication failed: {}", e.message))?;
+    validate_token(&token)?;
 
-    // Save to config
-    let mut cfg = crate::config::read_config();
-    let mut settings = cfg.settings.as_object().cloned().unwrap_or_default();
-    settings.insert("dhcp".to_string(), serde_json::to_value(&config).map_err(|e| e.to_string())?);
-    cfg.settings = serde_json::Value::Object(settings);
-    crate::config::write_config(&cfg).map_err(|e| format!("Failed to save DHCP config: {}", e))?;
+    save_config_section("dhcp", serde_json::to_value(&config).map_err(|e| e.to_string())?)?;
 
     let dhcp_config = format!(
         r#"# Global Config
@@ -598,24 +465,10 @@ allow booting;
 allow bootp;
 one-lease-per-client true;
 
-
 # Define a class for PXE clients
 class "pxeclients" {{
   match if substring(option vendor-class-identifier, 0, 9) = "PXEClient";
 }}
-
-#on commit {{
-#  set clip = binary-to-ascii(10, 8, ".", leased-address);
-#  set clmac = concat(
-#    suffix(concat("0", binary-to-ascii(16, 8, "", substring(hardware, 1, 1))), 2), ":",
-#    suffix(concat("0", binary-to-ascii(16, 8, "", substring(hardware, 2, 1))), 2), ":",
-#    suffix(concat("0", binary-to-ascii(16, 8, "", substring(hardware, 3, 1))), 2), ":",
-#    suffix(concat("0", binary-to-ascii(16, 8, "", substring(hardware, 4, 1))), 2), ":",
-#    suffix(concat("0", binary-to-ascii(16, 8, "", substring(hardware, 5, 1))), 2), ":",
-#    suffix(concat("0", binary-to-ascii(16, 8, "", substring(hardware, 6, 1))), 2)
-#  );
-#  execute("/usr/local/bin/provision_client.sh", clmac);
-#}}
 
 # DHCP Configuration
 subnet {} netmask {} {{
@@ -652,56 +505,25 @@ include "/etc/dhcp/clients.conf";
         config.dns_server1,
         config.dns_server2,
         config.broadcast_ip,
-        config.next_server_ip, 
+        config.next_server_ip,
         config.boot_server_ip,
         config.boot_script,
         config.boot_file_legacy,
         config.boot_file_uefi32,
-        config.boot_file_uefi64,
+        config.boot_file_uefi64
     );
 
-    // Write with sudo tee instead of fs::write
-    let mut child = Command::new("sudo")
-        .arg("tee")
-        .arg(DHCP_CONFIG_PATH)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to spawn sudo tee: {}", e))?;
-    if let Some(stdin) = child.stdin.as_mut() {
-        use std::io::Write;
-        stdin
-            .write(dhcp_config.as_bytes())
-            .map_err(|e| format!("Failed to write to stdin: {}", e))?;
-    }
-    let output = child
-        .wait_with_output()
-        .map_err(|e| format!("Failed to wait for tee: {}", e))?;
-    if !output.status.success() {
-        return Err(format!(
-            "Failed to write DHCP config: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
+    write_with_sudo_tee(DHCP_CONFIG_PATH, &dhcp_config).await?;
+    restart_service_async("isc-dhcp-server").await?;
 
-    // Restart DHCP service
-    restart_service("isc-dhcp-server").await?;
     Ok("DHCP server configured successfully".to_string())
 }
 
 #[tauri::command]
 pub async fn configure_tftp_server(token: String, tftp_config: TFTPConfig) -> Result<String, String> {
-    // Validate authentication token
-    crate::middleware::validate_auth_token_for_command(&token)
-        .map_err(|e| format!("Authentication failed: {}", e.message))?;
+    validate_token(&token)?;
 
-    // Save to config
-    let mut cfg = crate::config::read_config();
-    let mut settings = cfg.settings.as_object().cloned().unwrap_or_default();
-    settings.insert("tftp".to_string(), serde_json::to_value(&tftp_config).map_err(|e| e.to_string())?);
-    cfg.settings = serde_json::Value::Object(settings);
-    crate::config::write_config(&cfg).map_err(|e| format!("Failed to save TFTP config: {}", e))?;
+    save_config_section("tftp", serde_json::to_value(&tftp_config).map_err(|e| e.to_string())?)?;
 
     let tftp_content = format!(
         r#"# Defaults for tftpd-hpa
@@ -713,52 +535,20 @@ TFTP_OPTIONS="{}"
         tftp_config.tftp_root, tftp_config.tftp_server_ip, tftp_config.tftp_options
     );
 
-    // Create TFTP directory if it doesn't exist
-    if let Err(e) = std::fs::create_dir_all(&tftp_config.tftp_root) {
-        return Err(format!("Failed to create TFTP directory: {}", e));
-    }
+    std::fs::create_dir_all(&tftp_config.tftp_root)
+        .map_err(|e| format!("Create TFTP dir failed: {}", e))?;
 
-    // Write with sudo tee instead of fs::write
-    let mut child = Command::new("sudo")
-        .arg("tee")
-        .arg("/etc/default/tftpd-hpa")
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to spawn sudo tee: {}", e))?;
-    if let Some(stdin) = child.stdin.as_mut() {
-        use std::io::Write;
-        stdin
-            .write(tftp_content.as_bytes())
-            .map_err(|e| format!("Failed to write to stdin: {}", e))?;
-    }
-    let output = child
-        .wait_with_output()
-        .map_err(|e| format!("Failed to wait for tee: {}", e))?;
-    if !output.status.success() {
-        return Err(format!(
-            "Failed to write TFTP config: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
+    write_with_sudo_tee("/etc/default/tftpd-hpa", &tftp_content).await?;
+    restart_service_async("tftpd-hpa").await?;
 
-    restart_service("tftpd-hpa").await?;
     Ok("TFTP server configured successfully".to_string())
 }
 
 #[tauri::command]
 pub async fn configure_apache_server(token: String, http_config: HTTPConfig) -> Result<String, String> {
-    // Validate authentication token
-    crate::middleware::validate_auth_token_for_command(&token)
-        .map_err(|e| format!("Authentication failed: {}", e.message))?;
+    validate_token(&token)?;
 
-    // Save to config
-    let mut cfg = crate::config::read_config();
-    let mut settings = cfg.settings.as_object().cloned().unwrap_or_default();
-    settings.insert("http".to_string(), serde_json::to_value(&http_config).map_err(|e| e.to_string())?);
-    cfg.settings = serde_json::Value::Object(settings);
-    crate::config::write_config(&cfg).map_err(|e| format!("Failed to save HTTP config: {}", e))?;
+    save_config_section("http", serde_json::to_value(&http_config).map_err(|e| e.to_string())?)?;
 
     let apache_config = format!(
         r#"<VirtualHost {}:{}>
@@ -781,53 +571,22 @@ pub async fn configure_apache_server(token: String, http_config: HTTPConfig) -> 
         http_config.http_server_ip, http_config.http_server_port, http_config.http_root, http_config.http_root, http_config.http_root
     );
 
-    // Create HTTP directory if it doesn't exist
-    if let Err(e) = std::fs::create_dir_all(&http_config.http_root) {
-        return Err(format!("Failed to create HTTP directory: {}", e));
-    }
+    std::fs::create_dir_all(&http_config.http_root)
+        .map_err(|e| format!("Create HTTP dir failed: {}", e))?;
 
-    // Write with sudo tee instead of fs::write
-    let mut child = Command::new("sudo")
-        .arg("tee")
-        .arg("/etc/apache2/sites-available/diskless-server.conf")
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to spawn sudo tee: {}", e))?;
-    if let Some(stdin) = child.stdin.as_mut() {
-        use std::io::Write;
-        stdin
-            .write(apache_config.as_bytes())
-            .map_err(|e| format!("Failed to write to stdin: {}", e))?;
-    }
-    let output = child
-        .wait_with_output()
-        .map_err(|e| format!("Failed to wait for tee: {}", e))?;
-    if !output.status.success() {
-        return Err(format!(
-            "Failed to write Apache config: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
+    write_with_sudo_tee("/etc/apache2/sites-available/diskless-server.conf", &apache_config).await?;
 
-    // Enable the site and restart Apache
-    let _ = AsyncCommand::new("sudo")
-        .args(&["a2ensite", "diskless-server.conf"]) 
-        .output()
-        .await;
+    let _ = run_command(["a2ensite", "diskless-server.conf"]);
+    restart_service_async("apache2").await?;
 
-    restart_service("apache2").await?;
     Ok("Apache server configured successfully".to_string())
 }
 
 #[tauri::command]
 pub async fn configure_samba_server(token: String, shares: Vec<SambaShare>) -> Result<String, String> {
-    // Validate authentication token
-    crate::middleware::validate_auth_token_for_command(&token)
-        .map_err(|e| format!("Authentication failed: {}", e.message))?;
-    let mut samba_config = String::from(
-        r#"[global]
+    validate_token(&token)?;
+
+    let mut samba_config = r#"[global]
    workgroup = WORKGROUP
    server string = Diskless Boot Server
    netbios name = DISKLESS-SERVER
@@ -835,8 +594,7 @@ pub async fn configure_samba_server(token: String, shares: Vec<SambaShare>) -> R
    map to guest = bad user
    dns proxy = no
 
-"#,
-    );
+"#.to_string();
 
     for share in shares {
         samba_config.push_str(&format!(
@@ -855,69 +613,25 @@ pub async fn configure_samba_server(token: String, shares: Vec<SambaShare>) -> R
             if share.guest_ok { "yes" } else { "no" }
         ));
 
-        // Create share directory if it doesn't exist
-        if let Err(e) = std::fs::create_dir_all(&share.path) {
-            return Err(format!(
-                "Failed to create share directory {}: {}",
-                share.path, e
-            ));
-        }
+        std::fs::create_dir_all(&share.path)
+            .map_err(|e| format!("Create share dir {} failed: {}", share.path, e))?;
     }
 
-    // Write with sudo tee instead of fs::write
-    let mut child = Command::new("sudo")
-        .arg("tee")
-        .arg("/etc/samba/smb.conf")
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to spawn sudo tee: {}", e))?;
-    if let Some(stdin) = child.stdin.as_mut() {
-        use std::io::Write;
-        stdin
-            .write(samba_config.as_bytes())
-            .map_err(|e| format!("Failed to write to stdin: {}", e))?;
-    }
-    let output = child
-        .wait_with_output()
-        .map_err(|e| format!("Failed to wait for tee: {}", e))?;
-    if !output.status.success() {
-        return Err(format!(
-            "Failed to write Samba config: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
+    write_with_sudo_tee("/etc/samba/smb.conf", &samba_config).await?;
+    restart_service_async("smbd").await?;
+    restart_service_async("nmbd").await?;
 
-    restart_service("smbd").await?;
-    restart_service("nmbd").await?;
     Ok("Samba server configured successfully".to_string())
 }
 
-// Persist services object into the main Config and refresh in-memory cache
 pub fn save_services_state(services: &Value) -> Result<(), String> {
-    // ensure we have a baseline config value
-    let mut cfg_val: Value = match serde_json::to_value(get_config()) {
-        Ok(v) => v,
-        Err(_) => json!({
-            "clients": [],
-            "masters": {},
-            "services": {},
-            "settings": {}
-        }),
-    };
-
-    // replace/insert services key
-    cfg_val["services"] = services.clone();
-
-    // convert back to typed Config and write
-    let config_struct: Config = serde_json::from_value(cfg_val)
-        .map_err(|e| format!("Failed to convert merged config to struct: {}", e))?;
-    write_config(&config_struct)
-        .map_err(|e| format!("Failed to write config.json: {}", e))?;
-
-    // refresh the in-memory cache used by the app
-    crate::config::set_config(&config_struct);
-
+    let mut cfg = get_config();
+    if let Some(settings) = cfg.settings.as_object_mut() {
+        settings.insert("services".to_string(), services.clone());
+    } else {
+        cfg.settings = json!({ "services": services });
+    }
+    write_config(&cfg)?;
+    set_config(&cfg);
     Ok(())
 }

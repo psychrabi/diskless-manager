@@ -14,10 +14,10 @@ use futures::future::join_all;
 use tokio::task;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::process::Stdio;
+use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
-use std::{collections::HashMap, process::Command};
+use std::collections::HashMap;
 
 trait WaitTimeout {
     fn wait_timeout(&mut self, dur: Duration) -> std::io::Result<Option<std::process::ExitStatus>>;
@@ -431,18 +431,18 @@ pub fn get_client_paths_with_master(
 }
 
 // Helper: find a dataset marked org.diskless:type=writeback and return its name
-fn find_writeback_parent() -> Option<String> {
-    if let Ok(pool_list) = run_command_output(&["zfs", "list", "-H", "-o", "name", "-r", &get_zpool_name()]) {
-        for ds in pool_list.lines().filter(|l| !l.is_empty()) {
-            if let Ok(v) = run_command_output(&["zfs", "get", "-H", "-o", "value", "org.diskless:type", ds]) {
-                if v.trim() == "writeback" {
-                    return Some(ds.to_string());
-                }
-            }
-        }
-    }
-    None
-}
+// fn find_writeback_parent() -> Option<String> {
+//     if let Ok(pool_list) = run_command_output(&["zfs", "list", "-H", "-o", "name", "-r", &get_zpool_name()]) {
+//         for ds in pool_list.lines().filter(|l| !l.is_empty()) {
+//             if let Ok(v) = run_command_output(&["zfs", "get", "-H", "-o", "value", "org.diskless:type", ds]) {
+//                 if v.trim() == "writeback" {
+//                     return Some(ds.to_string());
+//                 }
+//             }
+//         }
+//     }
+//     None
+// }
 
 pub fn save_client_config(client_data: &Client) -> bool {
     // Operate directly on the Config struct to avoid multiple serde conversions.
@@ -478,35 +478,25 @@ fn get_latest_snapshot(master_name: &str) -> Result<String, String> {
     
     // Get all snapshots for the master image, sorted by creation time
     // Try without -r flag first, then with it if needed
-    let output = Command::new("sudo")
-        .args([
-            "zfs", "list", "-H", "-t", "snapshot", "-o", "name,creation", master_name,
-        ])
-        .output()
-        .map_err(|e| format!("Failed to list snapshots: {}", e))?;
-
-    let output = if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        append_log("DEBUG:", &format!(" First attempt failed: {}", stderr));
-        
-        // Try with -r flag as fallback
-        let output = Command::new("sudo")
-            .args([
-                "zfs", "list", "-H", "-t", "snapshot", "-o", "name,creation", "-r", master_name,
-            ])
-            .output()
-            .map_err(|e| format!("Failed to list snapshots with -r flag: {}", e))?;
+    let stdout = match run_command_output([
+        "zfs", "list", "-H", "-t", "snapshot", "-o", "name,creation", master_name,
+    ]) {
+        Ok(output) => output,
+        Err(e) => {
+            append_log("DEBUG:", &format!(" First attempt failed: {}", e));
             
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("Failed to list snapshots for {}: {}", master_name, stderr));
+            // Try with -r flag as fallback
+            match run_command_output([
+                "zfs", "list", "-H", "-t", "snapshot", "-o", "name,creation", "-r", master_name,
+            ]) {
+                Ok(output) => output,
+                Err(e) => {
+                    return Err(format!("Failed to list snapshots for {}: {}", master_name, e));
+                }
+            }
         }
-        output
-    } else {
-        output
     };
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    
     append_log("DEBUG:", &format!(" ZFS list output for {}: {}", master_name, stdout));
 
     let snapshots: Vec<(String, u64)> = stdout
@@ -1193,11 +1183,7 @@ pub async fn control_client(
 
                 // Debug: Let's also try a simple zfs list command to see what's available
                 append_log("DEBUG:", &format!(" Testing ZFS list command for master: {}", client.master));
-                let test_output = Command::new("sudo")
-                    .args(["zfs", "list", "-t", "snapshot", &client.master])
-                    .output();
-                if let Ok(output) = test_output {
-                    let stdout = String::from_utf8_lossy(&output.stdout);
+                if let Ok(stdout) = run_command_output(["zfs", "list", "-t", "snapshot", &client.master]) {
                     append_log("DEBUG:", &format!(" Simple ZFS list output: {}", stdout));
                 }
 
@@ -1211,18 +1197,12 @@ pub async fn control_client(
                         append_log("DEBUG:", &format!(" Failed to find existing snapshots: {}", e));
                         
                         // Try to find any snapshot manually using a simpler approach
-                        let manual_output = Command::new("sudo")
-                            .args(["zfs", "list", "-H", "-t", "snapshot", "-o", "name", &client.master])
-                            .output();
-                        
-                        if let Ok(output) = manual_output {
-
-                                let stdout = String::from_utf8_lossy(&output.stdout);
-                                append_log("DEBUG:", &format!(" Manual snapshot search output: {}", stdout));
-                                
-                                // Find the first snapshot that contains the master name
-                                if let Some(first_snapshot) = stdout.lines()
-                                    .find(|line| line.contains(&client.master) && line.contains('@')) {
+                        if let Ok(stdout) = run_command_output(["zfs", "list", "-H", "-t", "snapshot", "-o", "name", &client.master]) {
+                            append_log("DEBUG:", &format!(" Manual snapshot search output: {}", stdout));
+                            
+                            // Find the first snapshot that contains the master name
+                            if let Some(first_snapshot) = stdout.lines()
+                                .find(|line| line.contains(&client.master) && line.contains('@')) {
                                     append_log("DEBUG:", &format!(" Found snapshot manually: {}", first_snapshot));
                                     first_snapshot.to_string()
                                 } else {
@@ -1258,16 +1238,8 @@ pub async fn control_client(
                 }
                 
                 // Use a more detailed command execution for better error reporting
-                let clone_output = Command::new("sudo")
-                    .args(["zfs", "clone", &latest_snapshot, &clone_path])
-                    .output()
-                    .map_err(|e| format!("Failed to execute zfs clone command: {}", e))?;
-                
-                if !clone_output.status.success() {
-                    let stderr = String::from_utf8_lossy(&clone_output.stderr);
-                    let stdout = String::from_utf8_lossy(&clone_output.stdout);
-                    return Err(format!("ZFS clone failed: {}\nStderr: {}\nStdout: {}", 
-                        format!("zfs clone {} {}", latest_snapshot, clone_path), stderr, stdout));
+                if let Err(e) = run_command(["zfs", "clone", &latest_snapshot, &clone_path]) {
+                    return Err(format!("ZFS clone failed: {} -> {}: {}", latest_snapshot, clone_path, e));
                 }
                 
                 append_log("DEBUG:", &format!(" Successfully created ZFS clone from {} to {}", latest_snapshot, clone_path));
@@ -1418,22 +1390,17 @@ pub async fn deprovision_client(
     }
 
     // Execute the deprovisioning script
-    let output = Command::new("sudo")
-        .args(&args)
-        .output()
-        .map_err(|e| format!("Failed to execute deprovision script: {}", e))?;
-
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        Ok(serde_json::json!({
-            "success": true,
-            "message": "Client deprovisioned successfully",
-            "output": stdout.trim()
-        }))
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        Err(format!("Deprovisioning failed: {}\n{}", stderr, stdout))
+    match run_command_output(&args) {
+        Ok(output) => {
+            Ok(serde_json::json!({
+                "success": true,
+                "message": "Client deprovisioned successfully",
+                "output": output.trim()
+            }))
+        }
+        Err(e) => {
+            Err(format!("Deprovisioning failed: {}", e))
+        }
     }
 }
 
@@ -1536,31 +1503,16 @@ pub async fn get_deprovision_status(
 
     // Check iSCSI target (targetcli often requires sudo and may write to stderr)
     let iscsi_exists = {
-        // First attempt: sudo targetcli ls
-        let out1 = Command::new("sudo").args(["targetcli", "ls"]).output();
-        if let Ok(o) = out1 {
-            let txt = String::from_utf8_lossy(&o.stdout);
-            let err = String::from_utf8_lossy(&o.stderr);
-            let combined = format!("{}{}", txt, err);
-            if combined.contains(&target_iqn) {
-                true
-            } else {
-                // Fallback: sudo targetcli /iscsi ls
-                match Command::new("sudo")
-                    .args(["targetcli", "/iscsi", "ls"])
-                    .output()
-                {
-                    Ok(o2) => {
-                        let txt2 = String::from_utf8_lossy(&o2.stdout);
-                        let err2 = String::from_utf8_lossy(&o2.stderr);
-                        let combined2 = format!("{}{}", txt2, err2);
-                        combined2.contains(&target_iqn)
-                    }
+        // First try 'targetcli ls'
+        match run_command_output(["targetcli", "ls"]) {
+            Ok(output) if output.contains(&target_iqn) => true,
+            _ => {
+                // Fallback: try 'targetcli /iscsi ls'
+                match run_command_output(["targetcli", "/iscsi", "ls"]) {
+                    Ok(output) => output.contains(&target_iqn),
                     Err(_) => false,
                 }
             }
-        } else {
-            false
         }
     };
     println!("iscsi_exists: {}", iscsi_exists);

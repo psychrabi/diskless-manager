@@ -39,6 +39,7 @@ bcrypt = "0.15.0"
 rand = "0.8.5"
 lazy_static = "1.4.0"
 reqwest = { version = "0.11", features = ["blocking", "json", "rustls-tls"] }
+thiserror = "2.0.17"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-single-instance = "2"

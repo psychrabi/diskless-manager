@@ -881,6 +881,7 @@ dependencies = [
  "tauri-plugin-log",
  "tauri-plugin-process",
  "tauri-plugin-single-instance",
+ "thiserror 2.0.17",
  "tokio",
  "which",
 ]

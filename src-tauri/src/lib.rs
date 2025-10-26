@@ -18,9 +18,8 @@ use tauri::Manager;
 
 use crate::utils::{get_server_ip, append_log};
 
-const DHCP_CONFIG_PATH: &str = "/etc/dhcp/dhcpd.conf"; // Adjust as needed
-const DHCP_CLIENTS_PATH: &str = "/etc/dhcp/clients.conf"; // Adjust as needed
-// Path to the TFTP autoexec.ipxe file (adjust to your TFTP root)
+const DHCP_CONFIG_PATH: &str = "/etc/dhcp/dhcpd.conf";
+const DHCP_CLIENTS_PATH: &str = "/etc/dhcp/clients.conf";
 pub const TFTP_AUTOEXEC_PATH: &str = "/srv/tftp/autoexec.ipxe";
 
 #[derive(Debug, Serialize)]
@@ -41,7 +40,7 @@ fn get_server_info() -> ServerInfo {
         os_name: System::name(),
         kernel_version: System::kernel_version(),
         host_name: System::host_name(),
-        total_memory_mb: sys.total_memory() / 1024, // KiB -> GiB
+        total_memory_mb: sys.total_memory() / (1024 * 1024), // bytes -> MB
         cpu_count: sys.cpus().len(),
         server_ip: get_server_ip(),
     }
@@ -52,7 +51,6 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            // Handle single instance logic here
             let _ = app
                 .get_webview_window("main")
                 .expect("no main window")
@@ -110,7 +108,6 @@ pub fn run() {
             zfs::create_game_disk,
             zfs::delete_image,
             zfs::rename_image,
-            zfs::create_snapshot,
             zfs::delete_snapshot,
             zfs::zfs_pool_exists,
             zfs::set_default_image,
@@ -119,8 +116,8 @@ pub fn run() {
         ])
         .setup(|app| {
             append_log("INFO", "Application startup");
-             // Ensure config.json exists on first run
-             if let Some(base) = dirs::config_dir() {
+            // Ensure config.json exists on first run
+            if let Some(base) = dirs::config_dir() {
                 let config_dir = base.join("com.diskless.local");
                 let config_path = config_dir.join("config.json");
                 if !config_path.exists() {
@@ -134,16 +131,17 @@ pub fn run() {
                 }
             }
             if cfg!(debug_assertions) {
-                app.handle().plugin(
+                if let Err(e) = app.handle().plugin(
                     tauri_plugin_log::Builder::default()
                         .level(log::LevelFilter::Info)
                         .build(),
-                )?;
+                ) {
+                    eprintln!("[WARN] Failed to initialize logging plugin: {}", e);
+                }
             }
             append_log("INFO", "Tauri setup completed");
-   
-             Ok(())
-         })
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
