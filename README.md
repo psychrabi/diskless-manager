@@ -24,8 +24,8 @@ A web-based toolkit for managing diskless PXE/iSCSI boot environments using ZFS,
 
 ### System Requirements
 - Linux with ZFS support
-- Python 3.7+
-- Node.js 16+ (for frontend)
+- React 19.2 (for frontend)
+- Tauri v2 and Rust (for backend)
 - ISC DHCP Server
 - TFTP Server
 - iSCSI Target Support
@@ -40,42 +40,41 @@ sudo apt install \
     targetcli-fb \
     isc-dhcp-server \
     tftpd-hpa \
+    apache2 \
     wakeonlan \
     samba \
     samba-common-bin \
     openssh-server \
-    net-tools \
-    dnsutils \
-    iputils-ping
+    net-tools
 ```
 
 ### Required Services
 ```bash
 # Check service status
 sudo systemctl status \
-    iscsitarget \
+    target \
     tftpd-hpa \
     isc-dhcp-server \
     smbd \
-    nmbd \
+    apache2 \
     ssh
 
 # Enable services to start on boot
 sudo systemctl enable \
-    iscsitarget \
+    target \
     tftpd-hpa \
     isc-dhcp-server \
     smbd \
-    nmbd \
+    apache2 \
     ssh
 
 # Start services
 sudo systemctl start \
-    iscsitarget \
+    target \
     tftpd-hpa \
     isc-dhcp-server \
     smbd \
-    nmbd \
+    apache2 \
     ssh
 ```
 
@@ -98,20 +97,21 @@ sudo smbpasswd -a diskless
    valid users = diskless
 ```
 
-### Python Dependencies
-```bash
-flask
-flask-cors
-```
 
 ### System Packages
 ```bash
 sudo apt install \
-  zfsutils-linux \
-  targetcli-fb \
-  isc-dhcp-server \
-  tftpd-hpa \
-  wakeonlan
+    zfsutils-linux \
+    targetcli-fb \
+    isc-dhcp-server \
+    tftpd-hpa \
+    apache2 \
+    wakeonlan \
+    samba \
+    samba-common-bin \
+    openssh-server \
+    net-tools
+
 ```
 
 ## 🛠️ Installation
@@ -121,31 +121,23 @@ sudo apt install \
    git clone https://github.com/yourusername/diskless-manager.git
    cd diskless-manager
    ```
-
-2. **Setup Backend**
+2. **Setup the App**
    ```bash
-   python3 -m venv venv
-   source venv/bin/activate
-   pip install -r requirements.txt
+   bun install
    ```
 
-3. **Setup Frontend**
+3. **Configure Services**
    ```bash
-   cd frontend
-   npm install
-   ```
-
-4. **Configure Services**
-   ```bash
-   sudo mkdir -p /etc/diskless-manager
-   sudo cp config/config.json /etc/diskless-manager/
-   sudo cp config/dhcpd.conf /etc/dhcp/
-   sudo cp config/tftpd-hpa /etc/default/
+   sudo mkdir -p /srv/tftp
+   sudo mkdir -p /srv/shared
+   sudo mkdir -p /srv/iscsi
+   sudo mkdir -p ~/.config/com.diskless.local
+   sudo cp config/config.json ~/.config/com.diskless.local
    ```
 
 ## ⚙️ Configuration
 
-1. **Backend Settings** (`/etc/diskless-manager/config.json`):
+1. **Backend Settings** (`~/.config/com.diskless.local/config.json`):
    ```json
    {
      "zfs_pool": "diskless",
@@ -160,61 +152,43 @@ sudo apt install \
 2. **Configure Sudo Access**
    ```bash
    # Add to /etc/sudoers.d/diskless-manager
-   flaskuser ALL=(ALL) NOPASSWD: /usr/sbin/zfs,/usr/bin/targetcli,/bin/systemctl,/usr/sbin/dhcpd,/usr/bin/wakeonlan
+   %USER% ALL=(ALL) NOPASSWD: /usr/sbin/zfs,/usr/bin/targetcli,/bin/systemctl,/usr/sbin/dhcpd,/usr/bin/wakeonlan
    ```
 
 ## 🚀 Usage
 
-1. **Start Backend API**
+1. **Start App**
    ```bash
-   cd /srv/tftp/diskless-manager
-   source venv/bin/activate
-   python3 backend.py
+   bun tauri dev
    ```
 
-2. **Start Frontend Development Server**
-   ```bash
-   cd frontend
-   npm run dev
-   ```
-
-3. **Access Web Interface**
+2. **Access Web Interface**
    - Open browser to `http://localhost:5173`
 
 ## 📁 Project Structure
 
 ```
 diskless-manager/
-├── backend/
-│   ├── backend.py          # Flask API server
-│   ├── config.json         # Default configuration
-│   └── requirements.txt    # Python dependencies
-├── frontend/              # React frontend
+
+│   ├── src-tauri/
+│   │   ├── src/
+│   │   ├── icons/
+│   │   ├── Cargo.toml
+│   │   ├── Cargo.lock
+│   │   ├── tauri.conf.json
+│   │   └── build.rs
+│   ├── package.json
 │   ├── src/
 │   │   ├── components/
-│   │   ├── services/
-│   │   └── App.jsx
+│   │   ├── assets/
+│   │   ├── contexts/
+│   │   ├── hooks/
+│   │   ├── lib/
+│   │   ├── router/
+│   │   ├── store/
+│   │   ├── utils/
+│   │   ├── index.css
+│   │   └── main.jsx
 │   └── package.json
 └── README.md
 ```
-
-## 🔒 Security Considerations
-
-- Run Flask behind a reverse proxy in production
-- Enable HTTPS/SSL
-- Implement proper authentication
-- Configure firewall rules
-- Regular ZFS snapshots for backup
-- Audit system logs
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create feature branch
-3. Commit changes
-4. Push to branch
-5. Create Pull Request
-
-## 📝 License
-
-This project is licensed under the MIT License - see the LICENSE file for details.

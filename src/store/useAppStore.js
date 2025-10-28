@@ -55,7 +55,7 @@ export const useAppStore = create()(
             set({ selectedSnapshot: '' });
           }
         } catch (err) {
-          set({ error: `Failed to load data: ${err.message || 'Check backend connection.'}` });
+          set({ error: `Failed to load data: ${err}` });
         } finally {
           if (showLoading) set({ loading: false });
         }
@@ -91,7 +91,7 @@ export const useAppStore = create()(
           const cfg = await invoke('read_config');
           set({ config: cfg });
         } catch (err) {
-          set({ error: `Failed to load config: ${err.message || 'Check backend connection.'}` });
+          set({ error: `Failed to load config: ${err.message || 'Check config file in the ~/.config/com.diskless-server.'}` });
         } finally {
           set({ checkingConfig: false, loading: false });
         }
