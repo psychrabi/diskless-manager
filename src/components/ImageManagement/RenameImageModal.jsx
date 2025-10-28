@@ -47,7 +47,7 @@ const RenameImageModal = ({ openRenameModal, setOpenRenameModal, selectedImage, 
         if (response.message) showNotification(response.message, 'success');
         reset();
       }).catch((error) => {
-        showNotification(error, 'error');
+        showNotification('error', 'Failed to rename image', error.message || 'An unknown error occurred');
       }).finally(() => {
         refresh && refresh();
       });

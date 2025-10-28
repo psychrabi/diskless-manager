@@ -38,7 +38,7 @@ const CreateImageModal = ({ openImageCreateModal, setOpenImageCreateModal }) => 
         console.log(response)
         if (response.message) showNotification(response.message, 'success');
       }).catch((error) => {
-        showNotification(error, 'error',)
+        showNotification('error', 'Failed to create image', error.message || 'An unknown error occurred');
       })
   };
 

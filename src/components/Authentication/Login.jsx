@@ -7,6 +7,7 @@ import { Card, Input, Button, Loading } from '@/components/ui';
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/contexts/auth';
 import { useAppStore } from '@/store/useAppStore';
+import { useNotification } from '@/contexts/notification';
 
 // Define validation schema
 const loginSchema = z.object({
@@ -20,6 +21,7 @@ const Login = () => {
   const { login: setAuth } = useAuth();
   const { setServices } = useAppStore();
   const [preflightLoading, setPreflightLoading] = useState(true);
+  const { showNotification } = useNotification();
 
   const {
     register,
@@ -52,6 +54,7 @@ const Login = () => {
           }
         }
       } catch (e) {
+        showNotification('error', 'Preflight Check Failed', e.message || 'An unknown error occurred during preflight checks.');
         console.warn('Preflight check failed:', e);
         // Proceed to login UI even if preflight fails
       } finally {
@@ -61,11 +64,11 @@ const Login = () => {
     return () => {
       cancelled = true;
     };
-  }, [navigate, setServices]);
+  }, [navigate, setServices, showNotification]);
 
 
   if (preflightLoading) {
-    return <Loading />;
+    return <Loading message="Performing preflight checks..." />;
   }
 
   const onSubmit = async (data) => {
@@ -79,8 +82,8 @@ const Login = () => {
       // Set auth context immediately so ProtectedRoute sees it
       setAuth(response.user, response.token);
       navigate('/');
-    } catch (err) {
-      setError(err.message || 'Login failed');
+    } catch (e) {
+      showNotification('error', 'Login Failed', e.message || 'An unknown error occurred');
       reset({ password: '' }); // Clear password field on error
     }
   };
@@ -92,12 +95,6 @@ const Login = () => {
           <h1 className="text-2xl font-bold text-base-content">Diskless Manager</h1>
           <p className="text-base-content/70 mt-2">Sign in to your account</p>
         </div>
-
-        {error && (
-          <div className="mb-4 p-3 rounded-md bg-error/10 text-error">
-            {error}
-          </div>
-        )}
 
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           <div>

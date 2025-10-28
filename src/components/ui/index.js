@@ -1,10 +1,25 @@
-export { Card } from './Card.jsx';
-export { Button } from './Button.jsx';
-export { Modal } from './Modal.jsx';
-export { Input } from './Input.jsx';
-export { Select } from './Select.jsx';
-export { Table } from './Table.jsx';
-export { ContextMenu } from './ContextMenu.jsx';
-export { Loading } from './Loading.jsx';
-export { Notification } from './Notification.jsx';
-export { Error } from './Error.jsx';
+import { Card } from './Card.jsx';
+import { Button } from './Button.jsx';
+import { Modal } from './Modal.jsx';
+import { Input } from './Input.jsx';
+import { Select } from './Select.jsx';
+import { Table } from './Table.jsx';
+import { ContextMenu } from './ContextMenu.jsx';
+import { Loading } from './Loading.jsx';
+import { Notification } from './Notification.jsx';
+import { Error } from './Error.jsx';
+import { FormModal } from './FormModal.jsx';
+
+export {
+  Card,
+  Button,
+  Modal,
+  Input,
+  Select,
+  Table,
+  ContextMenu,
+  Loading,
+  Notification,
+  Error,
+  FormModal,
+};

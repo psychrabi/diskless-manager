@@ -2,16 +2,24 @@ import { invoke } from '@tauri-apps/api/core';
 import { List, RefreshCw } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Card } from '../ui';
+import { useNotification } from '@/contexts/notification';
 
 const ServerInfoCard = () => {
   const [serverInfo, setServerInfo] = useState(null)
+  const { showNotification } = useNotification();
 
   useEffect(() => {
-    ; (async () => {
-      const info = await invoke('get_server_info')
-      setServerInfo(info)
-    })()
-  }, [])
+    const fetchServerInfo = async () => {
+      try {
+        const info = await invoke('get_server_info');
+        setServerInfo(info);
+      } catch (error) {
+        showNotification('error', 'Failed to load server info', error.message || 'An unknown error occurred');
+        setServerInfo(null);
+      }
+    };
+    fetchServerInfo();
+  }, [showNotification]);
   return (
     <div>
       {serverInfo ? (

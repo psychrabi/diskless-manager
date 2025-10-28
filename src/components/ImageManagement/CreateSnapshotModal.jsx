@@ -37,7 +37,7 @@ const CreateSnapshotModal = ({ openSnapshotCreateModal, setOpenSnapshotCreateMod
         if (response.message) showNotification(response.message, 'success');
       }).catch((error) => {
         console.log(error)
-        showNotification(error, 'error',)
+        showNotification('error', 'Failed to create snapshot', error.message || 'An unknown error occurred');
       })
       setOpenSnapshotCreateModal(false);
   };

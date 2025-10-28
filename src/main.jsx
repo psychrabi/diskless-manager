@@ -14,15 +14,17 @@ createRoot(document.getElementById('root')).render(
   <StrictMode>
     <ErrorBoundary>
       <Suspense fallback={<Loading />}>
-        <AuthProvider>
-          <ConfirmDialogProvider>
-            <NotificationProvider>
+        <NotificationProvider>
+          <AuthProvider>
+            <ConfirmDialogProvider>
+
               <ThemeProvider>
                 <RouterProvider router={router} />
               </ThemeProvider>
-            </NotificationProvider>
-          </ConfirmDialogProvider>
-        </AuthProvider>
+            </ConfirmDialogProvider>
+          </AuthProvider>
+        </NotificationProvider>
+
       </Suspense>
     </ErrorBoundary >
   </StrictMode >

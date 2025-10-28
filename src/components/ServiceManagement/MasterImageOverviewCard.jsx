@@ -2,22 +2,28 @@ import { invoke } from '@tauri-apps/api/core';
 import { HardDrive } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Card } from '../ui';
+import { useNotification } from '@/contexts/notification';
 
 const MasterImageOverviewCard = () => {
   const [overview, setOverview] = useState(null);
   const [loading, setLoading] = useState(true);
+  const { showNotification } = useNotification();
 
   useEffect(() => {
-    invoke('get_default_image_overview')
-      .then(data => {
+    const fetchMasterImageOverview = async () => {
+      try {
+        const data = await invoke('get_default_image_overview');
         setOverview(data);
-        setLoading(false);
-      })
-      .catch(err => {
+      } catch (err) {
+        showNotification('error', 'Failed to load master image overview', err.message || 'An unknown error occurred');
         console.error(err);
+        setOverview(null);
+      } finally {
         setLoading(false);
-      });
-  }, []);
+      }
+    };
+    fetchMasterImageOverview();
+  }, [showNotification]);
 
   return (
     <Card title="Default Image Overview" icon={HardDrive}>

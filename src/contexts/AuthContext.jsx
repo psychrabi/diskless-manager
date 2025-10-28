@@ -1,11 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { AuthContext } from './auth';
+import { useNotification } from '@/contexts/notification';
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [token, setToken] = useState(null);
   const [loading, setLoading] = useState(true);
+  const { showNotification } = useNotification();
 
   // Define logout and validateToken BEFORE useEffect to avoid TDZ / uninitialized variable errors
   const logout = useCallback(() => {
@@ -19,11 +21,11 @@ export const AuthProvider = ({ children }) => {
     try {
       await invoke('validate_auth_token', { token: authToken });
       // Token is valid, do nothing
-    } catch {
-      // Token is invalid, logout
+    } catch (error) {
+      showNotification('error', 'Authentication Failed', error.message || 'Your session has expired. Please log in again.');
       logout();
     }
-  }, [logout]);
+  }, [logout, showNotification]);
 
   useEffect(() => {
     (async () => {

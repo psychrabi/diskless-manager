@@ -39,7 +39,7 @@ const DiskTable = ({ disks }) => {
 				.then((response) => {
 					if (response.message) showNotification(response.message, 'success');
 				}).catch((error) => {
-					showNotification(error.error, 'error',)
+					showNotification('error', 'Failed to delete disk', error.error || 'An unknown error occurred')
 				})
 		} else {
 			showNotification("Disk deletion cancelled", 'error',)

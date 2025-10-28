@@ -39,7 +39,7 @@ const RenameDiskModal = ({ openRenameModal, setOpenRenameModal, selectedDisk, re
         if (response.message) showNotification(response.message, 'success');
         reset();
       }).catch((error) => {
-        showNotification(error, 'error');
+        showNotification('error', 'Failed to rename disk', error.message || 'An unknown error occurred');
       }).finally(() => {
         refresh && refresh();
       });

@@ -1,6 +1,8 @@
 import { forwardRef } from 'react';
 
 export const Button = forwardRef(({ children, onClick, variant = 'default', size = 'md', className = '', icon: Icon, disabled = false, title = '', type = 'button' }, ref) => {
+  const ariaLabel = !children && title ? title : undefined;
+
   // daisyUI btn base
   const variantClasses = {
     default: 'btn',
@@ -24,7 +26,14 @@ export const Button = forwardRef(({ children, onClick, variant = 'default', size
   const iconPosition = size === 'icon' ? '' : 'mr-2';
 
   return (
-    <button ref={ref} type={type} onClick={onClick} disabled={disabled} title={title}
+    <button
+      ref={ref}
+      type={type}
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      aria-label={ariaLabel}
+      aria-disabled={disabled}
       className={[
         variantClasses[variant] || 'btn',
         sizeClasses[size] || '',

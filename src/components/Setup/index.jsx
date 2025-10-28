@@ -5,6 +5,7 @@ import { useForm } from "react-hook-form";
 import { useNavigate } from "react-router-dom";
 import { useAppStore } from "../../store/useAppStore";
 import { Button, Card, Input, Select } from "../ui";
+import { useNotification } from '@/contexts/notification';
 
 const Table = ({ children, className = '' }) => <div className={`w-full overflow-x-auto ${className}`}><table className="min-w-full">{children}</table></div>;
 const TableHeader = ({ children, className = '' }) => <thead className={`[&_tr]:border-b border-base-100 ${className}`}>{children}</thead>;
@@ -20,6 +21,7 @@ const Setup = () => {
   const [installing, setInstalling] = useState('');
   const { services, setServices } = useAppStore();
   const { poolName } = useAppStore();
+  const { showNotification } = useNotification();
 
   const {
     register,
@@ -35,6 +37,7 @@ const Setup = () => {
         const d = await invoke('list_disks');
         if (!cancelled) setDisks(d);
       } catch (e) {
+        showNotification('error', 'Failed to list disks', e.message || 'An unknown error occurred');
         console.warn('list_disks failed:', e);
         if (!cancelled) setDisks([]);
       }
@@ -43,6 +46,7 @@ const Setup = () => {
         const exists = await invoke('zfs_pool_exists');
         if (!cancelled) setPoolExists(exists);
       } catch (e) {
+        showNotification('error', 'Failed to check ZFS pool existence', e.message || 'An unknown error occurred');
         console.warn('zfs_pool_exists failed:', e);
         if (!cancelled) setPoolExists(false);
       }
@@ -52,11 +56,12 @@ const Setup = () => {
         const list = Array.isArray(updated) ? updated : (updated ? Object.values(updated) : []);
         if (!cancelled) setServices(list);
       } catch (e) {
+        showNotification('error', 'Failed to check package status', e.message || 'An unknown error occurred');
         console.warn('check_package_status failed:', e);
       }
     })();
     return () => { cancelled = true; };
-  }, [poolName, setServices]);
+  }, [poolName, setServices, showNotification]);
 
   // Navigate to dashboard when everything is ready
   useEffect(() => {
@@ -71,7 +76,9 @@ const Setup = () => {
     console.log(data);
     try {
       await invoke('create_zfs_pool', { name: data.name, disk: data.disk });
+      showNotification('success', 'ZFS Pool Created', `ZFS pool ${data.name} created successfully.`);
     } catch (e) {
+      showNotification('error', 'Failed to create ZFS pool', e.message || 'An unknown error occurred');
       console.error('Failed to create ZFS pool:', e);
     }
   });
@@ -80,10 +87,12 @@ const Setup = () => {
     setInstalling(service);
     try {
       await invoke('install_service', { service, token: localStorage.getItem('authToken') || '' });
+      showNotification('success', 'Service Installed', `Service ${service} installed successfully.`);
       const updated = await invoke('check_package_status', { token: localStorage.getItem('authToken') || '' });
       const list = Array.isArray(updated) ? updated : (updated ? Object.values(updated) : []);
       setServices(list);
     } catch (e) {
+      showNotification('error', 'Failed to install service', e.message || 'An unknown error occurred');
       console.error('Failed to install service:', e);
     } finally {
       setInstalling('');

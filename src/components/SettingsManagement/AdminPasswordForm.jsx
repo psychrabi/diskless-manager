@@ -40,7 +40,7 @@ export default function AdminPasswordForm() {
         if (response) showNotification(response, 'success');
       })
       .catch((error) => {
-        showNotification(error, 'error');
+        showNotification('error', 'Failed to update admin password', error.message || 'An unknown error occurred');
         console.log(error);
       });
   };

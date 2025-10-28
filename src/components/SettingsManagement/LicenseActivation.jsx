@@ -3,8 +3,10 @@ import { useForm } from 'react-hook-form';
 import { invoke } from '@tauri-apps/api/core';
 import { Card } from '../ui';
 import { File } from 'lucide-react';
+import { useNotification } from '@/contexts/notification';
 
 export default function LicenseActivation() {
+    const { showNotification } = useNotification();
     const [info, setInfo] = useState({
         license_key: null,
         license_status: null,
@@ -16,8 +18,6 @@ export default function LicenseActivation() {
      defaultValues: { license_key: '' },
    });
   const [loading, setLoading] = useState(false);
-  const [msg, setMsg] = useState(null);
-  const [err, setErr] = useState(null);
 
   const fetchInfo = useCallback(async () => {
     try {
@@ -28,29 +28,27 @@ export default function LicenseActivation() {
       // populate form input with license_key when fetched
       reset({ license_key: infoObj.license_key ?? '' });
     } catch (e) {
-      setErr(String(e));
+      showNotification('error', 'Failed to load license info', e?.message || String(e));
     }
-  }, [reset]);
+  }, [reset, showNotification]);
 
   useEffect(() => {
     fetchInfo();
   }, [fetchInfo]);
 
   const onSubmit = async (data) => {
-    setErr(null);
-    setMsg(null);
     if (!data.license_key || !data.license_key.trim()) {
-      setErr('Please enter a license key');
+      showNotification('error', 'License Key Required', 'Please enter a license key');
       return;
     }
     setLoading(true);
     try {
       const resp = await invoke('activate_license', { key: data.license_key.trim() });
-      setMsg(String(resp || 'License activated'));
+      showNotification('success', 'License Activated', resp?.message || 'License activated successfully');
       reset();
       await fetchInfo();
     } catch (e) {
-      setErr(e?.message ? String(e.message) : String(e));
+      showNotification('error', 'License Activation Failed', e?.message || String(e));
     } finally {
       setLoading(false);
     }
@@ -81,8 +79,7 @@ export default function LicenseActivation() {
             className="btn"
             onClick={() => {
               reset();
-              setMsg(null);
-              setErr(null);
+              showNotification('info', 'Form Reset', 'License activation form has been reset.');
             }}
             disabled={loading}
           >
@@ -90,9 +87,6 @@ export default function LicenseActivation() {
           </button>
         </div>
       </form>
-
-      {msg && <div className="mt-3 text-success">{msg}</div>}
-      {err && <div className="mt-3 text-error">{err}</div>}
     </Card>
   );
 }

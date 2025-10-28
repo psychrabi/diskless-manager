@@ -2,22 +2,28 @@ import { invoke } from '@tauri-apps/api/core';
 import { Users } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Card } from '../ui';
+import { useNotification } from '@/contexts/notification';
 
 const ClientOverviewCard = () => {
   const [overview, setOverview] = useState(null);
   const [loading, setLoading] = useState(true);
+  const { showNotification } = useNotification();
 
   useEffect(() => {
-    invoke('get_client_overview')
-      .then(data => {
+    const fetchClientOverview = async () => {
+      try {
+        const data = await invoke('get_client_overview');
         setOverview(data);
-        setLoading(false);
-      })
-      .catch(err => {
+      } catch (err) {
+        showNotification('error', 'Failed to load client overview', err.message || 'An unknown error occurred');
         console.error(err);
+        setOverview(null);
+      } finally {
         setLoading(false);
-      });
-  }, []);
+      }
+    };
+    fetchClientOverview();
+  }, [showNotification]);
 
   return (
     <Card title="Client Overview" icon={Users}>

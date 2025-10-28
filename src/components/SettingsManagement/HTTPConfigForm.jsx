@@ -45,7 +45,7 @@ export default function HTTPConfigForm() {
         if (response.message) showNotification(response.message, 'success');
       })
       .catch((error) => {
-        showNotification(error, 'error');
+        showNotification('error', 'Failed to configure HTTP server', error.message || 'An unknown error occurred');
         console.log(error);
       });
   };

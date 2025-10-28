@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Card } from '../ui';
+import { useNotification } from '@/contexts/notification';
 
 export default function LicenseCard() {
   const [license, setLicense] = useState({
@@ -9,7 +10,7 @@ export default function LicenseCard() {
     license_expires: null,
   });
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const { showNotification } = useNotification();
 
   useEffect(() => {
     async function fetchLicense() {
@@ -17,16 +18,15 @@ export default function LicenseCard() {
         const info = await invoke('get_license_info');
         setLicense(info || {});
       } catch (e) {
-        setError(String(e));
+        showNotification('error', 'Failed to load license info', e?.message || String(e));
       } finally {
         setLoading(false);
       }
     }
     fetchLicense();
-  }, []);
+  }, [showNotification]);
 
   if (loading) return <div>Loading license...</div>;
-  if (error) return <div className="text-error">Error: {error}</div>;
 
   return (
     <Card title="License Information" icon={null}  className='col-span-2'>

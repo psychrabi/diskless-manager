@@ -47,7 +47,11 @@ const MainLayout = () => {
 				/>
 			</Activity>
 
-			<div className="flex-1 flex flex-col overflow-hidden">
+			<div className="flex-1 flex flex-col overflow-hidden"
+				style={{
+					marginLeft: isSidebarCollapsed ? 'var(--sidebar-width-collapsed)' : 'var(--sidebar-width-open)',
+					transition: 'margin-left 0.3s ease-in-out',
+				}}>
 				<Header onToggleSidebar={() => setIsSidebarOpen((v) => !v)} />
 				<main className="flex-1 overflow-y-auto bg-base-200">
 					<div className="p-6">

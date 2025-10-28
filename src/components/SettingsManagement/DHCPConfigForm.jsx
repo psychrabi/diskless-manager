@@ -81,7 +81,7 @@ export default function DHCPConfigForm() {
       await invoke('configure_dhcp_server', { token, config: data });
       showNotification('DHCP configuration saved successfully', 'success');
     } catch (error) {
-      showNotification(error, 'error');
+      showNotification('error', 'Failed to configure DHCP server', error.message || 'An unknown error occurred');
       console.error(error);
     }
   };
