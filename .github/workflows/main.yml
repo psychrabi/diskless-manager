@@ -15,18 +15,25 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Build changelog
         id: build_changelog
         run: |
-          # NOTE: if commits subjects are standardized, you can filter the git log based on feat: and fix:
-          # and then replace "feat:" with "New: " and "fix:" with "Fixed "
-          # when AI gets good, we can also summarized commits into a bullet point list
-          PREV_TAG=$(git tag --list v* | tail -n2 | head -n1)
-          echo "changelog=$(git log $PREV_TAG...${{ github.ref_name }} --pretty=format:"- %s")" >> $GITHUB_OUTPUT
+          TAGS=$(git tag --list 'v*' --sort=-version:refname)
+          TAG_COUNT=$(echo "$TAGS" | wc -l)
+          if [ $TAG_COUNT -le 1 ]; then
+            changelog=$(git log --pretty=format:"- %s")
+          else
+            PREV_TAG=$(echo "$TAGS" | tail -n +2 | head -n1)
+            changelog=$(git log $PREV_TAG..${{ github.ref_name }} --pretty=format:"- %s")
+          fi
+          echo "changelog=$changelog" >> $GITHUB_OUTPUT
     outputs:
       changelog: ${{ steps.build_changelog.outputs.changelog }}
   release:
+    needs: changelog
     permissions:
       contents: write
     strategy:
@@ -67,18 +74,8 @@ jobs:
       - name: Install frontend dependencies
         run: bun install
       
-      - name: CI upload Linux
-        if: ${{ github.ref_type == 'branch' && matrix.platform == 'ubuntu-latest' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: 'Linux Distributions'
-          path: |
-            src-tauri/target/release/bundle/deb/*.deb
-            src-tauri/target/release/bundle/AppImage/*.AppImage
-
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
-        if: ${{ github.ref_type == 'tag' }}
         # if u get Error: Resource not accessible by integration
         # go to repository Settings => Action => General => Workflow permissions => Switch to Read and Write permisions
         env:
@@ -88,11 +85,18 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           # tauri-action replaces \_\_VERSION\_\_ with the app version
-          tagName: ${{ github.ref_name }}
-          releaseName: "${{ env.APP_NAME }} v__VERSION__"
-          releaseBody: |
-            ${{needs.changelog.outputs.changelog}}
-            See the assets to download this version and install.
-          releaseDraft: true
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          releaseName: ${{ github.ref_type == 'tag' && format('%s v__VERSION__', env.APP_NAME) || '' }}
+          releaseBody: ${{ github.ref_type == 'tag' && format('%s\n\nSee the assets to download this version and install.', needs.changelog.outputs.changelog) || '' }}
+          releaseDraft: ${{ github.ref_type == 'tag' }}
           prerelease: false
           args: ${{ matrix.args }}
+
+      - name: CI upload Linux
+        if: ${{ github.ref_type == 'branch' && matrix.platform == 'ubuntu-latest' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: 'Linux Distributions'
+          path: |
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/AppImage/*.AppImage
