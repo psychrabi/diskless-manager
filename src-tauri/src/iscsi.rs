@@ -1,4 +1,4 @@
-use crate::utils::{run_command, run_command_output};
+use crate::utils::{run_command, run_command_output, run_command_output_no_sudo};
 
 pub fn setup_iscsi_target(
     target_iqn: &str,
@@ -43,7 +43,7 @@ pub fn setup_iscsi_target(
             };
 
             // Check if ZFS dataset exists and is accessible
-            if let Err(ve) = run_command_output(&["zfs", "list", &dataset_path]) {
+            if let Err(ve) = run_command_output_no_sudo(&["zfs", "list", &dataset_path]) {
                 return Err(format!(
                     "ZFS volume '{}' not found or inaccessible: {}. \
                     Make sure the ZFS dataset exists and has correct permissions.", 

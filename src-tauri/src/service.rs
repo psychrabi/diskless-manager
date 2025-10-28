@@ -4,9 +4,9 @@ use async_process::Command as AsyncCommand;
 use futures::io::AsyncWriteExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use crate::utils::{append_log, run_command, run_command_output};
+use crate::utils::{append_log, run_command, run_command_output, run_command_output_no_sudo};
 use std::collections::HashMap;
-
+use crate::middleware::validate_auth_token_for_command;
 use std::process::Stdio;
 
 #[derive(Deserialize)]
@@ -66,7 +66,7 @@ pub struct SambaShare {
 
 // Common auth validator
 fn validate_token(token: &str) -> Result<(), String> {
-    match crate::middleware::validate_auth_token_for_command(token) {
+    match validate_auth_token_for_command(token) {
         Ok(_) => Ok(()),
         Err(e) => Err(format!("Authentication failed: {}", e.message)),
     }
@@ -235,7 +235,7 @@ pub async fn get_service_config(token: String, service_key: String) -> Result<Va
         "zfs" => {
             let zpool = run_command_output(["zpool", "status"])
                 .map_err(|e| format!("zpool status failed: {}", e))?;
-            let zfs_list = run_command_output(["zfs", "list", "-t", "all", "-o", "name,type,used,avail,refer,mountpoint"])
+            let zfs_list = run_command_output_no_sudo(["zfs", "list", "-t", "all", "-o", "name,type,used,avail,refer,mountpoint"])
                 .map_err(|e| format!("zfs list failed: {}", e))?;
 
             let content = format!(
@@ -283,6 +283,7 @@ pub async fn get_service_config(token: String, service_key: String) -> Result<Va
 #[tauri::command]
 pub async fn control_service(token: String, service_key: String, req: ServiceControlRequest) -> Result<Value, String> {
     validate_token(&token)?;
+    append_log("INFO", &format!("control_service: {} {}", service_key, req.action));
 
     let service_map = [
         ("rtslib-fb-targetctl", "rtslib-fb-targetctl.service"),

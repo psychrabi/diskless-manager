@@ -1,10 +1,8 @@
-// Client management logic: helpers for client lookup, config, and deduplication.
-
 use crate::{
-    config::{get_config, get_zpool_name, read_config, write_config, Config},
+    config::{Config, get_config, get_zpool_name, read_config, write_config},
     dhcp::{create_dhcp_entry, update_dhcp_config},
     iscsi::{cleanup_iscsi_target, setup_iscsi_target},
-    utils::{append_log, run_command, run_command_check, run_command_output},
+    utils::{append_log, run_command, run_command_check, run_command_output, run_command_output_no_sudo},
     zfs::{zfs_clone, zfs_destroy, zfs_exists},
 };
 
@@ -81,94 +79,12 @@ pub struct DeprovisionRequest {
     pub dry_run: Option<bool>,
 }
 
-// #[tauri::command]
-// pub async fn get_clients(client_id: Option<String>) -> Result<serde_json::Value, String> {
-//     let mut config: Config = get_config();
-//     use futures::future::join_all;
-
-//     // Collect (index, mac, ip) tuples
-//     let client_tuples: Vec<(usize, String, String)> = config
-//         .clients
-//         .iter()
-//         .enumerate()
-//         .map(|(i, c)| (i, c.mac.clone(), c.ip.clone()))
-//         .collect();
-
-//     // Spawn concurrent tasks to get status (Online / Leased / Offline)
-//     let handles: Vec<_> = client_tuples
-//         .into_iter()
-//         .map(|(i, mac, ip)| {
-//             tokio::task::spawn_blocking(move || (i, get_client_status_realtime(&ip)))
-//         })
-//         .collect();
-
-//     // Wait for all tasks to finish
-//     let results = join_all(handles).await;
-
-//     // Update statuses in the original clients vector
-//     for res in results {
-//         if let Ok((i, status)) = res {
-//             config.clients[i].status = Some(status);
-//         } else if let Err(e) = res {
-//             println!("[ERROR] spawn_blocking failed: {}", e);
-//         }
-//     }
-
-//     // Update the config cache with new statuses
-//     crate::config::set_config(&config);
-
-//     // Discover dynamically provisioned clients (from DHCP leases) not yet in config
-//     let mut combined_clients = config.clients.clone();
-//     let existing_macs: std::collections::HashSet<String> = combined_clients
-//         .iter()
-//         .map(|c| c.mac.to_lowercase())
-//         .collect();
-//     let discovered = discover_dynamic_clients();
-//     let mut new_clients_to_persist: Vec<Client> = Vec::new();
-//     for mut c in discovered {
-//         if !existing_macs.contains(&c.mac.to_lowercase()) {
-//             // compute status for the discovered client
-//             let status = get_client_status_realtime(&c.ip);
-//             c.status = Some(status);
-//             // Queue for persistence with transient status cleared (status is computed on read)
-//             let mut to_save = c.clone();
-//             to_save.status = None;
-//             new_clients_to_persist.push(to_save);
-//             combined_clients.push(c);
-//         }
-//     }
-
-//     // Persist any newly discovered clients into config.json so they become managed entries
-//     if !new_clients_to_persist.is_empty() {
-//         let mut cfg_to_write = get_config();
-//         // Deduplicate against MAC again in case of races
-//         let cfg_macs: std::collections::HashSet<String> = cfg_to_write
-//             .clients
-//             .iter()
-//             .map(|c| c.mac.to_lowercase())
-//             .collect();
-//         for client in new_clients_to_persist.into_iter() {
-//             if !cfg_macs.contains(&client.mac.to_lowercase()) {
-//                 cfg_to_write.clients.push(client);
-//             }
-//         }
-//         // Best effort write; failures are logged
-//         if let Err(e) = write_config(&cfg_to_write) {
-//             println!("[WARN] Failed to persist discovered clients: {}", e);
-//         } else {
-//             crate::config::set_config(&cfg_to_write);
-//         }
-//     }
-
-//     if let Some(id) = client_id {
-//         let client = combined_clients
-//             .iter()
-//             .find(|c| c.id.eq_ignore_ascii_case(&id));
-//         Ok(serde_json::json!(client))
-//     } else {
-//         Ok(serde_json::json!(combined_clients))
-//     }
-// }
+// Helper to validate auth token, returning Err if invalid
+fn validate_auth(token: &str) -> Result<(), String> {
+    crate::middleware::validate_auth_token_for_command(token)
+        .map(|_| ())
+        .map_err(|e| format!("Authentication failed: {}", e.message))
+}
 
 #[tauri::command]
 pub async fn get_clients(
@@ -176,8 +92,7 @@ pub async fn get_clients(
     client_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
     // Validate authentication token
-    crate::middleware::validate_auth_token_for_command(&token)
-        .map_err(|e| format!("Authentication failed: {}", e.message))?;
+    validate_auth(&token)?;
     let mut config: Config = read_config();
 
     // Read config once, compute statuses concurrently to avoid serial ping waits.
@@ -235,112 +150,6 @@ fn get_client_status_realtime(ip: &str) -> String {
     }
 }
 
-// fn has_active_dhcp_lease(mac_lower: &str, ip_opt: Option<&str>) -> bool {
-//     use std::fs;
-//     let leases_path = "/var/lib/dhcp/dhcpd.leases";
-//     if let Ok(content) = fs::read_to_string(leases_path) {
-//         // Very light parsing: look for a block that contains either the MAC or the IP with active state
-//         // Split into simple blocks by 'lease ' occurrences
-//         for block in content.split("lease ") {
-//             let block_lc = block.to_lowercase();
-//             if block_lc.contains(mac_lower) || ip_opt.map(|ip| block_lc.contains(ip)).unwrap_or(false) {
-//                 if block_lc.contains("binding state active") {
-//                     return true;
-//                 }
-//             }
-//         }
-//     } else {
-//         // Fallback to dhcp-lease-list if available
-//         if let Ok(output) = std::process::Command::new("dhcp-lease-list").output() {
-//             let out = String::from_utf8_lossy(&output.stdout).to_lowercase();
-//             if out.contains(mac_lower) {
-//                 return true;
-//             }
-//         }
-//     }
-//     false
-// }
-
-// fn discover_dynamic_clients() -> Vec<Client> {
-//     use std::collections::HashMap;
-//     use std::fs;
-//     let leases_path = "/var/lib/dhcp/dhcpd.leases";
-//     let mut mac_to_client: HashMap<String, Client> = HashMap::new();
-//     if let Ok(content) = fs::read_to_string(leases_path) {
-//         // Parse by blocks; last active block for a MAC wins
-//         for raw_block in content.split("lease ") {
-//             let block = raw_block.trim();
-//             if block.is_empty() {
-//                 continue;
-//             }
-//             // first token is IP until space or '{'
-//             let ip = block
-//                 .split_whitespace()
-//                 .next()
-//                 .unwrap_or("")
-//                 .trim_matches(|c: char| c == '{' || c.is_whitespace())
-//                 .trim_end_matches(';')
-//                 .to_string();
-//             let block_lc = block.to_lowercase();
-//             if !block_lc.contains("binding state active") {
-//                 continue;
-//             }
-//             // extract mac
-//             let mac_lc = block_lc
-//                 .lines()
-//                 .find_map(|l| {
-//                     if l.contains("hardware ethernet") {
-//                         l.split("hardware ethernet")
-//                             .nth(1)
-//                             .map(|s| s.trim().trim_end_matches(';').to_string())
-//                     } else {
-//                         None
-//                     }
-//                 })
-//                 .unwrap_or_default();
-//             if mac_lc.is_empty() || ip.is_empty() {
-//                 continue;
-//             }
-//             // extract hostname if any
-//             let hostname = block
-//                 .lines()
-//                 .find_map(|l| {
-//                     if l.contains("client-hostname") {
-//                         l.split('"').nth(1).map(|s| s.to_string())
-//                     } else {
-//                         None
-//                     }
-//                 })
-//                 .unwrap_or_else(|| mac_lc.replace(':', "").to_lowercase());
-//             // Build/overwrite ephemeral client for this MAC
-//             let name_upper = hostname.to_uppercase();
-//             let mac_upper = mac_lc.to_uppercase();
-//             mac_to_client.insert(
-//                 mac_lc,
-//                 Client {
-//                     // Use MAC as stable ID to avoid duplicate rows by hostname differences
-//                     id: mac_upper.to_lowercase(),
-//                     name: name_upper,
-//                     mac: mac_upper,
-//                     ip,
-//                     master: String::from(""),
-//                     snapshot: None,
-//                     block_store: None,
-//                     target_iqn: None,
-//                     writeback: None,
-//                     created_at: None,
-//                     last_modified: None,
-//                     block_device: None,
-//                     status: Some(String::from("Leased")),
-//                     mode: None,
-//                     pxe_mode: None,
-//                 },
-//             );
-//         }
-//     }
-//     mac_to_client.into_values().collect()
-// }
-
 fn get_client_by_id(client_id: &str) -> Option<Client> {
     // Borrow config to avoid moving the vector out of the global cache.
     let config = get_config();
@@ -353,44 +162,24 @@ fn get_client_by_id(client_id: &str) -> Option<Client> {
 }
 
 fn check_duplicate_client(name: &str, mac: &str, ip: &str) -> Option<String> {
-    let config: Value = match serde_json::to_value(get_config()) {
-        Ok(cfg) => cfg,
-        Err(e) => {
-            println!("Error parsing config file: {}", e);
-            return Some("Error checking for existing clients".to_string());
-        }
-    };
-    let clients = config.get("clients").and_then(|v| v.as_array());
-    if clients.is_none() {
-        return None;
-    }
-    for client in clients.unwrap() {
-        let client_name = client
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_lowercase();
-        let client_ip = client.get("ip").and_then(|v| v.as_str()).unwrap_or("");
-        let client_mac = client
-            .get("mac")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_uppercase();
+    let config = get_config();
+    for client in &config.clients {
+        let client_name = client.name.to_lowercase();
+        let client_ip = &client.ip;
+        let client_mac = client.mac.to_uppercase();
         if name.to_lowercase() == client_name {
             return Some(format!("A client with name '{}' already exists", name));
         }
         if ip == client_ip {
             return Some(format!(
                 "IP address {} is already in use by client '{}'",
-                ip,
-                client.get("name").and_then(|v| v.as_str()).unwrap_or("")
+                ip, client.name
             ));
         }
         if mac.to_uppercase() == client_mac {
             return Some(format!(
                 "MAC address {} is already in use by client '{}'",
-                mac,
-                client.get("name").and_then(|v| v.as_str()).unwrap_or("")
+                mac, client.name
             ));
         }
     }
@@ -416,33 +205,8 @@ pub fn get_client_paths_with_master(
     client_mac: &str,
     _master: &str,
 ) -> HashMap<String, String> {
-    let target_iqn = format!(
-        "iqn.2025-04.local.diskless:{}",
-        client_mac.to_lowercase().replace(':', "-")
-    );
-    let block_store = format!("block_{}", client_id.to_lowercase());
-    let clone = format!("{}/{}-disk", get_zpool_name(), client_id.to_uppercase());
-
-    let mut map = HashMap::new();
-    map.insert("target_iqn".to_string(), target_iqn);
-    map.insert("block_store".to_string(), block_store);
-    map.insert("clone".to_string(), clone);
-    map
+    get_client_paths(client_id, client_mac)
 }
-
-// Helper: find a dataset marked org.diskless:type=writeback and return its name
-// fn find_writeback_parent() -> Option<String> {
-//     if let Ok(pool_list) = run_command_output(&["zfs", "list", "-H", "-o", "name", "-r", &get_zpool_name()]) {
-//         for ds in pool_list.lines().filter(|l| !l.is_empty()) {
-//             if let Ok(v) = run_command_output(&["zfs", "get", "-H", "-o", "value", "org.diskless:type", ds]) {
-//                 if v.trim() == "writeback" {
-//                     return Some(ds.to_string());
-//                 }
-//             }
-//         }
-//     }
-//     None
-// }
 
 pub fn save_client_config(client_data: &Client) -> bool {
     // Operate directly on the Config struct to avoid multiple serde conversions.
@@ -478,7 +242,7 @@ fn get_latest_snapshot(master_name: &str) -> Result<String, String> {
     
     // Get all snapshots for the master image, sorted by creation time
     // Try without -r flag first, then with it if needed
-    let stdout = match run_command_output([
+    let stdout = match run_command_output_no_sudo([
         "zfs", "list", "-H", "-t", "snapshot", "-o", "name,creation", master_name,
     ]) {
         Ok(output) => output,
@@ -486,7 +250,7 @@ fn get_latest_snapshot(master_name: &str) -> Result<String, String> {
             append_log("DEBUG:", &format!(" First attempt failed: {}", e));
             
             // Try with -r flag as fallback
-            match run_command_output([
+            match run_command_output_no_sudo([
                 "zfs", "list", "-H", "-t", "snapshot", "-o", "name,creation", "-r", master_name,
             ]) {
                 Ok(output) => output,
@@ -532,9 +296,8 @@ fn get_latest_snapshot(master_name: &str) -> Result<String, String> {
 #[tauri::command]
 pub async fn remote_client(token: String, client_id: String) -> Result<serde_json::Value, String> {
     // Validate authentication token
-    crate::middleware::validate_auth_token_for_command(&token)
-        .map_err(|e| format!("Authentication failed: {}", e.message))?;
-    print!("Remote client: {}", client_id);
+    validate_auth(&token)?;
+    append_log("INFO", &format!("Remote client: {}", client_id));
     let client = get_client_by_id(&client_id).ok_or_else(|| "Client not found".to_string())?;
 
     let client_ip = client.ip.clone();
@@ -625,7 +388,7 @@ fn launch_remote_desktop(client_ip: &str, username: &str) -> Result<(), String> 
 }
 
 pub fn delete_client_config(client_id: &str) -> bool {
-    println!("Deleting client config: {}", client_id);
+    append_log("INFO", &format!("Deleting client config: {}", client_id));
     // Work with the typed Config directly and perform case-insensitive remove.
     let mut cfg = get_config();
     let before = cfg.clients.len();
@@ -649,8 +412,7 @@ pub fn delete_client_config(client_id: &str) -> bool {
 #[tauri::command]
 pub async fn add_client(token: String, req: AddClientRequest) -> Result<serde_json::Value, String> {
     // Validate authentication token
-    crate::middleware::validate_auth_token_for_command(&token)
-        .map_err(|e| format!("Authentication failed: {}", e.message))?;
+    validate_auth(&token)?;
     // Validate inputs
     let name = req.name.trim().to_lowercase();
     let mac = req.mac.trim().to_uppercase();
@@ -701,12 +463,12 @@ pub async fn add_client(token: String, req: AddClientRequest) -> Result<serde_js
     let mut paths = get_client_paths_with_master(&name, &mac, &master);
     
     // If a dataset with org.diskless:type=writeback exists, use it as the parent for client clones.
-    if let Ok(pool_list) = run_command_output(&["zfs", "list", "-H", "-o", "name", "-r", &get_zpool_name()]) {
+    if let Ok(pool_list) = run_command_output_no_sudo(&["zfs", "list", "-H", "-o", "name", "-r", &get_zpool_name()]) {
         if let Some(parent) = pool_list
             .lines()
             .filter(|l| !l.is_empty())
             .find_map(|ds| {
-                match run_command_output(&["zfs", "get", "-H", "-o", "value", "org.diskless:type", ds]) {
+                match run_command_output_no_sudo(&["zfs", "get", "-H", "-o", "value", "org.diskless:type", ds]) {
                     Ok(v) if v.trim() == "writeback" => Some(ds.to_string()),
                     _ => None,
                 }
@@ -787,8 +549,7 @@ pub async fn edit_client(
     data: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     // Validate authentication token
-    crate::middleware::validate_auth_token_for_command(&token)
-        .map_err(|e| format!("Authentication failed: {}", e.message))?;
+    validate_auth(&token)?;
     // Validate client_id format
     if !regex::Regex::new(r"^[\w-]+$").unwrap().is_match(&client_id) {
         return Err("Invalid client ID".to_string());
@@ -998,8 +759,7 @@ pub async fn edit_client(
 #[tauri::command]
 pub async fn delete_client(token: String, client_id: String) -> Result<serde_json::Value, String> {
     // Validate authentication token
-    crate::middleware::validate_auth_token_for_command(&token)
-        .map_err(|e| format!("Authentication failed: {}", e.message))?;
+    validate_auth(&token)?;
     let re = regex::Regex::new(r"^[\w-]+$").unwrap();
     if !re.is_match(&client_id) {
         return Err("Invalid client ID".to_string());
@@ -1060,8 +820,7 @@ pub async fn control_client(
     req: ControlRequest,
 ) -> Result<serde_json::Value, String> {
     // Validate authentication token
-    crate::middleware::validate_auth_token_for_command(&token)
-        .map_err(|e| format!("Authentication failed: {}", e.message))?;
+    validate_auth(&token)?;
     let client = get_client_by_id(&client_id).ok_or_else(|| format!("Client {} not found", client_id))?;
 
     let mac = client.mac.clone();
@@ -1183,7 +942,7 @@ pub async fn control_client(
 
                 // Debug: Let's also try a simple zfs list command to see what's available
                 append_log("DEBUG:", &format!(" Testing ZFS list command for master: {}", client.master));
-                if let Ok(stdout) = run_command_output(["zfs", "list", "-t", "snapshot", &client.master]) {
+                if let Ok(stdout) = run_command_output_no_sudo(["zfs", "list", "-t", "snapshot", &client.master]) {
                     append_log("DEBUG:", &format!(" Simple ZFS list output: {}", stdout));
                 }
 
@@ -1197,7 +956,7 @@ pub async fn control_client(
                         append_log("DEBUG:", &format!(" Failed to find existing snapshots: {}", e));
                         
                         // Try to find any snapshot manually using a simpler approach
-                        if let Ok(stdout) = run_command_output(["zfs", "list", "-H", "-t", "snapshot", "-o", "name", &client.master]) {
+                        if let Ok(stdout) = run_command_output_no_sudo(["zfs", "list", "-H", "-t", "snapshot", "-o", "name", &client.master]) {
                             append_log("DEBUG:", &format!(" Manual snapshot search output: {}", stdout));
                             
                             // Find the first snapshot that contains the master name
@@ -1282,8 +1041,7 @@ pub async fn control_client(
 pub async fn reset_client(token: String, client_id: String) -> Result<serde_json::Value, String> {
     append_log("INFO", &format!("reset_client start: client_id={}", client_id));
     // Validate authentication token
-    crate::middleware::validate_auth_token_for_command(&token)
-        .map_err(|e| format!("Authentication failed: {}", e.message))?;
+    validate_auth(&token)?;
     // Validate client ID
     let re = regex::Regex::new(r"^[\w-]+$").unwrap();
     if !re.is_match(&client_id) {
@@ -1363,8 +1121,7 @@ pub async fn deprovision_client(
     req: DeprovisionRequest,
 ) -> Result<serde_json::Value, String> {
     // Validate authentication token
-    crate::middleware::validate_auth_token_for_command(&token)
-        .map_err(|e| format!("Authentication failed: {}", e.message))?;
+    validate_auth(&token)?;
     let mac = req.mac;
     let force = req.force.unwrap_or(false);
     let keep_zfs = req.keep_zfs.unwrap_or(false);
@@ -1377,7 +1134,7 @@ pub async fn deprovision_client(
     }
 
     // Build command arguments
-    let mut args = vec!["/usr/local/bin/deprovision_client.sh", &mac];
+    let mut args = vec!["/usr/local/bin/deprovision_client.sh", mac.as_str()];
 
     if force {
         args.push("--force");
@@ -1412,8 +1169,7 @@ pub async fn deprovision_client_by_id(
     keep_zfs: Option<bool>,
 ) -> Result<serde_json::Value, String> {
     // Validate authentication token
-    crate::middleware::validate_auth_token_for_command(&token)
-        .map_err(|e| format!("Authentication failed: {}", e.message))?;
+    validate_auth(&token)?;
 
     // Get client by ID to extract MAC address
     let client =
@@ -1472,8 +1228,7 @@ pub async fn get_deprovision_status(
     mac: String,
 ) -> Result<serde_json::Value, String> {
     // Validate authentication token
-    crate::middleware::validate_auth_token_for_command(&token)
-        .map_err(|e| format!("Authentication failed: {}", e.message))?;
+    validate_auth(&token)?;
     // Check if client exists in various systems
     let mut status = serde_json::Map::new();
 
@@ -1515,7 +1270,7 @@ pub async fn get_deprovision_status(
             }
         }
     };
-    println!("iscsi_exists: {}", iscsi_exists);
+    append_log("DEBUG", &format!("iscsi_exists: {}", iscsi_exists));
     status.insert(
         "iscsi_target_exists".to_string(),
         serde_json::Value::Bool(iscsi_exists),

@@ -12,7 +12,7 @@ use crate::utils::{append_log, run_command, run_command_check, run_command_outpu
 use crate::{
     client::get_clients,
     config::{get_config, get_zpool_name, write_config},
-    middleware,
+    middleware::validate_auth_token_for_command,
 };
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -42,7 +42,7 @@ pub struct MasterData {
 
 // Helper to validate auth token, returning Err if invalid
 fn validate_auth(token: &str) -> Result<(), String> {
-    middleware::validate_auth_token_for_command(token)
+    validate_auth_token_for_command(token)
         .map(|_| ())
         .map_err(|e| format!("Authentication failed: {}", e.message))
 }
@@ -50,13 +50,6 @@ fn validate_auth(token: &str) -> Result<(), String> {
 // Check if a ZFS dataset/snapshot exists (returns 0 if exists)
 pub fn zfs_exists(dataset: &str) -> bool {
     run_command_check(&["zfs", "list", "-H", dataset]) == 0
-}
-
-// Run a ZFS command with sudo and return output as String (batched version for multiple datasets)
-fn run_zfs_get_property(prop: &str, datasets: &[&str]) -> Result<String, String> {
-    let mut args = vec!["zfs", "get", "-H", "-o", "name,value", prop];
-    args.extend_from_slice(datasets);
-    run_command_output(&args)
 }
 
 // Destroy a ZFS dataset/snapshot
@@ -333,7 +326,14 @@ pub async fn get_images(token: String) -> Result<Vec<Master>, String> {
     let parent_vec: Vec<&str> = unique_parents.iter().map(|s| s.as_str()).collect();
     let mut image_filter = HashSet::new();
     if !parent_vec.is_empty() {
-        if let Ok(get_out) = run_zfs_get_property("org.diskless:type", &parent_vec) {
+        if let Ok(get_out) = run_command_output(&[
+            "zfs",
+            "get",
+            "-H",
+            "-o",
+            "name,value",
+            "org.diskless:type",
+        ].iter().chain(&parent_vec).cloned().collect::<Vec<_>>()) {
             for (name, val) in parse_property_output(&get_out) {
                 if val == "image" {
                     image_filter.insert(name);
@@ -646,7 +646,7 @@ pub async fn get_default_image_overview() -> Result<serde_json::Value, String> {
         .and_then(|s| s.as_str())
         .ok_or("Default master image not set in config".to_string())?;
 
-    let stdout = run_command_output([
+    let stdout = run_command_output(&[
             "zfs",
             "get",
             "creation,clones",

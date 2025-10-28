@@ -5,6 +5,22 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 
+#[derive(Serialize)]
+pub struct MemoryStats {
+    total: String,
+    used: String,
+    free: String,
+    shared: String,
+    buff_cache: String,
+    available: String,
+}
+
+#[derive(Serialize)]
+pub struct RamUsage {
+    memory: MemoryStats,
+}
+
+
 #[derive(thiserror::Error, Debug)]
 pub enum CommandError {
     #[error("Failed to execute command {cmd}: {source}")]
@@ -26,7 +42,6 @@ where
         .collect::<Vec<_>>()
         .join(" ");
     let output = Command::new("sudo")
-        .arg("-n")
         .args(args_vec.iter())
         .stdin(Stdio::null()) // Avoid hanging on input
         .output()
@@ -94,6 +109,34 @@ where
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+pub fn run_command_output_no_sudo<II>(args: II) -> Result<String, String>
+where
+    II: IntoIterator,
+    II::Item: AsRef<std::ffi::OsStr>,
+{
+    let args_vec: Vec<_> = args.into_iter().collect();
+    let cmd_str = args_vec
+        .iter()
+        .map(|a| a.as_ref().to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(" ");
+    println!("Executing command: {}", cmd_str);
+    
+    let mut cmd_iter = args_vec.iter();
+    let program = cmd_iter.next().ok_or("No command provided")?;
+    
+    let output = std::process::Command::new(program)
+        .args(cmd_iter)
+        .output()
+        .map_err(|e| e.to_string())?;
+    
+    if !output.status.success() {
+        return Err(format!("Command failed: {}", String::from_utf8_lossy(&output.stderr)));
+    }
+    
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
 pub fn get_server_ip() -> String {
     // More robust parsing using regex for IP extraction
     let output = match Command::new("ip").args(["route", "get", "1"]).output() {
@@ -152,21 +195,6 @@ pub fn list_disks() -> Result<Vec<Disk>, String> {
         }
     }
     Ok(disks)
-}
-
-#[derive(Serialize)]
-pub struct MemoryStats {
-    total: String,
-    used: String,
-    free: String,
-    shared: String,
-    buff_cache: String,
-    available: String,
-}
-
-#[derive(Serialize)]
-pub struct RamUsage {
-    memory: MemoryStats,
 }
 
 /// Get current RAM usage statistics

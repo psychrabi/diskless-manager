@@ -78,6 +78,8 @@ lazy_static::lazy_static! {
         );
         m
     };
+    static ref SECRET_ENCODING_KEY: EncodingKey = EncodingKey::from_secret(SECRET_KEY.as_ref());
+    static ref SECRET_DECODING_KEY: DecodingKey = DecodingKey::from_secret(SECRET_KEY.as_ref());
 }
 
 const SECRET_KEY: &str = "diskless_manager_secret_key_2025"; // In production, use a more secure secret
@@ -131,7 +133,7 @@ pub fn authenticate_user(username: &str, password: &str) -> Result<LoginResponse
     let token = encode(
         &Header::default(),
         &claims,
-        &EncodingKey::from_secret(SECRET_KEY.as_ref()),
+        &SECRET_ENCODING_KEY,
     )
     .map_err(|_| AuthError {
         message: "Failed to generate token".to_string(),
@@ -151,7 +153,7 @@ pub fn validate_token(token: &str) -> Result<Claims, AuthError> {
     let validation = Validation::default();
     let decoded = decode::<Claims>(
         token,
-        &DecodingKey::from_secret(SECRET_KEY.as_ref()),
+        &SECRET_DECODING_KEY,
         &validation,
     )
     .map_err(|_| AuthError {

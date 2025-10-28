@@ -1,6 +1,6 @@
 // New ZFS management commands: list_zpools, list_datasets, create_zfs_dataset
 
-use crate::utils::{run_command, run_command_output, run_command_check};
+use crate::utils::{run_command, run_command_check, run_command_output, run_command_output_no_sudo};
 use serde::Serialize;
 use regex::Regex;
 
@@ -13,7 +13,7 @@ pub struct DatasetInfo {
 #[tauri::command]
 pub fn list_zpools() -> Result<Vec<String>, String> {
     // returns names, one per line
-    let out = run_command_output(&["zpool", "list", "-H", "-o", "name"])?;
+    let out = run_command_output_no_sudo(&["zpool", "list", "-H", "-o", "name"])?;
     let pools = out
         .lines()
         .filter(|l| !l.is_empty())
@@ -25,7 +25,7 @@ pub fn list_zpools() -> Result<Vec<String>, String> {
 #[tauri::command]
 pub fn list_datasets(zpool: &str) -> Result<Vec<DatasetInfo>, String> {
     // list datasets under the zpool and fetch org.diskless:type if set
-    let out = run_command_output(&["zfs", "list", "-H", "-o", "name", "-r", zpool])?;
+    let out = run_command_output_no_sudo(&["zfs", "list", "-H", "-o", "name", "-r", zpool])?;
     let mut with_type: Vec<DatasetInfo> = Vec::new();
 
     for line in out.lines().filter(|l| !l.is_empty()) {
