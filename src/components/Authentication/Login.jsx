@@ -1,13 +1,13 @@
-import { useForm } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
-import { z } from 'zod';
-import { invoke } from '@tauri-apps/api/core';
-import { useNavigate } from 'react-router-dom';
-import { Card, Input, Button, Loading } from '@/components/ui';
-import { useEffect, useState } from 'react';
+import { Button, Card, Input, Loading } from '@/components/ui';
 import { useAuth } from '@/contexts/auth';
-import { useAppStore } from '@/store/useAppStore';
 import { useNotification } from '@/contexts/notification';
+import { useAppStore } from '@/store/useAppStore';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { invoke } from '@tauri-apps/api/core';
+import { useEffect, useState } from 'react';
+import { useForm } from 'react-hook-form';
+import { useNavigate } from 'react-router-dom';
+import { z } from 'zod';
 
 // Define validation schema
 const loginSchema = z.object({
@@ -16,7 +16,6 @@ const loginSchema = z.object({
 });
 
 const Login = () => {
-  const [error, setError] = useState('');
   const navigate = useNavigate();
   const { login: setAuth } = useAuth();
   const { setServices } = useAppStore();
@@ -72,7 +71,6 @@ const Login = () => {
   }
 
   const onSubmit = async (data) => {
-    setError('');
 
     try {
       const response = await invoke('login', {

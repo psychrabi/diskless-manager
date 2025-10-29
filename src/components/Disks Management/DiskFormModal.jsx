@@ -1,14 +1,12 @@
-import { useNotification } from '@/contexts/notification';
 import { invoke } from '@tauri-apps/api/core';
 import { z } from 'zod';
-import { Input, Select, FormModal } from '../ui';
-import { useForm } from 'react-hook-form';
+import { FormModal, Input, Select } from '../ui';
 
 const diskSchema = z.object({
-	zpool: z.string().min(1, 'Zpool is required'),
-	name: z.string().min(4, 'Disk name is required'),
-	usage_type: z.string().min(1, 'Disk type is required'),
-	size: z.string().optional(),
+  zpool: z.string().min(1, 'Zpool is required'),
+  name: z.string().min(4, 'Disk name is required'),
+  usage_type: z.string().min(1, 'Disk type is required'),
+  size: z.string().optional(),
 });
 
 const DiskFormModal = ({ zpools, isOpen, setIsOpen, refresh }) => {

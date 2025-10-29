@@ -1,21 +1,21 @@
-import { invoke } from '@tauri-apps/api/core';
 import { useNotification } from '@/contexts/notification';
-import { Input, Select, FormModal } from '../ui';
-import { z } from 'zod';
+import { invoke } from '@tauri-apps/api/core';
 import { useEffect } from 'react';
+import { z } from 'zod';
+import { FormModal, Input, Select } from '../ui';
 
 const clientSchema = z.object({
   name: z.string().min(1, 'Client name is required'),
   mac: z.string().regex(/^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/, "Invalid MAC address format"),
   ip: z.string().regex(/^([\d]{1,3}\.){3}\d{1,3}$/, 'Invalid IP address format. Use X.X.X.X'),
   master: z.string().optional(),
-  snapshot: z.string().optional().nullable(), 
+  snapshot: z.string().optional().nullable(),
 });
 
 const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
   const { showNotification } = useNotification();
 
-  const onSubmit = async (data, showNotification) => {
+  const onSubmit = async (data) => {
     const token = localStorage.getItem('authToken') || '';
     if (!client.id) {
       showNotification(`Adding new client ${data.name}`, 'info');
@@ -65,7 +65,7 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
           if (!client?.id || selectedMaster !== client?.master) {
             setValue('snapshot', '');
           }
-        }, [selectedMaster, setValue, client?.id, client?.master]);
+        }, [selectedMaster, setValue]);
 
         return (
           <>
