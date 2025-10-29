@@ -1,6 +1,10 @@
 import { invoke } from '@tauri-apps/api/core';
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
+import { shallow } from 'zustand/shallow';
+
+// Export shallow comparison helper for consumers
+export { shallow };
 
 export const useAppStore = create()(
   persist(
@@ -42,18 +46,23 @@ export const useAppStore = create()(
             invoke('get_images', { token }),
             invoke('get_clients', { token }),
           ]);
-          set({
+          
+          // Batch state updates to reduce re-renders
+          const newState = {
             clients: clientsRes ? Object.values(clientsRes) : [],
             masters: mastersRes || [],
             services: Array.isArray(servicesRes) ? servicesRes : (servicesRes ? Object.values(servicesRes) : []),
-          });
+          };
+          
           // Set default snapshot selection for Add Client modal only if not already set and snapshots exist
           const { selectedSnapshot } = get();
           if (!selectedSnapshot && mastersRes?.length > 0 && mastersRes[0].snapshots?.length > 0) {
-            set({ selectedSnapshot: mastersRes[0].snapshots[mastersRes[0].snapshots.length - 1].name });
+            newState.selectedSnapshot = mastersRes[0].snapshots[mastersRes[0].snapshots.length - 1].name;
           } else if (mastersRes?.flatMap((m) => m.snapshots || []).length === 0) {
-            set({ selectedSnapshot: '' });
+            newState.selectedSnapshot = '';
           }
+          
+          set(newState);
         } catch (err) {
           set({ error: `Failed to load data: ${err}` });
         } finally {
@@ -70,7 +79,38 @@ export const useAppStore = create()(
             // Get token from localStorage
             const token = localStorage.getItem('authToken') || '';
             const clientsRes = await invoke('get_clients', { token });
-            set({ clients: clientsRes ? Object.values(clientsRes) : [] });
+            const newClients = clientsRes ? Object.values(clientsRes) : [];
+            
+            // Only update if data has changed to prevent unnecessary re-renders
+              const { clients: currentClients } = get();
+              // Lightweight deep-diff: prefer id+important-fields comparison to avoid expensive stringify on large objects
+              const clientsChanged = (() => {
+                try {
+                  if (currentClients.length !== newClients.length) return true;
+                  // Build map of id -> snapshot key
+                  const map = new Map();
+                  for (const c of currentClients) {
+                    if (c && c.id) {
+                      map.set(c.id, JSON.stringify({ status: c.status, online: c.online }));
+                    }
+                  }
+                  for (const nc of newClients) {
+                    if (nc && nc.id) {
+                      const prev = map.get(nc.id);
+                      if (!prev) return true;
+                      if (prev !== JSON.stringify({ status: nc.status, online: nc.online })) return true;
+                    } else {
+                      // Fallback to full compare if no id present
+                      if (JSON.stringify(currentClients) !== JSON.stringify(newClients)) return true;
+                    }
+                  }
+                  return false;
+                } catch (e) {
+                  // If anything unexpected, fallback to full compare
+                  return JSON.stringify(currentClients) !== JSON.stringify(newClients);
+                }
+              })();
+              if (clientsChanged) set({ clients: newClients });
           } catch {
             // ignore transient errors
           }
@@ -102,4 +142,4 @@ export const useAppStore = create()(
       storage: createJSONStorage(() => localStorage), // (optional) by default, 'localStorage' is used
     },
   )
-); 
+);

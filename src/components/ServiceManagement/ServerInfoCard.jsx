@@ -14,7 +14,7 @@ const ServerInfoCard = () => {
         const info = await invoke('get_server_info');
         setServerInfo(info);
       } catch (error) {
-        showNotification('error', 'Failed to load server info', error.message || 'An unknown error occurred');
+        showNotification('error', 'Failed to load server info', error || 'An unknown error occurred');
         setServerInfo(null);
       }
     };

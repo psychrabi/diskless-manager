@@ -1,34 +1,60 @@
 import { invoke } from '@tauri-apps/api/core';
-import { HardDrive } from 'lucide-react';
+import { HardDrive, RefreshCw } from 'lucide-react';  // Add Refresh icon
 import { useEffect, useState } from 'react';
-import { Card } from '../ui';
+import { Card, Button } from '../ui';  // Assume Button component
 import { useNotification } from '@/contexts/notification';
 
 const MasterImageOverviewCard = () => {
   const [overview, setOverview] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const { showNotification } = useNotification();
 
-  useEffect(() => {
-    const fetchMasterImageOverview = async () => {
-      try {
-        const data = await invoke('get_default_image_overview');
-        setOverview(data);
-      } catch (err) {
-        showNotification('error', 'Failed to load master image overview', err.message || 'An unknown error occurred');
-        console.error(err);
-        setOverview(null);
-      } finally {
-        setLoading(false);
+  const fetchMasterImageOverview = async (showErrorToast = true) => {
+    setError(null);
+    setLoading(true);
+    try {
+      const data = await invoke('get_default_image_overview');
+      setOverview(data);
+    } catch (err) {
+      console.error(err);
+      let errorMsg = err || 'An unknown error occurred';
+      // Map specific errors
+      if (errorMsg.includes('not set in config') || errorMsg.includes('please set a new one')) {
+        errorMsg = 'Set a default image first.';
+      } else if (errorMsg.includes('deleted or not present')) {
+        errorMsg = 'Master image is deleted or not present.';
       }
-    };
+      setError(errorMsg);
+      if (showErrorToast) {
+        showNotification('error', 'Failed to load master image overview', errorMsg);
+      }
+      setOverview(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
     fetchMasterImageOverview();
-  }, [showNotification]);
+  }, []);  // Run once on mount
+
+  const handleRetry = () => fetchMasterImageOverview(false);  // No duplicate toast
 
   return (
     <Card title="Default Image Overview" icon={HardDrive}>
       {loading ? (
-        <div>Loading...</div>
+        <div className="flex items-center justify-center py-4">
+          <div>Loading...</div>
+        </div>
+      ) : error ? (
+        <div className="text-center py-4 space-y-2">
+          <div className="text-red-500">{error}</div>
+          <Button onClick={handleRetry} variant="outline" size="sm">
+            <RefreshCw className="w-4 h-4 mr-2" />
+            Retry
+          </Button>
+        </div>
       ) : overview ? (
         <ul className="space-y-2">
           <li className="flex justify-between">
@@ -39,9 +65,15 @@ const MasterImageOverviewCard = () => {
             <span className="font-semibold">Created:</span>
             {overview.creation_date}
           </li>
+          {overview.clones && overview.clones !== '-' && (
+            <li className="flex justify-between">
+              <span className="font-semibold">Clones:</span>
+              {overview.clones}
+            </li>
+          )}
         </ul>
       ) : (
-        <div className="text-red-500">Set a default image first.</div>
+        <div className="text-red-500 text-center py-4">Set a default image first.</div>
       )}
     </Card>
   );

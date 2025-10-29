@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::process::Command;
+use std::time::Duration;
+use tokio::time::timeout;  // Add this import at top
 
 use crate::utils::{append_log, run_command, run_command_check, run_command_output};
 use crate::{
@@ -100,9 +102,9 @@ fn parse_property_output(output: &str) -> Vec<(String, String)> {
 }
 
 // Check for dependent clients (returns Ok(Vec<String>) of names if any, Err if fetch fails)
-async fn check_dependent_clients(base: &str, is_snapshot: bool) -> Result<Vec<String>, String> {
+async fn check_dependent_clients(base: &str, is_snapshot: bool, token: &str) -> Result<Vec<String>, String> {
     let key = if is_snapshot { "snapshot" } else { "master" };
-    let clients_result = get_clients("".to_string(), None).await;
+    let clients_result = get_clients(token.to_string(), None).await;
     match clients_result {
         Ok(clients_json) => {
             if let Some(clients) = clients_json.as_array() {
@@ -402,64 +404,98 @@ pub fn save_master_config(master_data: &MasterData) -> bool {
         }
     }
 }
-// Common delete logic for image/snapshot
+
 async fn common_delete(
     token: String,
     entity: &str,
     is_snapshot: bool,
 ) -> Result<Value, String> {
+    eprintln!("=== common_delete AUTH START: {}", entity);
     validate_auth(&token)?;
+    eprintln!("=== common_delete AUTH OK");
 
-    let dependents = check_dependent_clients(entity, is_snapshot).await?;
+    eprintln!("=== common_delete DEPENDENTS START");
+    let dependents = check_dependent_clients(entity, is_snapshot, &token).await
+        .map_err(|e| {
+            eprintln!("=== common_delete DEPENDENTS ERR: {}", e);
+            format!("Failed to check clients: {e}")
+        })?;
+    eprintln!("=== common_delete DEPENDENTS OK: {} found", dependents.len());
+
     if !dependents.is_empty() {
+        eprintln!("=== common_delete BLOCKED BY DEPENDENTS");
         return Ok(json!({
             "error": "Entity has dependent clients",
-            "message": format!(
-                "Cannot delete entity: It is being used by the following clients: {}",
-                dependents.join(", ")
-            ),
+            "message": format!("Cannot delete – used by: {}", dependents.join(", ")),
             "dependent_clients": dependents
         }));
     }
 
-    if let Err(stderr) = run_command(["zfs", "destroy", entity]) {
-        if stderr.contains("has dependent clones") {
-            return Ok(json!({
-                "error": "Entity has dependent clones",
-                "message": format!("Cannot delete entity '{}': It has dependent clones.", entity)
-            }));
-        } else {
-            return Ok(json!({
-                "error": format!("Failed to delete entity: {}", stderr)
-            }));
+    eprintln!("=== common_delete ZFS DESTROY START");
+    match run_command(&["zfs", "destroy", entity]) {
+        Ok(()) => {
+            eprintln!("=== common_delete ZFS DESTROY OK");
+            if !is_snapshot {
+                let _ = delete_image_config(entity);
+            }
+            append_log("INFO", &format!("delete_{}: {}", if is_snapshot { "snapshot" } else { "image" }, entity));
+            Ok(json!({
+                "message": format!("{} {} deleted successfully", if is_snapshot { "Snapshot" } else { "Master" }, entity)
+            }))
         }
-    }
-
-    if !is_snapshot {
-        let _ = delete_image_config(entity);
-    }
-    append_log("INFO", &format!("delete_{}: {}", if is_snapshot { "snapshot" } else { "image" }, entity));
-    Ok(json!({
-        "message": format!("{} {} deleted successfully", if is_snapshot { "Snapshot" } else { "Master" }, entity)
-    }))
-}
-
-pub fn delete_image_config(master_name: &str) -> bool {
-    let mut config = get_config();
-    if let Some(masters) = config.masters.as_object_mut() {
-        if masters.remove(master_name).is_some() {
-            if let Err(e) = write_config(&config) {
-                println!("Error writing config file: {}", e);
-                return false;
+        Err(stderr) => {
+            eprintln!("=== common_delete ZFS DESTROY ERR: {}", stderr);
+            if stderr.contains("has dependent clones") {
+                Ok(json!({
+                    "error": "Entity has dependent clones",
+                    "message": format!("Cannot delete '{}': dependent clones exist.", entity)
+                }))
+            } else {
+                Ok(json!({
+                    "error": "ZFS destroy failed",
+                    "message": format!("Failed for '{}': {}", entity, stderr.trim())
+                }))
             }
         }
     }
-    true
+}
+
+// Enhanced: Clear default if deleted master was default
+pub fn delete_image_config(master_name: &str) -> bool {
+    let mut config = get_config();
+    let was_default = config
+        .settings
+        .get("default_master")
+        .and_then(|s| s.as_str())
+        .map_or(false, |default| default == master_name);
+
+    if let Some(masters) = config.masters.as_object_mut() {
+        if masters.remove(master_name).is_some() {
+            // NEW: Clear default if this was the default
+            if was_default {
+                if !config.settings.is_object() {
+                    config.settings = json!({});
+                }
+                config.settings["default_master"] = json!(null);  // Or json!("")
+                eprintln!("=== delete_image_config: Cleared default_master after delete");
+            }
+
+            if let Err(e) = write_config(&config) {
+                eprintln!("Error writing config file: {}", e);
+                return false;
+            }
+            return true;
+        }
+    }
+    true  // Nothing deleted, but success
 }
 
 #[tauri::command]
 pub async fn delete_image(token: String, master_name: String) -> Result<serde_json::Value, String> {
-    common_delete(token, &master_name, false).await
+    eprintln!("=== delete_image START: {}", master_name); // Terminal log
+    let result = common_delete(token, &master_name, false).await;
+    eprintln!("=== delete_image END: {:?}", result); // Will show if it completes
+    result
 }
 
 #[tauri::command]
@@ -639,22 +675,36 @@ pub async fn get_zfs_arcstat() -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 pub async fn get_default_image_overview() -> Result<serde_json::Value, String> {
-    let config = get_config();
+    let mut config = get_config();  // Mutable for potential update
     let master_dataset = config
         .settings
         .get("default_master")
         .and_then(|s| s.as_str())
-        .ok_or("Default master image not set in config".to_string())?;
+        .ok_or("Default image is not set in config".to_string())?;
+
+    // NEW: Check if dataset exists before ZFS query
+    if !zfs_exists(master_dataset) {
+        eprintln!("=== get_default_image_overview: DEFAULT MISSING – CLEARING");
+        // Clear invalid default in config
+        if !config.settings.is_object() {
+            config.settings = json!({});
+        }
+        config.settings["default_master"] = json!(null);  // Or empty string: json!("")
+        if let Err(e) = write_config(&config) {
+            eprintln!("Warning: Failed to clear invalid default: {}", e);
+        }
+        return Err("Default master image is deleted or not present—please set a new one.".to_string());
+    }
 
     let stdout = run_command_output(&[
-            "zfs",
-            "get",
-            "creation,clones",
-            "-o",
-            "value",
-            "-H",
-            master_dataset,
-        ]).map_err(|e| format!("Failed to get master image info: {}", e))?;
+        "zfs",
+        "get",
+        "creation,clones",
+        "-o",
+        "value",
+        "-H",
+        master_dataset,
+    ]).map_err(|e| format!("Failed to get master image info: {}", e))?;
 
     let lines: Vec<&str> = stdout.lines().collect();
     if lines.len() < 2 {
@@ -693,7 +743,7 @@ pub async fn rename_image(
         return Err(format!("Master '{}' already exists.", new_master_zvol_name));
     }
 
-    let dependents = check_dependent_clients(&old_name, false).await?;
+    let dependents = check_dependent_clients(&old_name, false, &token).await?;
     if !dependents.is_empty() {
         return Ok(json!({
             "error": "Master has dependent clients",

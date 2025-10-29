@@ -128,13 +128,16 @@ export const useMasterManager = () => {
     });
     if (ok) {
       const token = localStorage.getItem('authToken') || '';
-      await invoke('delete_image', { token, masterName: image })
-        .then((response) => {
-          if (response.message) showNotification(response.message, 'success');
-          if (response.error) showNotification(response.error, 'error');
-        }).catch((error) => {
-          showNotification(error.error, 'error',)
-        })
+    console.log("=== JS: Starting invoke for", image);
+    try {
+      const response = await invoke('delete_image', { token, masterName: image });
+      console.log("=== JS: Invoke resolved with", response);
+      if (response.message) showNotification(response.message, 'success');
+      if (response.error) showNotification(response.error, 'error');
+    } catch (error) {
+      console.error("=== JS: Invoke rejected with", error);
+      showNotification(error?.error || 'Unknown error', 'error');
+    }
     } else {
       showNotification("Image deletion cancelled", 'error',)
     }
