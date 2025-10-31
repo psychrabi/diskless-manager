@@ -582,16 +582,21 @@ pub fn create_zfs_pool(name: String, disk: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn set_default_image(token: String, name: String) -> Result<bool, String> {
-    validate_auth(&token)?;
+pub fn set_default_image(token: String, name: &str) -> Result<bool, String> {
+    // Validate authentication token
+    crate::middleware::validate_auth_token_for_command(&token)
+        .map_err(|e| format!("Authentication failed: {}", e.message))?;
     let mut config = get_config();
     if !config.settings.is_object() {
         config.settings = json!({});
     }
-    config.settings["default_master"] = json!(name);
+    config.settings["default_master"] = Value::String(name.to_string());
     match write_config(&config) {
         Ok(_) => Ok(true),
-        Err(e) => Err(format!("Error saving default master: {}", e)),
+        Err(e) => {
+            println!("Error saving default master: {}", e);
+            Err(format!("Error saving default master: {}", e))
+        }
     }
 }
 
@@ -668,46 +673,29 @@ pub async fn get_zfs_arcstat() -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 pub async fn get_default_image_overview() -> Result<serde_json::Value, String> {
-    let mut config = get_config();  // Mutable for potential update
+    let config = get_config();
     let master_dataset = config
         .settings
         .get("default_master")
         .and_then(|s| s.as_str())
-        .ok_or("Default image is not set in config".to_string())?;
+        .unwrap_or("");
 
-    // NEW: Check if dataset exists before ZFS query
-    if !zfs_exists(master_dataset) {
-        eprintln!("=== get_default_image_overview: DEFAULT MISSING – CLEARING");
-        // Clear invalid default in config
-        if !config.settings.is_object() {
-            config.settings = json!({});
-        }
-        config.settings["default_master"] = json!(null);  // Or empty string: json!("")
-        if let Err(e) = write_config(&config) {
-            eprintln!("Warning: Failed to clear invalid default: {}", e);
-        }
-        return Err("Default master image is deleted or not present—please set a new one.".to_string());
+    if master_dataset.is_empty() {
+        return Err("Default master image not set in config".to_string());
     }
 
-    let stdout = run_command_output_no_sudo(&[
-        "zfs",
-        "get",
-        "creation,clones",
-        "-o",
-        "value",
-        "-H",
-        master_dataset,
-    ]).map_err(|e| format!("Failed to get master image info: {}", e))?;
+    let output = run_command_output_no_sudo(&[
+        "zfs", "get", "creation,clones", "-o", "value", "-H", master_dataset])?;
 
-    let lines: Vec<&str> = stdout.lines().collect();
+    let lines: Vec<&str> = output.lines().collect();
     if lines.len() < 2 {
-        return Err("Invalid master dataset output format".to_string());
+        return Err("Unexpected output from zfs get".to_string());
     }
 
     Ok(json!({
         "name": master_dataset,
-        "creation_date": lines[0].trim(),
-        "clones": lines[1].trim()
+        "creation_date": lines[0],
+        "clones": lines[1]
     }))
 }
 

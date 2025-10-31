@@ -463,7 +463,7 @@ include "/etc/dhcp/clients.conf";
     );
 
     write_with_sudo_tee(DHCP_CONFIG_PATH, &dhcp_config).await?;
-    restart_service_async("isc-dhcp-server").await?;
+    restart_service_async("isc-dhcp-server.service").await?;
 
     Ok("DHCP server configured successfully".to_string())
 }
@@ -488,7 +488,7 @@ TFTP_OPTIONS="{}"
         .map_err(|e| format!("Create TFTP dir failed: {}", e))?;
 
     write_with_sudo_tee("/etc/default/tftpd-hpa", &tftp_content).await?;
-    restart_service_async("tftpd-hpa").await?;
+    restart_service_async("tftpd-hpa.service").await?;
 
     Ok("TFTP server configured successfully".to_string())
 }
@@ -526,7 +526,7 @@ pub async fn configure_apache_server(token: String, http_config: HTTPConfig) -> 
     write_with_sudo_tee("/etc/apache2/sites-available/diskless-server.conf", &apache_config).await?;
 
     let _ = run_command(["a2ensite", "diskless-server.conf"]);
-    restart_service_async("apache2").await?;
+    restart_service_async("apache2.service").await?;
 
     Ok("Apache server configured successfully".to_string())
 }
@@ -567,8 +567,8 @@ pub async fn configure_samba_server(token: String, shares: Vec<SambaShare>) -> R
     }
 
     write_with_sudo_tee("/etc/samba/smb.conf", &samba_config).await?;
-    restart_service_async("smbd").await?;
-    restart_service_async("nmbd").await?;
+    restart_service_async("smbd.service").await?;
+    restart_service_async("nmbd.service").await?;
 
     Ok("Samba server configured successfully".to_string())
 }

@@ -244,8 +244,8 @@ pub fn clear_ram_cache() -> Result<serde_json::Value, String> {
 pub fn get_service_logs(unit: String, lines: Option<u32>) -> Result<String, String> {
     let num = lines.unwrap_or(200).to_string();
     let args_vec: Vec<_> = vec!["journalctl", "-u", &unit, "-n", &num, "--no-pager"];
-    let output = exec_sudo_cmd(args_vec.iter()).map_err(|e| e.to_string())?;
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    let output = run_command_output_no_sudo(args_vec.iter()).map_err(|e| e.to_string())?;
+    Ok(output)
 }
 
 pub fn log_file_path() -> PathBuf {
