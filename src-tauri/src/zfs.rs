@@ -3,44 +3,25 @@
 use chrono::Local;
 
 use regex::Regex;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::process::Command;
-use std::time::Duration;
-use tokio::time::timeout;  // Add this import at top
 
-use crate::utils::{append_log, run_command, run_command_check, run_command_output};
+
+use crate::types::{Master, MasterData, Snapshot};
+use crate::utils::{append_log, run_command, run_command_check, run_command_output_no_sudo};
 use crate::{
     client::get_clients,
     config::{get_config, get_zpool_name, write_config},
     middleware::validate_auth_token_for_command,
 };
 
-#[derive(Serialize, Deserialize, Clone)]
-pub struct Master {
-    pub id: String,
-    pub name: String,
-    pub is_default: bool,
-    pub size: String,
-    pub snapshots: Vec<Snapshot>,
-}
 
-#[derive(Serialize, Deserialize, Clone)]
-pub struct Snapshot {
-    pub name: String,
-    pub created: String,
-    pub used: String,
-}
 
-#[derive(Serialize, Deserialize, Clone)]
-pub struct MasterData {
-    name: String,
-    size: String,
-    snapshots: Vec<String>,
-    created_at: String,
-    last_modified: String,
-}
+
+
+
 
 // Helper to validate auth token, returning Err if invalid
 fn validate_auth(token: &str) -> Result<(), String> {
@@ -201,10 +182,22 @@ pub fn create_image(token: String, name: String, size: String) -> Result<Value, 
     validate_size(&size)?;
 
     let zpool = get_zpool_name();
+    // Validate that the ZFS pool exists before querying datasets
+    if std::process::Command::new("zpool")
+        .args(["list", &zpool])
+        .status()
+        .map(|s| !s.success())
+        .unwrap_or(true)
+    {
+        return Err(format!(
+            "ZFS pool '{}' not found. Create it (e.g., 'zpool create {} <disk>') or update zpool_name in settings.",
+            zpool, zpool
+        ));
+    }
     let mut parent_dataset = format!("{}/images", zpool);
 
     // Batch find parent with org.diskless:type=image
-    if let Ok(get_out) = run_command_output(&[
+    if let Ok(get_out) = run_command_output_no_sudo(&[
         "zfs",
         "get",
         "-H",
@@ -272,7 +265,7 @@ pub async fn get_images(token: String) -> Result<Vec<Master>, String> {
         .to_string();
 
     // List all datasets (fs/vol)
-    let ds_out = run_command_output(&[
+    let ds_out = run_command_output_no_sudo(&[
         "zfs",
         "list",
         "-H",
@@ -287,7 +280,7 @@ pub async fn get_images(token: String) -> Result<Vec<Master>, String> {
     let all_datasets = parse_zfs_list(&ds_out);
 
     // List all snapshots once
-    let snap_out = run_command_output(&[
+    let snap_out = run_command_output_no_sudo(&[
         "zfs",
         "list",
         "-H",
@@ -328,7 +321,7 @@ pub async fn get_images(token: String) -> Result<Vec<Master>, String> {
     let parent_vec: Vec<&str> = unique_parents.iter().map(|s| s.as_str()).collect();
     let mut image_filter = HashSet::new();
     if !parent_vec.is_empty() {
-        if let Ok(get_out) = run_command_output(&[
+        if let Ok(get_out) = run_command_output_no_sudo(&[
             "zfs",
             "get",
             "-H",
@@ -522,8 +515,8 @@ pub struct ZpoolInfo {
 #[tauri::command]
 pub fn get_zpool_list() -> Vec<ZpoolInfo> {
     let mut pools = vec![];
-    if run_command_check(&["which", "zpool"]) == 0 {
-        if let Ok(out) = run_command_output(&["zpool", "list", "-H", "-o", "name,size,alloc,free,health"]) {
+    
+        if let Ok(out) = run_command_output_no_sudo(&["zpool", "list", "-H", "-o", "name,size,alloc,free,health"]) {
             for line in out.lines() {
                 let parts: Vec<&str> = line.split_whitespace().map(|s| s.trim()).collect();
                 if parts.len() >= 5 {
@@ -537,7 +530,7 @@ pub fn get_zpool_list() -> Vec<ZpoolInfo> {
                 }
             }
         }
-    }
+    
     pools
 }
 
@@ -696,7 +689,7 @@ pub async fn get_default_image_overview() -> Result<serde_json::Value, String> {
         return Err("Default master image is deleted or not present—please set a new one.".to_string());
     }
 
-    let stdout = run_command_output(&[
+    let stdout = run_command_output_no_sudo(&[
         "zfs",
         "get",
         "creation,clones",

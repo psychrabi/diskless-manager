@@ -10,7 +10,9 @@ mod utils;
 mod zfs;
 mod license;
 mod disks;
+mod types;
 use dirs;
+
 use serde::Serialize;
 use sysinfo::System;
 
@@ -123,7 +125,7 @@ pub fn run() {
                 if !config_path.exists() {
                     if let Err(e) = std::fs::create_dir_all(&config_dir) {
                         eprintln!("[WARN] Failed to create config directory: {}", e);
-                    } else if let Err(e) = config::write_config(&config::Config::default()) {
+                    } else if let Err(e) = config::write_config(&types::Config::default()) {
                         eprintln!("[WARN] Failed to create default config.json: {}", e);
                     } else {
                         println!("Created default config at {}", config_path.display());

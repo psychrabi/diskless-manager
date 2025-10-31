@@ -1,65 +1,12 @@
 //! Authentication module for JWT-based authentication
-use crate::license::ensure_license_valid;
+use crate::{license::ensure_license_valid, types::User};
 use crate::utils::append_log;
 use bcrypt::{hash, verify, DEFAULT_COST};
 use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct User {
-    pub id: String,
-    pub username: String,
-    pub password_hash: String,
-    pub role: String, // admin, user
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Claims {
-    pub sub: String,      // subject (user id)
-    pub username: String, // username
-    pub role: String,     // user role
-    pub exp: i64,         // expiration time
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct LoginRequest {
-    pub username: String,
-    pub password: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct LoginResponse {
-    pub token: String,
-    pub user: UserResponse,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct UserResponse {
-    pub id: String,
-    pub username: String,
-    pub role: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct AuthError {
-    pub message: String,
-}
-
-impl From<String> for AuthError {
-    fn from(s: String) -> Self {
-        AuthError { message: s }
-    }
-}
-
-impl From<&str> for AuthError {
-    fn from(s: &str) -> Self {
-        AuthError {
-            message: s.to_string(),
-        }
-    }
-}
+use crate::types::{Claims, LoginRequest, LoginResponse, UserResponse, AuthError};
 
 // In a real application, this would be stored in a database
 lazy_static::lazy_static! {

@@ -1,68 +1,15 @@
 use crate::config::{get_config, set_config, write_config};
+use crate::types::service::SambaShare;
+use crate::types::{DHCPConfig, HTTPConfig, PackageStatus, ServiceControlRequest, TFTPConfig};
 use crate::{DHCP_CONFIG_PATH, DHCP_CLIENTS_PATH, TFTP_AUTOEXEC_PATH};
 use async_process::Command as AsyncCommand;
 use futures::io::AsyncWriteExt;
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use crate::utils::{append_log, run_command, run_command_output, run_command_output_no_sudo};
 use std::collections::HashMap;
 use crate::middleware::validate_auth_token_for_command;
 use std::process::Stdio;
 
-#[derive(Deserialize)]
-pub struct ServiceControlRequest {
-    pub action: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct PackageStatus {
-    name: String,
-    service: String,
-    installed: bool,
-    configured: bool,
-    running: bool,
-    version: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct DHCPConfig {
-    pub subnet_ip: String,
-    pub start_ip: String,
-    pub end_ip: String,
-    pub subnet_mask: String,
-    pub gateway_ip: String,
-    pub dns_server1: String,
-    pub dns_server2: String,
-    pub broadcast_ip: String,
-    pub next_server_ip: String,
-    pub boot_server_ip: String,
-    pub boot_script: String,
-    pub boot_file_legacy: String,
-    pub boot_file_uefi32: String,
-    pub boot_file_uefi64: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct TFTPConfig {
-    pub tftp_root: String,
-    pub tftp_server_ip: String,
-    pub tftp_options: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct HTTPConfig {
-    pub http_root: String,
-    pub http_server_ip: String,
-    pub http_server_port: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SambaShare {
-    name: String,
-    path: String,
-    read_only: bool,
-    guest_ok: bool,
-}
 
 // Common auth validator
 fn validate_token(token: &str) -> Result<(), String> {
@@ -75,6 +22,7 @@ fn validate_token(token: &str) -> Result<(), String> {
 // Helper: Write content to path using sudo tee (async)
 async fn write_with_sudo_tee(path: &str, content: &str) -> Result<(), String> {
     let mut child = AsyncCommand::new("sudo")
+        .arg("-n")
         .arg("tee")
         .arg(path)
         .stdin(Stdio::piped())

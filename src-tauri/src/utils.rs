@@ -42,6 +42,7 @@ where
         .collect::<Vec<_>>()
         .join(" ");
     let output = Command::new("sudo")
+        .arg("-n")
         .args(args_vec.iter())
         .stdin(Stdio::null()) // Avoid hanging on input
         .output()

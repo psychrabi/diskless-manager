@@ -1,12 +1,13 @@
 use crate::middleware;
 use crate::utils;
+use crate::types::AuthError;
 
 /// Return entire log content as string
 #[tauri::command]
 pub fn get_logs(token: String) -> Result<serde_json::Value, String> {
     // validate token (reuse middleware)
     middleware::validate_auth_token_for_command(&token)
-        .map_err(|e: crate::auth::AuthError| format!("Authentication failed: {}", e.message))?;
+        .map_err(|e: AuthError| format!("Authentication failed: {}", e.message))?;
     let text = utils::read_logs();
     Ok(serde_json::json!({ "text": text }))
 }

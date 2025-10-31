@@ -1,5 +1,6 @@
 //! Middleware for authentication and authorization
-use crate::auth::{validate_token, AuthError, Claims};
+use crate::auth::{validate_token};
+use crate::types::{AuthError, Claims};
 
 /// Middleware for Tauri commands that require authentication
 #[tauri::command]

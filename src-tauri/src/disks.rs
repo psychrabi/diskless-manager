@@ -1,14 +1,7 @@
 // New ZFS management commands: list_zpools, list_datasets, create_zfs_dataset
 
-use crate::utils::{run_command, run_command_check, run_command_output, run_command_output_no_sudo};
-use serde::Serialize;
+use crate::{types::DatasetInfo, utils::{run_command, run_command_check, run_command_output, run_command_output_no_sudo}};
 use regex::Regex;
-
-#[derive(Serialize)]
-pub struct DatasetInfo {
-    pub name: String,
-    pub disk_type: Option<String>,
-}
 
 #[tauri::command]
 pub fn list_zpools() -> Result<Vec<String>, String> {

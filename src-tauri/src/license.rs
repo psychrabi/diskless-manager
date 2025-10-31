@@ -1,4 +1,4 @@
-use crate::auth::AuthError;
+use crate::types::AuthError;
 use crate::config;
 use crate::utils::append_log;
 use reqwest::blocking::Client;
