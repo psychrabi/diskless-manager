@@ -12,7 +12,7 @@ export const Logs = () => {
   const fetchLogs = useCallback(async () => {
     if (!logUnit) return
     try {
-      const out = await invoke('get_service_logs', { unit: logUnit, lines: 200 })
+      const out = await invoke('get_service_logs', { unit: logUnit, lines: 50 })
       setLogs(out)
     } catch (error) {
       console.error(error)
@@ -36,15 +36,15 @@ export const Logs = () => {
   return (
     <Card title="Logs" actions={logOptions} className='max-h-[calc(100vh-7rem)]'>
       <Activity mode={logUnit !== 'app_log' ? 'visible' : 'hidden'}>
-        <Card title={`${logUnit} Logs`} className="bg-base-200">
-          <pre className="bg-base-300 p-3 rounded  overflow-auto text-xs whitespace-pre-wrap max-h-[calc(100vh-20rem)]">
+        <Card title={`${logUnit} Logs`} className="bg-base-200" headerClass="p-4" bodyClass="border-t-1">
+          <pre className="bg-base-300 p-2 rounded  overflow-auto text-xs whitespace-pre-wrap max-h-[calc(100vh-20rem)]">
             {logs}
           </pre>
-        </Card>
+        </Card>  
       </Activity>
       <Activity mode={logUnit === 'app_log' ? "visible" : "hidden"}>
-        <AppLogs />
-      </Activity>
-    </Card>
-  )
-}
+      <AppLogs />
+    </Activity>
+  </Card>
+);
+};

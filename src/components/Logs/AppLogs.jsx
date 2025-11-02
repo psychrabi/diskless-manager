@@ -2,6 +2,7 @@ import { useNotification } from '@/contexts/notification';
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
 import { Button, Card } from "../ui";
+import { Brush, BrushCleaning, Loader, RefreshCw } from 'lucide-react';
 
 export default function AppLogs({ tokenProp }) {
   const [logs, setLogs] = useState("");
@@ -41,15 +42,15 @@ export default function AppLogs({ tokenProp }) {
   }, []);
 
   return (
-    <Card title="Application Logs" className="bg-base-200" actions={<>
-      <Button onClick={load} className="btn btn-info" disabled={loading}>
-        {loading ? "Loading…" : "Refresh"}
+    <Card title="Application Logs" className="bg-base-200" headerClass="p-4" bodyClass="border-t-1 p-0" actions={<>
+      <Button onClick={load} className="btn btn-info btn-sm" disabled={loading}>
+        {loading ? <Loader className="animate-spin" size={16} /> : <RefreshCw size={16} />}
       </Button>
-      <Button onClick={clearLogs} className="btn btn-error" disabled={loading}>
-        Clear
+      <Button onClick={clearLogs} className="btn btn-error btn-sm" disabled={loading}>
+        <BrushCleaning size={16} />
       </Button>
     </>}>
-      <pre className="bg-base-300 p-3 rounded overflow-auto text-xs whitespace-pre-wrap max-h-[calc(100vh-20rem)]">
+      <pre className="bg-base-300 p-2 rounded overflow-auto text-xs whitespace-pre-wrap max-h-[calc(100vh-20rem)]">
         {logs || "(no logs yet)"}
       </pre>
     </Card>
