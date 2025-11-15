@@ -2,7 +2,7 @@ import { Error, Loading, Notification } from '@/components/ui';
 import { useNotification } from '@/contexts/notification';
 import { useAppStore } from '@/store/useAppStore';
 import { Activity, lazy, useEffect, useState } from 'react';
-import { Outlet, useNavigation } from 'react-router';
+import { Outlet, useNavigation } from 'react-router-dom';
 
 const Sidebar = lazy(() => import("@/components/layouts/Sidebar"));
 const Header = lazy(() => import("@/components/layouts/Header"));
