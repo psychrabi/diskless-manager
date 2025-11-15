@@ -4,7 +4,7 @@ import { useAppStore } from '../store/useAppStore';
 import AppLogs from './Logs/AppLogs';
 import { Card, Select } from './ui';
 
-export const Logs = () => {
+const Logs = () => {
   const [logUnit, setLogUnit] = useState('app_log');
   const [logs, setLogs] = useState(null);
   const services = useAppStore(state => state.services)
@@ -40,11 +40,13 @@ export const Logs = () => {
           <pre className="bg-base-300 p-2 rounded  overflow-auto text-xs whitespace-pre-wrap max-h-[calc(100vh-20rem)]">
             {logs}
           </pre>
-        </Card>  
+        </Card>
       </Activity>
       <Activity mode={logUnit === 'app_log' ? "visible" : "hidden"}>
-      <AppLogs />
-    </Activity>
-  </Card>
-);
+        <AppLogs />
+      </Activity>
+    </Card>
+  );
 };
+
+export default Logs;

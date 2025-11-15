@@ -1,5 +1,5 @@
-import DisksManagement from "@/components/Disks Management";
-import { Logs } from "@/components/Logs";
+
+
 import { lazy } from "react";
 import { createBrowserRouter } from "react-router-dom";
 
@@ -9,6 +9,8 @@ const ImageManagement = lazy(() => import("@/components/ImageManagement"));
 const ServiceManagement = lazy(() => import("@/components/ServiceManagement"));
 const Setup = lazy(() => import("@/components/Setup"));
 const SettingManagement = lazy(() => import("@/components/SettingsManagement"));
+const DisksManagement = lazy(() => import("@/components/DisksManagement"));
+const Logs = lazy(() => import("@/components/Logs"));
 const Login = lazy(() => import("@/components/Authentication/Login"));
 const ProtectedRoute = lazy(() => import("@/components/Authentication/ProtectedRoute"));
 

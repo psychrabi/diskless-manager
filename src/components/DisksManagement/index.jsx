@@ -1,4 +1,4 @@
-import DiskFormModal from '@/components/Disks Management/DiskFormModal';
+import DiskFormModal from '@/components/DisksManagement/DiskFormModal';
 import { useNotification } from '@/contexts/notification';
 import { useAppStore } from '@/store/useAppStore';
 import { invoke } from '@tauri-apps/api/core';

@@ -4,18 +4,15 @@ import { useNavigate } from 'react-router-dom';
 import { Loading } from '@/components/ui';
 
 const ProtectedRoute = ({ children }) => {
-  const { user, token, loading: authLoading } = useAuth();
+  const { user, token } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (!authLoading && (!user || !token)) {
+    if (!user || !token) {
       navigate('/login');
     }
-  }, [user, token, authLoading, navigate]);
+  }, [user, token, navigate]);
 
-  if (authLoading) {
-    return <Loading />;
-  }
 
   if (user && token) {
     return children;
