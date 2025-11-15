@@ -1,15 +1,14 @@
-use crate::config::{get_config, set_config, write_config};
+use crate::config::{ get_config, set_config, write_config };
 use crate::types::service::SambaShare;
-use crate::types::{DHCPConfig, HTTPConfig, PackageStatus, ServiceControlRequest, TFTPConfig};
-use crate::{DHCP_CONFIG_PATH, DHCP_CLIENTS_PATH, TFTP_AUTOEXEC_PATH};
+use crate::types::{ DHCPConfig, HTTPConfig, PackageStatus, ServiceControlRequest, TFTPConfig };
+use crate::{ DHCP_CONFIG_PATH, DHCP_CLIENTS_PATH, TFTP_AUTOEXEC_PATH };
 use async_process::Command as AsyncCommand;
 use futures::io::AsyncWriteExt;
-use serde_json::{json, Value};
-use crate::utils::{append_log, run_command, run_command_output, run_command_output_no_sudo};
+use serde_json::{ json, Value };
+use crate::utils::{ append_log, run_command, run_command_output, run_command_output_no_sudo };
 use std::collections::HashMap;
 use crate::middleware::validate_auth_token_for_command;
 use std::process::Stdio;
-
 
 // Common auth validator
 fn validate_token(token: &str) -> Result<(), String> {
@@ -32,11 +31,13 @@ async fn write_with_sudo_tee(path: &str, content: &str) -> Result<(), String> {
         .map_err(|e| format!("Failed to spawn sudo tee for {}: {}", path, e))?;
 
     if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(content.as_bytes()).await
+        stdin
+            .write_all(content.as_bytes()).await
             .map_err(|e| format!("Failed to write to stdin for {}: {}", path, e))?;
     }
 
-    let output = child.output().await
+    let output = child
+        .output().await
         .map_err(|e| format!("Failed to wait for tee on {}: {}", path, e))?;
 
     if !output.status.success() {
@@ -50,7 +51,7 @@ async fn write_with_sudo_tee(path: &str, content: &str) -> Result<(), String> {
 async fn restart_service_async(service: &str) -> Result<(), String> {
     match run_command(["systemctl", "restart", service]) {
         Ok(_) => Ok(()),
-        Err(e) => Err(format!("Failed to restart {}: {}", service, e))
+        Err(e) => Err(format!("Failed to restart {}: {}", service, e)),
     }
 }
 
@@ -58,11 +59,13 @@ async fn restart_service_async(service: &str) -> Result<(), String> {
 async fn check_package_installed(package: &str) -> Result<bool, String> {
     let output = AsyncCommand::new("dpkg-query")
         .args(["-W", "-f=${Status}", package])
-        .output()
-        .await
+        .output().await
         .map_err(|e| format!("dpkg-query failed for {}: {}", package, e))?;
 
-    Ok(output.status.success() && String::from_utf8_lossy(&output.stdout).trim() == "install ok installed")
+    Ok(
+        output.status.success() &&
+            String::from_utf8_lossy(&output.stdout).trim() == "install ok installed"
+    )
 }
 
 // Helper: Check service running
@@ -77,8 +80,7 @@ async fn check_service_running(service: &str) -> Result<bool, String> {
 
     let output = AsyncCommand::new("systemctl")
         .args(["is-active", "--quiet", &service_name])
-        .output()
-        .await
+        .output().await
         .map_err(|e| format!("systemctl check failed for {}: {}", service, e))?;
 
     Ok(output.status.success())
@@ -88,12 +90,15 @@ async fn check_service_running(service: &str) -> Result<bool, String> {
 async fn get_package_version(package: &str) -> Result<Option<String>, String> {
     let output = AsyncCommand::new("dpkg-query")
         .args(["-W", "-f=${Version}", package])
-        .output()
-        .await
+        .output().await
         .map_err(|e| format!("dpkg-query version failed for {}: {}", package, e))?;
 
     if output.status.success() {
-        Ok(String::from_utf8(output.stdout).ok().map(|s| s.trim().to_string()))
+        Ok(
+            String::from_utf8(output.stdout)
+                .ok()
+                .map(|s| s.trim().to_string())
+        )
     } else {
         Ok(None)
     }
@@ -129,8 +134,7 @@ pub async fn get_services(token: String, zfs_pool: String) -> Result<Value, Stri
     for (key, service_name) in service_map {
         let output = AsyncCommand::new("systemctl")
             .args(["is-active", service_name])
-            .output()
-            .await
+            .output().await
             .map_err(|e| format!("systemctl is-active failed for {}: {}", service_name, e))?;
 
         let status = if output.status.success() {
@@ -139,35 +143,44 @@ pub async fn get_services(token: String, zfs_pool: String) -> Result<Value, Stri
             "inactive".to_string()
         };
 
-        statuses.insert(key.to_string(), json!({
+        statuses.insert(
+            key.to_string(),
+            json!({
             "name": key,
             "service": service_name.trim_end_matches(".service"),
             "status": status
-        }));
+        })
+        );
     }
 
     // ZFS status
     let zfs_status = match run_command_output(["zpool", "status", &zfs_pool]) {
         Ok(stdout) => {
-            let pool_state = stdout.lines()
+            let pool_state = stdout
+                .lines()
                 .find_map(|line| {
                     if line.trim_start().starts_with("state:") {
-                        line.split(':').nth(1).map(|s| s.trim().to_string())
+                        line.split(':')
+                            .nth(1)
+                            .map(|s| s.trim().to_string())
                     } else {
                         None
                     }
                 })
                 .unwrap_or("unknown".to_string());
-            if pool_state == "ONLINE" { "active" } else { "degraded" }.to_string()
+            (if pool_state == "ONLINE" { "active" } else { "degraded" }).to_string()
         }
         _ => "error".to_string(),
     };
 
-    statuses.insert("zfs".to_string(), json!({
+    statuses.insert(
+        "zfs".to_string(),
+        json!({
         "name": format!("ZFS Pool ({})", zfs_pool),
         "service": "zfs",
         "status": zfs_status
-    }));
+    })
+    );
 
     save_config_section("services", serde_json::to_value(&statuses).map_err(|e| e.to_string())?)?;
 
@@ -181,20 +194,29 @@ pub async fn get_service_config(token: String, service_key: String) -> Result<Va
 
     match service_key.as_str() {
         "zfs" => {
-            let zpool = run_command_output(["zpool", "status"])
-                .map_err(|e| format!("zpool status failed: {}", e))?;
-            let zfs_list = run_command_output_no_sudo(["zfs", "list", "-t", "all", "-o", "name,type,used,avail,refer,mountpoint"])
-                .map_err(|e| format!("zfs list failed: {}", e))?;
+            let zpool = run_command_output(["zpool", "status"]).map_err(|e|
+                format!("zpool status failed: {}", e)
+            )?;
+            let zfs_list = run_command_output_no_sudo([
+                "zfs",
+                "list",
+                "-t",
+                "all",
+                "-o",
+                "name,type,used,avail,refer,mountpoint",
+            ]).map_err(|e| format!("zfs list failed: {}", e))?;
 
             let content = format!(
                 "=== ZFS Pool Status ===\n{}\n\n=== ZFS Datasets ===\n{}",
-                zpool, zfs_list
+                zpool,
+                zfs_list
             );
             Ok(json!({ "text": content }))
         }
         "target" => {
-            let output = run_command_output(["targetcli", "ls"])
-                .map_err(|e| format!("targetcli ls failed: {}", e))?;
+            let output = run_command_output(["targetcli", "ls"]).map_err(|e|
+                format!("targetcli ls failed: {}", e)
+            )?;
             let content = format!("=== TargetCLI Config ===\n\n{}", output);
             Ok(json!({ "text": content }))
         }
@@ -209,7 +231,8 @@ pub async fn get_service_config(token: String, service_key: String) -> Result<Va
                 ("smbd", "/etc/samba/smb.conf"),
             ];
 
-            let path = config_file_map.iter()
+            let path = config_file_map
+                .iter()
                 .find_map(|&(k, v)| if k == service_key.as_str() { Some(v) } else { None })
                 .ok_or_else(|| format!("Unknown service: {}", service_key))?;
 
@@ -221,15 +244,19 @@ pub async fn get_service_config(token: String, service_key: String) -> Result<Va
                 Ok(content) => {
                     append_log("INFO", &format!("Read {}: {} bytes", service_key, content.len()));
                     Ok(json!({ "text": content }))
-                },
-                Err(e) => Err(format!("Failed to read {}: {}", path, e))
+                }
+                Err(e) => Err(format!("Failed to read {}: {}", path, e)),
             }
         }
     }
 }
 
 #[tauri::command]
-pub async fn control_service(token: String, service_key: String, req: ServiceControlRequest) -> Result<Value, String> {
+pub async fn control_service(
+    token: String,
+    service_key: String,
+    req: ServiceControlRequest
+) -> Result<Value, String> {
     validate_token(&token)?;
     append_log("INFO", &format!("control_service: {} {}", service_key, req.action));
 
@@ -241,15 +268,18 @@ pub async fn control_service(token: String, service_key: String, req: ServiceCon
         ("smbd", "smbd.service"),
     ];
 
-    let service_name = service_map.iter()
+    let service_name = service_map
+        .iter()
         .find_map(|&(k, v)| if k == service_key.as_str() { Some(v) } else { None })
         .ok_or_else(|| format!("Unknown service: {}", service_key))?;
 
     crate::utils::run_command(&["systemctl", &req.action, service_name])?;
 
-    Ok(json!({
+    Ok(
+        json!({
         "message": format!("Service '{}' {} issued successfully.", service_name, &req.action)
-    }))
+    })
+    )
 }
 
 #[tauri::command]
@@ -258,12 +288,16 @@ pub async fn install_service(service: String, token: String) -> Result<(), Strin
 
     match run_command(["apt-get", "install", "-y", &service]) {
         Ok(_) => Ok(()),
-        Err(e) => Err(format!("Failed to install {}: {}", service, e))
+        Err(e) => Err(format!("Failed to install {}: {}", service, e)),
     }
 }
 
 #[tauri::command]
-pub async fn save_service_config(token: String, service_key: String, content: String) -> Result<(), String> {
+pub async fn save_service_config(
+    token: String,
+    service_key: String,
+    content: String
+) -> Result<(), String> {
     validate_token(&token)?;
 
     let config_file_map = [
@@ -275,7 +309,8 @@ pub async fn save_service_config(token: String, service_key: String, content: St
         ("smbd", "/etc/samba/smb.conf"),
     ];
 
-    let path = config_file_map.iter()
+    let path = config_file_map
+        .iter()
         .find_map(|&(k, v)| if k == service_key.as_str() { Some(v) } else { None })
         .ok_or_else(|| format!("Unknown service: {}", service_key))?;
 
@@ -283,9 +318,7 @@ pub async fn save_service_config(token: String, service_key: String, content: St
 }
 
 #[tauri::command]
-pub async fn check_package_status(token: String) -> Result<Value, String> {
-    validate_token(&token)?;
-
+pub async fn check_package_status() -> Result<Value, String> {
     let packages = [
         ("isc-dhcp-server", "isc-dhcp-server"),
         ("tftpd-hpa", "tftpd-hpa"),
@@ -312,7 +345,8 @@ pub async fn check_package_status(token: String) -> Result<Value, String> {
         });
     }
 
-    let services_value = serde_json::to_value(&status_list)
+    let services_value = serde_json
+        ::to_value(&status_list)
         .map_err(|e| format!("Serialization failed: {}", e))?;
 
     if let Err(e) = save_config_section("services", services_value.clone()) {
@@ -341,10 +375,10 @@ pub async fn install_packages() -> Result<String, String> {
     // Prepare args: ["apt", "install", "-y", pkg1, pkg2, ...]
     let mut args = vec!["apt", "install", "-y"];
     args.extend(packages);
-    
+
     match run_command(&args) {
         Ok(_) => Ok("Packages installed successfully".to_string()),
-        Err(e) => Err(format!("Installation failed: {}", e))
+        Err(e) => Err(format!("Installation failed: {}", e)),
     }
 }
 
@@ -469,7 +503,10 @@ include "/etc/dhcp/clients.conf";
 }
 
 #[tauri::command]
-pub async fn configure_tftp_server(token: String, tftp_config: TFTPConfig) -> Result<String, String> {
+pub async fn configure_tftp_server(
+    token: String,
+    tftp_config: TFTPConfig
+) -> Result<String, String> {
     validate_token(&token)?;
 
     save_config_section("tftp", serde_json::to_value(&tftp_config).map_err(|e| e.to_string())?)?;
@@ -481,10 +518,13 @@ TFTP_DIRECTORY="{}"
 TFTP_ADDRESS="{}:69"
 TFTP_OPTIONS="{}"
 "#,
-        tftp_config.tftp_root, tftp_config.tftp_server_ip, tftp_config.tftp_options
+        tftp_config.tftp_root,
+        tftp_config.tftp_server_ip,
+        tftp_config.tftp_options
     );
 
-    std::fs::create_dir_all(&tftp_config.tftp_root)
+    std::fs
+        ::create_dir_all(&tftp_config.tftp_root)
         .map_err(|e| format!("Create TFTP dir failed: {}", e))?;
 
     write_with_sudo_tee("/etc/default/tftpd-hpa", &tftp_content).await?;
@@ -494,7 +534,10 @@ TFTP_OPTIONS="{}"
 }
 
 #[tauri::command]
-pub async fn configure_apache_server(token: String, http_config: HTTPConfig) -> Result<String, String> {
+pub async fn configure_apache_server(
+    token: String,
+    http_config: HTTPConfig
+) -> Result<String, String> {
     validate_token(&token)?;
 
     save_config_section("http", serde_json::to_value(&http_config).map_err(|e| e.to_string())?)?;
@@ -517,10 +560,15 @@ pub async fn configure_apache_server(token: String, http_config: HTTPConfig) -> 
     </Directory>
 </VirtualHost>
 "#,
-        http_config.http_server_ip, http_config.http_server_port, http_config.http_root, http_config.http_root, http_config.http_root
+        http_config.http_server_ip,
+        http_config.http_server_port,
+        http_config.http_root,
+        http_config.http_root,
+        http_config.http_root
     );
 
-    std::fs::create_dir_all(&http_config.http_root)
+    std::fs
+        ::create_dir_all(&http_config.http_root)
         .map_err(|e| format!("Create HTTP dir failed: {}", e))?;
 
     write_with_sudo_tee("/etc/apache2/sites-available/diskless-server.conf", &apache_config).await?;
@@ -532,10 +580,14 @@ pub async fn configure_apache_server(token: String, http_config: HTTPConfig) -> 
 }
 
 #[tauri::command]
-pub async fn configure_samba_server(token: String, shares: Vec<SambaShare>) -> Result<String, String> {
+pub async fn configure_samba_server(
+    token: String,
+    shares: Vec<SambaShare>
+) -> Result<String, String> {
     validate_token(&token)?;
 
-    let mut samba_config = r#"[global]
+    let mut samba_config =
+        r#"[global]
    workgroup = WORKGROUP
    server string = Diskless Boot Server
    netbios name = DISKLESS-SERVER
@@ -546,8 +598,9 @@ pub async fn configure_samba_server(token: String, shares: Vec<SambaShare>) -> R
 "#.to_string();
 
     for share in shares {
-        samba_config.push_str(&format!(
-            r#"[{}]
+        samba_config.push_str(
+            &format!(
+                r#"[{}]
    path = {}
    browseable = yes
    read only = {}
@@ -556,13 +609,23 @@ pub async fn configure_samba_server(token: String, shares: Vec<SambaShare>) -> R
    directory mask = 0755
 
 "#,
-            share.name,
-            share.path,
-            if share.read_only { "yes" } else { "no" },
-            if share.guest_ok { "yes" } else { "no" }
-        ));
+                share.name,
+                share.path,
+                if share.read_only {
+                    "yes"
+                } else {
+                    "no"
+                },
+                if share.guest_ok {
+                    "yes"
+                } else {
+                    "no"
+                }
+            )
+        );
 
-        std::fs::create_dir_all(&share.path)
+        std::fs
+            ::create_dir_all(&share.path)
             .map_err(|e| format!("Create share dir {} failed: {}", share.path, e))?;
     }
 

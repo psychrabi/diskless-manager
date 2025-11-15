@@ -2,7 +2,7 @@
 //!
 //! This module contains all image/master-related types and structures.
 
-use serde::{Deserialize, Serialize};
+use serde::{ Deserialize, Serialize };
 
 /// Master image structure
 #[derive(Serialize, Deserialize, Clone)]
@@ -56,7 +56,10 @@ pub struct ImageOperationResponse {
 
 impl ImageOperationResponse {
     /// Create a success response
-    pub fn success<T: Serialize + std::fmt::Display>(message: T, data: Option<serde_json::Value>) -> Self {
+    pub fn success<T: Serialize + std::fmt::Display>(
+        message: T,
+        data: Option<serde_json::Value>
+    ) -> Self {
         Self {
             success: true,
             message: message.to_string(),

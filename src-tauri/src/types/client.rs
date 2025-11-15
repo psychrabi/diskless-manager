@@ -2,7 +2,7 @@
 //!
 //! This module contains all client-related types and structures.
 
-use serde::{Deserialize, Serialize};
+use serde::{ Deserialize, Serialize };
 
 /// Main client structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -127,8 +127,10 @@ fn is_valid_mac(mac: &str) -> bool {
 
 /// Helper function to validate IP address format
 fn is_valid_ip(ip: &str) -> bool {
-    let ip_regex = regex::Regex::new(
-        r"^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
-    ).unwrap();
+    let ip_regex = regex::Regex
+        ::new(
+            r"^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
+        )
+        .unwrap();
     ip_regex.is_match(ip.trim())
 }

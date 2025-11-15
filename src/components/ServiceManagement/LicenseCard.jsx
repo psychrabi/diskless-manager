@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { Card } from '../ui';
 import { useNotification } from '@/contexts/notification';
+import { invoke } from '@tauri-apps/api/core';
+import { useEffect, useState } from 'react';
+import { Card } from '../ui';
 
 export default function LicenseCard() {
   const [license, setLicense] = useState({
@@ -29,7 +29,7 @@ export default function LicenseCard() {
   if (loading) return <div>Loading license...</div>;
 
   return (
-    <Card title="License Information" icon={null}  className='col-span-2'>
+    <Card title="License Information" icon={null} className='col-span-2'>
       <ul>
         <li><strong>Status:</strong> {license.license_status || 'not activated'}</li>
         <li><strong>Expires:</strong> {license.license_expires || '—'}</li>

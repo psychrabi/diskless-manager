@@ -1,3 +1,4 @@
+import { useNotification } from '@/contexts/notification';
 import { invoke } from "@tauri-apps/api/core";
 import { TableConfig } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -5,7 +6,6 @@ import { useForm } from "react-hook-form";
 import { useNavigate } from "react-router-dom";
 import { useAppStore } from "../../store/useAppStore";
 import { Button, Card, Input, Select } from "../ui";
-import { useNotification } from '@/contexts/notification';
 
 const Table = ({ children, className = '' }) => <div className={`w-full overflow-x-auto ${className}`}><table className="min-w-full">{children}</table></div>;
 const TableHeader = ({ children, className = '' }) => <thead className={`[&_tr]:border-b border-base-100 ${className}`}>{children}</thead>;
@@ -52,7 +52,7 @@ const Setup = () => {
       }
 
       try {
-        const updated = await invoke('check_package_status', { token: localStorage.getItem('authToken') || '' });
+        const updated = await invoke('check_package_status');
         const list = Array.isArray(updated) ? updated : (updated ? Object.values(updated) : []);
         if (!cancelled) setServices(list);
       } catch (e) {
@@ -88,7 +88,7 @@ const Setup = () => {
     try {
       await invoke('install_service', { service, token: localStorage.getItem('authToken') || '' });
       showNotification('success', 'Service Installed', `Service ${service} installed successfully.`);
-      const updated = await invoke('check_package_status', { token: localStorage.getItem('authToken') || '' });
+      const updated = await invoke('check_package_status');
       const list = Array.isArray(updated) ? updated : (updated ? Object.values(updated) : []);
       setServices(list);
     } catch (e) {

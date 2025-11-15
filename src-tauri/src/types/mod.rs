@@ -11,9 +11,9 @@ pub mod image;
 pub mod disk;
 
 // Re-export commonly used types
-pub use config::{Config, AppConfig};
-pub use client::{Client, AddClientRequest, ControlRequest, DeprovisionRequest};
-pub use auth::{User, Claims, LoginRequest, LoginResponse, UserResponse, AuthError};
-pub use service::{ServiceControlRequest, PackageStatus, DHCPConfig, TFTPConfig, HTTPConfig};
-pub use image::{Master, Snapshot, MasterData};
-pub use disk::{DatasetInfo};
+pub use config::{ Config, AppConfig };
+pub use client::{ Client, AddClientRequest, ControlRequest, DeprovisionRequest };
+pub use auth::{ User, Claims, LoginRequest, LoginResponse, UserResponse, AuthError };
+pub use service::{ ServiceControlRequest, PackageStatus, DHCPConfig, TFTPConfig, HTTPConfig };
+pub use image::{ Master, Snapshot, MasterData };
+pub use disk::{ DatasetInfo };

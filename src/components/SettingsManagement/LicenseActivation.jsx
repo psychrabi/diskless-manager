@@ -1,22 +1,22 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import { useForm } from 'react-hook-form';
-import { invoke } from '@tauri-apps/api/core';
-import { Card } from '../ui';
-import { File } from 'lucide-react';
 import { useNotification } from '@/contexts/notification';
+import { invoke } from '@tauri-apps/api/core';
+import { File } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { useForm } from 'react-hook-form';
+import { Card } from '../ui';
 
 export default function LicenseActivation() {
-    const { showNotification } = useNotification();
-    const [info, setInfo] = useState({
-        license_key: null,
-        license_status: null,
-        license_expires: null,
-      });;
+  const { showNotification } = useNotification();
+  const [info, setInfo] = useState({
+    license_key: null,
+    license_status: null,
+    license_expires: null,
+  });;
 
-   // start with empty default and reset when async info arrives
-   const { register, handleSubmit, reset } = useForm({
-     defaultValues: { license_key: '' },
-   });
+  // start with empty default and reset when async info arrives
+  const { register, handleSubmit, reset } = useForm({
+    defaultValues: { license_key: '' },
+  });
   const [loading, setLoading] = useState(false);
 
   const fetchInfo = useCallback(async () => {
@@ -55,7 +55,7 @@ export default function LicenseActivation() {
   };
 
   return (
-     <Card title="LIcense Activation" icon={File} >
+    <Card title="LIcense Activation" icon={File} >
 
 
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-3">
@@ -63,7 +63,7 @@ export default function LicenseActivation() {
           <span className="label-text">License</span>
           <input
             type="text"
-            {...register('license_key')}            
+            {...register('license_key')}
             placeholder="Enter license key"
             className="input input-bordered w-full mt-1"
             readOnly={!!info.license_key} // make read-only if already activated

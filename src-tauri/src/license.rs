@@ -2,7 +2,7 @@ use crate::types::AuthError;
 use crate::config;
 use crate::utils::append_log;
 use reqwest::blocking::Client;
-use serde::{Deserialize, Serialize};
+use serde::{ Deserialize, Serialize };
 use std::time::Duration;
 
 const LICENSE_SERVER_URL: &str = "https://license.example.com/api/verify"; // replace with real SaaS license server
@@ -60,19 +60,19 @@ pub fn activate_license(key: &str) -> Result<String, AuthError> {
             "license_key".to_string(),
             serde_json::to_value("trial").map_err(|e| AuthError {
                 message: format!("failed to serialize license key: {}", e),
-            })?,
+            })?
         );
         settings.insert(
             "license_status".to_string(),
             serde_json::to_value("valid").map_err(|e| AuthError {
                 message: format!("failed to serialize license status: {}", e),
-            })?,
+            })?
         );
         settings.insert(
             "license_expires".to_string(),
             serde_json::to_value("2027-10-12").map_err(|e| AuthError {
                 message: format!("failed to serialize expires: {}", e),
-            })?,
+            })?
         );
         cfg.settings = serde_json::Value::Object(settings);
         config::write_config(&cfg).map_err(|e| AuthError {
@@ -82,13 +82,12 @@ pub fn activate_license(key: &str) -> Result<String, AuthError> {
         Ok("Trial License activated".to_string())
     } else {
         // verify with remote
-        let res: LicenseVerifyResponse =
-            verify_license_remote(key).map_err(|e| AuthError { message: e })?;
+        let res: LicenseVerifyResponse = verify_license_remote(key).map_err(|e| AuthError {
+            message: e,
+        })?;
         if !res.valid {
             return Err(AuthError {
-                message: res
-                    .message
-                    .unwrap_or_else(|| "License not valid".to_string()),
+                message: res.message.unwrap_or_else(|| "License not valid".to_string()),
             });
         }
 
@@ -99,20 +98,20 @@ pub fn activate_license(key: &str) -> Result<String, AuthError> {
             "license_key".to_string(),
             serde_json::to_value(key).map_err(|e| AuthError {
                 message: format!("failed to serialize license key: {}", e),
-            })?,
+            })?
         );
         settings.insert(
             "license_status".to_string(),
             serde_json::to_value("valid").map_err(|e| AuthError {
                 message: format!("failed to serialize license status: {}", e),
-            })?,
+            })?
         );
         if let Some(expires) = res.expires_at {
             settings.insert(
                 "license_expires".to_string(),
                 serde_json::to_value(expires).map_err(|e| AuthError {
                     message: format!("failed to serialize expires: {}", e),
-                })?,
+                })?
             );
         }
         cfg.settings = serde_json::Value::Object(settings);
@@ -130,10 +129,12 @@ pub fn ensure_license_valid() -> Result<(), AuthError> {
     let cfg = config::read_config();
     if let Some(obj) = cfg.settings.as_object() {
         // Check if the license status is valid and the license_expires is in the future
-        if let (Some(status), Some(expires)) = (
-            obj.get("license_status").and_then(|v| v.as_str()),
-            obj.get("license_expires").and_then(|v| v.as_str()),
-        ) {
+        if
+            let (Some(status), Some(expires)) = (
+                obj.get("license_status").and_then(|v| v.as_str()),
+                obj.get("license_expires").and_then(|v| v.as_str()),
+            )
+        {
             if status == "valid" {
                 if let Ok(expiry_date) = chrono::NaiveDate::parse_from_str(expires, "%Y-%m-%d") {
                     if expiry_date >= chrono::Local::now().naive_local().date() {
@@ -146,7 +147,7 @@ pub fn ensure_license_valid() -> Result<(), AuthError> {
                 }
             }
         }
-        use chrono::{NaiveDate, Utc};
+        use chrono::{ NaiveDate, Utc };
 
         if let Some(val) = obj.get("license_status") {
             if val.as_str() == Some("valid") {

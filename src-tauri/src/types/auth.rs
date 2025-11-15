@@ -2,7 +2,7 @@
 //!
 //! This module contains all authentication-related types and structures.
 
-use serde::{Deserialize, Serialize};
+use serde::{ Deserialize, Serialize };
 
 /// User structure
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -16,10 +16,10 @@ pub struct User {
 /// JWT claims structure
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Claims {
-    pub sub: String,      // subject (user id)
+    pub sub: String, // subject (user id)
     pub username: String, // username
-    pub role: String,     // user role
-    pub exp: i64,         // expiration time
+    pub role: String, // user role
+    pub exp: i64, // expiration time
 }
 
 /// Login request structure

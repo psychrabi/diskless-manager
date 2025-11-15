@@ -2,7 +2,7 @@
 //!
 //! This module contains all disk and storage-related types and structures.
 
-use serde::{Deserialize, Serialize};
+use serde::{ Deserialize, Serialize };
 
 /// Dataset information structure
 #[derive(Serialize, Deserialize)]

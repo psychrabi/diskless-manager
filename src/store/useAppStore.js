@@ -39,10 +39,10 @@ export const useAppStore = create()(
         if (showLoading) set({ loading: true });
         set({ error: null });
         try {
-          // Get token from localStorage
+          // Get token from bun localStorage
           const token = localStorage.getItem('authToken') || '';
           const [servicesRes, mastersRes, clientsRes] = await Promise.all([
-            invoke('check_package_status', { token }),
+            invoke('check_package_status'),
             invoke('get_images', { token }),
             invoke('get_clients', { token }),
           ]);
@@ -105,7 +105,7 @@ export const useAppStore = create()(
                     }
                   }
                   return false;
-                } catch (e) {
+                } catch {
                   // If anything unexpected, fallback to full compare
                   return JSON.stringify(currentClients) !== JSON.stringify(newClients);
                 }

@@ -1,6 +1,9 @@
 // New ZFS management commands: list_zpools, list_datasets, create_zfs_dataset
 
-use crate::{types::DatasetInfo, utils::{run_command, run_command_check, run_command_output, run_command_output_no_sudo}};
+use crate::{
+    types::DatasetInfo,
+    utils::{ run_command, run_command_check, run_command_output, run_command_output_no_sudo },
+};
 use regex::Regex;
 
 #[tauri::command]
@@ -24,7 +27,9 @@ pub fn list_datasets(zpool: &str) -> Result<Vec<DatasetInfo>, String> {
     for line in out.lines().filter(|l| !l.is_empty()) {
         let name = line.to_string();
         // try to read the custom property; if missing/failed, treat as not set
-        let disk_type = match run_command_output(&["zfs", "get", "-H", "-o", "value", "org.diskless:type", &name]) {
+        let disk_type = match
+            run_command_output(&["zfs", "get", "-H", "-o", "value", "org.diskless:type", &name])
+        {
             Ok(v) => {
                 let v = v.trim();
                 // treat '-' or 'none' (zfs placeholder) as not set
@@ -44,7 +49,10 @@ pub fn list_datasets(zpool: &str) -> Result<Vec<DatasetInfo>, String> {
 
     // Exclude any dataset that is a child of another dataset in the list.
     // e.g. if "pool/images" is present, do not include "pool/images/foo"
-    let names: Vec<String> = with_type.iter().map(|d| d.name.clone()).collect();
+    let names: Vec<String> = with_type
+        .iter()
+        .map(|d| d.name.clone())
+        .collect();
     let mut result: Vec<DatasetInfo> = Vec::new();
 
     'outer: for ds in with_type.into_iter() {
@@ -64,7 +72,12 @@ pub fn list_datasets(zpool: &str) -> Result<Vec<DatasetInfo>, String> {
 }
 
 #[tauri::command]
-pub fn create_zfs_dataset(zpool: &str, name: &str, usage_type: &str, size: &str) -> Result<String, String> {
+pub fn create_zfs_dataset(
+    zpool: &str,
+    name: &str,
+    usage_type: &str,
+    size: &str
+) -> Result<String, String> {
     // usage_type must be one of these
     let allowed = ["image", "writeback", "game"];
     if !allowed.contains(&usage_type) {
@@ -85,9 +98,10 @@ pub fn create_zfs_dataset(zpool: &str, name: &str, usage_type: &str, size: &str)
         }
 
         // Validate size format (e.g., 50G)
-        if !Regex::new(r"^\d+[KMGTP]$")
-            .map_err(|e| format!("regex error: {}", e))?
-            .is_match(&size_trim.to_uppercase())
+        if
+            !Regex::new(r"^\d+[KMGTP]$")
+                .map_err(|e| format!("regex error: {}", e))?
+                .is_match(&size_trim.to_uppercase())
         {
             return Err("Invalid size format (e.g., '50G')".into());
         }
@@ -107,23 +121,18 @@ pub fn create_zfs_dataset(zpool: &str, name: &str, usage_type: &str, size: &str)
         }
 
         // Create the zvol
-        run_command(&[
-            "zfs",
-            "create",
-            "-s",
-            "-V",
-            size_trim,
-            "-o",
-            "volblocksize=4K",
-            &zvol_name,
-        ])?;
+        run_command(
+            &["zfs", "create", "-s", "-V", size_trim, "-o", "volblocksize=4K", &zvol_name]
+        )?;
 
         // tag it with our custom property
-        let _ = run_command(&["zfs", "set", &format!("org.diskless:type={}", usage_type), &zvol_name]);
+        let _ = run_command(
+            &["zfs", "set", &format!("org.diskless:type={}", usage_type), &zvol_name]
+        );
 
         return Ok(format!("Created zvol {}", zvol_name));
     }
-    
+
     // create dataset
     run_command(&["zfs", "create", &dataset])?;
     // tag it with our custom property
@@ -149,7 +158,10 @@ pub fn delete_zfs_dataset(dataset: &str, recursive: bool) -> Result<String, Stri
         vec!["zfs", "destroy", dataset]
     };
     // convert to slice of &str
-    let args_ref: Vec<&str> = args.iter().map(|s| *s).collect();
+    let args_ref: Vec<&str> = args
+        .iter()
+        .map(|s| *s)
+        .collect();
     run_command(&args_ref)?;
     Ok(format!("Destroyed dataset {}", dataset))
 }
