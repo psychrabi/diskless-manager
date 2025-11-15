@@ -1,14 +1,13 @@
 import { Error, Loading, Notification } from '@/components/ui';
 import { useNotification } from '@/contexts/notification';
 import { useAppStore } from '@/store/useAppStore';
-import { invoke } from '@tauri-apps/api/core';
 import { Activity, lazy, useEffect, useState } from 'react';
-import { Outlet, useNavigate, useNavigation } from 'react-router-dom';
+import { Outlet, useNavigation } from 'react-router-dom';
 
 const Sidebar = lazy(() => import("@/components/layouts/Sidebar"));
 const Header = lazy(() => import("@/components/layouts/Header"));
 
-const MainLayout = () => {
+const AdminLayout = () => {
 	const { error, fetchData } = useAppStore()
 	const [activeTab, setActiveTab] = useState('dashboard');
 	const { notification } = useNotification()
@@ -16,10 +15,7 @@ const MainLayout = () => {
 	const isNavigating = Boolean(navigation.location);
 	const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 	const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
-	const { setServices } = useAppStore();
-	const [preflightLoading, setPreflightLoading] = useState(true);
-	const navigate = useNavigate();
-	const { showNotification } = useNotification();
+
 
 	const toggleSidebarCollapse = () => {
 		setIsSidebarCollapsed(prevState => !prevState);
@@ -29,48 +25,6 @@ const MainLayout = () => {
 		fetchData()
 	}, [fetchData]);
 
-
-	// Preflight check before showing login
-	useEffect(() => {
-		let cancelled = false;
-		(async () => {
-			try {
-				const res = await invoke('check_package_status');
-				const list = Array.isArray(res) ? res : (res ? Object.values(res) : []);
-				if (!cancelled) {
-					setServices(list);
-					const allServicesInstalled = list.every(svc => svc?.installed);
-					const poolExists = await invoke('zfs_pool_exists', { poolName: null });
-
-					// Only redirect to setup if services are not installed
-					if (!allServicesInstalled || !poolExists) {
-						navigate('/setup');
-					}
-				}
-			} catch (e) {
-				showNotification('error', 'Preflight Check Failed', e.message || 'An unknown error occurred during preflight checks.');
-				console.warn('Preflight check failed:', e);
-				// Proceed to login UI even if preflight fails
-			} finally {
-				if (!cancelled) setPreflightLoading(false);
-			}
-
-			try {
-				const license = await invoke("get_license")
-				if (license) console.log(license);
-			} catch (error) {
-				console.log(error)
-			}
-		})();
-		return () => {
-			cancelled = true;
-		};
-	}, [navigate, setServices, showNotification]);
-
-
-	if (preflightLoading) {
-		return <Loading message="Performing preflight checks..." />;
-	}
 
 
 	return (
@@ -114,4 +68,4 @@ const MainLayout = () => {
 	)
 }
 
-export default MainLayout;
+export default AdminLayout;

@@ -1,9 +1,11 @@
 
 
+import PublicRoute from "@/components/Authentication/PublicRoute";
+import PublicLayout from "@/components/layouts/PublicLayout";
 import { lazy } from "react";
 import { createBrowserRouter } from "react-router-dom";
 
-const MainLayout = lazy(() => import("@/components/layouts/MainLayout"));
+const Adminlayout = lazy(() => import("@/components/layouts/AdminLayout"));
 const ClientManagement = lazy(() => import("@/components/ClientManagement"));
 const ImageManagement = lazy(() => import("@/components/ImageManagement"));
 const ServiceManagement = lazy(() => import("@/components/ServiceManagement"));
@@ -16,16 +18,21 @@ const ProtectedRoute = lazy(() => import("@/components/Authentication/ProtectedR
 
 export const router = createBrowserRouter([
   {
-    path: "/login",
-    element: <Login />,
-  },
-  {
-    path: "/setup",
-    element: <Setup />,
+    path: "/",
+    element: <PublicRoute><PublicLayout /></PublicRoute>,
+    children: [
+      {
+        path: "/login",
+        element: <Login />,
+      },
+      {
+        path: "/setup",
+        element: <Setup />,
+      },]
   },
   {
     path: "/",
-    element: <ProtectedRoute><MainLayout /></ProtectedRoute>,
+    element: <ProtectedRoute><Adminlayout /></ProtectedRoute>,
     children: [
       {
         index: true,

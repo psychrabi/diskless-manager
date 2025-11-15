@@ -5,7 +5,7 @@ import { Save } from 'lucide-react';
 import { useEffect } from 'react';
 import { useForm, useWatch } from 'react-hook-form';
 import { z } from 'zod';
-import { Input, Select } from '../ui';
+import { Input, Modal, Select, Button } from '../ui';
 
 const clientSchema = z.object({
   name: z.string().min(1, 'Client name is required'),

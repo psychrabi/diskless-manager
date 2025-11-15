@@ -38,6 +38,8 @@ const Login = () => {
         request: { username: data.username, password: data.password }
       });
 
+      console.log(response);
+
       // Set auth context immediately so ProtectedRoute sees it
       setAuth(response.user, response.token);
       navigate('/');

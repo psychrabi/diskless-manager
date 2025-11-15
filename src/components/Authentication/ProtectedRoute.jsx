@@ -1,7 +1,6 @@
-import { useEffect } from 'react';
 import { useAuth } from '@/contexts/auth';
+import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Loading } from '@/components/ui';
 
 const ProtectedRoute = ({ children }) => {
   const { user, token } = useAuth();

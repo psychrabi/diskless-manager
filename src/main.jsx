@@ -17,14 +17,12 @@ createRoot(document.getElementById('root')).render(
         <NotificationProvider>
           <AuthProvider>
             <ConfirmDialogProvider>
-
               <ThemeProvider>
                 <RouterProvider router={router} />
               </ThemeProvider>
             </ConfirmDialogProvider>
           </AuthProvider>
         </NotificationProvider>
-
       </Suspense>
     </ErrorBoundary >
   </StrictMode >

@@ -134,6 +134,7 @@ pub fn run() {
                     }
                 }
             }
+            app.get_webview_window("main").unwrap().open_devtools();
             if cfg!(debug_assertions) {
                 if
                     let Err(e) = app

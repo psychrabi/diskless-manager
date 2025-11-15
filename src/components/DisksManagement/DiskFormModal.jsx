@@ -4,6 +4,7 @@ import { Input, Select } from '../ui';
 import { useNotification } from '@/contexts/notification';
 import { useForm, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
+import { Save } from 'lucide-react';
 
 const diskSchema = z.object({
   zpool: z.string().min(1, 'Zpool is required'),
