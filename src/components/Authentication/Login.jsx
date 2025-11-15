@@ -18,8 +18,6 @@ const loginSchema = z.object({
 const Login = () => {
   const navigate = useNavigate();
   const { login: setAuth } = useAuth();
-  const { setServices } = useAppStore();
-  const [preflightLoading, setPreflightLoading] = useState(true);
   const { showNotification } = useNotification();
 
   const {
@@ -34,41 +32,6 @@ const Login = () => {
       password: ''
     }
   });
-
-  // Preflight check before showing login
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await invoke('check_package_status');
-        const list = Array.isArray(res) ? res : (res ? Object.values(res) : []);
-        if (!cancelled) {
-          setServices(list);
-          const allServicesInstalled = list.every(svc => svc?.installed);
-          const poolExists = await invoke('zfs_pool_exists', { poolName: null });
-
-          // Only redirect to setup if services are not installed
-          if (!allServicesInstalled || !poolExists) {
-            navigate('/setup');
-          }
-        }
-      } catch (e) {
-        showNotification('error', 'Preflight Check Failed', e.message || 'An unknown error occurred during preflight checks.');
-        console.warn('Preflight check failed:', e);
-        // Proceed to login UI even if preflight fails
-      } finally {
-        if (!cancelled) setPreflightLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [navigate, setServices, showNotification]);
-
-
-  if (preflightLoading) {
-    return <Loading message="Performing preflight checks..." />;
-  }
 
   const onSubmit = async (data) => {
 

@@ -4,24 +4,13 @@ use std::sync::RwLock;
 use std::fs;
 
 extern crate dirs;
-use crate::types::Config;
+use crate::types::AppConfig;
 use serde_json::json;
 use crate::utils::append_log;
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            clients: Vec::new(),
-            masters: json!({}),
-            services: json!({}),
-            settings: json!({}),
-        }
-    }
-}
+static CONFIG_CACHE: OnceCell<RwLock<AppConfig>> = OnceCell::new();
 
-static CONFIG_CACHE: OnceCell<RwLock<Config>> = OnceCell::new();
-
-pub fn get_config() -> Config {
+pub fn get_config() -> AppConfig {
     let cache = CONFIG_CACHE.get_or_init(|| {
         let config = read_config();
         RwLock::new(config)
@@ -29,7 +18,7 @@ pub fn get_config() -> Config {
     cache.read().unwrap().clone()
 }
 
-pub fn set_config(new_config: &Config) {
+pub fn set_config(new_config: &AppConfig) {
     let cache = CONFIG_CACHE.get_or_init(|| {
         let config = read_config();
         RwLock::new(config)
@@ -44,7 +33,7 @@ pub fn reload_config_from_disk() {
 
 #[tauri::command]
 // Read config.json, or return default
-pub fn read_config() -> Config {
+pub fn read_config() -> AppConfig {
     append_log("DEBUG", "read_config called");
     dirs::config_dir()
         .map(|path| {
@@ -52,14 +41,14 @@ pub fn read_config() -> Config {
             if let Ok(content) = fs::read_to_string(config_path) {
                 serde_json::from_str(&content).unwrap_or_default()
             } else {
-                Config::default()
+                AppConfig::default()
             }
         })
         .unwrap_or_default()
 }
 
 // Write config.json
-pub fn write_config(cfg: &Config) -> Result<(), String> {
+pub fn write_config(cfg: &AppConfig) -> Result<(), String> {
     append_log("INFO", "write_config called");
     dirs
         ::config_dir()

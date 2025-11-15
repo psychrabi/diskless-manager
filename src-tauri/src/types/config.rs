@@ -23,35 +23,3 @@ impl Default for AppConfig {
         }
     }
 }
-
-/// Legacy configuration structure (for backward compatibility)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Config {
-    pub clients: Vec<super::client::Client>,
-    pub masters: serde_json::Value,
-    pub services: serde_json::Value,
-    pub settings: serde_json::Value,
-}
-
-impl Config {
-    /// Convert to new AppConfig format
-    pub fn into_app_config(self) -> AppConfig {
-        AppConfig {
-            clients: self.clients,
-            masters: self.masters,
-            services: self.services,
-            settings: self.settings,
-        }
-    }
-}
-
-impl From<AppConfig> for Config {
-    fn from(app_config: AppConfig) -> Self {
-        Self {
-            clients: app_config.clients,
-            masters: app_config.masters,
-            services: app_config.services,
-            settings: app_config.settings,
-        }
-    }
-}
