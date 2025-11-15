@@ -1,8 +1,11 @@
 import { useNotification } from '@/contexts/notification';
+import { zodResolver } from '@hookform/resolvers/zod';
 import { invoke } from '@tauri-apps/api/core';
+import { Save } from 'lucide-react';
 import { useEffect } from 'react';
+import { useForm, useWatch } from 'react-hook-form';
 import { z } from 'zod';
-import { FormModal, Input, Select } from '../ui';
+import { Input, Select } from '../ui';
 
 const clientSchema = z.object({
   name: z.string().min(1, 'Client name is required'),
@@ -12,8 +15,29 @@ const clientSchema = z.object({
   snapshot: z.string().optional().nullable(),
 });
 
+
 const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
   const { showNotification } = useNotification();
+
+  const defaultValues = {
+    name: client?.name || '',
+    mac: client?.mac || '',
+    ip: client?.ip || '',
+    master: client?.master || '',
+    snapshot: client?.snapshot || null,
+    pxeMode: client?.pxeMode || 'uefi',
+  };
+
+  const {
+    register,
+    handleSubmit,
+    formState: { errors },
+    setValue,
+    control
+  } = useForm({
+    resolver: zodResolver(clientSchema),
+    defaultValues
+  });
 
   const onSubmit = async (data) => {
     const token = localStorage.getItem('authToken') || '';
@@ -36,95 +60,81 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
       });
       showNotification('success', 'Client Updated', `Client ${data.name} updated successfully.`);
     }
+    refresh();
   };
 
-  const defaultValues = {
-    name: client?.name || '',
-    mac: client?.mac || '',
-    ip: client?.ip || '',
-    master: client?.master || '',
-    snapshot: client?.snapshot || null,
-    pxeMode: client?.pxeMode || 'uefi',
-  };
+  const selectedMaster = useWatch({
+    control,
+    name: 'master'
+  });
+
+  useEffect(() => {
+    if (!client?.id || selectedMaster !== client?.master) {
+      setValue('snapshot', '');
+    }
+  }, [client?.id, client?.master, selectedMaster, setValue]);
 
   return (
-    <FormModal
-      isOpen={isOpen}
-      setIsOpen={setIsOpen}
-      title={client.id ? 'Edit Client' : 'Add Client'}
-      schema={clientSchema}
-      defaultValues={defaultValues}
-      onSubmit={onSubmit}
-      submitButtonText={client.id ? 'Update Client' : 'Add Client'}
-      refresh={refresh}
-    >
-      {({ register, errors, setValue, watch }) => {
-        const selectedMaster = watch('master');
-
-        useEffect(() => {
-          if (!client?.id || selectedMaster !== client?.master) {
-            setValue('snapshot', '');
-          }
-        }, [selectedMaster, setValue]);
-
-        return (
-          <>
-            <Input
-              label="Client Name"
-              {...register('name')}
-              type='text'
-              placeholder="enter client name"
-              error={errors.name?.message}
-            />
-            <Input
-              label="MAC Address"
-              {...register('mac')}
-              type='text'
-              placeholder="XX:XX:XX:XX:XX:XX"
-              error={errors.mac?.message}
-            />
-            <Input
-              label="IP Address"
-              {...register('ip')}
-              type='text'
-              placeholder="X.X.X.X"
-              error={errors.ip?.message}
-            />
-            <Select
-              label="Select Image"
-              {...register('master')}
-              onChange={(e) => setValue('master', e.target.value)}
-              error={errors.master?.message}
-            >
-              <option value="">Select image ...</option>
-              {masters.map((master) => (
-                <option key={master.name} value={master.name}>
-                  {master.name}
-                </option>
-              ))}
-            </Select>
-            <Select
-              label="Select Snapshot"
-              {...register('snapshot')}
-              disabled={!selectedMaster}
-              onChange={(e) => setValue('snapshot', e.target.value)}
-              error={errors.snapshot?.message}
-            >
-              <option value="">Use master directly</option>
-              {masters.find(m => m.name === selectedMaster)?.snapshots?.map((snap) => (
-                <option key={snap.name} value={snap.name}>
-                  {snap.name} ({snap.created}, {snap.size})
-                </option>
-              ))}
-            </Select>
-            <div className="text-xs text-gray-500 mt-1">
-              DEBUG: Current snapshot value: {watch('snapshot') || 'empty'}<br />
-              DEBUG: Available snapshots: {masters.find(m => m.name === selectedMaster)?.snapshots?.map(s => s.name).join(', ') || 'none'}
-            </div>
-          </>
-        );
-      }}
-    </FormModal>
+    <Modal isOpen={isOpen} onClose={() => setIsOpen(false)} title="Create Client" size="xl">
+      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+        <Input
+          label="Client Name"
+          {...register('name')}
+          type='text'
+          placeholder="enter client name"
+          error={errors.name?.message}
+        />
+        <Input
+          label="MAC Address"
+          {...register('mac')}
+          type='text'
+          placeholder="XX:XX:XX:XX:XX:XX"
+          error={errors.mac?.message}
+        />
+        <Input
+          label="IP Address"
+          {...register('ip')}
+          type='text'
+          placeholder="X.X.X.X"
+          error={errors.ip?.message}
+        />
+        <Select
+          label="Select Image"
+          {...register('master')}
+          onChange={(e) => setValue('master', e.target.value)}
+          error={errors.master?.message}
+        >
+          <option value="">Select image ...</option>
+          {masters.map((master) => (
+            <option key={master.name} value={master.name}>
+              {master.name}
+            </option>
+          ))}
+        </Select>
+        <Select
+          label="Select Snapshot"
+          {...register('snapshot')}
+          disabled={!selectedMaster}
+          onChange={(e) => setValue('snapshot', e.target.value)}
+          error={errors.snapshot?.message}
+        >
+          <option value="">Use master directly</option>
+          {masters.find(m => m.name === selectedMaster)?.snapshots?.map((snap) => (
+            <option key={snap.name} value={snap.name}>
+              {snap.name} ({snap.created}, {snap.size})
+            </option>
+          ))}
+        </Select>
+        <div className="text-xs text-gray-500 mt-1">
+          DEBUG: Current snapshot value: {useWatch({ control, name: 'snapshot' }) || 'empty'}<br />
+          DEBUG: Available snapshots: {masters.find(m => m.name === selectedMaster)?.snapshots?.map(s => s.name).join(', ') || 'none'}
+        </div>
+        <div className="mt-6 flex justify-end space-x-3">
+          <Button type="submit" variant="primary" icon={Save}>Create Master</Button>
+          <Button type="button" variant="destructive" onClick={() => setIsOpen(false)}>Cancel</Button>
+        </div>
+      </form>
+    </Modal>
   );
 };
 

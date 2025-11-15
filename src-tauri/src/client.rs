@@ -1,7 +1,7 @@
 use crate::config::{ get_config, get_zpool_name, read_config, write_config };
 use crate::dhcp::{ create_dhcp_entry, update_dhcp_config };
 use crate::iscsi::{ cleanup_iscsi_target, setup_iscsi_target };
-use crate::types::{ AddClientRequest, Client, Config, ControlRequest, DeprovisionRequest };
+use crate::types::{ AddClientRequest, Client, AppConfig, ControlRequest, DeprovisionRequest };
 use crate::utils::{
     append_log,
     run_command,
@@ -58,7 +58,7 @@ pub async fn get_clients(
 ) -> Result<serde_json::Value, String> {
     // Validate authentication token
     validate_auth(&token)?;
-    let mut config: Config = read_config();
+    let mut config: AppConfig = read_config();
 
     // Read config once, compute statuses concurrently to avoid serial ping waits.
     // Note: get_client_status_realtime uses blocking `ping` command — run it in spawn_blocking.
@@ -165,7 +165,7 @@ pub fn get_client_paths_with_master(
 }
 
 pub fn save_client_config(client_data: &Client) -> bool {
-    // Operate directly on the Config struct to avoid multiple serde conversions.
+    // Operate directly on the AppConfig struct to avoid multiple serde conversions.
     let mut cfg = get_config();
     let mut found = false;
     // match case-insensitively
@@ -370,7 +370,7 @@ fn launch_remote_desktop(client_ip: &str, username: &str) -> Result<(), String> 
 
 pub fn delete_client_config(client_id: &str) -> bool {
     append_log("INFO", &format!("Deleting client config: {}", client_id));
-    // Work with the typed Config directly and perform case-insensitive remove.
+    // Work with the typed AppConfig directly and perform case-insensitive remove.
     let mut cfg = get_config();
     let before = cfg.clients.len();
     cfg.clients.retain(|c| !c.id.eq_ignore_ascii_case(client_id));

@@ -1,10 +1,8 @@
-import { Button, Card, Input, Loading } from '@/components/ui';
+import { Button, Card, Input } from '@/components/ui';
 import { useAuth } from '@/contexts/auth';
 import { useNotification } from '@/contexts/notification';
-import { useAppStore } from '@/store/useAppStore';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { invoke } from '@tauri-apps/api/core';
-import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { useNavigate } from 'react-router-dom';
 import { z } from 'zod';
