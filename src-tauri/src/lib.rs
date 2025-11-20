@@ -1,3 +1,4 @@
+mod app_config;
 mod auth;
 mod client;
 mod config;
@@ -7,6 +8,7 @@ mod logs;
 mod middleware;
 mod service;
 mod utils;
+mod validation;
 mod zfs;
 mod license;
 mod disks;
@@ -19,7 +21,9 @@ use sysinfo::System;
 use tauri::Manager;
 
 use crate::utils::{ get_server_ip, append_log };
+use crate::app_config::AppConfig;
 
+// Legacy constants for backward compatibility - prefer using AppConfig
 const DHCP_CONFIG_PATH: &str = "/etc/dhcp/dhcpd.conf";
 const DHCP_CLIENTS_PATH: &str = "/etc/dhcp/clients.conf";
 pub const TFTP_AUTOEXEC_PATH: &str = "/srv/tftp/autoexec.ipxe";

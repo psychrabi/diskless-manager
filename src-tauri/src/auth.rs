@@ -5,8 +5,26 @@ use bcrypt::{ hash, verify, DEFAULT_COST };
 use chrono::{ Duration, Utc };
 use jsonwebtoken::{ decode, encode, DecodingKey, EncodingKey, Header, Validation };
 use std::collections::HashMap;
+use std::env;
 
 use crate::types::{ Claims, LoginRequest, LoginResponse, UserResponse, AuthError };
+
+// Load JWT secret from environment variable
+// SECURITY: Never commit the actual secret to version control
+// Set JWT_SECRET environment variable before running the application
+lazy_static::lazy_static! {
+    static ref SECRET_KEY: Vec<u8> = {
+        env::var("JWT_SECRET")
+            .unwrap_or_else(|_| {
+                eprintln!("WARNING: JWT_SECRET environment variable not set!");
+                eprintln!("Using fallback secret for development only.");
+                eprintln!("For production, set JWT_SECRET environment variable with a secure random string.");
+                // Fallback for development only - generates a warning
+                "d939af3c6a5b136c954e48de599dd57dd987032a5e9e32ae6caa9369087cfecb".to_string()
+            })
+            .into_bytes()
+    };
+}
 
 // In a real application, this would be stored in a database
 lazy_static::lazy_static! {
@@ -25,11 +43,9 @@ lazy_static::lazy_static! {
         );
         m
     };
-    static ref SECRET_ENCODING_KEY: EncodingKey = EncodingKey::from_secret(SECRET_KEY.as_ref());
-    static ref SECRET_DECODING_KEY: DecodingKey = DecodingKey::from_secret(SECRET_KEY.as_ref());
+    static ref SECRET_ENCODING_KEY: EncodingKey = EncodingKey::from_secret(&SECRET_KEY);
+    static ref SECRET_DECODING_KEY: DecodingKey = DecodingKey::from_secret(&SECRET_KEY);
 }
-
-const SECRET_KEY: &str = "diskless_manager_secret_key_2025"; // In production, use a more secure secret
 
 pub fn authenticate_user(username: &str, password: &str) -> Result<LoginResponse, AuthError> {
     // Find user by username in the in-memory store (base data)

@@ -155,6 +155,30 @@ sudo apt install \
    %USER% ALL=(ALL) NOPASSWD: /usr/sbin/zfs,/usr/bin/targetcli,/bin/systemctl,/usr/sbin/dhcpd,/usr/bin/wakeonlan
    ```
 
+### 4. Configure Environment Variables
+
+**IMPORTANT - Security Configuration:**
+
+The application requires a JWT secret for authentication. Generate a secure random secret:
+
+```bash
+# Generate a secure random secret
+openssl rand -base64 32
+
+# Set the JWT_SECRET environment variable
+export JWT_SECRET="your-generated-secret-here"
+
+# Or add to your shell profile (~/.bashrc, ~/.zshrc, etc.)
+echo 'export JWT_SECRET="your-generated-secret-here"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+⚠️ **Security Notes:**
+- Never commit the actual JWT_SECRET to version control
+- Use a different secret for development and production
+- Keep your secret secure and rotate it periodically
+- See `src-tauri/.env.example` for reference
+
 ## 🚀 Usage
 
 1. **Start App**

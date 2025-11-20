@@ -1,0 +1,23 @@
+# Diskless Manager Configuration
+# Place this file at /etc/diskless-manager/config.toml
+
+# TFTP server root directory
+tftp_root = "/srv/tftp"
+
+# DHCP server configuration file
+dhcp_config_path = "/etc/dhcp/dhcpd.conf"
+
+# iSCSI IQN prefix for all targets
+iscsi_iqn_prefix = "iqn.2025-04.local.diskless"
+
+# Application log file
+log_file_path = "/var/log/diskless-manager.log"
+
+# Default ZFS pool to use
+zfs_pool = "diskless"
+
+# HTTP/Apache server root
+http_root = "/srv/tftp"
+
+# Configuration directory
+config_dir = "/etc/diskless-manager"
