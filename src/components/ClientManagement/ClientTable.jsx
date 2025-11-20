@@ -59,7 +59,7 @@ const ClientTable = ({ handleClientContextMenu }) => {
 
   return (
     <>
-      <Table className='bg-base-100 rounded-lg'>
+      <Table className='bg-base-100 rounded-lg' aria-label="Client list">
         <TableHeader>
           <TableRow>
             <TableHead>Name</TableHead>

@@ -38,7 +38,7 @@ export default function DisksManagement() {
       </Button>
     } >
       <div className="min-h-[calc(100vh-15rem)]">
-        <DiskTable disks={datasets} />
+        <DiskTable datasets={datasets} onRefresh={fetchData} />
       </div>
       {isModalOpen && <DiskFormModal zpools={zpools} isOpen={isModalOpen} setIsOpen={setIsModalOpen} refresh={fetchData} />}
     </Card>

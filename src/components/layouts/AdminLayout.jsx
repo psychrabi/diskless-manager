@@ -30,6 +30,14 @@ const AdminLayout = () => {
 
 	return (
 		<div className="flex h-screen bg-base-200 text-base-content">
+			{/* Skip Navigation Link */}
+			<a
+				href="#main-content"
+				className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-50 focus:px-4 focus:py-2 focus:bg-primary focus:text-primary-content focus:rounded"
+			>
+				Skip to main content
+			</a>
+
 			{/* Sidebar */}
 			<Sidebar
 				activeTab={activeTab}
@@ -48,6 +56,10 @@ const AdminLayout = () => {
 				<div
 					className="fixed inset-0 z-30 bg-black/50 lg:hidden"
 					onClick={() => setIsSidebarOpen(false)}
+					aria-label="Close sidebar"
+					role="button"
+					tabIndex={0}
+					onKeyDown={(e) => e.key === 'Enter' && setIsSidebarOpen(false)}
 				/>
 			</Activity>
 
@@ -57,12 +69,13 @@ const AdminLayout = () => {
 					transition: 'margin-left 0.3s ease-in-out',
 				}}>
 				<Header onToggleSidebar={() => setIsSidebarOpen((v) => !v)} />
-				<main className="flex-1 overflow-y-auto bg-base-200">
+				<main id="main-content" className="flex-1 overflow-y-auto bg-base-200" tabIndex={-1}>
 					<div className="p-6 relative">
 						{/* Global Loading Overlay */}
 						{loading && (
-							<div className="absolute inset-0 z-50 flex items-center justify-center bg-base-200/50 backdrop-blur-sm rounded-lg">
+							<div className="absolute inset-0 z-50 flex items-center justify-center bg-base-200/50 backdrop-blur-sm rounded-lg" role="status" aria-live="polite">
 								<Loading className="w-10 h-10 text-primary" />
+								<span className="sr-only">Loading...</span>
 							</div>
 						)}
 						{error && <Error error={error} />}

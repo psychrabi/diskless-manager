@@ -1,15 +1,16 @@
 import React from 'react';
 import PropTypes from 'prop-types';
 
-export const Table = ({ children, className = '' }) => (
+export const Table = ({ children, className = '', 'aria-label': ariaLabel }) => (
   <div className={`w-full overflow-x-auto ${className}`}>
-    <table className="table w-full">{children}</table>
+    <table className="table w-full" aria-label={ariaLabel}>{children}</table>
   </div>
 );
 
 Table.propTypes = {
   children: PropTypes.node,
   className: PropTypes.string,
+  'aria-label': PropTypes.string,
 };
 
 export const TableHeader = ({ children, className = '' }) => (
@@ -41,13 +42,14 @@ TableRow.propTypes = {
   className: PropTypes.string,
 };
 
-export const TableHead = ({ children, className = '' }) => (
-  <th className={`h-12 px-4 align-middle font-medium text-base-content/70 ${className}`}>{children}</th>
+export const TableHead = ({ children, className = '', scope = 'col' }) => (
+  <th scope={scope} className={`h-12 px-4 align-middle font-medium text-base-content/70 ${className}`}>{children}</th>
 );
 
 TableHead.propTypes = {
   children: PropTypes.node,
   className: PropTypes.string,
+  scope: PropTypes.oneOf(['col', 'row', 'colgroup', 'rowgroup']),
 };
 
 export const TableCell = ({ children, className = '' }) => (

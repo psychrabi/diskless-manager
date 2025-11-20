@@ -1,5 +1,5 @@
 //! Authentication module for JWT-based authentication
-use crate::{ license::ensure_license_valid, types::User };
+use crate::types::User;
 use crate::utils::append_log;
 use bcrypt::{ hash, verify, DEFAULT_COST };
 use chrono::{ Duration, Utc };

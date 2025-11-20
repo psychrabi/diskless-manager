@@ -3,12 +3,14 @@ import { useZfs } from '@/hooks/useZfs';
 import { useState } from 'react';
 import { Button, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui';
 import RenameDiskModal from './RenameDiskModal';
+import { useNotification } from '@/contexts/notification';
 
 const DiskTable = ({ datasets, onRefresh }) => {
 	const [selectedDisk, setSelectedDisk] = useState(null);
 	const [isRenameModalOpen, setIsRenameModalOpen] = useState(false);
 	const confirm = useConfirm();
 	const { deleteDataset } = useZfs();
+	const { showNotification } = useNotification();
 
 	const handleRenameDisk = (disk) => {
 		setSelectedDisk(disk);
@@ -27,6 +29,11 @@ const DiskTable = ({ datasets, onRefresh }) => {
 		if (ok) {
 			const success = await deleteDataset(disk.name);
 			if (success) {
+				showNotification({
+					title: 'Disk deleted',
+					message: `Disk "${disk.name}" deleted successfully`,
+					type: 'success',
+				});
 				onRefresh();
 			}
 		}
@@ -34,37 +41,50 @@ const DiskTable = ({ datasets, onRefresh }) => {
 
 	return (
 		<>
-			<div className="overflow-x-auto">
-				<Table className='bg-base-100 rounded-lg'>
-					<TableHeader>
-						<TableRow>
-							<TableHead className='text-start'>Name</TableHead>
-							<TableHead>Type</TableHead>
-							<TableHead>Actions</TableHead>
+			<Table className='bg-base-100 rounded-lg border' aria-label="ZFS datasets list">
+				<TableHeader>
+					<TableRow>
+						<TableHead>Name</TableHead>
+						<TableHead>Used</TableHead>
+						<TableHead>Available</TableHead>
+						<TableHead>Referred</TableHead>
+						<TableHead>Mount Point</TableHead>
+						<TableHead>Actions</TableHead>
+					</TableRow>
+				</TableHeader>
+				<TableBody>
+					{datasets.map((dataset) => (
+						<TableRow key={dataset.name}>
+							<TableCell>{dataset.name}</TableCell>
+							<TableCell>{dataset.used}</TableCell>
+							<TableCell>{dataset.avail}</TableCell>
+							<TableCell>{dataset.refer}</TableCell>
+							<TableCell>{dataset.mountpoint}</TableCell>
+							<TableCell>
+								<div className='flex gap-2'>
+									<Button variant='ghost' size='sm' onClick={() => handleRenameDisk(dataset)}>
+										Rename
+									</Button>
+									<Button variant='destructive' size='sm' onClick={() => handleDeleteDisk(dataset)}>
+										Delete
+									</Button>
+								</div>
+							</TableCell>
 						</TableRow>
-					</TableHeader>
-					<TableBody>
-						{datasets.map((ds) => (
-							<TableRow key={ds.name}>
-								<TableCell className='text-start'>{ds.name}</TableCell>
-								<TableCell>{ds.disk_type || (ds.type === 'volume' ? 'zvol' : '—')}</TableCell>
-								<TableCell className="flex gap-2 justify-center">
-									<Button size="sm" onClick={() => handleRenameDisk(ds)}>Rename</Button>
-									<Button size="sm" variant="destructive" onClick={() => handleDeleteDisk(ds)}>Remove</Button>
-								</TableCell>
-							</TableRow>
-						))}
-						{datasets.length === 0 && (
-							<TableRow>
-								<TableCell colSpan={3} className="text-center py-4 text-base-content/70">
-									No disks found
-								</TableCell>
-							</TableRow>
-						)}
-					</TableBody>
-				</Table>
-			</div>
-			{isRenameModalOpen && <RenameDiskModal openRenameModal={isRenameModalOpen} setOpenRenameModal={setIsRenameModalOpen} selectedDisk={selectedDisk} refresh={onRefresh} />}
+					))}
+				</TableBody>
+			</Table>
+			{datasets.length === 0 && (
+				<p className='text-center py-4 text-base-content/60'>No datasets available.</p>
+			)}
+			{isRenameModalOpen && selectedDisk && (
+				<RenameDiskModal
+					openRenameModal={isRenameModalOpen}
+					setOpenRenameModal={setIsRenameModalOpen}
+					selectedDisk={selectedDisk}
+					refresh={onRefresh}
+				/>
+			)}
 		</>
 	);
 };
