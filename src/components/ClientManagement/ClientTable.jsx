@@ -2,13 +2,8 @@ import { Layers, Monitor, Power, PowerOff, Zap } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 
 import React from 'react';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui';
 
-const Table = React.memo(({ children, className = '' }) => <div className={`w-full overflow-x-auto ${className}`}><table className="min-w-full">{children}</table></div>);
-const TableHeader = React.memo(({ children, className = '' }) => <thead className={`[&_tr]:border-b border-base-100 ${className}`}>{children}</thead>);
-const TableBody = React.memo(({ children, className = '' }) => <tbody className={`[&_tr:last-child]:border-0 ${className}`}>{children}</tbody>);
-const TableRow = React.memo(({ children, className = '', onContextMenu }) => <tr onContextMenu={onContextMenu} className={`border-b border-base-300 transition-colors hover:bg-base-300 ${className}`}>{children}</tr>);
-const TableHead = React.memo(({ children, className = '' }) => <th className={`h-12 px-4 align-middle font-bold text-base-content/60 ${className} `}>{children}</th>);
-const TableCell = React.memo(({ children, className = '' }) => <td className={`p-4 align-middle ${className} text-center`}>{children}</td>);
 const ClientStatusBadge = React.memo(({ status }) => {
   const currentStatus = status || 'Offline';
   const isOnline = currentStatus === 'Online';
@@ -49,7 +44,7 @@ const ClientRow = React.memo(({ client, handleClientContextMenu }) => (
     <TableCell className='font-mono text-xs'>{client.ip}</TableCell>
     <TableCell className="hidden md:table-cell text-xs font-mono break-all">{client.master}</TableCell>
     <TableCell className="hidden xl:table-cell text-xs font-mono break-all">{client.snapshot ?? "-"}</TableCell>
-    <TableCell className="hidden xl:table-cell text-xs font-mono break-all">{client.block_device}</TableCell>              
+    <TableCell className="hidden xl:table-cell text-xs font-mono break-all">{client.block_device}</TableCell>
     <TableCell>
       <ClientStatusBadge status={client.status} />
     </TableCell>
@@ -60,7 +55,7 @@ const ClientRow = React.memo(({ client, handleClientContextMenu }) => (
 ));
 
 const ClientTable = ({ handleClientContextMenu }) => {
-  const { clients } = useAppStore()
+  const clients = useAppStore((state) => state.clients)
 
   return (
     <>
@@ -72,7 +67,7 @@ const ClientTable = ({ handleClientContextMenu }) => {
             <TableHead>IP Address</TableHead>
             <TableHead className="hidden md:table-cell">Image</TableHead>
             <TableHead className="hidden xl:table-cell">Restore Point</TableHead>
-            <TableHead className="hidden xl:table-cell">Boot disk</TableHead>            
+            <TableHead className="hidden xl:table-cell">Boot disk</TableHead>
             <TableHead className='text-center'>Status</TableHead>
             <TableHead>Mode</TableHead>
           </TableRow>

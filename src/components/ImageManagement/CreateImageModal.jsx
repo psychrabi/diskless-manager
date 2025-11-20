@@ -35,7 +35,7 @@ const CreateImageModal = ({ openImageCreateModal, setOpenImageCreateModal }) => 
     const token = localStorage.getItem('authToken') || '';
     await invoke('create_image', { token, name: data.name, size: data.size })
       .then((response) => {
-        console.log(response)
+
         if (response.message) showNotification(response.message, 'success');
       }).catch((error) => {
         showNotification('error', 'Failed to create image', error.message || 'An unknown error occurred');

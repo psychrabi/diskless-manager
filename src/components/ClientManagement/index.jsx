@@ -1,7 +1,7 @@
 import { PlusCircle, Users } from 'lucide-react';
 import { memo, useCallback, useEffect, useState } from 'react';
 import { useAppStore } from '../../store/useAppStore';
-import { useClientContextMenuActions } from '../../utils/contextMenuAction';
+import { useClientActions } from '@/hooks/useClientActions';
 import { Button, Card } from '../ui';
 import { ContextMenu } from '../ui/ContextMenu';
 import ClientFormModal from './ClientFormModal';
@@ -33,28 +33,42 @@ const ClientManagement = () => {
     setContextMenu(prev => ({ ...prev, isOpen: false }));
   }, []);
 
-  const contextActions = useClientContextMenuActions(fetchData, closeContextMenu, setClient, setIsModalOpen, setDeprovisionModal);
+  const contextActions = useClientActions(fetchData, closeContextMenu, setClient, setIsModalOpen, setDeprovisionModal);
 
   const handleClientFormModalOpen = useCallback(() => {
-    let newName = 'PC101'
-    let newIp = '192.168.1.101'
+    let newName = 'PC001';
+    let newIp = '192.168.1.101'; // Default start IP
+
     if (clients.length > 0) {
-      const lastClient = clients[clients.length - 1]
+      // Sort clients by name to find the "last" one logically
+      const sortedClients = [...clients].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+      const lastClient = sortedClients[sortedClients.length - 1];
+
       // Increment name (e.g., pc002 -> pc003)
-      const nameMatch = lastClient.name.match(/(.*?)(\d+)$/)
+      const nameMatch = lastClient.name.match(/^(.*?)(\d+)$/);
       if (nameMatch) {
-        const prefix = nameMatch[1]
-        const num = parseInt(nameMatch[2], 10) + 1
-        newName = `${prefix}${num.toString().padStart(nameMatch[2].length, '0')}`
+        const prefix = nameMatch[1];
+        const numberPart = nameMatch[2];
+        const num = parseInt(numberPart, 10) + 1;
+        newName = `${prefix}${num.toString().padStart(numberPart.length, '0')}`;
       }
+
       // Increment IP last octet
-      const ipParts = lastClient.ip.split('.')
-      if (ipParts.length === 4) {
-        const lastOctet = parseInt(ipParts[3], 10) + 1
-        ipParts[3] = lastOctet.toString()
-        newIp = ipParts.join('.')
+      // Find the highest IP to avoid collisions
+      const sortedIps = [...clients]
+        .map(c => c.ip)
+        .filter(ip => ip.startsWith('192.168.1.')) // Assuming standard subnet
+        .map(ip => parseInt(ip.split('.')[3], 10))
+        .sort((a, b) => a - b);
+
+      if (sortedIps.length > 0) {
+        const lastOctet = sortedIps[sortedIps.length - 1];
+        if (lastOctet < 254) {
+          newIp = `192.168.1.${lastOctet + 1}`;
+        }
       }
     }
+
     setClient({
       name: newName,
       mac: '',

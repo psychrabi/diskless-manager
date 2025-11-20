@@ -16,9 +16,6 @@ const Input = lazy(() =>
 const Select = lazy(() =>
   import("./Select.jsx").then((module) => ({ default: module.Select }))
 );
-const Table = lazy(() =>
-  import("./Table.jsx").then((module) => ({ default: module.Table }))
-);
 const ContextMenu = lazy(() =>
   import("./ContextMenu.jsx").then((module) => ({
     default: module.ContextMenu,
@@ -36,13 +33,14 @@ const Error = lazy(() =>
   import("./Error.jsx").then((module) => ({ default: module.Error }))
 );
 
+export * from './Table';
+
 export {
   Card,
   Button,
   Modal,
   Input,
   Select,
-  Table,
   ContextMenu,
   Loading,
   Notification,

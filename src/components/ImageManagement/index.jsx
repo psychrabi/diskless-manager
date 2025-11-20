@@ -6,7 +6,7 @@ import { ImagesList } from './ImagesList';
 import CreateImageModal from './CreateImageModal';
 
 const ImageManagement = () => {
-  const { masters } = useAppStore();
+  const masters = useAppStore((state) => state.masters);
   const [openImageCreateModal, setOpenImageCreateModal] = useState(false)
 
   const handleCreateImage = () => setOpenImageCreateModal(true)

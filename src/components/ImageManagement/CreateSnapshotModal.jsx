@@ -36,10 +36,10 @@ const CreateSnapshotModal = ({ openSnapshotCreateModal, setOpenSnapshotCreateMod
       .then((response) => {
         if (response.message) showNotification(response.message, 'success');
       }).catch((error) => {
-        console.log(error)
+
         showNotification('error', 'Failed to create snapshot', error.message || 'An unknown error occurred');
       })
-      setOpenSnapshotCreateModal(false);
+    setOpenSnapshotCreateModal(false);
   };
 
   return (
@@ -53,7 +53,7 @@ const CreateSnapshotModal = ({ openSnapshotCreateModal, setOpenSnapshotCreateMod
           {errors.name && <div className="text-red-500 text-xs">{errors.name.message}</div>}
         </fieldset>
         <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
-          This operation will capture the current state of <strong className="font-semibold">{selectedImage}</strong>.          
+          This operation will capture the current state of <strong className="font-semibold">{selectedImage}</strong>.
         </p>
         <div className="mt-6 flex justify-end space-x-3">
           <Button type="submit" variant="primary" icon={Save}>Create Snapshot</Button>

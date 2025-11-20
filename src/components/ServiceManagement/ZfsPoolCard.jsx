@@ -1,24 +1,8 @@
-import { invoke } from '@tauri-apps/api/core';
-import { useEffect, useState } from 'react';
+import { useAppStore } from '@/store/useAppStore';
 import { Card } from '../ui';
-import { useNotification } from '@/contexts/notification';
 
 const ZfsPoolCard = ({ loading }) => {
-  const [zpoolStats, setZpoolStats] = useState(null);
-  const { showNotification } = useNotification();
-
-  useEffect(() => {
-    const fetchZpoolStats = async () => {
-      try {
-        const stats = await invoke("get_zpool_list");
-        setZpoolStats(stats[0]);
-      } catch (error) {
-        showNotification('error', 'Failed to load ZFS pool info', error.message || 'An unknown error occurred');
-        setZpoolStats(null);
-      }
-    };
-    fetchZpoolStats();
-  }, [showNotification]);
+  const zpoolStats = useAppStore((state) => state.zpoolStats);
   return (
     <Card title="ZFS Pool Usage">
       {loading ? (

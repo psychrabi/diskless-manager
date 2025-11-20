@@ -38,9 +38,9 @@ const PublicLayout = () => {
 
             try {
                 const license = await invoke("get_license")
-                if (license) console.log(license);
+
             } catch (error) {
-                console.log(error)
+
             }
         })();
         return () => {

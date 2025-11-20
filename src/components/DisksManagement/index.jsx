@@ -1,64 +1,32 @@
-import DiskFormModal from '@/components/DisksManagement/DiskFormModal';
-import { useNotification } from '@/contexts/notification';
+import { useZfs } from '@/hooks/useZfs';
 import { useAppStore } from '@/store/useAppStore';
-import { invoke } from '@tauri-apps/api/core';
 import { HardDrive, PlusCircle } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { Button, Card } from '../ui';
+import DiskFormModal from './DiskFormModal';
 import DiskTable from './DiskTable';
 
 export default function DisksManagement() {
   const { fetchData } = useAppStore();
+  const zpools = useAppStore((state) => state.zpools);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [zpools, setZpools] = useState([]);
-  const [datasets, setDatasets] = useState([]);
   const [selectedPool, setSelectedPool] = useState('');
-  const { showNotification } = useNotification();
+  const { datasets, fetchDatasets } = useZfs();
 
   const handleDiskFormModalOpen = useCallback(() => {
     setIsModalOpen(true)
   }, [])
 
-  const fetchZpools = useCallback(async () => {
-    try {
-      const res = await invoke('list_zpools');
-      setZpools(res || []);
-      if ((res || []).length > 0 && !selectedPool) {
-        setSelectedPool(res[0]);
-      }
-    } catch (e) {
-      showNotification('error', 'Failed to list ZFS pools', e.message || 'An unknown error occurred');
-      console.error(String(e));
-    }
-  }, [selectedPool, showNotification]);
-
-  const fetchDatasets = useCallback(async (pool) => {
-    if (!pool) {
-      setDatasets([]);
-      return;
-    }
-    try {
-      const res = await invoke('list_datasets', { zpool: pool });
-      setDatasets(res || []);
-    } catch (e) {
-      showNotification('error', 'Failed to list datasets', e.message || 'An unknown error occurred');
-      console.error(String(e));
-    }
-  }, [showNotification]);
-
+  // Set default pool when zpools are loaded
   useEffect(() => {
-    const getZpools = async () => {
-      await fetchZpools();
-    };
-    getZpools();
-  }, [fetchZpools]);
+    if (zpools.length > 0 && !selectedPool) {
+      setSelectedPool(zpools[0]);
+    }
+  }, [zpools, selectedPool]);
 
   useEffect(() => {
     if (selectedPool) {
-      const getDatasets = async () => {
-        await fetchDatasets(selectedPool);
-      };
-      getDatasets();
+      fetchDatasets(selectedPool);
     }
   }, [selectedPool, fetchDatasets]);
 

@@ -1,4 +1,6 @@
 import React from 'react';
+import { Button } from './ui';
+import { AlertTriangle, RefreshCw, Home } from 'lucide-react';
 
 class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -7,43 +9,59 @@ class ErrorBoundary extends React.Component {
   }
 
   static getDerivedStateFromError(error) {
-    return { hasError: true, error };
+    return { hasError: true };
   }
 
   componentDidCatch(error, errorInfo) {
-    this.setState({
-      error: error,
-      errorInfo: errorInfo
-    });
-    // You can also log the error to an error reporting service
-    console.error('Error caught by boundary:', error, errorInfo);
+    this.setState({ error, errorInfo });
+    console.error("Uncaught error:", error, errorInfo);
   }
 
   render() {
     if (this.state.hasError) {
       return (
-        <div className="min-h-screen bg-gray-100 dark:bg-gray-900 flex items-center justify-center p-4">
-          <div className="max-w-7xl mx-auto w-full bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6">
-            <h2 className="text-2xl font-bold text-red-600 dark:text-red-400 mb-4">
-              Something went wrong
-            </h2>
-            <p className="text-gray-600 dark:text-gray-300 mb-4">
-              {this.state.error?.message || 'An unexpected error occurred'}
-            </p>
-            <button
-              onClick={() => window.location.reload()}
-              className="w-full bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 px-4 rounded-md transition duration-200"
-            >
-              Reload Page
-            </button>
-            {import.meta.env.DEV && (
-              <details className="mt-4 text-sm text-gray-500 dark:text-gray-400">
-                <summary>Error Details</summary>
-                <pre className="mt-2 p-2 bg-gray-100 dark:bg-gray-700 rounded overflow-auto">
-                  {this.state.errorInfo?.componentStack}
-                </pre>
-              </details>
-            )}
+        <div className="min-h-screen flex items-center justify-center bg-base-200 p-4">
+          <div className="card w-full max-w-lg bg-base-100 shadow-xl">
+            <div className="card-body items-center text-center">
+              <AlertTriangle className="h-12 w-12 text-error mb-4" />
+              <h2 className="card-title text-2xl mb-2">Something went wrong</h2>
+              <p className="text-base-content/70 mb-6">
+                An unexpected error occurred. Please try reloading the page.
+              </p>
+              <div className="flex gap-4">
+                <Button
+                  variant="primary"
+                  onClick={() => window.location.reload()}
+                  className="gap-2"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  Reload Page
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => window.location.href = '/'}
+                  className="gap-2"
+                >
+                  <Home className="h-4 w-4" />
+                  Go Home
+                </Button>
+              </div>
+              {process.env.NODE_ENV === 'development' && (
+                <div className="mt-6 text-left w-full collapse collapse-arrow border border-base-300 bg-base-200 rounded-box">
+                  <input type="checkbox" />
+                  <div className="collapse-title font-medium">
+                    Error Details
+                  </div>
+                  <div className="collapse-content">
+                    <pre className="text-xs overflow-auto max-h-40 p-2">
+                      {this.state.error && this.state.error.toString()}
+                      <br />
+                      {this.state.errorInfo && this.state.errorInfo.componentStack}
+                    </pre>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       );

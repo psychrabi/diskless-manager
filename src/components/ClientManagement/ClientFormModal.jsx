@@ -125,10 +125,6 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
             </option>
           ))}
         </Select>
-        <div className="text-xs text-gray-500 mt-1">
-          DEBUG: Current snapshot value: {useWatch({ control, name: 'snapshot' }) || 'empty'}<br />
-          DEBUG: Available snapshots: {masters.find(m => m.name === selectedMaster)?.snapshots?.map(s => s.name).join(', ') || 'none'}
-        </div>
         <div className="mt-6 flex justify-end space-x-3">
           <Button type="submit" variant="primary" icon={Save}>Create Master</Button>
           <Button type="button" variant="destructive" onClick={() => setIsOpen(false)}>Cancel</Button>

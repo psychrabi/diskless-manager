@@ -1,4 +1,5 @@
 import { Error, Loading, Notification } from '@/components/ui';
+import ErrorBoundary from '@/components/ErrorBoundary';
 import { useNotification } from '@/contexts/notification';
 import { useAppStore } from '@/store/useAppStore';
 import { Activity, lazy, useEffect, useState } from 'react';
@@ -8,7 +9,7 @@ const Sidebar = lazy(() => import("@/components/layouts/Sidebar"));
 const Header = lazy(() => import("@/components/layouts/Header"));
 
 const AdminLayout = () => {
-	const { error, fetchData } = useAppStore()
+	const { error, fetchData, loading } = useAppStore()
 	const [activeTab, setActiveTab] = useState('dashboard');
 	const { notification } = useNotification()
 	const navigation = useNavigation();
@@ -57,10 +58,20 @@ const AdminLayout = () => {
 				}}>
 				<Header onToggleSidebar={() => setIsSidebarOpen((v) => !v)} />
 				<main className="flex-1 overflow-y-auto bg-base-200">
-					<div className="p-6">
+					<div className="p-6 relative">
+						{/* Global Loading Overlay */}
+						{loading && (
+							<div className="absolute inset-0 z-50 flex items-center justify-center bg-base-200/50 backdrop-blur-sm rounded-lg">
+								<Loading className="w-10 h-10 text-primary" />
+							</div>
+						)}
 						{error && <Error error={error} />}
 						{notification && <Notification />}
-						{isNavigating ? <Loading /> : <Outlet />}
+						{isNavigating ? <Loading /> : (
+							<ErrorBoundary>
+								<Outlet />
+							</ErrorBoundary>
+						)}
 					</div>
 				</main>
 			</div>

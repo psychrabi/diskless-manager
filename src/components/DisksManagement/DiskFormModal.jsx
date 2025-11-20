@@ -1,10 +1,10 @@
-import { invoke } from '@tauri-apps/api/core';
-import { z } from 'zod';
-import { Input, Select } from '../ui';
-import { useNotification } from '@/contexts/notification';
-import { useForm, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Save } from 'lucide-react';
+import { useForm, useWatch } from 'react-hook-form';
+import { z } from 'zod';
+import { useNotification } from '@/contexts/notification';
+import { useZfs } from '@/hooks/useZfs';
+import { Button, Input, Modal, Select } from '../ui';
 
 const diskSchema = z.object({
   zpool: z.string().min(1, 'Zpool is required'),
@@ -15,6 +15,7 @@ const diskSchema = z.object({
 
 const DiskFormModal = ({ zpools, isOpen, setIsOpen, refresh }) => {
   const { showNotification } = useNotification();
+  const { createDataset } = useZfs();
 
   const {
     register,
@@ -29,10 +30,11 @@ const DiskFormModal = ({ zpools, isOpen, setIsOpen, refresh }) => {
 
   const onSubmit = async (data) => {
     showNotification(`Adding new disk ${data.name}`, 'info');
-    const token = localStorage.getItem('authToken') || '';
-    await invoke('create_zfs_dataset', { token, zpool: data.zpool, name: data.name, usageType: data.usage_type, size: data.size ?? '' });
-    showNotification('success', 'Dataset Created', `Dataset ${data.name} created successfully.`);
-    refresh();
+    const success = await createDataset(data);
+    if (success) {
+      refresh();
+      setIsOpen(false);
+    }
   };
 
   const defaultValues = { zpool: '', name: '', usage_type: 'image', size: '' };

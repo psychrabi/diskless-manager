@@ -5,14 +5,7 @@ import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { useNavigate } from "react-router-dom";
 import { useAppStore } from "../../store/useAppStore";
-import { Button, Card, Input, Select } from "../ui";
-
-const Table = ({ children, className = '' }) => <div className={`w-full overflow-x-auto ${className}`}><table className="min-w-full">{children}</table></div>;
-const TableHeader = ({ children, className = '' }) => <thead className={`[&_tr]:border-b border-base-100 ${className}`}>{children}</thead>;
-const TableBody = ({ children, className = '' }) => <tbody className={`[&_tr:last-child]:border-0 ${className}`}>{children}</tbody>;
-const TableRow = ({ children, className = '', onContextMenu }) => <tr onContextMenu={onContextMenu} className={`border-b border-base-300 transition-colors hover:bg-base-300 ${className}`}>{children}</tr>;
-const TableHead = ({ children, className = '' }) => <th className={`h-12 px-4 align-middle font-bold text-base-content/60 ${className} text-left`}>{children}</th>;
-const TableCell = ({ children, className = '' }) => <td className={`p-4 align-middle ${className}`}>{children}</td>;
+import { Button, Card, Input, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui";
 
 const Setup = () => {
   const navigate = useNavigate();
@@ -73,7 +66,7 @@ const Setup = () => {
   }, [services, navigate, poolExists]);
 
   const handleCreatePool = (async (data) => {
-    console.log(data);
+
     try {
       await invoke('create_zfs_pool', { name: data.name, disk: data.disk });
       showNotification('success', 'ZFS Pool Created', `ZFS pool ${data.name} created successfully.`);

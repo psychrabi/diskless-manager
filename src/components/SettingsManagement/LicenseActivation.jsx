@@ -1,12 +1,13 @@
-import { useNotification } from '@/contexts/notification';
-import { invoke } from '@tauri-apps/api/core';
 import { File } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
-import { Card } from '../ui';
+import { useNotification } from '@/contexts/notification';
+import { useSettings } from '@/hooks/useSettings';
+import { Button, Card } from '../ui';
 
 export default function LicenseActivation() {
   const { showNotification } = useNotification();
+  const { getLicenseInfo, activateLicense, loading: hookLoading } = useSettings();
   const [info, setInfo] = useState({
     license_key: null,
     license_status: null,
@@ -20,17 +21,12 @@ export default function LicenseActivation() {
   const [loading, setLoading] = useState(false);
 
   const fetchInfo = useCallback(async () => {
-    try {
-      const res = await invoke('get_license_info');
-      console.log(res)
-      const infoObj = res || {};
-      setInfo(infoObj);
-      // populate form input with license_key when fetched
-      reset({ license_key: infoObj.license_key ?? '' });
-    } catch (e) {
-      showNotification('error', 'Failed to load license info', e?.message || String(e));
-    }
-  }, [reset, showNotification]);
+    const res = await getLicenseInfo();
+    const infoObj = res || {};
+    setInfo(infoObj);
+    // populate form input with license_key when fetched
+    reset({ license_key: infoObj.license_key ?? '' });
+  }, [reset, getLicenseInfo]);
 
   useEffect(() => {
     fetchInfo();
@@ -42,16 +38,12 @@ export default function LicenseActivation() {
       return;
     }
     setLoading(true);
-    try {
-      const resp = await invoke('activate_license', { key: data.license_key.trim() });
-      showNotification('success', 'License Activated', resp?.message || 'License activated successfully');
+    const success = await activateLicense(data.license_key.trim());
+    if (success) {
       reset();
       await fetchInfo();
-    } catch (e) {
-      showNotification('error', 'License Activation Failed', e?.message || String(e));
-    } finally {
-      setLoading(false);
     }
+    setLoading(false);
   };
 
   return (
@@ -71,12 +63,12 @@ export default function LicenseActivation() {
         </label>
 
         <div className="flex items-center gap-2">
-          <button type="submit" className="btn btn-primary" disabled={info.license_key || loading}>
+          <Button type="submit" variant="primary" disabled={info.license_key || loading} loading={loading}>
             {loading ? 'Activating…' : 'Activate'}
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="btn"
+            variant="secondary"
             onClick={() => {
               reset();
               showNotification('info', 'Form Reset', 'License activation form has been reset.');
@@ -84,7 +76,7 @@ export default function LicenseActivation() {
             disabled={loading}
           >
             Reset
-          </button>
+          </Button>
         </div>
       </form>
     </Card>

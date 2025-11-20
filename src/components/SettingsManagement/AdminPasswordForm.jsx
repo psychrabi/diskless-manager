@@ -1,11 +1,12 @@
 import { File } from 'lucide-react'
-import { Button, Card } from '../ui'
 import { useForm } from 'react-hook-form';
 import { useNotification } from '@/contexts/notification';
-import { invoke } from '@tauri-apps/api/core';
+import { useSettings } from '@/hooks/useSettings';
+import { Button, Card } from '../ui'
 
 export default function AdminPasswordForm() {
   const { showNotification } = useNotification();
+  const { updatePassword } = useSettings();
 
   const {
     register,
@@ -19,30 +20,22 @@ export default function AdminPasswordForm() {
     }
   });
 
-  const onSubmit = async (data) => {    
+  const onSubmit = async (data) => {
     showNotification(`Updating Admin Password`, 'info');
     // Get token from localStorage
-    if(!data.old_password === "admin123"){
+    if (!data.old_password === "admin123") {
       showNotification('Old password is incorrect', 'error');
       return;
     }
-    if(data.new_password !== data.confirm_new_password){
+    if (data.new_password !== data.confirm_new_password) {
       showNotification('New password and confirm new password do not match', 'error');
       return;
     }
-    if(data.new_password.length < 6){
+    if (data.new_password.length < 6) {
       showNotification('New password must be at least 6 characters long', 'error');
       return;
     }
-    const token = localStorage.getItem('authToken') || '';
-    await invoke('update_admin_password', { token, oldPassword:data.old_password,newPassword: data.new_password })
-      .then((response) => {
-        if (response) showNotification(response, 'success');
-      })
-      .catch((error) => {
-        showNotification('error', 'Failed to update admin password', error.message || 'An unknown error occurred');
-        console.log(error);
-      });
+    await updatePassword(data.old_password, data.new_password);
   };
 
   return (

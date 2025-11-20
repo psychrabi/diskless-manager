@@ -3,9 +3,9 @@ import { Button, Card } from '../ui';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useNotification } from '@/contexts/notification';
 import { useForm } from 'react-hook-form';
-import { HardDrive, Network } from 'lucide-react';
-import { invoke } from '@tauri-apps/api/core';
+import { Network } from 'lucide-react';
 import { useEffect } from 'react';
+import { useSettings } from '@/hooks/useSettings';
 
 const dhcpSchema = z.object({
   subnet_ip: z.ipv4(),
@@ -43,6 +43,7 @@ const dhcpInitial = {
 
 export default function DHCPConfigForm() {
   const { showNotification } = useNotification();
+  const { readConfig, updateDhcp } = useSettings();
 
   const {
     register,
@@ -57,33 +58,19 @@ export default function DHCPConfigForm() {
   // Load saved config on component mount
   useEffect(() => {
     const loadConfig = async () => {
-      try {
-        const config = await invoke('read_config');
-        if (config?.settings?.dhcp) {
-          reset(config.settings.dhcp);
-        } else {
-          reset(dhcpInitial);
-        }
-      } catch (error) {
-        console.error('Failed to load DHCP config:', error);
+      const config = await readConfig();
+      if (config?.settings?.dhcp) {
+        reset(config.settings.dhcp);
+      } else {
         reset(dhcpInitial);
       }
     };
     loadConfig();
-  }, [reset]);
+  }, [reset, readConfig]);
 
   const onSubmit = async (data) => {
-    console.log(data);
     showNotification(`Updating DHCP Configurations`, 'info');
-    const token = localStorage.getItem('authToken') || '';
-    
-    try {
-      await invoke('configure_dhcp_server', { token, config: data });
-      showNotification('DHCP configuration saved successfully', 'success');
-    } catch (error) {
-      showNotification('error', 'Failed to configure DHCP server', error.message || 'An unknown error occurred');
-      console.error(error);
-    }
+    await updateDhcp(data);
   };
 
   return (

@@ -1,12 +1,13 @@
+import { useEffect } from "react";
 import { useForm } from "react-hook-form";
-import { Button, Card, Input } from "../ui";
 import { Network } from "lucide-react";
 import { useNotification } from "@/contexts/notification";
-import { invoke } from "@tauri-apps/api/core";
-import { useEffect } from "react";
+import { useSettings } from "@/hooks/useSettings";
+import { Button, Card, Input } from "../ui";
 
 export default function TFTPConfigForm() {
   const { showNotification } = useNotification();
+  const { readConfig, updateTftp } = useSettings();
 
   const {
     register,
@@ -23,40 +24,26 @@ export default function TFTPConfigForm() {
   // Load saved config on component mount
   useEffect(() => {
     const loadConfig = async () => {
-      try {
-        const config = await invoke('read_config');
-        if (config?.settings?.tftp) {
-          reset(config.settings.tftp);
-        }
-      } catch (error) {
-        console.error('Failed to load TFTP config:', error);
+      const config = await readConfig();
+      if (config?.settings?.tftp) {
+        reset(config.settings.tftp);
       }
     };
     loadConfig();
-  }, [reset]);
+  }, [reset, readConfig]);
 
   const onSubmit = async (data) => {
-    console.log(data);
     showNotification(`Updating TFTP Configurations`, 'info');
-    // Get token from localStorage
-    const token = localStorage.getItem('authToken') || '';
-    await invoke('configure_tftp_server', { token, tftpConfig: data })
-      .then((response) => {
-        if (response.message) showNotification(response.message, 'success');
-      })
-      .catch((error) => {
-        showNotification('error', 'Failed to configure TFTP server', error.message || 'An unknown error occurred');
-        console.log(error);
-      });
+    await updateTftp(data);
   };
 
   return (
     <Card title="TFTP Configuration" icon={Network} className=''>
       <form onSubmit={handleSubmit(onSubmit)}>
-        <div className="space-y-4">          
-            <Input id="tftp_root" register={register("tftp_root")} label="TFTP Root Directory" className="w-full" placeholder="/srv/tftp" />
-            <Input id="tftp_server_ip" register={register("tftp_server_ip")} label="TFTP Server IP" className="w-full" placeholder="0.0.0.0" />
-            <Input id="tftp_options" register={register("tftp_options")} label="TFTP Options" className="w-full" placeholder="--secure" />          
+        <div className="space-y-4">
+          <Input id="tftp_root" register={register("tftp_root")} label="TFTP Root Directory" className="w-full" placeholder="/srv/tftp" />
+          <Input id="tftp_server_ip" register={register("tftp_server_ip")} label="TFTP Server IP" className="w-full" placeholder="0.0.0.0" />
+          <Input id="tftp_options" register={register("tftp_options")} label="TFTP Options" className="w-full" placeholder="--secure" />
           <Button variant="primary" type="submit">Save TFTP Settings</Button>
         </div>
       </form>
