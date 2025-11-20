@@ -1,4 +1,5 @@
 import { forwardRef } from 'react';
+import PropTypes from 'prop-types';
 
 export const Button = forwardRef(({ children, onClick, variant = 'default', size = 'md', className = '', icon: Icon, disabled = false, title = '', type = 'button' }, ref) => {
   const ariaLabel = !children && title ? title : undefined;
@@ -45,3 +46,17 @@ export const Button = forwardRef(({ children, onClick, variant = 'default', size
     </button>
   );
 });
+
+Button.displayName = 'Button';
+
+Button.propTypes = {
+  children: PropTypes.node,
+  onClick: PropTypes.func,
+  variant: PropTypes.oneOf(['default', 'destructive', 'outline', 'ghost', 'link', 'primary', 'secondary', 'accent', 'info', 'success', 'warning']),
+  size: PropTypes.oneOf(['sm', 'md', 'lg', 'icon']),
+  className: PropTypes.string,
+  icon: PropTypes.elementType,
+  disabled: PropTypes.bool,
+  title: PropTypes.string,
+  type: PropTypes.oneOf(['button', 'submit', 'reset']),
+};

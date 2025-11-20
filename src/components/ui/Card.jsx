@@ -1,4 +1,5 @@
 import React from "react";
+import PropTypes from 'prop-types';
 
 export const Card = ({ title, icon, children, className = '', titleClassName = '', actions, bodyClass = '', headerClass = 'pb-0' }) => (
   <div className={`card bg-base-100 shadow-xl ${className}`}>
@@ -16,3 +17,14 @@ export const Card = ({ title, icon, children, className = '', titleClassName = '
     <div className={`card-body ${bodyClass}`}>{children}</div>
   </div>
 );
+
+Card.propTypes = {
+  title: PropTypes.string,
+  icon: PropTypes.elementType,
+  children: PropTypes.node,
+  className: PropTypes.string,
+  titleClassName: PropTypes.string,
+  actions: PropTypes.node,
+  bodyClass: PropTypes.string,
+  headerClass: PropTypes.string,
+};

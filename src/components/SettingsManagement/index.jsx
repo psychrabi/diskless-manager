@@ -7,7 +7,7 @@ import HTTPConfigForm from './HTTPConfigForm';
 import TFTPConfigForm from './TFTPConfigForm';
 import LicenseActivation from './LicenseActivation';
 
-const SettingManagement = () => {
+const SettingsManagement = () => {
 
   return (
     <Card title="System Settings" icon={Settings} className='bg-base-300'>
@@ -32,4 +32,4 @@ const SettingManagement = () => {
   );
 }
 
-export default SettingManagement;
+export default SettingsManagement;

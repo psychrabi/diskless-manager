@@ -27,8 +27,8 @@ const RenameDiskModal = ({ openRenameModal, setOpenRenameModal, selectedDisk, re
   const onSubmit = async (data) => {
     if (!selectedDisk) return;
 
-    //TODO: Fix the name extraction logic
-    const baseName = selectedDisk.split('/').pop() || '';
+    // Extract the dataset name from the full path (e.g., "tank/images/ubuntu" -> "ubuntu")
+    const baseName = selectedDisk.name ? selectedDisk.name.split('/').pop() : '';
     showNotification(`Renaming disk from ${baseName} to ${data.newName}`, 'info');
     setOpenRenameModal(false);
 
@@ -51,8 +51,8 @@ const RenameDiskModal = ({ openRenameModal, setOpenRenameModal, selectedDisk, re
     showNotification("Disk rename cancelled", 'info',)
   };
 
-  //TODO: Fix the name extraction logic
-  const displayName = selectedDisk.name;
+  // Extract display name from the full ZFS path (e.g., "tank/images/ubuntu" -> "ubuntu")
+  const displayName = selectedDisk?.name ? selectedDisk.name.split('/').pop() : '';
 
   return (
     <Modal isOpen={openRenameModal} onClose={handleClose} title="Rename disk" size="xl">
@@ -62,15 +62,17 @@ const RenameDiskModal = ({ openRenameModal, setOpenRenameModal, selectedDisk, re
             Rename disk "{displayName}" to a new name.
           </p>
           <fieldset className={`fieldset`}>
-            <legend htmlFor='newName' className='fieldset-legend'>New Name</legend>
+            <legend className='fieldset-legend'>New Name</legend>
             <input
               {...register('newName')}
               type='text'
               id='newName'
               placeholder="e.g., boot-disk, writeback-disk"
               className='input w-full'
+              aria-invalid={!!errors.newName}
+              aria-describedby={errors.newName ? 'newName-error' : undefined}
             />
-            {errors.newName && <div className="text-red-500 text-xs">{errors.newName.message}</div>}
+            {errors.newName && <div id="newName-error" role="alert" className="text-red-500 text-xs">{errors.newName.message}</div>}
           </fieldset>
         </div>
         <div className="mt-6 flex justify-end space-x-3">

@@ -1,5 +1,6 @@
 import { X } from 'lucide-react';
 import { useEffect, useRef } from 'react';
+import PropTypes from 'prop-types';
 import { Button } from './Button.jsx';
 
 export const Modal = ({ isOpen, onClose, title, children, size = 'md', id = 'modal-dialog' }) => {
@@ -26,11 +27,11 @@ export const Modal = ({ isOpen, onClose, title, children, size = 'md', id = 'mod
   };
 
   return (
-    <dialog ref={dialogRef} id={id} className={`modal ${isOpen ? 'modal-open' : ''}`} tabIndex={0} onClose={onClose}>
+    <dialog ref={dialogRef} id={id} className={`modal ${isOpen ? 'modal-open' : ''}`} tabIndex={0} onClose={onClose} aria-modal="true" aria-labelledby={`${id}-title`}>
       <div className={`modal-box ${sizeClasses[size] || ''}`}>
         <div className='flex justify-between items-center mb-4 border-b border-base-200 pb-3'>
-          <h2 className='text-xl font-semibold'>{title}</h2>
-          <Button onClick={onClose} variant='destructive' size='icon' className='h-8 w-8'>
+          <h2 id={`${id}-title`} className='text-xl font-semibold'>{title}</h2>
+          <Button onClick={onClose} variant='destructive' size='icon' className='h-8 w-8' aria-label="Close modal">
             <X className='h-5 w-5' />
           </Button>
         </div>
@@ -41,4 +42,13 @@ export const Modal = ({ isOpen, onClose, title, children, size = 'md', id = 'mod
       </form>
     </dialog>
   );
+};
+
+Modal.propTypes = {
+  isOpen: PropTypes.bool.isRequired,
+  onClose: PropTypes.func.isRequired,
+  title: PropTypes.string,
+  children: PropTypes.node,
+  size: PropTypes.oneOf(['sm', 'md', 'lg', 'xl', '2xl', '3xl', '4xl', '5xl', 'full']),
+  id: PropTypes.string,
 };
