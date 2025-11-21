@@ -33,7 +33,7 @@ const CreateImageModal = ({ openImageCreateModal, setOpenImageCreateModal }) => 
 
     // Get token from localStorage
     const token = localStorage.getItem('authToken') || '';
-    await invoke('create_image', { token, name: data.name, size: data.size })
+    await invoke('create_image', { request: { token, name: data.name, size: data.size } })
       .then((response) => {
 
         if (response.message) showNotification(response.message, 'success');

@@ -68,7 +68,7 @@ const Setup = () => {
   const handleCreatePool = (async (data) => {
 
     try {
-      await invoke('create_zfs_pool', { name: data.name, disk: data.disk });
+      await invoke('create_zfs_pool', { req: { name: data.name, disk: data.disk } });
       showNotification('success', 'ZFS Pool Created', `ZFS pool ${data.name} created successfully.`);
     } catch (e) {
       showNotification('error', 'Failed to create ZFS pool', e.message || 'An unknown error occurred');

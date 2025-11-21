@@ -92,11 +92,12 @@ describe('useZfs', () => {
 
         expect(success).toBe(true);
         expect(tauriCore.invoke).toHaveBeenCalledWith('create_zfs_dataset', {
-            token: 'mock-token',
-            zpool: 'tank',
-            name: 'test-dataset',
-            usageType: 'image',
-            size: '10G',
+            req: {
+                zpool: 'tank',
+                name: 'test-dataset',
+                usage_type: 'image',
+                size: '10G',
+            }
         });
     });
 

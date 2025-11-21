@@ -13,7 +13,7 @@ pub mod disk;
 // Re-export commonly used types
 pub use config::AppConfig;
 pub use client::{Client, AddClientRequest, ControlRequest, DeprovisionRequest, ClientOverview};
-pub use auth::{ User, Claims, LoginRequest, LoginResponse, UserResponse, AuthError };
-pub use service::{ ServiceControlRequest, PackageStatus, DHCPConfig, TFTPConfig, HTTPConfig };
-pub use image::{ Master, Snapshot, MasterData };
-pub use disk::{DatasetInfo, Disk, MemoryStats, RamUsage};
+pub use auth::{User, Claims, LoginRequest, LoginResponse, UserResponse, AuthError};
+pub use service::{ServiceControlRequest, PackageStatus, DHCPConfig, TFTPConfig, HTTPConfig, SambaShare};
+pub use image::{Master, Snapshot, MasterData, ZpoolInfo, ArcstatInfo, CreateImageRequest, CreateSnapshotRequest, ImageOperationResponse};
+pub use disk::{DatasetInfo, Disk, MemoryStats, RamUsage, CreateZpoolRequest, CreateDatasetRequest, DatasetOperationResponse};

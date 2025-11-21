@@ -25,14 +25,14 @@ export const useZfs = () => {
     }, [showNotification]);
 
     const createDataset = useCallback(async (data) => {
-        const token = localStorage.getItem('authToken') || '';
         try {
             await invoke('create_zfs_dataset', {
-                token,
-                zpool: data.zpool,
-                name: data.name,
-                usageType: data.usage_type,
-                size: data.size ?? ''
+                req: {
+                    zpool: data.zpool,
+                    name: data.name,
+                    usage_type: data.usage_type,
+                    size: data.size ?? ''
+                }
             });
             showNotification('success', 'Dataset Created', `Dataset ${data.name} created successfully.`);
             return true;

@@ -30,7 +30,7 @@ export const useMasterManager = () => {
     setIsCreateMasterModalOpen(false); // Close modal
     // Get token from localStorage
     const token = localStorage.getItem('authToken') || '';
-    await invoke('create_image', { token, name: newMasterName, size: newMasterSize })
+    await invoke('create_image', { request: { token, name: newMasterName, size: newMasterSize } })
       .then((response) => {
         if (response.message) showNotification(response.message, 'success');
       }).catch((error) => {
@@ -128,16 +128,16 @@ export const useMasterManager = () => {
     });
     if (ok) {
       const token = localStorage.getItem('authToken') || '';
-    console.log("=== JS: Starting invoke for", image);
-    try {
-      const response = await invoke('delete_image', { token, masterName: image });
-      console.log("=== JS: Invoke resolved with", response);
-      if (response.message) showNotification(response.message, 'success');
-      if (response.error) showNotification(response.error, 'error');
-    } catch (error) {
-      console.error("=== JS: Invoke rejected with", error);
-      showNotification(error?.error || 'Unknown error', 'error');
-    }
+      console.log("=== JS: Starting invoke for", image);
+      try {
+        const response = await invoke('delete_image', { token, masterName: image });
+        console.log("=== JS: Invoke resolved with", response);
+        if (response.message) showNotification(response.message, 'success');
+        if (response.error) showNotification(response.error, 'error');
+      } catch (error) {
+        console.error("=== JS: Invoke rejected with", error);
+        showNotification(error?.error || 'Unknown error', 'error');
+      }
     } else {
       showNotification("Image deletion cancelled", 'error',)
     }

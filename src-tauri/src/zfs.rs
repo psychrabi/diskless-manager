@@ -9,7 +9,7 @@ use std::process::Command;
 
 
 use crate::types::image::CreateImageRequest;
-use crate::types::{Master, MasterData, Snapshot};
+use crate::types::{Master, MasterData, Snapshot, CreateZpoolRequest};
 use crate::utils::{append_log, run_command, run_command_check, run_command_output_no_sudo};
 use crate::{
     client::get_clients,
@@ -564,16 +564,16 @@ pub fn zfs_pool_exists(pool_name: Option<String>) -> Result<bool, AppError> {
 }
 
 #[tauri::command]
-pub fn create_zfs_pool(name: String, disk: String) -> Result<(), AppError> {
-    let status = run_command(&["zpool", "create", &name, &format!("/dev/{}", disk)]);
+pub fn create_zfs_pool(req: CreateZpoolRequest) -> Result<(), AppError> {
+    let status = run_command(&["zpool", "create", &req.name, &format!("/dev/{}", req.disk)]);
     if status.is_err() {
         return Err(AppError::Command("Failed to create ZFS pool".to_string()));
     }
 
     let mut config = get_config();
     let mut settings = config.settings.as_object().cloned().unwrap_or_default();
-    settings.insert("zpool_name".to_string(), json!(name.clone()));
-    settings.insert("zfsPool".to_string(), json!(name));
+    settings.insert("zpool_name".to_string(), json!(req.name.clone()));
+    settings.insert("zfsPool".to_string(), json!(req.name));
     config.settings = json!(settings);
     write_config(&config).map_err(|e| {
         AppError::Config(format!("ZFS pool created, but failed to update config: {}", e))
@@ -674,19 +674,43 @@ pub async fn get_zfs_arcstat() -> Result<ArcstatInfo, AppError> {
 
 #[tauri::command]
 pub async fn get_default_image_overview() -> Result<serde_json::Value, AppError> {
-    let config = get_config();
+    let mut config = get_config();
     let master_dataset = config
         .settings
         .get("default_master")
         .and_then(|s| s.as_str())
-        .unwrap_or("");
+        .map(|s| s.to_string())
+        .unwrap_or_default();
 
     if master_dataset.is_empty() {
-        return Err(AppError::Config("Default master image not set in config".to_string()));
+        return Ok(json!({
+            "name": null,
+            "creation_date": null,
+            "clones": null,
+            "message": "No default master image set"
+        }));
     }
 
+    // Check if the dataset exists
+    if !zfs_exists(&master_dataset) {
+        // Clear the invalid default_master from config
+        if !config.settings.is_object() {
+            config.settings = json!({});
+        }
+        config.settings["default_master"] = json!(null);
+        let _ = write_config(&config);
+        
+        return Ok(json!({
+            "name": null,
+            "creation_date": null,
+            "clones": null,
+            "message": format!("Default master image '{}' no longer exists and has been cleared from config", master_dataset)
+        }));
+    }
+
+    // Dataset exists, get its information
     let output = run_command_output_no_sudo(&[
-        "zfs", "get", "creation,clones", "-o", "value", "-H", master_dataset])?;
+        "zfs", "get", "creation,clones", "-o", "value", "-H", &master_dataset])?;
 
     let lines: Vec<&str> = output.lines().collect();
     if lines.len() < 2 {
