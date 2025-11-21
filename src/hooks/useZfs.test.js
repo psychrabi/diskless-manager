@@ -61,6 +61,7 @@ describe('useZfs', () => {
 
         // Set some initial datasets
         tauriCore.invoke.mockResolvedValue(['dataset1']);
+
         await result.current.fetchDatasets('tank');
 
         await waitFor(() => {
@@ -70,7 +71,10 @@ describe('useZfs', () => {
         // Now fetch with null pool
         await result.current.fetchDatasets(null);
 
-        expect(result.current.datasets).toEqual([]);
+        await waitFor(() => {
+            expect(result.current.datasets).toEqual([]);
+        });
+
         expect(tauriCore.invoke).toHaveBeenCalledTimes(1); // Only called once for 'tank'
     });
 

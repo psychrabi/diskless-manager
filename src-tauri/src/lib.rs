@@ -8,11 +8,12 @@ mod logs;
 mod middleware;
 mod service;
 mod utils;
-mod validation;
+pub mod validation;
 mod zfs;
 mod license;
 mod disks;
 mod types;
+mod error;
 use dirs;
 
 use serde::Serialize;
@@ -21,7 +22,6 @@ use sysinfo::System;
 use tauri::Manager;
 
 use crate::utils::{ get_server_ip, append_log };
-use crate::app_config::AppConfig;
 
 // Legacy constants for backward compatibility - prefer using AppConfig
 const DHCP_CONFIG_PATH: &str = "/etc/dhcp/dhcpd.conf";
@@ -54,6 +54,21 @@ fn get_server_info() -> ServerInfo {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Initialize tracing with fixed log file
+    let log_path = utils::log_file_path();
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .expect("Failed to open log file");
+        
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file);
+    
+    tracing_subscriber::fmt()
+        .with_writer(non_blocking)
+        .with_max_level(tracing::Level::INFO)
+        .init();
+
     tauri::Builder
         ::default()
         .plugin(tauri_plugin_process::init())

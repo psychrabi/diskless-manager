@@ -5,6 +5,18 @@ use crate::{utils::{get_server_ip, append_log, run_command, run_command_output},
 pub async fn update_dhcp_config(client_id: &str, dhcp_entry: &str, is_new: bool) -> Result<(), String> {
     append_log("INFO", &format!("update_dhcp_config: client_id={}, is_new={}", client_id, is_new));
 
+    // Acquire lock to prevent race conditions
+    let lock_path = std::env::temp_dir().join("diskless-manager-dhcp.lock");
+    let lock_file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(&lock_path)
+        .map_err(|e| format!("Failed to open lock file: {}", e))?;
+
+    use fs2::FileExt;
+    lock_file.lock_exclusive().map_err(|e| format!("Failed to acquire lock: {}", e))?;
+
     // Read current config async
     let mut content = match run_command_output(["cat", DHCP_CONFIG_PATH]) {
         Ok(output) => output,
@@ -60,6 +72,8 @@ pub async fn update_dhcp_config(client_id: &str, dhcp_entry: &str, is_new: bool)
     
     append_log("INFO", &format!("DHCP updated for {}", client_id));
     let _ = async_fs::remove_file(&dhcp_backup_path).await;
+    
+    // Lock is automatically released when lock_file goes out of scope
     Ok(())
 }
 
@@ -88,4 +102,30 @@ pub fn create_dhcp_entry(name: &str, mac: &str, ip: &str, target_iqn: &str) -> S
     );
     append_log("DEBUG", &format!("DHCP entry for {}: {} bytes", name, entry.len()));
     entry
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_client_name() {
+        assert_eq!(format_client_name("client_1"), "PC001");
+        assert_eq!(format_client_name("client_10"), "PC010");
+        assert_eq!(format_client_name("client_100"), "PC100");
+        assert_eq!(format_client_name("my_pc"), "MY_PC");
+        assert_eq!(format_client_name("test"), "TEST");
+    }
+
+    #[test]
+    fn test_create_dhcp_entry() {
+        let entry = create_dhcp_entry("client_1", "00:11:22:33:44:55", "192.168.1.100", "iqn.test");
+        assert!(entry.contains("host PC001 {"));
+        assert!(entry.contains("hardware ethernet 00:11:22:33:44:55;"));
+        assert!(entry.contains("fixed-address 192.168.1.100;"));
+        assert!(entry.contains("option host-name \"PC001\";"));
+        // Note: server_ip might vary based on environment, so we just check structure
+        assert!(entry.contains("option root-path \"iscsi:"));
+        assert!(entry.contains("::::iqn.test\";"));
+    }
 }

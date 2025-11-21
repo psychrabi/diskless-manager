@@ -1,10 +1,14 @@
+use tracing::info;
+use tracing::warn;
+
 use crate::utils::{run_command, run_command_output, run_command_output_no_sudo};
+use crate::error::AppError;
 
 pub fn setup_iscsi_target(
     target_iqn: &str,
     block_store: &str,
     volume_path: &str,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     // Check and create iSCSI target if it doesn't exist
     if !target_exists(target_iqn)? {
         run_command(&["targetcli", "iscsi/", "create", target_iqn])?;
@@ -17,7 +21,7 @@ pub fn setup_iscsi_target(
             "cache_dynamic_acls=1",
             "demo_mode_write_protect=0",
             "authentication=0",
-        ])?;
+        ]).map_err(|e| AppError::Command(format!("Failed to set target attributes: {}", e)))?;
     }
 
     // Ensure block backstore (delete if exists, then create)
@@ -39,44 +43,44 @@ pub fn setup_iscsi_target(
             let dataset_path = if let Some(dataset) = volume_path.strip_prefix("/dev/zvol/") {
                 dataset.to_string()
             } else {
-                return Err(format!("Invalid volume path format: {}", volume_path));
+                return Err(AppError::Validation(format!("Invalid volume path format: {}", volume_path)));
             };
 
             // Check if ZFS dataset exists and is accessible
             if let Err(ve) = run_command_output_no_sudo(&["zfs", "list", &dataset_path]) {
-                return Err(format!(
+                return Err(AppError::NotFound(format!(
                     "ZFS volume '{}' not found or inaccessible: {}. \
                     Make sure the ZFS dataset exists and has correct permissions.", 
                     dataset_path, ve
-                ));
+                )));
             }
 
             // Check if the device file exists
             if !std::path::Path::new(volume_path).exists() {
-                return Err(format!(
+                return Err(AppError::NotFound(format!(
                     "ZFS volume exists but device file '{}' is not available. \
                     Try running 'zfs set volmode=dev {}' to create the device file.", 
                     volume_path, dataset_path
-                ));
+                )));
             }
 
             // Check if there's an existing block device with the same name
             if let Ok(output) = run_command_output(&["targetcli", "backstores/block", "ls"]) {
                 if output.contains(block_store) {
-                    return Err(format!(
+                    return Err(AppError::Validation(format!(
                         "Block device '{}' already exists in targetcli. \
                         Try using a different name or delete the existing one first.", 
                         block_store
-                    ));
+                    )));
                 }
             }
 
             // Check if any process is using the device
             if let Ok(output) = run_command_output(&["lsof", volume_path]) {
-                return Err(format!(
+                return Err(AppError::Validation(format!(
                     "Volume '{}' is in use by other processes:\n{}", 
                     volume_path, output
-                ));
+                )));
             }
 
             // Get current targetcli configuration for debugging
@@ -84,7 +88,7 @@ pub fn setup_iscsi_target(
                 .unwrap_or_else(|_| "Failed to get targetcli state".to_string());
 
             // If all checks pass but targetcli still fails, return detailed error info
-            return Err(format!(
+            return Err(AppError::Command(format!(
                 "Failed to create iSCSI block backstore:\n\
                 - Command failed: targetcli backstores/block create {} {}\n\
                 - Error: {}\n\
@@ -92,7 +96,7 @@ pub fn setup_iscsi_target(
                 Try manually running 'targetcli backstores/block create {} {}' \
                 for more detailed error output.",
                 block_store, volume_path, e, targetcli_state, block_store, volume_path
-            ));
+            )));
         }
     };
 
@@ -123,31 +127,31 @@ pub fn setup_iscsi_target(
     Ok(())
 }
 
-pub fn cleanup_iscsi_target(target_iqn: &str, block_store: &str) -> Result<(), String> {
-    println!(
+pub fn cleanup_iscsi_target(target_iqn: &str, block_store: &str) -> Result<(), AppError> {
+    info!(
         "Cleaning up iSCSI target {} and backstore {}",
         target_iqn, block_store
     );
 
     // Delete iSCSI target (handles LUNs/portals)
     if let Err(e) = run_command(&["targetcli", "iscsi/", "delete", target_iqn]) {
-        println!(
+        warn!(
             "Warning: Could not delete target {}: {}",
             target_iqn, e
         );
     } else {
-        println!("Deleted iSCSI target {}", target_iqn);
+        info!("Deleted iSCSI target {}", target_iqn);
     }
 
     // Delete backstore if it exists
     if !block_store.is_empty() && backstore_exists(block_store)? {
         if let Err(e) = run_command(&["targetcli", "backstores/block/", "delete", block_store]) {
-            println!(
+            warn!(
                 "Warning: Could not delete block backstore {}: {}",
                 block_store, e
             );
         } else {
-            println!("Deleted block backstore {}", block_store);
+            info!("Deleted block backstore {}", block_store);
         }
     }
 
@@ -158,19 +162,19 @@ pub fn cleanup_iscsi_target(target_iqn: &str, block_store: &str) -> Result<(), S
 }
 
 // Helper: Check if target exists
-fn target_exists(target_iqn: &str) -> Result<bool, String> {
+fn target_exists(target_iqn: &str) -> Result<bool, AppError> {
     let output = run_command_output(&["targetcli", "iscsi/", "ls"])?;
     Ok(output.lines().any(|line| line.contains(target_iqn)))
 }
 
 // Helper: Check if block backstore exists
-fn backstore_exists(block_store: &str) -> Result<bool, String> {
+fn backstore_exists(block_store: &str) -> Result<bool, AppError> {
     let output = run_command_output(&["targetcli", "backstores/block", "ls"])?;
     Ok(output.lines().any(|line| line.trim().contains(block_store)))
 }
 
 // Helper: Check if LUN exists for the backstore path
-fn lun_exists(target_iqn: &str, lun_path: &str) -> Result<bool, String> {
+fn lun_exists(target_iqn: &str, lun_path: &str) -> Result<bool, AppError> {
     let output = run_command_output(&[
         "targetcli",
         &format!("iscsi/{}/tpg1/luns", target_iqn),
@@ -180,7 +184,7 @@ fn lun_exists(target_iqn: &str, lun_path: &str) -> Result<bool, String> {
 }
 
 // Helper: Check if portal (0.0.0.0:3260) exists
-fn portal_exists(target_iqn: &str) -> Result<bool, String> {
+fn portal_exists(target_iqn: &str) -> Result<bool, AppError> {
     let output = run_command_output(&[
         "targetcli",
         &format!("iscsi/{}/tpg1/portals/", target_iqn),

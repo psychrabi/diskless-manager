@@ -35,6 +35,7 @@ pub struct MasterData {
 /// Image creation request
 #[derive(Debug, Deserialize)]
 pub struct CreateImageRequest {
+    pub token: String,
     pub name: String,
     pub size: String,
 }
@@ -42,6 +43,7 @@ pub struct CreateImageRequest {
 /// Snapshot creation request
 #[derive(Debug, Deserialize)]
 pub struct CreateSnapshotRequest {
+    pub token: String,
     pub master_name: String,
     pub snapshot_name: Option<String>,
 }

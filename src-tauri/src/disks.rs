@@ -9,7 +9,7 @@ use regex::Regex;
 #[tauri::command]
 pub fn list_zpools() -> Result<Vec<String>, String> {
     // returns names, one per line
-    let out = run_command_output_no_sudo(&["zpool", "list", "-H", "-o", "name"])?;
+    let out = run_command_output_no_sudo(&["zpool", "list", "-H", "-o", "name"]).map_err(|e| e.to_string())?;
     let pools = out
         .lines()
         .filter(|l| !l.is_empty())
@@ -21,7 +21,7 @@ pub fn list_zpools() -> Result<Vec<String>, String> {
 #[tauri::command]
 pub fn list_datasets(zpool: &str) -> Result<Vec<DatasetInfo>, String> {
     // list datasets under the zpool and fetch org.diskless:type if set
-    let out = run_command_output_no_sudo(&["zfs", "list", "-H", "-o", "name", "-r", zpool])?;
+    let out = run_command_output_no_sudo(&["zfs", "list", "-H", "-o", "name", "-r", zpool]).map_err(|e| e.to_string())?;
     let mut with_type: Vec<DatasetInfo> = Vec::new();
 
     for line in out.lines().filter(|l| !l.is_empty()) {
@@ -110,7 +110,7 @@ pub fn create_zfs_dataset(
         let games_parent = format!("{}/games", zpool);
         if run_command_check(&["zfs", "list", "-H", &games_parent]) != 0 {
             // create the parent dataset if missing
-            run_command(&["zfs", "create", &games_parent])?;
+            run_command(&["zfs", "create", &games_parent]).map_err(|e| e.to_string())?;
         }
 
         // Use given name for the zvol under <zpool>/games/<name>
@@ -123,7 +123,7 @@ pub fn create_zfs_dataset(
         // Create the zvol
         run_command(
             &["zfs", "create", "-s", "-V", size_trim, "-o", "volblocksize=4K", &zvol_name]
-        )?;
+        ).map_err(|e| e.to_string())?;
 
         // tag it with our custom property
         let _ = run_command(
@@ -134,9 +134,9 @@ pub fn create_zfs_dataset(
     }
 
     // create dataset
-    run_command(&["zfs", "create", &dataset])?;
+    run_command(&["zfs", "create", &dataset]).map_err(|e| e.to_string())?;
     // tag it with our custom property
-    run_command(&["zfs", "set", &format!("org.diskless:type={}", usage_type), &dataset])?;
+    run_command(&["zfs", "set", &format!("org.diskless:type={}", usage_type), &dataset]).map_err(|e| e.to_string())?;
 
     // sensible default for image datasets
     if usage_type == "image" {
@@ -162,7 +162,7 @@ pub fn delete_zfs_dataset(dataset: &str, recursive: bool) -> Result<String, Stri
         .iter()
         .map(|s| *s)
         .collect();
-    run_command(&args_ref)?;
+    run_command(&args_ref).map_err(|e| e.to_string())?;
     Ok(format!("Destroyed dataset {}", dataset))
 }
 
@@ -173,6 +173,6 @@ pub fn rename_zfs_dataset(old: &str, new: &str) -> Result<String, String> {
         return Err("old and new dataset names are required".into());
     }
     // zfs rename <old> <new>
-    run_command(&["zfs", "rename", old, new])?;
+    run_command(&["zfs", "rename", old, new]).map_err(|e| e.to_string())?;
     Ok(format!("Renamed {} -> {}", old, new))
 }

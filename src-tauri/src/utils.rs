@@ -1,25 +1,8 @@
-use dirs;
-use serde::Serialize;
 use std::fs::{self, OpenOptions};
-use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
-
-#[derive(Serialize)]
-pub struct MemoryStats {
-    total: String,
-    used: String,
-    free: String,
-    shared: String,
-    buff_cache: String,
-    available: String,
-}
-
-#[derive(Serialize)]
-pub struct RamUsage {
-    memory: MemoryStats,
-}
-
+use crate::error::AppError;
+use crate::types::disk::{Disk, MemoryStats, RamUsage};
 
 #[derive(thiserror::Error, Debug)]
 pub enum CommandError {
@@ -60,7 +43,7 @@ where
     Ok(output)
 }
 
-pub fn run_command<II>(args: II) -> Result<(), String>
+pub fn run_command<II>(args: II) -> Result<(), AppError>
 where
     II: IntoIterator,
     II::Item: AsRef<std::ffi::OsStr>,
@@ -72,7 +55,7 @@ where
         .collect::<Vec<_>>()
         .join(" ");
     println!("Executing command: sudo {}", cmd_str);
-    exec_sudo_cmd(args_vec.iter()).map_err(|e| e.to_string())?;
+    exec_sudo_cmd(args_vec.iter()).map_err(|e| AppError::Command(e.to_string()))?;
     Ok(())
 }
 
@@ -94,7 +77,7 @@ where
     }
 }
 
-pub fn run_command_output<II>(args: II) -> Result<String, String>
+pub fn run_command_output<II>(args: II) -> Result<String, AppError>
 where
     II: IntoIterator,
     II::Item: AsRef<std::ffi::OsStr>,
@@ -106,11 +89,11 @@ where
         .collect::<Vec<_>>()
         .join(" ");
     println!("Executing command: sudo {}", cmd_str);
-    let output = exec_sudo_cmd(args_vec.iter()).map_err(|e| e.to_string())?;
+    let output = exec_sudo_cmd(args_vec.iter()).map_err(|e| AppError::Command(e.to_string()))?;
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-pub fn run_command_output_no_sudo<II>(args: II) -> Result<String, String>
+pub fn run_command_output_no_sudo<II>(args: II) -> Result<String, AppError>
 where
     II: IntoIterator,
     II::Item: AsRef<std::ffi::OsStr>,
@@ -124,15 +107,15 @@ where
     println!("Executing command: {}", cmd_str);
     
     let mut cmd_iter = args_vec.iter();
-    let program = cmd_iter.next().ok_or("No command provided")?;
+    let program = cmd_iter.next().ok_or(AppError::Command("No command provided".to_string()))?;
     
     let output = std::process::Command::new(program)
         .args(cmd_iter)
         .output()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| AppError::Command(e.to_string()))?;
     
     if !output.status.success() {
-        return Err(format!("Command failed: {}", String::from_utf8_lossy(&output.stderr)));
+        return Err(AppError::Command(format!("Command failed: {}", String::from_utf8_lossy(&output.stderr))));
     }
     
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
@@ -168,18 +151,14 @@ pub fn get_server_ip() -> String {
     "192.168.1.200".to_string()
 }
 
-#[derive(Serialize)]
-pub struct Disk {
-    name: String,
-    size: String,
-}
+
 
 #[tauri::command]
-pub fn list_disks() -> Result<Vec<Disk>, String> {
+pub fn list_disks() -> Result<Vec<Disk>, AppError> {
     let output = Command::new("lsblk")
         .args(["-dn", "-o", "NAME,SIZE,TYPE"])
         .output()
-        .map_err(|e| format!("'lsblk' not available: {}", e))?;
+        .map_err(|e| AppError::Command(format!("'lsblk' not available: {}", e)))?;
     if !output.status.success() {
         return Ok(vec![]);
     }
@@ -200,24 +179,24 @@ pub fn list_disks() -> Result<Vec<Disk>, String> {
 
 /// Get current RAM usage statistics
 #[tauri::command]
-pub fn get_ram_usage() -> Result<RamUsage, String> {
+pub fn get_ram_usage() -> Result<RamUsage, AppError> {
     let output = Command::new("free")
         .arg("-h")
         .output()
-        .map_err(|e| format!("Failed to run free command: {}", e))?;
+        .map_err(|e| AppError::Command(format!("Failed to run free command: {}", e)))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let lines: Vec<&str> = stdout.lines().collect();
 
     if lines.len() < 2 {
-        return Err("Unexpected output from free command".to_string());
+        return Err(AppError::Command("Unexpected output from free command".to_string()));
     }
 
     // Parse Mem line (index 1, after header)
     let mem_line = lines[1];
     let parts: Vec<&str> = mem_line.split_whitespace().collect();
     if parts.len() < 7 {
-        return Err("Invalid memory information format".to_string());
+        return Err(AppError::Command("Invalid memory information format".to_string()));
     }
 
     let memory = MemoryStats {
@@ -234,17 +213,17 @@ pub fn get_ram_usage() -> Result<RamUsage, String> {
 
 /// Clear RAM cache (sync and drop caches)
 #[tauri::command]
-pub fn clear_ram_cache() -> Result<serde_json::Value, String> {
+pub fn clear_ram_cache() -> Result<serde_json::Value, AppError> {
     run_command(vec!["sh", "-c", "sync && echo 3 > /proc/sys/vm/drop_caches"])?;
 
     Ok(serde_json::json!({ "message": "RAM cache cleared successfully" }))
 }
 
 #[tauri::command]
-pub fn get_service_logs(unit: String, lines: Option<u32>) -> Result<String, String> {
+pub fn get_service_logs(unit: String, lines: Option<u32>) -> Result<String, AppError> {
     let num = lines.unwrap_or(200).to_string();
     let args_vec: Vec<_> = vec!["journalctl", "-u", &unit, "-n", &num, "--no-pager"];
-    let output = run_command_output_no_sudo(args_vec.iter()).map_err(|e| e.to_string())?;
+    let output = run_command_output_no_sudo(args_vec.iter())?;
     Ok(output)
 }
 
@@ -257,13 +236,17 @@ pub fn log_file_path() -> PathBuf {
     base
 }
 
+use tracing::{info, warn, error, debug};
+
 /// Append a single line with level and timestamp to the log file.
 /// This is best-effort and should not panic.
+/// NOW DEPRECATED: Redirects to tracing macros.
 pub fn append_log(level: &str, msg: &str) {
-    let path = log_file_path();
-    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
-        let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-        let _ = writeln!(f, "[{}] {}: {}", ts, level, msg);
+    match level.to_uppercase().as_str() {
+        "ERROR" => error!("{}", msg),
+        "WARN" | "WARNING" => warn!("{}", msg),
+        "DEBUG" => debug!("{}", msg),
+        _ => info!("{}", msg),
     }
 }
 
@@ -273,7 +256,7 @@ pub fn read_logs() -> String {
 }
 
 /// Clear the log file (best-effort)
-pub fn clear_logs() -> Result<(), String> {
+pub fn clear_logs() -> Result<(), AppError> {
     let path = log_file_path();
     OpenOptions::new()
         .write(true)
@@ -281,5 +264,5 @@ pub fn clear_logs() -> Result<(), String> {
         .create(true)
         .open(path)
         .map(drop)
-        .map_err(|e| format!("Failed to clear log file: {}", e))
+        .map_err(|e| AppError::Io(e))
 }

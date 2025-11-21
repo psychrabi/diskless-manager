@@ -18,6 +18,6 @@ pub fn clear_logs(token: String) -> Result<serde_json::Value, String> {
     middleware::validate_auth_token_for_command(&token)
         .map_err(|e| format!("Authentication failed: {}", e.message))?;
     utils::append_log("INFO", "Log cleared by user");
-    utils::clear_logs().map_err(|e| e)?;
+    utils::clear_logs().map_err(|e| e.to_string())?;
     Ok(serde_json::json!({ "message": "Logs cleared" }))
 }

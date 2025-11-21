@@ -6,11 +6,17 @@ import tailwindcss from '@tailwindcss/vite'
 export default defineConfig({
   plugins: [
     react(),
-    tailwindcss(),    
+    tailwindcss(),
   ],
   resolve: {
     alias: {
       '@': '/src',
     },
-  }, 
+  },
+  test: {
+    globals: true,
+    environment: 'jsdom',
+    setupFiles: './src/test/setup.js',
+    css: true,
+  },
 })
