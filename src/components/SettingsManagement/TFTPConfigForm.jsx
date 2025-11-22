@@ -5,9 +5,12 @@ import { useNotification } from "@/contexts/notification";
 import { useSettings } from "@/hooks/useSettings";
 import { Button, Card, Input } from "../ui";
 
+import { useAppStore } from '@/store/useAppStore';
+
 export default function TFTPConfigForm() {
   const { showNotification } = useNotification();
-  const { readConfig, updateTftp } = useSettings();
+  const { updateTftp } = useSettings();
+  const config = useAppStore(state => state.appConfig);
 
   const {
     register,
@@ -21,16 +24,12 @@ export default function TFTPConfigForm() {
     }
   });
 
-  // Load saved config on component mount
+  // Load saved config when config from store changes
   useEffect(() => {
-    const loadConfig = async () => {
-      const config = await readConfig();
-      if (config?.settings?.tftp) {
-        reset(config.settings.tftp);
-      }
-    };
-    loadConfig();
-  }, [reset, readConfig]);
+    if (config?.settings?.tftp) {
+      reset(config.settings.tftp);
+    }
+  }, [config, reset]);
 
   const onSubmit = async (data) => {
     showNotification(`Updating TFTP Configurations`, 'info');

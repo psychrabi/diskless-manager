@@ -6,8 +6,8 @@ import { Button, Modal } from '../ui'
 function ServiceConfigModal() {
   const title = useAppStore(state => state.title)
   const loading = useAppStore(state => state.loading)
-  const config = useAppStore(state => state.config)
-  const setConfig = useAppStore(state => state.setConfig)
+  const config = useAppStore(state => state.serviceConfig)
+  const setConfig = useAppStore(state => state.setServiceConfig)
   const open = useAppStore(state => state.open)
   const setOpen = useAppStore(state => state.setOpen)
   const [editable, setEditable] = useState(false)

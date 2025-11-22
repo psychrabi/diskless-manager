@@ -13,7 +13,8 @@ export const useAppStore = create()(
       masters: [],
       services: [],
       services_status: {},
-      config: '',
+      appConfig: null, // Renamed from config to avoid conflict with service config string
+      serviceConfig: '', // Renamed from config
       error: null,
       loading: true,
       selectedSnapshot: '',
@@ -22,7 +23,8 @@ export const useAppStore = create()(
       setClients: (clients) => set({ clients }),
       setMasters: (masters) => set({ masters }),
       setServices: (services) => set({ services }),
-      setConfig: (config) => set({ config }),
+      setServiceConfig: (serviceConfig) => set({ serviceConfig }), // Renamed from setConfig
+      setAppConfig: (appConfig) => set({ appConfig }), // Added for global config
       setError: (error) => set({ error }),
       setLoading: (loading) => set({ loading }),
       setSelectedSnapshot: (selectedSnapshot) => set({ selectedSnapshot }),
@@ -183,7 +185,7 @@ export const useAppStore = create()(
         set({ checkingConfig: true, loading: true });
         try {
           const cfg = await invoke('read_config');
-          set({ config: cfg });
+          set({ appConfig: cfg });
         } catch (err) {
           set({ error: `Failed to load config: ${err.message || 'Check config file in the ~/.config/com.diskless-server.'}` });
         } finally {

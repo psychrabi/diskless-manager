@@ -41,9 +41,14 @@ const dhcpInitial = {
   boot_file_uefi64: "ipxe.efi",
 }
 
+import { useAppStore } from '@/store/useAppStore';
+
+// ...
+
 export default function DHCPConfigForm() {
   const { showNotification } = useNotification();
-  const { readConfig, updateDhcp } = useSettings();
+  const { updateDhcp } = useSettings();
+  const config = useAppStore(state => state.appConfig);
 
   const {
     register,
@@ -55,18 +60,14 @@ export default function DHCPConfigForm() {
     defaultValues: dhcpInitial
   });
 
-  // Load saved config on component mount
+  // Load saved config when config from store changes
   useEffect(() => {
-    const loadConfig = async () => {
-      const config = await readConfig();
-      if (config?.settings?.dhcp) {
-        reset(config.settings.dhcp);
-      } else {
-        reset(dhcpInitial);
-      }
-    };
-    loadConfig();
-  }, [reset, readConfig]);
+    if (config?.settings?.dhcp) {
+      reset(config.settings.dhcp);
+    } else {
+      reset(dhcpInitial);
+    }
+  }, [config, reset]);
 
   const onSubmit = async (data) => {
     showNotification(`Updating DHCP Configurations`, 'info');

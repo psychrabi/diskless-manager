@@ -5,9 +5,12 @@ import { useNotification } from "@/contexts/notification";
 import { useSettings } from "@/hooks/useSettings";
 import { Button, Card, Input } from "../ui";
 
+import { useAppStore } from '@/store/useAppStore';
+
 export default function HTTPConfigForm() {
   const { showNotification } = useNotification();
-  const { readConfig, updateHttp } = useSettings();
+  const { updateHttp } = useSettings();
+  const config = useAppStore(state => state.appConfig);
 
   const {
     register,
@@ -21,16 +24,12 @@ export default function HTTPConfigForm() {
     }
   });
 
-  // Load saved config on component mount
+  // Load saved config when config from store changes
   useEffect(() => {
-    const loadConfig = async () => {
-      const config = await readConfig();
-      if (config?.settings?.http) {
-        reset(config.settings.http);
-      }
-    };
-    loadConfig();
-  }, [reset, readConfig]);
+    if (config?.settings?.http) {
+      reset(config.settings.http);
+    }
+  }, [config, reset]);
 
   const onSubmit = async (data) => {
     showNotification(`Updating HTTP Configurations`, 'info');

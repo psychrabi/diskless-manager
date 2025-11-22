@@ -6,7 +6,7 @@ import { useAppStore } from '../store/useAppStore';
 export const useServiceManager = () => {
   const { showNotification } = useNotification();
   const setOpen = useAppStore(state => state.setOpen)
-  const setConfig = useAppStore(state => state.setConfig)
+  const setConfig = useAppStore(state => state.setServiceConfig)
   const setTitle = useAppStore(state => state.setTitle)
   const setLoading = useAppStore(state => state.setLoading)
   const setSaving = useAppStore(state => state.setSaving)
