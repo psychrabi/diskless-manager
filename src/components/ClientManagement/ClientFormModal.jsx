@@ -13,6 +13,7 @@ const clientSchema = z.object({
   ip: z.string().regex(/^([\d]{1,3}\.){3}\d{1,3}$/, 'Invalid IP address format. Use X.X.X.X'),
   master: z.string().optional(),
   snapshot: z.string().optional().nullable(),
+  keep_writeback: z.boolean().optional(),
 });
 
 
@@ -25,7 +26,8 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
     ip: client?.ip || '',
     master: client?.master || '',
     snapshot: client?.snapshot || null,
-    pxeMode: client?.pxeMode || 'uefi',
+    pxe_mode: client?.pxe_mode || 'uefi',
+    keep_writeback: client?.keep_writeback !== false,  // Default to true
   };
 
   const {
@@ -33,11 +35,27 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
     handleSubmit,
     formState: { errors },
     setValue,
-    control
+    control,
+    reset
   } = useForm({
     resolver: zodResolver(clientSchema),
     defaultValues
   });
+
+  // Reset form when client changes
+  useEffect(() => {
+    if (isOpen && client) {
+      reset({
+        name: client.name || '',
+        mac: client.mac || '',
+        ip: client.ip || '',
+        master: client.master || '',
+        snapshot: client.snapshot || null,
+        pxe_mode: client.pxe_mode || 'uefi',
+        keep_writeback: client.keep_writeback !== false,
+      });
+    }
+  }, [client, isOpen, reset]);
 
   const onSubmit = async (data) => {
     const token = localStorage.getItem('authToken') || '';
@@ -56,6 +74,8 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
           ip: data.ip,
           master: data.master,
           snapshot: data.snapshot || null,
+          pxe_mode: data.pxe_mode,
+          keep_writeback: data.keep_writeback,
         }
       });
       showNotification('success', 'Client Updated', `Client ${data.name} updated successfully.`);
@@ -75,32 +95,32 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
   }, [client?.id, client?.master, selectedMaster, setValue]);
 
   return (
-    <Modal isOpen={isOpen} onClose={() => setIsOpen(false)} title="Create Client" size="xl">
+    <Modal isOpen={isOpen} onClose={() => setIsOpen(false)} title={client?.id ? "Edit Client" : "Create Client"} size="xl">
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         <Input
           label="Client Name"
-          {...register('name')}
+          register={register('name')}
           type='text'
           placeholder="enter client name"
           error={errors.name?.message}
         />
         <Input
           label="MAC Address"
-          {...register('mac')}
+          register={register('mac')}
           type='text'
           placeholder="XX:XX:XX:XX:XX:XX"
           error={errors.mac?.message}
         />
         <Input
           label="IP Address"
-          {...register('ip')}
+          register={register('ip')}
           type='text'
           placeholder="X.X.X.X"
           error={errors.ip?.message}
         />
         <Select
           label="Select Image"
-          {...register('master')}
+          register={register('master')}
           onChange={(e) => setValue('master', e.target.value)}
           error={errors.master?.message}
         >
@@ -113,7 +133,7 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
         </Select>
         <Select
           label="Select Snapshot"
-          {...register('snapshot')}
+          register={register('snapshot')}
           disabled={!selectedMaster}
           onChange={(e) => setValue('snapshot', e.target.value)}
           error={errors.snapshot?.message}
@@ -125,8 +145,27 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
             </option>
           ))}
         </Select>
+
+        {/* Keep Writeback Checkbox */}
+        <div className="form-control">
+          <label className="label cursor-pointer justify-start gap-3">
+            <input
+              type="checkbox"
+              className="checkbox checkbox-primary"
+              register={register('keep_writeback')}
+              defaultChecked={client?.keep_writeback !== false}
+            />
+            <div className="flex flex-col">
+              <span className="label-text font-medium">Keep Changes (Persistent Mode)</span>
+              <span className="label-text-alt text-base-content/60">
+                If unchecked, client will reset to clean state on every boot (non-persistent mode)
+              </span>
+            </div>
+          </label>
+        </div>
+
         <div className="mt-6 flex justify-end space-x-3">
-          <Button type="submit" variant="primary" icon={Save}>Create Master</Button>
+          <Button type="submit" variant="primary" icon={Save}>{client?.id ? "Update Client" : "Create Client"}</Button>
           <Button type="button" variant="destructive" onClick={() => setIsOpen(false)}>Cancel</Button>
         </div>
       </form>

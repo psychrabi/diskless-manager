@@ -1,4 +1,4 @@
-import { Layers, Monitor, Power, PowerOff, Zap } from 'lucide-react';
+import { Layers, Monitor, Power, PowerOff, Zap, RefreshCw } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 
 import React from 'react';
@@ -23,15 +23,27 @@ const ClientStatusBadge = React.memo(({ status }) => {
 });
 
 const ClientModeBadge = React.memo(({ client }) => {
-  return client.super ? (
-    <span className="badge badge-warning gap-1" title="Using the image directly">
-      <Zap className="h-3 w-3" /> Super Client
-    </span>
-  ) : (
+  if (client.mode === 'super') {
+    return (
+      <span className="badge badge-warning gap-1" title="Using the image directly">
+        <Zap className="h-3 w-3" /> Super Client
+      </span>
+    );
+  }
+
+  if (client.keep_writeback === false) {
+    return (
+      <span className="badge badge-secondary gap-1" title="Changes are lost on reset (Non-Persistent)">
+        <RefreshCw className="h-3 w-3" /> Non-Persistent
+      </span>
+    );
+  }
+
+  return (
     <span className="badge badge-info gap-1" title="Client changes will be kept in the clone">
-      <Layers className="h-3 w-3" />Writeback
+      <Layers className="h-3 w-3" /> Writeback
     </span>
-  )
+  );
 });
 
 const ClientRow = React.memo(({ client, handleClientContextMenu }) => (

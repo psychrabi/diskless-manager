@@ -20,13 +20,26 @@ pub fn list_zpools() -> Result<Vec<String>, String> {
 
 #[tauri::command]
 pub fn list_datasets(zpool: &str) -> Result<Vec<DatasetInfo>, String> {
-    // list datasets under the zpool and fetch org.diskless:type if set
-    let out = run_command_output_no_sudo(&["zfs", "list", "-H", "-o", "name", "-r", zpool]).map_err(|e| e.to_string())?;
+    // Get all datasets with their properties in one command
+    let out = run_command_output_no_sudo(&[
+        "zfs", "list", "-H", "-o", "name,used,avail,refer,mountpoint", "-r", zpool
+    ]).map_err(|e| e.to_string())?;
+    
     let mut with_type: Vec<DatasetInfo> = Vec::new();
 
     for line in out.lines().filter(|l| !l.is_empty()) {
-        let name = line.to_string();
-        // try to read the custom property; if missing/failed, treat as not set
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.len() < 5 {
+            continue;
+        }
+        
+        let name = parts[0].to_string();
+        let used = parts[1].to_string();
+        let available = parts[2].to_string();
+        let referenced = parts[3].to_string();
+        let mountpoint = parts[4].to_string();
+        
+        // Get the custom property org.diskless:type
         let disk_type = match
             run_command_output(&["zfs", "get", "-H", "-o", "value", "org.diskless:type", &name])
         {
@@ -43,7 +56,14 @@ pub fn list_datasets(zpool: &str) -> Result<Vec<DatasetInfo>, String> {
         };
 
         if let Some(dt) = disk_type {
-            with_type.push(DatasetInfo { name, disk_type: Some(dt) });
+            with_type.push(DatasetInfo { 
+                name, 
+                disk_type: Some(dt),
+                used,
+                available,
+                referenced,
+                mountpoint,
+            });
         }
     }
 

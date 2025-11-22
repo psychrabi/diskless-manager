@@ -6,6 +6,7 @@ import z from 'zod';
 import { Save } from 'lucide-react';
 import { useNotification } from '@/contexts/notification';
 import { invoke } from '@tauri-apps/api/core';
+import { useAppStore } from '@/store/useAppStore';
 
 const imageSchema = z.object({
   name: z.string().min(1, 'Image name is required'),
@@ -14,6 +15,8 @@ const imageSchema = z.object({
 
 const CreateImageModal = ({ openImageCreateModal, setOpenImageCreateModal }) => {
   const { showNotification } = useNotification();
+  const fetchImages = useAppStore(state => state.fetchImages);
+
   const {
     register,
     handleSubmit,
@@ -33,20 +36,20 @@ const CreateImageModal = ({ openImageCreateModal, setOpenImageCreateModal }) => 
 
     // Get token from localStorage
     const token = localStorage.getItem('authToken') || '';
-    await invoke('create_image', { request: { token, name: data.name, size: data.size } })
-      .then((response) => {
-
-        if (response.message) showNotification(response.message, 'success');
-      }).catch((error) => {
-        showNotification('error', 'Failed to create image', error.message || 'An unknown error occurred');
-      })
+    try {
+      const response = await invoke('create_image', { request: { token, name: data.name, size: data.size } });
+      if (response.message) showNotification(response.message, 'success');
+      fetchImages(); // Refresh images
+    } catch (error) {
+      showNotification('error', 'Failed to create image', error.message || 'An unknown error occurred');
+    }
   };
 
   return (
-    <Modal isOpen={openImageCreateModal} onClose={() => setOpenImageCreateModal(false)} title="Create Master Image" size="xl">
+    <Modal isOpen={openImageCreateModal} onClose={() => setOpenImageCreateModal(false)} title="Create Image" size="xl">
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         <fieldset className={`fieldset`}>
-          <legend htmlFor='name' className='fieldset-legend'>Master Name</legend>
+          <legend htmlFor='name' className='fieldset-legend'>Image Name</legend>
           <input {...register('name')} type='text' id='name' placeholder="e.g., win11-enterprise (will create pool/name-master)"
             className='input w-full' />
           {errors.name && <div className="text-red-500 text-xs">{errors.name.message}</div>}
@@ -59,7 +62,7 @@ const CreateImageModal = ({ openImageCreateModal, setOpenImageCreateModal }) => 
           {errors.size && <div className="text-red-500 text-xs">{errors.size.message}</div>}
         </fieldset>
         <div className="mt-6 flex justify-end space-x-3">
-          <Button type="submit" variant="primary" icon={Save}>Create Master</Button>
+          <Button type="submit" variant="primary" icon={Save}>Create Image</Button>
           <Button type="button" variant="destructive" onClick={() => setOpenImageCreateModal(false)}>Cancel</Button>
         </div>
       </form>

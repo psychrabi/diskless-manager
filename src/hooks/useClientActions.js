@@ -80,6 +80,28 @@ export const useClientActions = (fetchData, closeContextMenu, setClient, setIsMo
 
         reset: (client) => handleAction(client, 'reset', 'Reset client writeback', `Are you sure you want to reset client "${client.name}"? This will destroy their ZFS clone and remove configurations.`, 'Reset Client', 'reset_client', { clientId: client.id }, null, 'Client reset cancelled.'),
 
+        resetToClean: async (client) => {
+            if (!client) return;
+
+            // Check if client is in non-persistent mode
+            if (client.keep_writeback !== false) {
+                showNotification('Client is in persistent mode. Only non-persistent clients can be reset to clean state.', 'error');
+                return;
+            }
+
+            handleAction(
+                client,
+                'resetToClean',
+                'Reset to Clean State',
+                `This will delete the writeback for "${client.name}" and recreate it from the snapshot. All changes will be lost. Continue?`,
+                'Reset to Clean',
+                'reset_client_to_clean',
+                { clientId: client.id },
+                null,
+                'Reset to clean cancelled.'
+            );
+        },
+
         delete: (client) => handleAction(client, 'delete', 'Delete Client', `Are you sure you want to delete client "${client.name}"? This will destroy their ZFS clone and remove configurations.`, 'Delete Client', 'delete_client', { clientId: client.id }, null, 'Client deletion cancelled.'),
 
         enableSuper: (client) => handleAction(client, 'enableSuper', 'Enable Super Client', `Client "${client.name}" will boot directly from master image. This skips clone/writeback. Continue?`, 'Enable Super', 'control_client', { clientId: client.id, req: { action: 'super', make_super: true } }, null, 'Enable Super cancelled.'),

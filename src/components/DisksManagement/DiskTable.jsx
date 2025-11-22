@@ -45,9 +45,10 @@ const DiskTable = ({ datasets, onRefresh }) => {
 				<TableHeader>
 					<TableRow>
 						<TableHead>Name</TableHead>
+						<TableHead>Type</TableHead>
 						<TableHead>Used</TableHead>
 						<TableHead>Available</TableHead>
-						<TableHead>Referred</TableHead>
+						<TableHead>Referenced</TableHead>
 						<TableHead>Mount Point</TableHead>
 						<TableHead>Actions</TableHead>
 					</TableRow>
@@ -56,10 +57,15 @@ const DiskTable = ({ datasets, onRefresh }) => {
 					{datasets.map((dataset) => (
 						<TableRow key={dataset.name}>
 							<TableCell>{dataset.name}</TableCell>
+							<TableCell>
+								<span className="badge badge-primary badge-sm">
+									{dataset.disk_type || '-'}
+								</span>
+							</TableCell>
 							<TableCell>{dataset.used}</TableCell>
-							<TableCell>{dataset.avail}</TableCell>
-							<TableCell>{dataset.refer}</TableCell>
-							<TableCell>{dataset.mountpoint}</TableCell>
+							<TableCell>{dataset.available}</TableCell>
+							<TableCell>{dataset.referenced}</TableCell>
+							<TableCell className="text-sm text-base-content/70">{dataset.mountpoint}</TableCell>
 							<TableCell>
 								<div className='flex gap-2'>
 									<Button variant='ghost' size='sm' onClick={() => handleRenameDisk(dataset)}>

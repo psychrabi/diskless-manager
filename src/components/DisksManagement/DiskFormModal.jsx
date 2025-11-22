@@ -17,6 +17,8 @@ const DiskFormModal = ({ zpools, isOpen, setIsOpen, refresh }) => {
   const { showNotification } = useNotification();
   const { createDataset } = useZfs();
 
+  const defaultValues = { zpool: '', name: '', usage_type: 'image', size: '' };
+
   const {
     register,
     handleSubmit,
@@ -37,8 +39,6 @@ const DiskFormModal = ({ zpools, isOpen, setIsOpen, refresh }) => {
     }
   };
 
-  const defaultValues = { zpool: '', name: '', usage_type: 'image', size: '' };
-
   const usageType = useWatch({
     control,
     name: 'usage_type'
@@ -52,7 +52,7 @@ const DiskFormModal = ({ zpools, isOpen, setIsOpen, refresh }) => {
 
         <Select
           label="Select zpool"
-          {...register('zpool')}
+          register={register("zpool")}
           onChange={(e) => setValue('zpool', e.target.value)}
           error={errors.zpool?.message}
         >
@@ -62,7 +62,7 @@ const DiskFormModal = ({ zpools, isOpen, setIsOpen, refresh }) => {
 
         <Select
           label="Disk type"
-          {...register('usage_type')}
+          register={register("usage_type")}
           onChange={(e) => setValue('usage_type', e.target.value)}
           error={errors.usage_type?.message}
         >
@@ -74,7 +74,7 @@ const DiskFormModal = ({ zpools, isOpen, setIsOpen, refresh }) => {
 
         <Input
           label="Disk Name"
-          {...register('name')}
+          register={register("name")}
           type='text'
           placeholder="Enter disk name"
           error={errors.name?.message}
@@ -83,7 +83,7 @@ const DiskFormModal = ({ zpools, isOpen, setIsOpen, refresh }) => {
         {usageType === 'game' && (
           <Input
             label="Disk size"
-            {...register('size')}
+            register={register("size")}
             type='text'
             placeholder="e.g. 50G"
             error={errors.size?.message}

@@ -11,7 +11,7 @@ export const useServiceManager = () => {
   const setLoading = useAppStore(state => state.setLoading)
   const setSaving = useAppStore(state => state.setSaving)
   const setServiceKey = useAppStore(state => state.setServiceKey)
-  const fetchData = useAppStore(state => state.fetchData)
+  const fetchServices = useAppStore(state => state.fetchServices)
 
   const handleServiceAction = useCallback(async (serviceKey, action) => {
     // Get token from localStorage
@@ -22,8 +22,9 @@ export const useServiceManager = () => {
       req: { action: action }
     }).then((response) => {
       if (response.message) showNotification(response.message, 'success');
+      fetchServices(); // Refresh services status
     }).catch((error) => showNotification(error, 'error',));
-  }, [showNotification]);
+  }, [showNotification, fetchServices]);
 
   const handleServiceConfigView = useCallback(async (serviceKey, serviceName) => {
     setTitle(`Configuration: ${serviceName}`);
@@ -55,7 +56,7 @@ export const useServiceManager = () => {
       const token = localStorage.getItem('authToken') || '';
       await invoke('save_service_config', { token, serviceKey: serviceKey, content: content });
       showNotification('Configuration saved successfully', 'success');
-      fetchData();
+      fetchServices();
     } catch (err) {
       showNotification(`Failed to save config: ${err.message || err}`, 'error');
     } finally {

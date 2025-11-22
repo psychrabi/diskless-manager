@@ -35,79 +35,87 @@ export const useAppStore = create()(
       serviceKey: '',
       setServiceKey: (serviceKey) => set({ serviceKey }),
       serverInfo: null, // Added
+      licenseInfo: null, // Added
       _pollIntervalId: null, // Added
+
+      fetchClients: async () => {
+        try {
+          const token = localStorage.getItem('authToken') || '';
+          const clientsRes = await invoke('get_clients', { token });
+          const clientsData = clientsRes ? Object.values(clientsRes) : [];
+          set({ clients: clientsData });
+        } catch (err) {
+          console.error('Failed to fetch clients:', err);
+        }
+      },
+
+      fetchImages: async () => {
+        try {
+          const token = localStorage.getItem('authToken') || '';
+          const mastersRes = await invoke('get_images', { token });
+          set({ masters: mastersRes || [] });
+        } catch (err) {
+          console.error('Failed to fetch images:', err);
+        }
+      },
+
+      fetchServices: async () => {
+        try {
+          const servicesRes = await invoke('check_package_status');
+          const servicesData = Array.isArray(servicesRes) ? servicesRes : (servicesRes ? Object.values(servicesRes) : []);
+          set({ services: servicesData });
+        } catch (err) {
+          console.error('Failed to fetch services:', err);
+        }
+      },
+
+      fetchServerInfo: async () => {
+        try {
+          const serverInfoRes = await invoke('get_server_info');
+          set({ serverInfo: serverInfoRes });
+        } catch (err) {
+          console.error('Failed to fetch server info:', err);
+        }
+      },
+
+      fetchLicenseInfo: async () => {
+        try {
+          const licenseRes = await invoke('get_license_info');
+          set({ licenseInfo: licenseRes });
+        } catch (err) {
+          console.error('Failed to fetch license info:', err);
+        }
+      },
+
+      fetchDisks: async () => {
+        try {
+          const [zpoolStatsRes, zpoolsRes] = await Promise.all([
+            invoke('get_zpool_list'),
+            invoke('list_zpools')
+          ]);
+          set({
+            zpoolStats: Array.isArray(zpoolStatsRes) ? zpoolStatsRes[0] : null,
+            zpools: zpoolsRes || []
+          });
+        } catch (err) {
+          console.error('Failed to fetch disk info:', err);
+        }
+      },
 
       fetchData: async (showLoading = true) => {
         if (showLoading) set({ loading: true });
         set({ error: null });
+        const { fetchClients, fetchImages, fetchServices, fetchServerInfo, fetchDisks, fetchLicenseInfo } = get();
+
         try {
-          // Get token from bun localStorage
-          const token = localStorage.getItem('authToken') || '';
-
-          // Use Promise.allSettled to allow partial failures
-          const results = await Promise.allSettled([
-            invoke('check_package_status'),
-            invoke('get_images', { token }),
-            invoke('get_clients', { token }),
-            invoke('get_server_info'),
-            invoke('get_zpool_list'),
-            invoke('list_zpools'),
+          await Promise.allSettled([
+            fetchClients(),
+            fetchImages(),
+            fetchServices(),
+            fetchServerInfo(),
+            fetchDisks(),
+            fetchLicenseInfo()
           ]);
-
-          const [servicesRes, mastersRes, clientsRes, serverInfoRes, zpoolStatsRes, zpoolsRes] = results;
-
-          // Handle individual failures
-          if (servicesRes.status === 'rejected') {
-            console.error('Failed to fetch services:', servicesRes.reason);
-          }
-          if (mastersRes.status === 'rejected') {
-            console.error('Failed to fetch images:', mastersRes.reason);
-          }
-          if (clientsRes.status === 'rejected') {
-            console.error('Failed to fetch clients:', clientsRes.reason);
-          }
-          if (serverInfoRes.status === 'rejected') {
-            console.error('Failed to fetch server info:', serverInfoRes.reason);
-          }
-          if (zpoolStatsRes.status === 'rejected') {
-            console.error('Failed to fetch zpool stats:', zpoolStatsRes.reason);
-          }
-          if (zpoolsRes.status === 'rejected') {
-            console.error('Failed to fetch zpools:', zpoolsRes.reason);
-          }
-
-          // Extract data or default to empty
-          const servicesData = servicesRes.status === 'fulfilled' ? servicesRes.value : [];
-          const mastersData = mastersRes.status === 'fulfilled' ? mastersRes.value : [];
-          const clientsData = clientsRes.status === 'fulfilled' ? clientsRes.value : {};
-          const serverInfoData = serverInfoRes.status === 'fulfilled' ? serverInfoRes.value : null;
-          const zpoolStatsData = zpoolStatsRes.status === 'fulfilled' && Array.isArray(zpoolStatsRes.value) ? zpoolStatsRes.value[0] : null;
-          const zpoolsData = zpoolsRes.status === 'fulfilled' ? zpoolsRes.value : [];
-
-          // Batch state updates to reduce re-renders
-          const newState = {
-            clients: clientsData ? Object.values(clientsData) : [],
-            masters: mastersData || [],
-            services: Array.isArray(servicesData) ? servicesData : (servicesData ? Object.values(servicesData) : []),
-            serverInfo: serverInfoData,
-            zpoolStats: zpoolStatsData,
-            zpools: zpoolsData,
-          };
-
-          // Set default snapshot selection for Add Client modal only if not already set and snapshots exist
-          const { selectedSnapshot } = get();
-          if (!selectedSnapshot && mastersData?.length > 0 && mastersData[0].snapshots?.length > 0) {
-            newState.selectedSnapshot = mastersData[0].snapshots[mastersData[0].snapshots.length - 1].name;
-          } else if (mastersData?.flatMap((m) => m.snapshots || []).length === 0) {
-            newState.selectedSnapshot = '';
-          }
-
-          // If all requests failed, set a general error
-          if (results.every(r => r.status === 'rejected')) {
-            set({ error: 'Failed to load application data. Please check the backend connection.' });
-          }
-
-          set(newState);
         } catch (err) {
           set({ error: `Unexpected error loading data: ${err}` });
         } finally {

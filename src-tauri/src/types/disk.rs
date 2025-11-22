@@ -5,10 +5,14 @@
 use serde::{ Deserialize, Serialize };
 
 /// Dataset information structure
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct DatasetInfo {
     pub name: String,
     pub disk_type: Option<String>,
+    pub used: String,
+    pub available: String,
+    pub referenced: String,
+    pub mountpoint: String,
 }
 
 /// Disk information structure

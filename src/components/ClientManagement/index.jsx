@@ -12,7 +12,7 @@ const MemoizedClientTable = memo(ClientTable);
 const MemoizedContextMenu = memo(ContextMenu);
 
 const ClientManagement = () => {
-  const { clients, fetchData, masters, startClientStatusPolling, stopClientStatusPolling } = useAppStore();
+  const { clients, fetchClients, fetchImages, masters, startClientStatusPolling, stopClientStatusPolling } = useAppStore();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [client, setClient] = useState({
     name: '',
@@ -33,7 +33,12 @@ const ClientManagement = () => {
     setContextMenu(prev => ({ ...prev, isOpen: false }));
   }, []);
 
-  const contextActions = useClientActions(fetchData, closeContextMenu, setClient, setIsModalOpen, setDeprovisionModal);
+  // refreshData callback for actions
+  const refreshData = useCallback(async () => {
+    await Promise.all([fetchClients(), fetchImages()]);
+  }, [fetchClients, fetchImages]);
+
+  const contextActions = useClientActions(refreshData, closeContextMenu, setClient, setIsModalOpen, setDeprovisionModal);
 
   const handleClientFormModalOpen = useCallback(() => {
     let newName = 'PC001';
@@ -97,14 +102,14 @@ const ClientManagement = () => {
         <MemoizedClientTable handleClientContextMenu={handleClientContextMenu} />
         <MemoizedContextMenu isOpen={contextMenu.isOpen} xPos={contextMenu.x} yPos={contextMenu.y} targetClient={contextMenu.client} onClose={closeContextMenu} actions={contextActions} />
       </div>
-      <ClientFormModal client={client} setClient={setClient} masters={masters} isOpen={isModalOpen} setIsOpen={setIsModalOpen} refresh={fetchData} />
+      <ClientFormModal client={client} setClient={setClient} masters={masters} isOpen={isModalOpen} setIsOpen={setIsModalOpen} refresh={refreshData} />
       {deprovisionModal &&
         <DeprovisionModal
           isOpen={deprovisionModal.isOpen}
           onClose={() => setDeprovisionModal({ isOpen: false, client: null })}
           client={deprovisionModal.client}
           onSuccess={() => {
-            fetchData();
+            refreshData();
             setDeprovisionModal({ isOpen: false, client: null });
           }}
         />

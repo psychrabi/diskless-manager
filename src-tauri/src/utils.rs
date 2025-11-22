@@ -55,8 +55,28 @@ where
         .collect::<Vec<_>>()
         .join(" ");
     println!("Executing command: sudo {}", cmd_str);
-    exec_sudo_cmd(args_vec.iter()).map_err(|e| AppError::Command(e.to_string()))?;
-    Ok(())
+    
+    match exec_sudo_cmd(args_vec.iter()) {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            // Try to get stderr output for better error messages
+            let stderr_output = Command::new("sudo")
+                .arg("-n")
+                .args(args_vec.iter())
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stderr).ok())
+                .unwrap_or_default();
+            
+            eprintln!("Command failed: sudo {}", cmd_str);
+            eprintln!("Error: {}", e);
+            if !stderr_output.is_empty() {
+                eprintln!("Stderr: {}", stderr_output);
+            }
+            
+            Err(AppError::Command(format!("{} (stderr: {})", e, stderr_output)))
+        }
+    }
 }
 
 pub fn run_command_check<II>(args: II) -> i32

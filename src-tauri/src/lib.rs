@@ -91,6 +91,7 @@ pub fn run() {
                 client::control_client,
                 client::remote_client,
                 client::reset_client,
+                client::reset_client_to_clean,
                 client::deprovision_client,
                 client::deprovision_client_by_id,
                 client::get_deprovision_status,
@@ -132,6 +133,7 @@ pub fn run() {
                 zfs::rename_image,
                 zfs::delete_snapshot,
                 zfs::zfs_pool_exists,
+                zfs::create_snapshot,
                 zfs::set_default_image,
                 zfs::rollback_image_snapshot,
                 zfs::get_default_image_overview
@@ -153,7 +155,7 @@ pub fn run() {
                     }
                 }
             }
-            app.get_webview_window("main").unwrap().open_devtools();
+            // app.get_webview_window("main").unwrap().open_devtools();
             if cfg!(debug_assertions) {
                 if
                     let Err(e) = app

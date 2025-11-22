@@ -1,6 +1,6 @@
 use crate::config::{ get_config, get_zpool_name, read_config, write_config };
 use crate::dhcp::{ create_dhcp_entry, update_dhcp_config };
-use crate::iscsi::{ cleanup_iscsi_target, setup_iscsi_target };
+use crate::iscsi::{ cleanup_iscsi_target, setup_iscsi_target_with_game_disks };
 use crate::types::{ AddClientRequest, Client, AppConfig, ControlRequest, DeprovisionRequest };
 use crate::utils::{
     run_command,
@@ -445,6 +445,7 @@ pub async fn add_client(token: String, req: AddClientRequest) -> Result<serde_js
             status: None,
             mode: None,
             pxe_mode: Some("uefi".to_string()),
+            keep_writeback: req.keep_writeback.or(Some(true)),  // Default to true for backward compatibility
         };
         if !save_client_config(&client_data) {
             return Err(AppError::Config(format!("Failed to save client configuration for {}", name)));
@@ -553,7 +554,7 @@ pub async fn add_client(token: String, req: AddClientRequest) -> Result<serde_js
 
     // Step 2: Set up iSCSI target
     let block_device = format!("/dev/zvol/{}", &paths["clone"]);
-    if let Err(e) = setup_iscsi_target(&paths["target_iqn"], &paths["block_store"], &block_device) {
+    if let Err(e) = setup_iscsi_target_with_game_disks(&paths["target_iqn"], &paths["block_store"], &block_device) {
         perform_rollback(rollback_clone, rollback_target, rollback_dhcp, name.clone()).await;
         return Err(AppError::Command(format!("Failed to setup iSCSI target: {}", e)));
     }
@@ -597,6 +598,7 @@ pub async fn add_client(token: String, req: AddClientRequest) -> Result<serde_js
             None
         },
         pxe_mode: Some("uefi".to_string()),
+        keep_writeback: req.keep_writeback.or(Some(true)),  // Default to true for backward compatibility
     };
     
     if !save_client_config(&client_data) {
@@ -609,9 +611,10 @@ pub async fn add_client(token: String, req: AddClientRequest) -> Result<serde_js
     if let Err(e) = run_command(&["systemctl", "restart", "isc-dhcp-server.service"]) {
         warn!("Failed to restart DHCP service after adding client {}: {}", name, e);
     }
-
+    
     Ok(serde_json::json!({ "message": format!("Client {} added successfully", name) }))
 }
+
 
 #[tauri::command]
 pub async fn edit_client(
@@ -837,7 +840,7 @@ pub async fn edit_client(
         let dhcp_entry = create_dhcp_entry(&new_name, &new_mac, &new_ip, &new_target_iqn);
         update_dhcp_config(&client_id, &dhcp_entry, false).await.map_err(|e| AppError::Config(format!("Failed to update DHCP config: {}", e)))?;
 
-        setup_iscsi_target(&new_target_iqn, &new_block_store, &block_device).map_err(|e| AppError::Command(format!("Failed to setup iSCSI target: {}", e)))?;
+        setup_iscsi_target_with_game_disks(&new_target_iqn, &new_block_store, &block_device).map_err(|e| AppError::Command(format!("Failed to setup iSCSI target: {}", e)))?;
 
         // Save updated config
         save_client_config(&client_info);
@@ -1023,7 +1026,7 @@ pub async fn control_client(
                 }
 
                 // Set up iSCSI target pointing to master
-                setup_iscsi_target(&target_iqn, &block_store, &block_device).map_err(|e|
+                setup_iscsi_target_with_game_disks(&target_iqn, &block_store, &block_device).map_err(|e|
                     AppError::Command(format!("Failed to set iSCSI to master: {}", e))
                 )?;
 
@@ -1147,7 +1150,7 @@ pub async fn control_client(
                 if let Some(tiqn) = client.target_iqn.as_ref() {
                     let _ = cleanup_iscsi_target(tiqn, &block_store);
                 }
-                setup_iscsi_target(&target_iqn, &block_store, &block_device).map_err(|e|
+                setup_iscsi_target_with_game_disks(&target_iqn, &block_store, &block_device).map_err(|e|
                     AppError::Command(format!("Failed to set iSCSI to client writeback: {}", e))
                 )?;
 
@@ -1227,7 +1230,7 @@ pub async fn reset_client(token: String, client_id: String) -> Result<serde_json
     // 4. Setup new iSCSI target
     let block_device = format!("/dev/zvol/{}", clone);
 
-    if let Err(e) = setup_iscsi_target(&target_iqn, &block_store, &block_device) {
+    if let Err(e) = setup_iscsi_target_with_game_disks(&target_iqn, &block_store, &block_device) {
         return Err(AppError::Command(format!("Failed to set up iSCSI target: {}", e)));
     }
 
@@ -1263,6 +1266,59 @@ pub async fn reset_client(token: String, client_id: String) -> Result<serde_json
         "message": format!("Client {} reset successfully", client_id.to_uppercase())
     })
     )
+}
+
+/// Reset a non-persistent client to clean state by recreating writeback from snapshot
+#[tauri::command]
+pub async fn reset_client_to_clean(
+    token: String,
+    client_id: String,
+) -> Result<serde_json::Value, AppError> {
+    validate_auth(&token)?;
+    
+    info!("Resetting client {} to clean state", client_id);
+    
+    // Get client info
+    let client_info = get_client_by_id(&client_id)
+        .ok_or_else(|| AppError::NotFound(format!("Client {} not found", client_id)))?;
+    
+    // Check if client is in non-persistent mode
+    if client_info.keep_writeback.unwrap_or(true) {
+        return Err(AppError::Validation(
+            "Client is in persistent mode. Cannot reset to clean state.".to_string()
+        ));
+    }
+    
+    // Check if client has a snapshot
+    let snapshot = client_info.snapshot
+        .as_ref()
+        .ok_or_else(|| AppError::Validation("Client has no snapshot to reset from".to_string()))?;
+    
+    if snapshot.is_empty() {
+        return Err(AppError::Validation("Client snapshot is empty".to_string()));
+    }
+    
+    // Check if client has a writeback
+    let writeback = client_info.writeback
+        .as_ref()
+        .ok_or_else(|| AppError::Validation("Client has no writeback to reset".to_string()))?;
+    
+    info!("Deleting writeback: {}", writeback);
+    
+    // Delete existing writeback if it exists
+    if zfs_exists(writeback) {
+        zfs_destroy(writeback)?;
+        info!("Writeback deleted successfully");
+    }
+    
+    // Recreate writeback from snapshot
+    info!("Recreating writeback from snapshot: {}", snapshot);
+    zfs_clone(snapshot, writeback)?;
+    info!("Writeback recreated successfully");
+    
+    Ok(serde_json::json!({
+        "message": format!("Client {} reset to clean state successfully", client_id)
+    }))
 }
 
 #[tauri::command]

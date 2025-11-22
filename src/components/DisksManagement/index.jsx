@@ -7,7 +7,7 @@ import DiskFormModal from './DiskFormModal';
 import DiskTable from './DiskTable';
 
 export default function DisksManagement() {
-  const { fetchData } = useAppStore();
+  const fetchDisks = useAppStore((state) => state.fetchDisks);
   const zpools = useAppStore((state) => state.zpools);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedPool, setSelectedPool] = useState('');
@@ -22,7 +22,8 @@ export default function DisksManagement() {
     if (zpools.length > 0 && !selectedPool) {
       setSelectedPool(zpools[0]);
     }
-  }, [zpools, selectedPool]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [zpools]);
 
   useEffect(() => {
     if (selectedPool) {
@@ -30,6 +31,10 @@ export default function DisksManagement() {
     }
   }, [selectedPool, fetchDatasets]);
 
+  const refresh = useCallback(() => {
+    if (selectedPool) fetchDatasets(selectedPool);
+    fetchDisks();
+  }, [selectedPool, fetchDatasets, fetchDisks]);
 
   return (
     <Card title="Disk Management" icon={HardDrive} className="bg-base-300" actions={
@@ -38,9 +43,9 @@ export default function DisksManagement() {
       </Button>
     } >
       <div className="min-h-[calc(100vh-15rem)]">
-        <DiskTable datasets={datasets} onRefresh={fetchData} />
+        <DiskTable datasets={datasets} onRefresh={refresh} />
       </div>
-      {isModalOpen && <DiskFormModal zpools={zpools} isOpen={isModalOpen} setIsOpen={setIsModalOpen} refresh={fetchData} />}
+      {isModalOpen && <DiskFormModal zpools={zpools} isOpen={isModalOpen} setIsOpen={setIsModalOpen} refresh={refresh} />}
     </Card>
   );
 }

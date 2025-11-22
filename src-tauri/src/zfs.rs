@@ -4,6 +4,7 @@ use chrono::Local;
 
 use regex::Regex;
 use serde_json::{json, Value};
+use tracing::debug;
 use std::collections::HashSet;
 use std::process::Command;
 
@@ -203,8 +204,9 @@ pub fn create_image(request: CreateImageRequest) -> Result<Value, AppError> {
         )));
     }
     let mut parent_dataset = format!("{}/images", zpool);
+    eprintln!("=== CREATE_IMAGE: Initial parent_dataset = {}", parent_dataset);
 
-    // Batch find parent with org.diskless:type=image
+    // Batch find all parents with org.diskless:type=image
     if let Ok(get_out) = run_command_output_no_sudo(&[
         "zfs",
         "get",
@@ -212,16 +214,72 @@ pub fn create_image(request: CreateImageRequest) -> Result<Value, AppError> {
         "-o",
         "name,value",
         "-r",
-        &zpool,
         "org.diskless:type",
+        &zpool,
     ]) {
+        let mut image_datasets = vec![];
         for (dataset, val) in parse_property_output(&get_out) {
+            debug!("{}: {}", dataset, val);
+            eprintln!("=== CREATE_IMAGE: Found dataset {} with type {}", dataset, val);
             if val == "image" {
-                parent_dataset = dataset;
-                break;
+                // Only consider datasets that are direct children of zpool
+                // e.g., "diskless/images" or "diskless/image-disk"
+                // NOT "diskless/images/win11" (that's an image itself, not a parent)
+                let parts: Vec<&str> = dataset.split('/').collect();
+                eprintln!("=== CREATE_IMAGE: Dataset {} has {} parts", dataset, parts.len());
+                if parts.len() == 2 {
+                    // This is a direct child of zpool (zpool/dataset)
+                    eprintln!("=== CREATE_IMAGE: Adding {} to image_datasets", dataset);
+                    image_datasets.push(dataset);
+                }
             }
         }
+        
+        debug!("Found {} top-level image datasets", image_datasets.len());
+        eprintln!("=== CREATE_IMAGE: Found {} top-level image datasets", image_datasets.len());
+        
+        // If we found image datasets, use the most recently created one
+        if !image_datasets.is_empty() {
+            // Get creation times for all image datasets
+            if let Ok(creation_out) = run_command_output_no_sudo(&[
+                "zfs",
+                "get",
+                "-H",
+                "-o",
+                "name,value",
+                "creation",
+            ].iter().chain(&image_datasets.iter().map(|s| s.as_str()).collect::<Vec<_>>()).cloned().collect::<Vec<_>>()) {
+                let mut datasets_with_time: Vec<(String, String)> = vec![];
+                for (dataset, creation_time) in parse_property_output(&creation_out) {
+                    datasets_with_time.push((dataset.clone(), creation_time.clone()));
+                    debug!("Dataset {} created at {}", dataset, creation_time);
+                    eprintln!("=== CREATE_IMAGE: Dataset {} created at {}", dataset, creation_time);
+                }
+                
+                // Sort by creation time (newest first) - ZFS times are sortable as strings
+                datasets_with_time.sort_by(|a, b| b.1.cmp(&a.1));
+                
+                // Use the most recently created image dataset
+                if let Some((newest_dataset, _)) = datasets_with_time.first() {
+                    debug!("Selected parent dataset: {}", newest_dataset);
+                    eprintln!("=== CREATE_IMAGE: Selected parent dataset: {}", newest_dataset);
+                    parent_dataset = newest_dataset.clone();
+                }
+            } else {
+                // Fallback: if we can't get creation times, use the first one found
+                debug!("Failed to get creation times, using first dataset: {}", image_datasets[0]);
+                eprintln!("=== CREATE_IMAGE: Failed to get creation times, using first dataset: {}", image_datasets[0]);
+                parent_dataset = image_datasets[0].clone();
+            }
+        } else {
+            debug!("No top-level image datasets found, using default: {}", parent_dataset);
+            eprintln!("=== CREATE_IMAGE: No top-level image datasets found, using default: {}", parent_dataset);
+        }
     }
+
+    eprintln!("=== CREATE_IMAGE: Final parent_dataset = {}", parent_dataset);
+
+
 
     // Ensure parent exists
     ensure_parent_dataset(&parent_dataset, "org.diskless:type", "image")?;
@@ -499,6 +557,60 @@ pub async fn delete_image(token: String, master_name: String) -> Result<serde_js
     eprintln!("=== delete_image END: {:?}", result); // Will show if it completes
     result
 }
+
+// Create a ZFS snapshot
+
+#[tauri::command]
+pub fn create_snapshot(token: String, snapshot_name: String) -> Result<Value, String> {
+    // Validate authentication token
+    crate::middleware::validate_auth_token_for_command(&token)
+        .map_err(|e| format!("Authentication failed: {}", e.message))?;
+    let zpool_name = get_zpool_name();
+    if !snapshot_name.contains('@') || !snapshot_name.starts_with(&format!("{}/", zpool_name)) {
+        return Err(format!(
+            "Invalid snapshot name. Expected {}/master@snapname",
+            zpool_name
+        ));
+    }
+    let master_name = snapshot_name.split('@').next().unwrap();
+    let status_code = run_command_check(&["zfs", "list", "-H", master_name]);
+    if status_code != 0 {
+        return Err(format!("Master '{}' not found.", master_name));
+    }
+    let output = Command::new("sudo")
+        .args(["zfs", "snapshot", &snapshot_name])
+        .output()
+        .map_err(|e| format!("Failed to run zfs snapshot: {}", e))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("dataset already exists") {
+            return Err(format!("Snapshot '{}' already exists.", snapshot_name));
+        } else {
+            return Err(format!("Failed creating snapshot: {}", stderr));
+        }
+    }
+    let mut config = get_config();
+    if let Some(masters) = config.masters.as_object_mut() {
+        if let Some(master) = masters.get_mut(master_name) {
+            // Avoid double mutable borrow by splitting the logic
+            if !master.get("snapshots").and_then(|s| s.as_array()).is_some() {
+                master["snapshots"] = json!([]);
+            }
+            let snapshots = master
+                .get_mut("snapshots")
+                .and_then(|s| s.as_array_mut())
+                .expect("snapshots should be an array after initialization");
+            if !snapshots.iter().any(|v| v == &json!(snapshot_name)) {
+                snapshots.push(json!(snapshot_name));
+            }
+            write_config(&config).map_err(|e| format!("Failed to write config: {}", e))?;
+        }
+    }
+    Ok(json!({
+        "message": format!("Snapshot {} created", snapshot_name)
+    }))
+}
+
 
 #[tauri::command]
 pub async fn delete_snapshot(token: String, snapshot_name: String) -> Result<Value, AppError> {
