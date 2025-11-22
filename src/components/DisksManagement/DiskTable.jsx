@@ -41,7 +41,7 @@ const DiskTable = ({ datasets, onRefresh }) => {
 
 	return (
 		<>
-			<Table className='bg-base-100 rounded-lg border' aria-label="ZFS datasets list">
+			<Table className='bg-base-100 rounded-lg' aria-label="ZFS datasets list">
 				<TableHeader>
 					<TableRow>
 						<TableHead>Name</TableHead>
