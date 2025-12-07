@@ -624,12 +624,10 @@ pub async fn add_client(
         master: master.clone(),
         snapshot: if used_master_directly {
             None
+        } else if snapshot.is_empty() {
+            None
         } else {
-            if snapshot.is_empty() {
-                None
-            } else {
-                Some(snapshot.clone())
-            }
+            Some(snapshot.clone())
         },
         target_iqn: Some(paths["target_iqn"].clone()),
         block_device: Some(block_device.clone()),
@@ -978,13 +976,10 @@ pub async fn delete_client(
     }
 
     // Clean up client image (ZFS clone)
-    match run_command_check(&["zfs", "list", "-H", &paths["clone"]]) {
-        0 => {
-            if let Err(e) = run_command(&["zfs", "destroy", &paths["clone"]]) {
-                errors.push(format!("Failed to destroy ZFS clone: {}", e));
-            }
+    if run_command_check(&["zfs", "list", "-H", &paths["clone"]]) == 0 {
+        if let Err(e) = run_command(&["zfs", "destroy", &paths["clone"]]) {
+            errors.push(format!("Failed to destroy ZFS clone: {}", e));
         }
-        _ => {} // ZFS clone does not exist, nothing to do
     }
 
     // Delete client configuration from JSON file
@@ -1558,7 +1553,7 @@ pub async fn get_deprovision_status(
 
     // Check ZFS clone
     let zfs_exists = Command::new("zfs")
-        .args(&[
+        .args([
             "list",
             "-H",
             "-o",
@@ -1617,7 +1612,7 @@ fn check_client_online_status(mac: &str) -> bool {
 
     // Check if client responds to ping (if we can determine IP)
     if let Ok(output) = Command::new("grep")
-        .args(&["-A", "10", mac, "/var/lib/dhcp/dhcpd.leases"])
+        .args(["-A", "10", mac, "/var/lib/dhcp/dhcpd.leases"])
         .output()
     {
         if let Ok(lease_content) = String::from_utf8(output.stdout) {
@@ -1625,7 +1620,7 @@ fn check_client_online_status(mac: &str) -> bool {
                 if let Some(ip) = ip_line.split_whitespace().nth(1) {
                     let ip = ip.trim_end_matches(';');
                     if Command::new("ping")
-                        .args(&["-c", "1", "-W", "2", ip])
+                        .args(["-c", "1", "-W", "2", ip])
                         .output()
                         .map(|output| output.status.success())
                         .unwrap_or(false)

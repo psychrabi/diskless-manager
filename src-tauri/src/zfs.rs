@@ -4,29 +4,21 @@ use chrono::Local;
 
 use regex::Regex;
 use serde_json::{json, Value};
-use tracing::debug;
 use std::collections::HashSet;
 use std::process::Command;
-
+use tracing::debug;
 
 use crate::types::image::CreateImageRequest;
-use crate::types::{Master, MasterData, Snapshot, CreateZpoolRequest};
+use crate::types::{CreateZpoolRequest, Master, MasterData, Snapshot};
 use crate::utils::{append_log, run_command, run_command_check, run_command_output_no_sudo};
 use crate::{
     client::get_clients,
     config::{get_config, get_zpool_name, write_config},
-    middleware::validate_auth_token_for_command,
     error::AppError,
-    types::image::{ZpoolInfo, ArcstatInfo},
+    middleware::validate_auth_token_for_command,
+    types::image::{ArcstatInfo, ZpoolInfo},
 };
 
-
-
-
-
-
-
-// Helper to validate auth token, returning Err if invalid
 // Helper to validate auth token, returning Err if invalid
 fn validate_auth(token: &str) -> Result<(), AppError> {
     validate_auth_token_for_command(token)
@@ -40,12 +32,10 @@ pub fn zfs_exists(dataset: &str) -> bool {
 }
 
 // Destroy a ZFS dataset/snapshot
-// Destroy a ZFS dataset/snapshot
 pub fn zfs_destroy(dataset: &str) -> Result<(), AppError> {
     run_command(&["zfs", "destroy", dataset])
 }
 
-// Clone a ZFS snapshot to a new dataset
 // Clone a ZFS snapshot to a new dataset
 pub fn zfs_clone(snapshot: &str, clone: &str) -> Result<(), AppError> {
     run_command(&["zfs", "clone", snapshot, clone])
@@ -77,10 +67,7 @@ fn parse_property_output(output: &str) -> Vec<(String, String)> {
         .filter_map(|line| {
             let parts: Vec<&str> = line.split('\t').collect();
             if parts.len() == 2 {
-                Some((
-                    parts[0].trim().to_string(),
-                    parts[1].trim().to_string(),
-                ))
+                Some((parts[0].trim().to_string(), parts[1].trim().to_string()))
             } else {
                 None
             }
@@ -89,8 +76,11 @@ fn parse_property_output(output: &str) -> Vec<(String, String)> {
 }
 
 // Check for dependent clients (returns Ok(Vec<String>) of names if any, Err if fetch fails)
-// Check for dependent clients (returns Ok(Vec<String>) of names if any, Err if fetch fails)
-async fn check_dependent_clients(base: &str, is_snapshot: bool, token: &str) -> Result<Vec<String>, AppError> {
+async fn check_dependent_clients(
+    base: &str,
+    is_snapshot: bool,
+    token: &str,
+) -> Result<Vec<String>, AppError> {
     let key = if is_snapshot { "snapshot" } else { "master" };
     let clients_result = get_clients(token.to_string(), None).await;
     match clients_result {
@@ -119,7 +109,9 @@ async fn check_dependent_clients(base: &str, is_snapshot: bool, token: &str) -> 
 fn validate_name(name: &str) -> Result<(), AppError> {
     let re = Regex::new(r"^[\w-]+$").unwrap();
     if !re.is_match(name) || name.contains(' ') || name.contains('/') {
-        Err(AppError::Validation("Invalid name format (alphanumeric, _, -; no spaces or /)".to_string()))
+        Err(AppError::Validation(
+            "Invalid name format (alphanumeric, _, -; no spaces or /)".to_string(),
+        ))
     } else {
         Ok(())
     }
@@ -132,7 +124,9 @@ fn validate_size(size: &str) -> Result<(), AppError> {
     if re.is_match(&upper) {
         Ok(())
     } else {
-        Err(AppError::Validation("Invalid size format (e.g., '50G')".to_string()))
+        Err(AppError::Validation(
+            "Invalid size format (e.g., '50G')".to_string(),
+        ))
     }
 }
 
@@ -146,7 +140,10 @@ fn create_zvol(
 ) -> Result<String, AppError> {
     let full_name = format!("{}/{}", parent, basename);
     if zfs_exists(&full_name) {
-        return Err(AppError::Validation(format!("ZVOL '{}' already exists.", full_name)));
+        return Err(AppError::Validation(format!(
+            "ZVOL '{}' already exists.",
+            full_name
+        )));
     }
 
     run_command(&[
@@ -172,14 +169,23 @@ fn create_zvol(
         return Err(AppError::Config("Failed to update config.json".to_string()));
     }
 
-    append_log("INFO", &format!("create_{} start: {}", zvol_type, full_name));
+    append_log(
+        "INFO",
+        &format!("create_{} start: {}", zvol_type, full_name),
+    );
     Ok(full_name)
 }
 
 // Ensure parent dataset exists with property
 fn ensure_parent_dataset(parent: &str, prop: &str, prop_val: &str) -> Result<(), AppError> {
     if run_command_check(&["zfs", "list", "-H", parent]) != 0 {
-        run_command(&["zfs", "create", "-o", &format!("{}={}", prop, prop_val), parent])?;
+        run_command(&[
+            "zfs",
+            "create",
+            "-o",
+            &format!("{}={}", prop, prop_val),
+            parent,
+        ])?;
     }
     Ok(())
 }
@@ -204,7 +210,10 @@ pub fn create_image(request: CreateImageRequest) -> Result<Value, AppError> {
         )));
     }
     let mut parent_dataset = format!("{}/images", zpool);
-    eprintln!("=== CREATE_IMAGE: Initial parent_dataset = {}", parent_dataset);
+    eprintln!(
+        "=== CREATE_IMAGE: Initial parent_dataset = {}",
+        parent_dataset
+    );
 
     // Batch find all parents with org.diskless:type=image
     if let Ok(get_out) = run_command_output_no_sudo(&[
@@ -220,13 +229,20 @@ pub fn create_image(request: CreateImageRequest) -> Result<Value, AppError> {
         let mut image_datasets = vec![];
         for (dataset, val) in parse_property_output(&get_out) {
             debug!("{}: {}", dataset, val);
-            eprintln!("=== CREATE_IMAGE: Found dataset {} with type {}", dataset, val);
+            eprintln!(
+                "=== CREATE_IMAGE: Found dataset {} with type {}",
+                dataset, val
+            );
             if val == "image" {
                 // Only consider datasets that are direct children of zpool
                 // e.g., "diskless/images" or "diskless/image-disk"
                 // NOT "diskless/images/win11" (that's an image itself, not a parent)
                 let parts: Vec<&str> = dataset.split('/').collect();
-                eprintln!("=== CREATE_IMAGE: Dataset {} has {} parts", dataset, parts.len());
+                eprintln!(
+                    "=== CREATE_IMAGE: Dataset {} has {} parts",
+                    dataset,
+                    parts.len()
+                );
                 if parts.len() == 2 {
                     // This is a direct child of zpool (zpool/dataset)
                     eprintln!("=== CREATE_IMAGE: Adding {} to image_datasets", dataset);
@@ -234,52 +250,78 @@ pub fn create_image(request: CreateImageRequest) -> Result<Value, AppError> {
                 }
             }
         }
-        
+
         debug!("Found {} top-level image datasets", image_datasets.len());
-        eprintln!("=== CREATE_IMAGE: Found {} top-level image datasets", image_datasets.len());
-        
+        eprintln!(
+            "=== CREATE_IMAGE: Found {} top-level image datasets",
+            image_datasets.len()
+        );
+
         // If we found image datasets, use the most recently created one
         if !image_datasets.is_empty() {
             // Get creation times for all image datasets
-            if let Ok(creation_out) = run_command_output_no_sudo(&[
-                "zfs",
-                "get",
-                "-H",
-                "-o",
-                "name,value",
-                "creation",
-            ].iter().chain(&image_datasets.iter().map(|s| s.as_str()).collect::<Vec<_>>()).cloned().collect::<Vec<_>>()) {
+            if let Ok(creation_out) = run_command_output_no_sudo(
+                &["zfs", "get", "-H", "-o", "name,value", "creation"]
+                    .iter()
+                    .chain(
+                        &image_datasets
+                            .iter()
+                            .map(|s| s.as_str())
+                            .collect::<Vec<_>>(),
+                    )
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            ) {
                 let mut datasets_with_time: Vec<(String, String)> = vec![];
                 for (dataset, creation_time) in parse_property_output(&creation_out) {
                     datasets_with_time.push((dataset.clone(), creation_time.clone()));
                     debug!("Dataset {} created at {}", dataset, creation_time);
-                    eprintln!("=== CREATE_IMAGE: Dataset {} created at {}", dataset, creation_time);
+                    eprintln!(
+                        "=== CREATE_IMAGE: Dataset {} created at {}",
+                        dataset, creation_time
+                    );
                 }
-                
+
                 // Sort by creation time (newest first) - ZFS times are sortable as strings
                 datasets_with_time.sort_by(|a, b| b.1.cmp(&a.1));
-                
+
                 // Use the most recently created image dataset
                 if let Some((newest_dataset, _)) = datasets_with_time.first() {
                     debug!("Selected parent dataset: {}", newest_dataset);
-                    eprintln!("=== CREATE_IMAGE: Selected parent dataset: {}", newest_dataset);
+                    eprintln!(
+                        "=== CREATE_IMAGE: Selected parent dataset: {}",
+                        newest_dataset
+                    );
                     parent_dataset = newest_dataset.clone();
                 }
             } else {
                 // Fallback: if we can't get creation times, use the first one found
-                debug!("Failed to get creation times, using first dataset: {}", image_datasets[0]);
-                eprintln!("=== CREATE_IMAGE: Failed to get creation times, using first dataset: {}", image_datasets[0]);
+                debug!(
+                    "Failed to get creation times, using first dataset: {}",
+                    image_datasets[0]
+                );
+                eprintln!(
+                    "=== CREATE_IMAGE: Failed to get creation times, using first dataset: {}",
+                    image_datasets[0]
+                );
                 parent_dataset = image_datasets[0].clone();
             }
         } else {
-            debug!("No top-level image datasets found, using default: {}", parent_dataset);
-            eprintln!("=== CREATE_IMAGE: No top-level image datasets found, using default: {}", parent_dataset);
+            debug!(
+                "No top-level image datasets found, using default: {}",
+                parent_dataset
+            );
+            eprintln!(
+                "=== CREATE_IMAGE: No top-level image datasets found, using default: {}",
+                parent_dataset
+            );
         }
     }
 
-    eprintln!("=== CREATE_IMAGE: Final parent_dataset = {}", parent_dataset);
-
-
+    eprintln!(
+        "=== CREATE_IMAGE: Final parent_dataset = {}",
+        parent_dataset
+    );
 
     // Ensure parent exists
     ensure_parent_dataset(&parent_dataset, "org.diskless:type", "image")?;
@@ -387,14 +429,13 @@ pub async fn get_images(token: String) -> Result<Vec<Master>, AppError> {
     let parent_vec: Vec<&str> = unique_parents.iter().map(|s| s.as_str()).collect();
     let mut image_filter = HashSet::new();
     if !parent_vec.is_empty() {
-        if let Ok(get_out) = run_command_output_no_sudo(&[
-            "zfs",
-            "get",
-            "-H",
-            "-o",
-            "name,value",
-            "org.diskless:type",
-        ].iter().chain(&parent_vec).cloned().collect::<Vec<_>>()) {
+        if let Ok(get_out) = run_command_output_no_sudo(
+            &["zfs", "get", "-H", "-o", "name,value", "org.diskless:type"]
+                .iter()
+                .chain(&parent_vec)
+                .cloned()
+                .collect::<Vec<_>>(),
+        ) {
             for (name, val) in parse_property_output(&get_out) {
                 if val == "image" {
                     image_filter.insert(name);
@@ -464,22 +505,22 @@ pub fn save_master_config(master_data: &MasterData) -> bool {
     }
 }
 
-async fn common_delete(
-    token: String,
-    entity: &str,
-    is_snapshot: bool,
-) -> Result<Value, AppError> {
+async fn common_delete(token: String, entity: &str, is_snapshot: bool) -> Result<Value, AppError> {
     eprintln!("=== common_delete AUTH START: {}", entity);
     validate_auth(&token)?;
     eprintln!("=== common_delete AUTH OK");
 
     eprintln!("=== common_delete DEPENDENTS START");
-    let dependents = check_dependent_clients(entity, is_snapshot, &token).await
+    let dependents = check_dependent_clients(entity, is_snapshot, &token)
+        .await
         .map_err(|e| {
             eprintln!("=== common_delete DEPENDENTS ERR: {}", e);
             AppError::Internal(format!("Failed to check clients: {e}"))
         })?;
-    eprintln!("=== common_delete DEPENDENTS OK: {} found", dependents.len());
+    eprintln!(
+        "=== common_delete DEPENDENTS OK: {} found",
+        dependents.len()
+    );
 
     if !dependents.is_empty() {
         eprintln!("=== common_delete BLOCKED BY DEPENDENTS");
@@ -497,7 +538,14 @@ async fn common_delete(
             if !is_snapshot {
                 let _ = delete_image_config(entity);
             }
-            append_log("INFO", &format!("delete_{}: {}", if is_snapshot { "snapshot" } else { "image" }, entity));
+            append_log(
+                "INFO",
+                &format!(
+                    "delete_{}: {}",
+                    if is_snapshot { "snapshot" } else { "image" },
+                    entity
+                ),
+            );
             Ok(json!({
                 "message": format!("{} {} deleted successfully", if is_snapshot { "Snapshot" } else { "Master" }, entity)
             }))
@@ -527,7 +575,7 @@ pub fn delete_image_config(master_name: &str) -> bool {
         .settings
         .get("default_master")
         .and_then(|s| s.as_str())
-        .map_or(false, |default| default == master_name);
+        == Some(master_name);
 
     if let Some(masters) = config.masters.as_object_mut() {
         if masters.remove(master_name).is_some() {
@@ -536,7 +584,7 @@ pub fn delete_image_config(master_name: &str) -> bool {
                 if !config.settings.is_object() {
                     config.settings = json!({});
                 }
-                config.settings["default_master"] = json!(null);  // Or json!("")
+                config.settings["default_master"] = json!(null); // Or json!("")
                 eprintln!("=== delete_image_config: Cleared default_master after delete");
             }
 
@@ -547,11 +595,14 @@ pub fn delete_image_config(master_name: &str) -> bool {
             return true;
         }
     }
-    true  // Nothing deleted, but success
+    true // Nothing deleted, but success
 }
 
 #[tauri::command]
-pub async fn delete_image(token: String, master_name: String) -> Result<serde_json::Value, AppError> {
+pub async fn delete_image(
+    token: String,
+    master_name: String,
+) -> Result<serde_json::Value, AppError> {
     eprintln!("=== delete_image START: {}", master_name); // Terminal log
     let result = common_delete(token, &master_name, false).await;
     eprintln!("=== delete_image END: {:?}", result); // Will show if it completes
@@ -593,7 +644,7 @@ pub fn create_snapshot(token: String, snapshot_name: String) -> Result<Value, St
     if let Some(masters) = config.masters.as_object_mut() {
         if let Some(master) = masters.get_mut(master_name) {
             // Avoid double mutable borrow by splitting the logic
-            if !master.get("snapshots").and_then(|s| s.as_array()).is_some() {
+            if master.get("snapshots").and_then(|s| s.as_array()).is_none() {
                 master["snapshots"] = json!([]);
             }
             let snapshots = master
@@ -611,39 +662,41 @@ pub fn create_snapshot(token: String, snapshot_name: String) -> Result<Value, St
     }))
 }
 
-
 #[tauri::command]
 pub async fn delete_snapshot(token: String, snapshot_name: String) -> Result<Value, AppError> {
     validate_auth(&token)?;
 
     let zpool = get_zpool_name();
     if !snapshot_name.contains('@') || !snapshot_name.starts_with(&format!("{}/", &zpool)) {
-        return Err(AppError::Validation("Invalid snapshot name format.".to_string()));
+        return Err(AppError::Validation(
+            "Invalid snapshot name format.".to_string(),
+        ));
     }
 
     common_delete(token, &snapshot_name, true).await
 }
 
-
 #[tauri::command]
 pub fn get_zpool_list() -> Vec<ZpoolInfo> {
     let mut pools = vec![];
-    
-        if let Ok(out) = run_command_output_no_sudo(&["zpool", "list", "-H", "-o", "name,size,alloc,free,health"]) {
-            for line in out.lines() {
-                let parts: Vec<&str> = line.split_whitespace().map(|s| s.trim()).collect();
-                if parts.len() >= 5 {
-                    pools.push(ZpoolInfo {
-                        name: parts[0].to_string(),
-                        size: parts[1].to_string(),
-                        alloc: parts[2].to_string(),
-                        free: parts[3].to_string(),
-                        health: parts[4].to_string(),
-                    });
-                }
+
+    if let Ok(out) =
+        run_command_output_no_sudo(&["zpool", "list", "-H", "-o", "name,size,alloc,free,health"])
+    {
+        for line in out.lines() {
+            let parts: Vec<&str> = line.split_whitespace().map(|s| s.trim()).collect();
+            if parts.len() >= 5 {
+                pools.push(ZpoolInfo {
+                    name: parts[0].to_string(),
+                    size: parts[1].to_string(),
+                    alloc: parts[2].to_string(),
+                    free: parts[3].to_string(),
+                    health: parts[4].to_string(),
+                });
             }
         }
-    
+    }
+
     pools
 }
 
@@ -657,9 +710,10 @@ pub fn zfs_pool_exists(pool_name: Option<String>) -> Result<bool, AppError> {
         Ok(output.status.success() && !output.stdout.is_empty())
     } else {
         let pool = pool_name.unwrap();
-        let status = Command::new("zpool").args(["list", &pool]).status().map_err(|e| {
-            AppError::Io(e)
-        })?;
+        let status = Command::new("zpool")
+            .args(["list", &pool])
+            .status()
+            .map_err(AppError::Io)?;
 
         let exists = status.success();
         if exists {
@@ -688,7 +742,10 @@ pub fn create_zfs_pool(req: CreateZpoolRequest) -> Result<(), AppError> {
     settings.insert("zfsPool".to_string(), json!(req.name));
     config.settings = json!(settings);
     write_config(&config).map_err(|e| {
-        AppError::Config(format!("ZFS pool created, but failed to update config: {}", e))
+        AppError::Config(format!(
+            "ZFS pool created, but failed to update config: {}",
+            e
+        ))
     })?;
 
     Ok(())
@@ -708,7 +765,10 @@ pub fn set_default_image(token: String, name: &str) -> Result<bool, AppError> {
         Ok(_) => Ok(true),
         Err(e) => {
             println!("Error saving default master: {}", e);
-            Err(AppError::Config(format!("Error saving default master: {}", e)))
+            Err(AppError::Config(format!(
+                "Error saving default master: {}",
+                e
+            )))
         }
     }
 }
@@ -723,7 +783,10 @@ pub async fn rollback_image_snapshot(
 
     // Rollback the snapshot (destroys newer snapshots and their clones)
     if let Err(e) = run_command(["zfs", "rollback", "-r", &snapshot_name]) {
-        return Err(AppError::Command(format!("Failed to rollback snapshot: {}", e)));
+        return Err(AppError::Command(format!(
+            "Failed to rollback snapshot: {}",
+            e
+        )));
     }
 
     // Get clients and recreate clones for those using exactly this snapshot
@@ -733,7 +796,10 @@ pub async fn rollback_image_snapshot(
         if let Some(clients) = clients_json.as_array() {
             let zpool = get_zpool_name();
             for client in clients {
-                let client_snapshot = client.get("snapshot").and_then(|v| v.as_str()).unwrap_or("");
+                let client_snapshot = client
+                    .get("snapshot")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 let client_id = client.get("id").and_then(|v| v.as_str()).unwrap_or("");
                 let client_name = client.get("name").and_then(|v| v.as_str()).unwrap_or("");
                 let client_clone = format!("{}/{}-disk", zpool, client_name.to_uppercase());
@@ -778,10 +844,7 @@ pub async fn get_zfs_arcstat() -> Result<ArcstatInfo, AppError> {
     } else {
         0.0
     };
-    Ok(ArcstatInfo {
-        size,
-        hit_percent,
-    })
+    Ok(ArcstatInfo { size, hit_percent })
 }
 
 #[tauri::command]
@@ -811,7 +874,7 @@ pub async fn get_default_image_overview() -> Result<serde_json::Value, AppError>
         }
         config.settings["default_master"] = json!(null);
         let _ = write_config(&config);
-        
+
         return Ok(json!({
             "name": null,
             "creation_date": null,
@@ -822,11 +885,20 @@ pub async fn get_default_image_overview() -> Result<serde_json::Value, AppError>
 
     // Dataset exists, get its information
     let output = run_command_output_no_sudo(&[
-        "zfs", "get", "creation,clones", "-o", "value", "-H", &master_dataset])?;
+        "zfs",
+        "get",
+        "creation,clones",
+        "-o",
+        "value",
+        "-H",
+        &master_dataset,
+    ])?;
 
     let lines: Vec<&str> = output.lines().collect();
     if lines.len() < 2 {
-        return Err(AppError::Internal("Unexpected output from zfs get".to_string()));
+        return Err(AppError::Internal(
+            "Unexpected output from zfs get".to_string(),
+        ));
     }
 
     Ok(json!({
@@ -846,7 +918,10 @@ pub async fn rename_image(
     validate_name(&new_name)?;
 
     if !zfs_exists(&old_name) {
-        return Err(AppError::NotFound(format!("Master '{}' not found.", old_name)));
+        return Err(AppError::NotFound(format!(
+            "Master '{}' not found.",
+            old_name
+        )));
     }
 
     let zpool = get_zpool_name();
@@ -858,7 +933,10 @@ pub async fn rename_image(
     let new_master_zvol_name = format!("{}/{}", parent, new_name);
 
     if zfs_exists(&new_master_zvol_name) {
-        return Err(AppError::Validation(format!("Master '{}' already exists.", new_master_zvol_name)));
+        return Err(AppError::Validation(format!(
+            "Master '{}' already exists.",
+            new_master_zvol_name
+        )));
     }
 
     let dependents = check_dependent_clients(&old_name, false, &token).await?;

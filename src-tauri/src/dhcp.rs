@@ -1,9 +1,22 @@
+use crate::{
+    utils::{append_log, get_server_ip, run_command, run_command_output},
+    DHCP_CONFIG_PATH,
+};
 use regex::Regex;
 use tokio::fs as async_fs;
-use crate::{utils::{get_server_ip, append_log, run_command, run_command_output}, DHCP_CONFIG_PATH};
 
-pub async fn update_dhcp_config(client_id: &str, dhcp_entry: &str, is_new: bool) -> Result<(), String> {
-    append_log("INFO", &format!("update_dhcp_config: client_id={}, is_new={}", client_id, is_new));
+pub async fn update_dhcp_config(
+    client_id: &str,
+    dhcp_entry: &str,
+    is_new: bool,
+) -> Result<(), String> {
+    append_log(
+        "INFO",
+        &format!(
+            "update_dhcp_config: client_id={}, is_new={}",
+            client_id, is_new
+        ),
+    );
 
     // Acquire lock to prevent race conditions
     let lock_path = std::env::temp_dir().join("diskless-manager-dhcp.lock");
@@ -11,11 +24,14 @@ pub async fn update_dhcp_config(client_id: &str, dhcp_entry: &str, is_new: bool)
         .read(true)
         .write(true)
         .create(true)
+        .truncate(true)
         .open(&lock_path)
         .map_err(|e| format!("Failed to open lock file: {}", e))?;
 
     use fs2::FileExt;
-    lock_file.lock_exclusive().map_err(|e| format!("Failed to acquire lock: {}", e))?;
+    lock_file
+        .lock_exclusive()
+        .map_err(|e| format!("Failed to acquire lock: {}", e))?;
 
     // Read current config async
     let mut content = match run_command_output(["cat", DHCP_CONFIG_PATH]) {
@@ -29,11 +45,13 @@ pub async fn update_dhcp_config(client_id: &str, dhcp_entry: &str, is_new: bool)
 
     // Backup
     let backup_dir = "/srv/tftp/backups";
-    async_fs::create_dir_all(backup_dir).await
+    async_fs::create_dir_all(backup_dir)
+        .await
         .map_err(|e| format!("Failed to create backup dir: {}", e))?;
     let pid = std::process::id();
     let dhcp_backup_path = format!("{}/dhcp_clients_{}.bak", backup_dir, pid);
-    async_fs::write(&dhcp_backup_path, &content).await
+    async_fs::write(&dhcp_backup_path, &content)
+        .await
         .map_err(|e| format!("Backup failed: {}", e))?;
 
     // Remove old entry if not new
@@ -59,7 +77,8 @@ pub async fn update_dhcp_config(client_id: &str, dhcp_entry: &str, is_new: bool)
 
     // Write via temp file + sudo mv
     let temp_path = format!("{}/dhcp_clients_{}.tmp", backup_dir, pid);
-    async_fs::write(&temp_path, &content).await
+    async_fs::write(&temp_path, &content)
+        .await
         .map_err(|e| format!("Temp write failed: {}", e))?;
 
     if let Err(e) = run_command(["mv", &temp_path, DHCP_CONFIG_PATH]) {
@@ -69,10 +88,10 @@ pub async fn update_dhcp_config(client_id: &str, dhcp_entry: &str, is_new: bool)
         let _ = async_fs::remove_file(&temp_path).await;
         return Err(msg);
     }
-    
+
     append_log("INFO", &format!("DHCP updated for {}", client_id));
     let _ = async_fs::remove_file(&dhcp_backup_path).await;
-    
+
     // Lock is automatically released when lock_file goes out of scope
     Ok(())
 }
@@ -100,7 +119,10 @@ pub fn create_dhcp_entry(name: &str, mac: &str, ip: &str, target_iqn: &str) -> S
         target_iqn = target_iqn,
         server_ip = server_ip,
     );
-    append_log("DEBUG", &format!("DHCP entry for {}: {} bytes", name, entry.len()));
+    append_log(
+        "DEBUG",
+        &format!("DHCP entry for {}: {} bytes", name, entry.len()),
+    );
     entry
 }
 

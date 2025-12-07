@@ -1,15 +1,15 @@
+use crate::error::AppError;
+use crate::types::disk::{Disk, MemoryStats, RamUsage};
 use std::fs::{self, OpenOptions};
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
-use crate::error::AppError;
-use crate::types::disk::{Disk, MemoryStats, RamUsage};
 
 #[derive(thiserror::Error, Debug)]
 pub enum CommandError {
     #[error("Failed to execute command {cmd}: {source}")]
     Execution { cmd: String, source: std::io::Error },
     #[error("Command {cmd} failed with status {status}")]
-    Failure { cmd: String, status: i32 },    
+    Failure { cmd: String, status: i32 },
 }
 
 // Generic command runner with sudo -n
@@ -55,7 +55,7 @@ where
         .collect::<Vec<_>>()
         .join(" ");
     println!("Executing command: sudo {}", cmd_str);
-    
+
     match exec_sudo_cmd(args_vec.iter()) {
         Ok(_) => Ok(()),
         Err(e) => {
@@ -67,14 +67,17 @@ where
                 .ok()
                 .and_then(|o| String::from_utf8(o.stderr).ok())
                 .unwrap_or_default();
-            
+
             eprintln!("Command failed: sudo {}", cmd_str);
             eprintln!("Error: {}", e);
             if !stderr_output.is_empty() {
                 eprintln!("Stderr: {}", stderr_output);
             }
-            
-            Err(AppError::Command(format!("{} (stderr: {})", e, stderr_output)))
+
+            Err(AppError::Command(format!(
+                "{} (stderr: {})",
+                e, stderr_output
+            )))
         }
     }
 }
@@ -125,19 +128,24 @@ where
         .collect::<Vec<_>>()
         .join(" ");
     println!("Executing command: {}", cmd_str);
-    
+
     let mut cmd_iter = args_vec.iter();
-    let program = cmd_iter.next().ok_or(AppError::Command("No command provided".to_string()))?;
-    
+    let program = cmd_iter
+        .next()
+        .ok_or(AppError::Command("No command provided".to_string()))?;
+
     let output = std::process::Command::new(program)
         .args(cmd_iter)
         .output()
         .map_err(|e| AppError::Command(e.to_string()))?;
-    
+
     if !output.status.success() {
-        return Err(AppError::Command(format!("Command failed: {}", String::from_utf8_lossy(&output.stderr))));
+        return Err(AppError::Command(format!(
+            "Command failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
     }
-    
+
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
@@ -162,7 +170,25 @@ pub fn get_server_ip() -> String {
     let re = regex::Regex::new(r"src\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})").unwrap();
     if let Some(caps) = re.captures(&stdout) {
         let ip = &caps[1];
-        if ip.starts_with("192.168.") || ip.starts_with("10.") || ip.starts_with("172.16.") || ip.starts_with("172.17.") || ip.starts_with("172.18.") || ip.starts_with("172.19.") || ip.starts_with("172.20.") || ip.starts_with("172.21.") || ip.starts_with("172.22.") || ip.starts_with("172.23.") || ip.starts_with("172.24.") || ip.starts_with("172.25.") || ip.starts_with("172.26.") || ip.starts_with("172.27.") || ip.starts_with("172.28.") || ip.starts_with("172.29.") || ip.starts_with("172.30.") || ip.starts_with("172.31.") {
+        if ip.starts_with("192.168.")
+            || ip.starts_with("10.")
+            || ip.starts_with("172.16.")
+            || ip.starts_with("172.17.")
+            || ip.starts_with("172.18.")
+            || ip.starts_with("172.19.")
+            || ip.starts_with("172.20.")
+            || ip.starts_with("172.21.")
+            || ip.starts_with("172.22.")
+            || ip.starts_with("172.23.")
+            || ip.starts_with("172.24.")
+            || ip.starts_with("172.25.")
+            || ip.starts_with("172.26.")
+            || ip.starts_with("172.27.")
+            || ip.starts_with("172.28.")
+            || ip.starts_with("172.29.")
+            || ip.starts_with("172.30.")
+            || ip.starts_with("172.31.")
+        {
             return ip.to_string();
         }
     }
@@ -170,8 +196,6 @@ pub fn get_server_ip() -> String {
     eprintln!("Warning: Could not find valid server IP address in output");
     "192.168.1.200".to_string()
 }
-
-
 
 #[tauri::command]
 pub fn list_disks() -> Result<Vec<Disk>, AppError> {
@@ -185,7 +209,8 @@ pub fn list_disks() -> Result<Vec<Disk>, AppError> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut disks = Vec::new();
-    for line in stdout.lines().skip(1) { // Skip header
+    for line in stdout.lines().skip(1) {
+        // Skip header
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() == 3 && parts[2] == "disk" {
             disks.push(Disk {
@@ -209,14 +234,18 @@ pub fn get_ram_usage() -> Result<RamUsage, AppError> {
     let lines: Vec<&str> = stdout.lines().collect();
 
     if lines.len() < 2 {
-        return Err(AppError::Command("Unexpected output from free command".to_string()));
+        return Err(AppError::Command(
+            "Unexpected output from free command".to_string(),
+        ));
     }
 
     // Parse Mem line (index 1, after header)
     let mem_line = lines[1];
     let parts: Vec<&str> = mem_line.split_whitespace().collect();
     if parts.len() < 7 {
-        return Err(AppError::Command("Invalid memory information format".to_string()));
+        return Err(AppError::Command(
+            "Invalid memory information format".to_string(),
+        ));
     }
 
     let memory = MemoryStats {
@@ -234,7 +263,11 @@ pub fn get_ram_usage() -> Result<RamUsage, AppError> {
 /// Clear RAM cache (sync and drop caches)
 #[tauri::command]
 pub fn clear_ram_cache() -> Result<serde_json::Value, AppError> {
-    run_command(vec!["sh", "-c", "sync && echo 3 > /proc/sys/vm/drop_caches"])?;
+    run_command(vec![
+        "sh",
+        "-c",
+        "sync && echo 3 > /proc/sys/vm/drop_caches",
+    ])?;
 
     Ok(serde_json::json!({ "message": "RAM cache cleared successfully" }))
 }
@@ -248,15 +281,14 @@ pub fn get_service_logs(unit: String, lines: Option<u32>) -> Result<String, AppE
 }
 
 pub fn log_file_path() -> PathBuf {
-    let mut base = dirs::config_dir()
-        .unwrap_or_else(|| dirs::home_dir().expect("No home dir"));
+    let mut base = dirs::config_dir().unwrap_or_else(|| dirs::home_dir().expect("No home dir"));
     base.push("com.diskless.local");
     let _ = std::fs::create_dir_all(&base);
     base.push("diskless-manager.log");
     base
 }
 
-use tracing::{info, warn, error, debug};
+use tracing::{debug, error, info, warn};
 
 /// Append a single line with level and timestamp to the log file.
 /// This is best-effort and should not panic.
@@ -284,5 +316,5 @@ pub fn clear_logs() -> Result<(), AppError> {
         .create(true)
         .open(path)
         .map(drop)
-        .map_err(|e| AppError::Io(e))
+        .map_err(AppError::Io)
 }
