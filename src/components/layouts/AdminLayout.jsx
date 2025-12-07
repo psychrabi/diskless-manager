@@ -2,8 +2,8 @@ import { Error, Loading, Notification } from '@/components/ui';
 import ErrorBoundary from '@/components/ErrorBoundary';
 import { useNotification } from '@/contexts/notification';
 import { useAppStore } from '@/store/useAppStore';
-import { Activity, lazy, useEffect, useState } from 'react';
-import { Outlet, useNavigation } from 'react-router-dom';
+import { Activity, lazy, useEffect, useState, useRef } from 'react';
+import { Outlet, useNavigation, useLocation, useNavigate } from 'react-router-dom';
 
 const Sidebar = lazy(() => import("@/components/layouts/Sidebar"));
 const Header = lazy(() => import("@/components/layouts/Header"));
@@ -22,9 +22,36 @@ const AdminLayout = () => {
 		setIsSidebarCollapsed(prevState => !prevState);
 	};
 
+	const location = useLocation();
+	const navigate = useNavigate();
+
 	useEffect(() => {
 		fetchData()
 	}, [fetchData]);
+
+	// Restore path on mount if we are at root and have a saved path
+	useEffect(() => {
+		const lastPath = localStorage.getItem('last_path');
+		// Determine if we should navigate:
+		// Logic: If on root '/' AND we have a saved path that is not '/', restore it.
+		// Note with HashRouter: window.location.hash might be '#/' initially.
+		if (lastPath && lastPath !== '/' && location.pathname === '/') {
+			navigate(lastPath);
+		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, []); // Run once on mount
+
+	// Save current path
+	const isFirstRun = useRef(true);
+	useEffect(() => {
+		if (isFirstRun.current) {
+			isFirstRun.current = false;
+			return;
+		}
+		if (location.pathname && location.pathname !== '/login') {
+			localStorage.setItem('last_path', location.pathname);
+		}
+	}, [location]);
 
 
 
