@@ -1,6 +1,72 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use app_lib::types::AddClientRequest;
+use clap::{Parser, Subcommand};
+
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Add a new client
+    AutoAddClient {
+        #[arg(long, default_value = "")]
+        name: String,
+        #[arg(long)]
+        mac: String,
+        #[arg(long)]
+        ip: String,
+        #[arg(long, default_value = "")]
+        master: Option<String>,
+        #[arg(long)]
+        snapshot: Option<String>,
+        #[arg(long)]
+        keep_writeback: Option<bool>,
+        #[arg(long)]
+        use_game_disk: Option<bool>,
+    },
+}
+
 fn main() {
+    let cli = Cli::parse();
+
+    if let Some(Commands::AutoAddClient {
+        name,
+        mac,
+        ip,
+        master,
+        snapshot,
+        keep_writeback,
+        use_game_disk,
+    }) = cli.command
+    {
+        let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
+        rt.block_on(async {
+            let req = AddClientRequest {
+                name,
+                mac,
+                ip,
+                master: master.unwrap_or_default(),
+                snapshot,
+                keep_writeback: keep_writeback.or(Some(true)),
+                use_game_disk,
+            };
+
+            match app_lib::client::add_client_impl(req).await {
+                Ok(v) => println!("Success: {}", v),
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        });
+        return;
+    }
+
     app_lib::run();
 }

@@ -1,6 +1,6 @@
 use crate::{
     utils::{append_log, get_server_ip, run_command, run_command_output},
-    DHCP_CONFIG_PATH,
+    DHCP_CLIENTS_PATH,
 };
 use regex::Regex;
 use tokio::fs as async_fs;
@@ -33,14 +33,10 @@ pub async fn update_dhcp_config(
         .lock_exclusive()
         .map_err(|e| format!("Failed to acquire lock: {}", e))?;
 
-    // Read current config async
-    let mut content = match run_command_output(["cat", DHCP_CONFIG_PATH]) {
+    // Read current config async (allow empty if file doesn't exist)
+    let mut content = match run_command_output(["cat", DHCP_CLIENTS_PATH]) {
         Ok(output) => output,
-        Err(e) => {
-            let msg = format!("DHCP read failed: {}", e);
-            append_log("ERROR", &msg);
-            return Err(msg);
-        }
+        Err(_) => String::new(),
     };
 
     // Backup
@@ -81,7 +77,7 @@ pub async fn update_dhcp_config(
         .await
         .map_err(|e| format!("Temp write failed: {}", e))?;
 
-    if let Err(e) = run_command(["mv", &temp_path, DHCP_CONFIG_PATH]) {
+    if let Err(e) = run_command(["mv", &temp_path, DHCP_CLIENTS_PATH]) {
         let msg = format!("Sudo mv failed: {}", e);
         append_log("ERROR", &msg);
         let _ = async_fs::remove_file(&dhcp_backup_path).await;

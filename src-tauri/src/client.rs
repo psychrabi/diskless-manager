@@ -409,27 +409,52 @@ pub fn delete_client_config(client_id: &str) -> bool {
     }
 }
 
-#[tauri::command]
-pub async fn add_client(
-    token: String,
-    req: AddClientRequest,
-) -> Result<serde_json::Value, AppError> {
-    // Validate authentication token
-    validate_auth(&token)?;
+pub async fn add_client_impl(req: AddClientRequest) -> Result<serde_json::Value, AppError> {
     // Validate inputs
-    let name = req.name.trim().to_lowercase();
     let mac = req.mac.trim().to_uppercase();
     let ip = req.ip.trim().to_string();
-    let master = req.master.trim().to_string();
+
+    let name = if req.name.trim().is_empty() {
+        // Generate name from IP last octet
+        if let Some(last) = ip.split('.').last() {
+            if let Ok(num) = last.parse::<u8>() {
+                format!("PC{:03}", num)
+            } else {
+                format!("PC_{}", mac.replace(":", ""))
+            }
+        } else {
+            format!("PC_{}", mac.replace(":", ""))
+        }
+    } else {
+        req.name.trim().to_lowercase()
+    };
+
+    let mut master = req.master.trim().to_string();
+
+    // If master is not provided, try to use the default master from settings
+    if master.is_empty() {
+        let config = get_config();
+        if let Some(default) = config
+            .settings
+            .get("default_master")
+            .and_then(|v| v.as_str())
+        {
+            if !default.is_empty() {
+                master = default.to_string();
+                info!("Using default master image: {}", master);
+            }
+        }
+    }
+
     let snapshot = req
         .snapshot
         .as_ref()
         .map(|s| s.trim().to_string())
         .unwrap_or_default();
 
-    if name.is_empty() || mac.is_empty() || ip.is_empty() {
+    if mac.is_empty() || ip.is_empty() {
         return Err(AppError::Validation(
-            "Missing required fields: name, mac, ip".to_string(),
+            "Missing required fields: mac, ip".to_string(),
         ));
     }
 
@@ -438,6 +463,38 @@ pub async fn add_client(
         return Err(AppError::Validation(dup));
     }
 
+    // Pass keep_writeback and use_game_disk from req
+    add_client_logic(
+        name,
+        mac,
+        ip,
+        master,
+        snapshot,
+        req.keep_writeback,
+        req.use_game_disk,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn add_client(
+    token: String,
+    req: AddClientRequest,
+) -> Result<serde_json::Value, AppError> {
+    // Validate authentication token
+    validate_auth(&token)?;
+    add_client_impl(req).await
+}
+
+async fn add_client_logic(
+    name: String,
+    mac: String,
+    ip: String,
+    master: String,
+    snapshot: String,
+    keep_writeback: Option<bool>,
+    use_game_disk: Option<bool>,
+) -> Result<serde_json::Value, AppError> {
     // If no master image is selected, only save to config files
     if master.is_empty() {
         let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -461,8 +518,8 @@ pub async fn add_client(
             status: None,
             mode: None,
             pxe_mode: Some("uefi".to_string()),
-            keep_writeback: req.keep_writeback.or(Some(true)), // Default to true for backward compatibility
-            use_game_disk: req.use_game_disk,
+            keep_writeback: keep_writeback.or(Some(true)), // Default to true for backward compatibility
+            use_game_disk: use_game_disk,
         };
         if !save_client_config(&client_data) {
             return Err(AppError::Config(format!(
@@ -584,7 +641,7 @@ pub async fn add_client(
     // Step 2: Set up iSCSI target
     let block_device = format!("/dev/zvol/{}", &paths["clone"]);
 
-    let iscsi_result = if req.use_game_disk.unwrap_or(false) {
+    let iscsi_result = if use_game_disk.unwrap_or(false) {
         setup_iscsi_target_with_game_disks(
             &paths["target_iqn"],
             &paths["block_store"],
@@ -646,8 +703,8 @@ pub async fn add_client(
             None
         },
         pxe_mode: Some("uefi".to_string()),
-        keep_writeback: req.keep_writeback.or(Some(true)), // Default to true for backward compatibility
-        use_game_disk: req.use_game_disk,
+        keep_writeback: keep_writeback.or(Some(true)), // Default to true for backward compatibility
+        use_game_disk: use_game_disk,
     };
 
     if !save_client_config(&client_data) {
