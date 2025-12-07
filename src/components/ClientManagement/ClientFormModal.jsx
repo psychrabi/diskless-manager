@@ -14,6 +14,7 @@ const clientSchema = z.object({
   master: z.string().optional(),
   snapshot: z.string().optional().nullable(),
   keep_writeback: z.boolean().optional(),
+  use_game_disk: z.boolean().optional(),
 });
 
 
@@ -28,6 +29,7 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
     snapshot: client?.snapshot || null,
     pxe_mode: client?.pxe_mode || 'uefi',
     keep_writeback: client?.keep_writeback !== false,  // Default to true
+    use_game_disk: client?.use_game_disk || false,
   };
 
   const {
@@ -53,6 +55,7 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
         snapshot: client.snapshot || null,
         pxe_mode: client.pxe_mode || 'uefi',
         keep_writeback: client.keep_writeback !== false,
+        use_game_disk: client.use_game_disk || false,
       });
     }
   }, [client, isOpen, reset]);
@@ -76,6 +79,7 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
           snapshot: data.snapshot || null,
           pxe_mode: data.pxe_mode,
           keep_writeback: data.keep_writeback,
+          use_game_disk: data.use_game_disk,
         }
       });
       showNotification('success', 'Client Updated', `Client ${data.name} updated successfully.`);
@@ -159,6 +163,24 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
               <span className="label-text font-medium">Keep Changes (Persistent Mode)</span>
               <span className="label-text-alt text-base-content/60">
                 If unchecked, client will reset to clean state on every boot (non-persistent mode)
+              </span>
+            </div>
+          </label>
+        </div>
+
+        {/* Use Game Disk Checkbox */}
+        <div className="form-control">
+          <label className="label cursor-pointer justify-start gap-3">
+            <input
+              type="checkbox"
+              className="checkbox checkbox-primary"
+              {...register('use_game_disk')}
+              defaultChecked={client?.use_game_disk}
+            />
+            <div className="flex flex-col">
+              <span className="label-text font-medium">Use Game Disk</span>
+              <span className="label-text-alt text-base-content/60">
+                If checked, available game disks will be mounted via iSCSI
               </span>
             </div>
           </label>

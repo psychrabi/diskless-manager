@@ -2,7 +2,7 @@
 //!
 //! This module contains all client-related types and structures.
 
-use serde::{ Deserialize, Serialize };
+use serde::{Deserialize, Serialize};
 
 /// Main client structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,7 +22,8 @@ pub struct Client {
     pub status: Option<String>,
     pub mode: Option<String>,
     pub pxe_mode: Option<String>,
-    pub keep_writeback: Option<bool>,  // If false, writeback is deleted on shutdown (non-persistent mode)
+    pub keep_writeback: Option<bool>, // If false, writeback is deleted on shutdown (non-persistent mode)
+    pub use_game_disk: Option<bool>,
 }
 
 impl Client {
@@ -65,7 +66,8 @@ pub struct AddClientRequest {
     pub ip: String,
     pub master: String,
     pub snapshot: Option<String>,
-    pub keep_writeback: Option<bool>,  // Default: true for backward compatibility
+    pub keep_writeback: Option<bool>, // Default: true for backward compatibility
+    pub use_game_disk: Option<bool>,
 }
 
 impl AddClientRequest {
