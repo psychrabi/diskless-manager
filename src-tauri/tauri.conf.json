@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "diskless-manager",
-  "version": "0.1.0",
+  "productName": "Diskless Boot Manager",
+  "version": "1.0.0",
   "identifier": "com.diskless.local",
   "build": {
     "frontendDist": "../dist",
@@ -33,7 +33,15 @@
     "linux": {
       "deb": {
         "files": {},
-        "depends": ["isc-dhcp-server", "tftpd-hpa", "samba", "apache2","wakeonlan", "targetcli-fb" ]
+        "depends": [
+          "isc-dhcp-server",
+          "tftpd-hpa",
+          "samba",
+          "apache2",
+          "wakeonlan",
+          "targetcli-fb",
+          "zfsutils-linux"
+        ]
       }
     },
     "icon": [

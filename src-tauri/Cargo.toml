@@ -1,6 +1,6 @@
 [package]
-name = "diskless-server"
-version = "0.1.0"
+name = "diskless-manager"
+version = "1.0.0"
 description = "Diskless Boot Server for booting diskless clients"
 authors = ["Rabi Shrestha"]
 license = ""

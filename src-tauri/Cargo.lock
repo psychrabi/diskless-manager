@@ -953,8 +953,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "diskless-server"
-version = "0.1.0"
+name = "diskless-manager"
+version = "1.0.0"
 dependencies = [
  "async-process",
  "bcrypt",
