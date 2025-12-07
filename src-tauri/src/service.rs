@@ -523,6 +523,19 @@ class "pxeclients" {{
   match if substring(option vendor-class-identifier, 0, 9) = "PXEClient";
 }}
 
+#on commit {{
+#  set clip = binary-to-ascii(10, 8, ".", leased-address);
+#  set clmac = concat(
+#    suffix(concat("0", binary-to-ascii(16, 8, "", substring(hardware, 1, 1))), 2), ":",
+#    suffix(concat("0", binary-to-ascii(16, 8, "", substring(hardware, 2, 1))), 2), ":",
+#    suffix(concat("0", binary-to-ascii(16, 8, "", substring(hardware, 3, 1))), 2), ":",
+#    suffix(concat("0", binary-to-ascii(16, 8, "", substring(hardware, 4, 1))), 2), ":",
+#    suffix(concat("0", binary-to-ascii(16, 8, "", substring(hardware, 5, 1))), 2), ":",
+#    suffix(concat("0", binary-to-ascii(16, 8, "", substring(hardware, 6, 1))), 2)
+#  );
+#  execute("/usr/local/bin/diskless-manager", "add-client", clmac, clip);
+#}}
+
 # DHCP Configuration
 subnet {} netmask {} {{
     # Only hand out dynamic leases to PXE clients
