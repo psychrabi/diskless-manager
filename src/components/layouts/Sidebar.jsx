@@ -3,28 +3,35 @@ import { cn } from '@/lib/utils';
 import { exit } from '@tauri-apps/plugin-process';
 
 import {
+  ComputerIcon,
   File,
+  FilesIcon,
   Gamepad,
   HardDrive,
+  KeyRound,
+  Laptop2,
   LayoutDashboard,
   Monitor,
+  MonitorStop,
   PanelLeftClose,
   PanelRightClose,
   Power,
   Settings,
-  Wrench
+  SquareLibrary
 } from 'lucide-react';
 import { Activity } from 'react';
 import { NavLink } from 'react-router-dom';
 
 const menuItems = [
   { id: 'dashboard', to: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { id: 'clients', to: '/clients', label: 'Client Management', icon: Monitor },
-  { id: 'disks', to: '/disks', label: 'Disk Management', icon: HardDrive },
-  { id: 'masters', to: '/masters', label: 'Image Management', icon: HardDrive },
-  { id: 'settings', to: '/settings', label: 'System Settings', icon: Settings },
-  { id: 'setup', to: '/setup', label: 'System Setup', icon: Wrench },
-  { id: 'logs', to: '/logs', label: 'Logs', icon: File }
+  { id: 'clients', to: '/clients', label: 'Clients', icon: Laptop2 },
+  { id: 'disks', to: '/disks', label: 'Disks', icon: HardDrive },
+  { id: 'masters', to: '/masters', label: 'Images', icon: FilesIcon },
+  { id: 'settings', to: '/settings', label: 'Settings', icon: Settings },
+  { id: 'services', to: '/services', label: 'Configuration', icon: Settings },
+  { id: 'license', to: '/license', label: 'License', icon: KeyRound },
+  { id: 'setup', to: '/setup', label: 'Setup', icon: SquareLibrary },
+  { id: 'logs', to: '/logs', label: 'Logs', icon: File },
 ];
 
 const handleExit = async () => {

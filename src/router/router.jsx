@@ -1,7 +1,9 @@
 
 
+import ApplicationSettings from "@/components/ApplicationMangement";
 import PublicRoute from "@/components/Authentication/PublicRoute";
 import PublicLayout from "@/components/layouts/PublicLayout";
+import LicenseManagement from "@/components/LicenseManagement";
 import { lazy } from "react";
 import { createHashRouter } from "react-router-dom";
 
@@ -51,8 +53,16 @@ export const router = createHashRouter([
         element: <ImageManagement />,
       },
       {
-        path: "/settings",
+        path: "/services",
         element: <SettingManagement />,
+      },
+      {
+        path: "/license",
+        element: <LicenseManagement />,
+      },
+      {
+        path: "/settings",
+        element: <ApplicationSettings />,
       },
       {
         path: "/logs",

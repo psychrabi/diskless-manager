@@ -1,5 +1,6 @@
 import { useAppStore } from '@/store/useAppStore';
 import { Card } from '../ui';
+import { Key, Lock } from 'lucide-react';
 
 export default function LicenseCard() {
   const license = useAppStore(state => state.licenseInfo) || {};
@@ -22,8 +23,8 @@ export default function LicenseCard() {
 
 
   return (
-    <Card title="License Information" icon={null} className='col-span-2'>
-      <ul>
+    <Card title="License Information" icon={Key}>
+      <ul className="space-y-2">
         <li><strong>Status:</strong> {license.license_status || 'not activated'}</li>
         <li><strong>Expires:</strong> {license.license_expires || '—'}</li>
         <li><strong>Key:</strong> {license.license_key ? license.license_key : '—'}</li>

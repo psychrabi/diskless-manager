@@ -1,4 +1,4 @@
-import { File } from 'lucide-react'
+import { File, LockKeyhole } from 'lucide-react'
 import { useForm } from 'react-hook-form';
 import { useNotification } from '@/contexts/notification';
 import { useSettings } from '@/hooks/useSettings';
@@ -39,7 +39,7 @@ export default function AdminPasswordForm() {
   };
 
   return (
-    <Card title="Admin password" icon={File} >
+    <Card title="Admin password" icon={LockKeyhole} >
       <form onSubmit={handleSubmit(onSubmit)}>
         <div className='space-y-4'>
           <fieldset className='fieldset w-full'>

@@ -8,7 +8,7 @@ import ServerInfoCard from './ServerInfoCard';
 import ServiceConfigModal from './ServiceConfigModal';
 import ServicesList from './ServicesList';
 import ZfsPoolCard from './ZfsPoolCard';
-import LicenseCard from './LicenseCard';
+
 
 const ServiceManagement = () => {
   return (
@@ -26,7 +26,6 @@ const ServiceManagement = () => {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <ClientOverviewCard />
           <MasterImageOverviewCard />
-          <LicenseCard />
         </div>
         <ServiceConfigModal />
       </div>

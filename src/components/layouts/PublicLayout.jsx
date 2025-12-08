@@ -37,10 +37,9 @@ const PublicLayout = () => {
             }
 
             try {
-                const license = await invoke("get_license")
-
+                await invoke("get_license")
             } catch (error) {
-
+                console.log(error)
             }
         })();
         return () => {
