@@ -263,11 +263,11 @@ pub fn get_ram_usage() -> Result<RamUsage, AppError> {
 /// Clear RAM cache (sync and drop caches)
 #[tauri::command]
 pub fn clear_ram_cache() -> Result<serde_json::Value, AppError> {
-    run_command(vec![
-        "sh",
-        "-c",
-        "sync && echo 3 > /proc/sys/vm/drop_caches",
-    ])?;
+    Command::new("pkexec")
+        .arg("sh")
+        .arg("-c")
+        .arg("sync && echo 3 > /proc/sys/vm/drop_caches")
+        .output()?;
 
     Ok(serde_json::json!({ "message": "RAM cache cleared successfully" }))
 }

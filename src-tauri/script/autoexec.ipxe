@@ -1,0 +1,211 @@
+#!ipxe
+# Initial check: If static IP details are not set, fall back to DHCP for initial download.
+dhcp
+
+# Force gateway to be the iSCSI target server (kludge for stupid window behavior)
+# Some menu defaults
+set boot-url http://${next-server}/boot/winpe
+set menu-timeout 3000
+set keep-san 1
+
+# --- NEW STATIC IP VARIABLES ---
+# Default to DHCP until the user sets a static one.
+set net_mode dhcp
+set static_ip
+set static_netmask
+set static_gateway
+
+
+###################### MAIN MENU ####################################
+:start
+menu Diskless Boot Menu (Server IP: ${next-server} | Mode: ${net_mode})
+item --gap -- ------------------------- Operating systems ------------------------------
+item --key w boot_windows Diskless boot Windows 11
+item --key d boot_debian Diskless boot Debian 13.1
+item --key b boot_ubuntu Diskless boot Ubuntu 25.10
+item --key a boot_anduinos Diskless boot Anduin OS 25.04
+item --key i boot_pe Boot from WinPE (WIM)
+item --key i boot_pe_iso Boot from WinPE (ISO)
+
+item --gap -- ------------------------- Network Configuration -------------------------------
+item --key s set_static_ip Configure Static IP
+item --key r set_dhcp Reset to DHCP (Current: ${net0/ip})
+
+item --gap -- ------------------------- Advanced options -------------------------------
+item --key c config Configure settings
+item shell Drop to iPXE shell
+item reboot Reboot computer
+item
+item --key x exit Exit iPXE and continue BIOS boot
+choose --timeout ${menu-timeout} --default ${menu-default} selected || goto cancel
+set menu-timeout 0
+goto ${selected}
+
+:cancel
+echo You cancelled the menu, dropping you to a shell
+
+:shell
+echo Type 'exit' to get the back to the menu
+shell
+goto start
+
+:failed
+echo Booting failed, dropping to shell
+goto shell
+
+:reboot
+reboot
+
+:exit
+exit
+
+:config
+config
+goto start
+
+:boot_windows
+set keep-san 1
+set net0/gateway 0.0.0.0
+sanboot ${root-path} || goto failed
+
+:boot_pe_iso
+echo ${root-path}
+set keep-san 1
+set net0/gateway 0.0.0.0
+sanhook ${root-path} || goto failed
+sanboot --drive 0x81 http://${next-server}/winpe.iso || goto failed
+
+:boot_pe
+echo ${root-path}
+set keep-san 1
+set net0/gateway 0.0.0.0
+sanhook ${root-path} || goto failed
+kernel ${boot-url}/wimboot
+initrd ${boot-url}/bootx64.efi bootx64.efi || goto failed
+initrd ${boot-url}/bootmgr bootmgr || goto failed
+initrd ${boot-url}/BCD BCD || goto failed
+initrd ${boot-url}/boot.sdi boot.sdi || goto failed
+initrd ${boot-url}/boot.wim boot.wim || goto failed
+boot || goto failed
+
+# --- NEW ROUTINES FOR NETWORK SETUP ---
+
+:set_static_ip
+# Prompt the user for the necessary details
+echo Set Static IP Details
+echo Current IP: ${net0/ip}
+echo
+
+set static_ip 
+read -p "Client IP (e.g., 192.168.1.150): " static_ip || goto start
+set static_netmask
+read -p "Netmask (e.g., 255.255.255.0): " static_netmask || goto start
+set static_gateway
+read -p "Gateway (e.g., 192.168.1.1): " static_gateway || goto start
+
+# Apply the settings to the current iPXE environment
+ip ${static_ip} ${static_netmask} ${static_gateway}
+route
+
+# Set the flag for the OS routines
+set net_mode static
+echo Network set to STATIC IP: ${static_ip}.
+
+goto start
+
+:set_dhcp
+# Clear the static variables and revert to DHCP
+set net_mode dhcp
+set static_ip
+set static_netmask
+set static_gateway
+dhcp
+echo Network set to DHCP.
+goto start
+
+
+# --------------------------------------------------------------------------------
+# LINUX BOOT ROUTINES (DEBIAN)
+# --------------------------------------------------------------------------------
+:boot_debian
+# Check the selected network mode
+isset ${static_ip} && goto do_static_debian || goto do_dhcp_debian
+
+:do_static_debian
+# Set the kernel parameter using the static variables
+set KERNEL_IP_PARAM ip=${static_ip}:::${static_netmask}::net0:none
+goto boot_linux_debian
+
+:do_dhcp_debian
+# Set the kernel parameter for DHCP
+set KERNEL_IP_PARAM ip=dhcp
+goto boot_linux_debian
+
+:boot_linux_debian
+kernel http://192.168.1.250/debian/vmlinuz \
+    ${KERNEL_IP_PARAM} \
+    iscsi_initiator=iqn.2025-04.client:${net0/mac:hexhyp} \
+    iscsi_target_name=iqn.2025-04.local.diskless:${net0/mac:hexhyp} \
+    iscsi_target_ip=192.168.1.250 \
+    root=/dev/disk/by-path/ip-192.168.1.250:3260-iscsi-iqn.2025-04.local.diskless:${net0/mac:hexhyp}-lun-0-part2 \
+    rw
+initrd http://192.168.1.250/debian/initrd.img
+boot || goto failed
+
+
+# --------------------------------------------------------------------------------
+# LINUX BOOT ROUTINES (UBUNTU)
+# --------------------------------------------------------------------------------
+:boot_ubuntu
+# Check the selected network mode
+isset ${static_ip} && goto do_static_ubuntu || goto do_dhcp_ubuntu
+
+:do_static_ubuntu
+# Set the kernel parameter using the static variables
+set KERNEL_IP_PARAM ip=${static_ip}:::${static_netmask}::net0:none
+goto boot_linux_ubuntu
+
+:do_dhcp_ubuntu
+# Set the kernel parameter for DHCP
+set KERNEL_IP_PARAM ip=dhcp
+goto boot_linux_ubuntu
+
+:boot_linux_ubuntu
+kernel http://192.168.1.250/ubuntu/vmlinuz \
+    ${KERNEL_IP_PARAM} \
+    iscsi_initiator=iqn.2025-04.client:${net0/mac:hexhyp} \
+    iscsi_target_name=iqn.2025-04.local.diskless:${net0/mac:hexhyp} \
+    iscsi_target_ip=192.168.1.250 \
+    root=/dev/disk/by-path/ip-192.168.1.250:3260-iscsi-iqn.2025-04.local.diskless:${net0/mac:hexhyp}-lun-0-part2 \
+    rw
+initrd http://192.168.1.250/ubuntu/initrd.img
+boot || goto failed
+
+
+# --------------------------------------------------------------------------------
+# LINUX BOOT ROUTINES (ANDUINOS)
+# --------------------------------------------------------------------------------
+:boot_anduinos
+# Check the selected network mode
+isset ${static_ip} && goto do_static_anduinos || goto do_dhcp_anduinos
+
+:do_static_anduinos
+# Set the kernel parameter using the static variables
+set KERNEL_IP_PARAM ip=${static_ip}:::${static_netmask}::net0:none
+goto boot_linux_anduinos
+
+:do_dhcp_anduinos
+# Set the kernel parameter for DHCP
+set KERNEL_IP_PARAM ip=dhcp
+goto boot_linux_anduinos
+
+:boot_linux_anduinos
+kernel http://192.168.1.250/anduinos/vmlinuz \
+    ${KERNEL_IP_PARAM} \
+    iscsi_initiator=iqn.2025-04.client:${net0/mac:hexhyp} \
+    iscsi_target_name=iqn.2025-04.local.diskless:${net0/mac:hexhyp} \
+    iscsi_target_ip=192.168.1.250 \
+    root=/dev/disk/by-path/ip-192.168.1.250:3260-iscsi-iqn.2025-04.local.diskless:${net0/mac:hexhyp}-lun-0-part2 \
+    rw
+initrd http://192.168.1.250/anduinos/initrd.img
+boot || goto failed
