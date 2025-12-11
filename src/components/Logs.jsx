@@ -1,9 +1,9 @@
-import { Activity, useCallback, useEffect, useState } from 'react';
+import { useLogs } from '@/hooks/useLogs';
+import { RefreshCw } from 'lucide-react';
+import { Activity, useEffect, useState } from 'react';
 import { useAppStore } from '../store/useAppStore';
 import AppLogs from './Logs/AppLogs';
 import { Button, Card, Select } from './ui';
-import { RefreshCw } from 'lucide-react';
-import { useLogs } from '@/hooks/useLogs';
 
 const Logs = () => {
   const [logUnit, setLogUnit] = useState('app_log');

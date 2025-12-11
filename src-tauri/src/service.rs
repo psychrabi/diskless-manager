@@ -16,7 +16,8 @@ use tokio::sync::RwLock;
 // Cache for system services information to reduce system calls
 use once_cell::sync::Lazy;
 
-static SERVICES_CACHE: Lazy<Arc<RwLock<ServicesCache>>> = Lazy::new(|| Arc::new(RwLock::new(ServicesCache::new())));
+static SERVICES_CACHE: Lazy<Arc<RwLock<ServicesCache>>> =
+    Lazy::new(|| Arc::new(RwLock::new(ServicesCache::new())));
 
 #[derive(Debug, Clone)]
 struct ServicesCache {
@@ -181,7 +182,8 @@ pub async fn get_services(token: String, zfs_pool: String) -> Result<Value, AppE
 
         if !cache.needs_refresh() {
             // Return cached data
-            return serde_json::to_value(cache.service_statuses.clone()).map_err(|e| AppError::Internal(e.to_string()));
+            return serde_json::to_value(cache.service_statuses.clone())
+                .map_err(|e| AppError::Internal(e.to_string()));
         }
     } // Drop read lock
 
@@ -190,7 +192,8 @@ pub async fn get_services(token: String, zfs_pool: String) -> Result<Value, AppE
     // Double-check after acquiring write lock
     if !cache.needs_refresh() {
         // Another thread may have updated the cache while we were waiting
-        return serde_json::to_value(cache.service_statuses.clone()).map_err(|e| AppError::Internal(e.to_string()));
+        return serde_json::to_value(cache.service_statuses.clone())
+            .map_err(|e| AppError::Internal(e.to_string()));
     }
 
     let service_map = [
