@@ -5,22 +5,104 @@ use crate::{
     utils::{run_command, run_command_check, run_command_output, run_command_output_no_sudo},
 };
 use regex::Regex;
+use std::sync::{Arc, RwLock};
+
+// Cache for ZFS pool and dataset information to reduce system calls
+use once_cell::sync::Lazy;
+
+static DISK_CACHE: Lazy<Arc<RwLock<DiskCache>>> = Lazy::new(|| Arc::new(RwLock::new(DiskCache::new())));
+
+#[derive(Debug, Clone)]
+struct DiskCache {
+    zpools: Vec<String>,
+    datasets: std::collections::HashMap<String, Vec<DatasetInfo>>, // zpool -> datasets
+    last_updated: std::time::SystemTime,
+    ttl: std::time::Duration,
+}
+
+impl DiskCache {
+    fn new() -> Self {
+        DiskCache {
+            zpools: Vec::new(),
+            datasets: std::collections::HashMap::new(),
+            last_updated: std::time::SystemTime::UNIX_EPOCH,
+            ttl: std::time::Duration::from_secs(30), // 30 second cache TTL
+        }
+    }
+
+    fn is_fresh(&self) -> bool {
+        self.last_updated
+            .elapsed()
+            .map(|elapsed| elapsed < self.ttl)
+            .unwrap_or(false)
+    }
+
+    fn needs_refresh(&self) -> bool {
+        !self.is_fresh()
+    }
+}
 
 #[tauri::command]
 pub fn list_zpools() -> Result<Vec<String>, String> {
-    // returns names, one per line
+    // Try to get cached data first
+    let cache = DISK_CACHE.read().unwrap();
+
+    if !cache.needs_refresh() {
+        // Return cached data
+        return Ok(cache.zpools.clone());
+    }
+
+    // Drop read lock before acquiring write lock
+    drop(cache);
+
+    let mut cache = DISK_CACHE.write().unwrap();
+
+    // Double-check after acquiring write lock
+    if !cache.needs_refresh() {
+        // Another thread may have updated the cache while we were waiting
+        return Ok(cache.zpools.clone());
+    }
+
+    // Get fresh data
     let out = run_command_output_no_sudo(&["zpool", "list", "-H", "-o", "name"])
         .map_err(|e| e.to_string())?;
-    let pools = out
+    let pools: Vec<String> = out
         .lines()
         .filter(|l| !l.is_empty())
         .map(|s| s.to_string())
         .collect();
+
+    // Update cache
+    cache.zpools = pools.clone();
+    cache.last_updated = std::time::SystemTime::now();
+
     Ok(pools)
 }
 
 #[tauri::command]
 pub fn list_datasets(zpool: &str) -> Result<Vec<DatasetInfo>, String> {
+    // Try to get cached data first
+    let cache = DISK_CACHE.read().unwrap();
+
+    if !cache.needs_refresh() {
+        if let Some(cached_datasets) = cache.datasets.get(zpool) {
+            return Ok(cached_datasets.clone());
+        }
+    }
+
+    // Drop read lock before acquiring write lock
+    drop(cache);
+
+    let mut cache = DISK_CACHE.write().unwrap();
+
+    // Double-check after acquiring write lock
+    if !cache.needs_refresh() {
+        if let Some(cached_datasets) = cache.datasets.get(zpool) {
+            return Ok(cached_datasets.clone());
+        }
+    }
+
+    // Get fresh data
     // Get all datasets with their properties in one command
     let out = run_command_output_no_sudo(&[
         "zfs",
@@ -99,6 +181,10 @@ pub fn list_datasets(zpool: &str) -> Result<Vec<DatasetInfo>, String> {
         result.push(ds);
     }
 
+    // Update cache for this specific zpool
+    cache.datasets.insert(zpool.to_string(), result.clone());
+    cache.last_updated = std::time::SystemTime::now();
+
     Ok(result)
 }
 
@@ -166,6 +252,12 @@ pub fn create_zfs_dataset(req: CreateDatasetRequest) -> Result<String, String> {
             &zvol_name,
         ]);
 
+        // Invalidate cache since we've modified datasets
+        if let Ok(mut cache) = DISK_CACHE.try_write() {
+            cache.datasets.remove(&req.zpool);
+            cache.last_updated = std::time::SystemTime::UNIX_EPOCH; // Force refresh next time
+        }
+
         return Ok(format!("Created zvol {}", zvol_name));
     }
 
@@ -185,6 +277,12 @@ pub fn create_zfs_dataset(req: CreateDatasetRequest) -> Result<String, String> {
         let _ = run_command(&["zfs", "set", "compression=lz4", &dataset]);
     }
 
+    // Invalidate cache since we've modified datasets
+    if let Ok(mut cache) = DISK_CACHE.try_write() {
+        cache.datasets.remove(&req.zpool);
+        cache.last_updated = std::time::SystemTime::UNIX_EPOCH; // Force refresh next time
+    }
+
     Ok(format!("Created dataset {}", dataset))
 }
 
@@ -194,6 +292,10 @@ pub fn delete_zfs_dataset(dataset: &str, recursive: bool) -> Result<String, Stri
     if dataset.trim().is_empty() {
         return Err("dataset is required".into());
     }
+
+    // Extract zpool name from dataset path (format: zpool/dataset)
+    let zpool = dataset.split('/').next().unwrap_or("").to_string();
+
     let args = if recursive {
         vec!["zfs", "destroy", "-r", dataset]
     } else {
@@ -202,6 +304,13 @@ pub fn delete_zfs_dataset(dataset: &str, recursive: bool) -> Result<String, Stri
     // convert to slice of &str
     let args_ref: Vec<&str> = args.iter().copied().collect();
     run_command(&args_ref).map_err(|e| e.to_string())?;
+
+    // Invalidate cache since we've modified datasets
+    if let Ok(mut cache) = DISK_CACHE.try_write() {
+        cache.datasets.remove(&zpool);
+        cache.last_updated = std::time::SystemTime::UNIX_EPOCH; // Force refresh next time
+    }
+
     Ok(format!("Destroyed dataset {}", dataset))
 }
 
@@ -211,7 +320,18 @@ pub fn rename_zfs_dataset(old: &str, new: &str) -> Result<String, String> {
     if old.trim().is_empty() || new.trim().is_empty() {
         return Err("old and new dataset names are required".into());
     }
+
+    // Extract zpool name from old dataset path (format: zpool/dataset)
+    let zpool = old.split('/').next().unwrap_or("").to_string();
+
     // zfs rename <old> <new>
     run_command(&["zfs", "rename", old, new]).map_err(|e| e.to_string())?;
+
+    // Invalidate cache since we've modified datasets
+    if let Ok(mut cache) = DISK_CACHE.try_write() {
+        cache.datasets.remove(&zpool);
+        cache.last_updated = std::time::SystemTime::UNIX_EPOCH; // Force refresh next time
+    }
+
     Ok(format!("Renamed {} -> {}", old, new))
 }

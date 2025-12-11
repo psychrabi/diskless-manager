@@ -3,6 +3,7 @@
 
 use app_lib::types::AddClientRequest;
 use clap::{Parser, Subcommand};
+use tracing::info;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -45,6 +46,7 @@ fn main() {
         use_game_disk,
     }) = cli.command
     {
+        info!("Auto adding client: {}", name);
         let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
         rt.block_on(async {
             let req = AddClientRequest {
@@ -58,7 +60,7 @@ fn main() {
             };
 
             match app_lib::client::add_client_impl(req).await {
-                Ok(v) => println!("Success: {}", v),
+                Ok(v) => info!("Success auto adding: {}", v),
                 Err(e) => {
                     eprintln!("Error: {}", e);
                     std::process::exit(1);

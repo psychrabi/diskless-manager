@@ -17,6 +17,7 @@ mod zfs;
 use dirs;
 
 use serde::Serialize;
+use std::sync::{Arc, RwLock};
 use sysinfo::System;
 
 use tauri::Manager;
@@ -28,7 +29,48 @@ const DHCP_CONFIG_PATH: &str = "/etc/dhcp/dhcpd.conf";
 const DHCP_CLIENTS_PATH: &str = "/etc/dhcp/clients.conf";
 pub const TFTP_AUTOEXEC_PATH: &str = "/srv/tftp/autoexec.ipxe";
 
-#[derive(Debug, Serialize)]
+// Cache for server info to avoid frequent system calls
+use once_cell::sync::Lazy;
+
+static SERVER_INFO_CACHE: Lazy<Arc<RwLock<ServerInfoCache>>> =
+    Lazy::new(|| Arc::new(RwLock::new(ServerInfoCache::new())));
+
+#[derive(Debug, Clone)]
+struct ServerInfoCache {
+    info: ServerInfo,
+    last_updated: std::time::SystemTime,
+    ttl: std::time::Duration,
+}
+
+impl ServerInfoCache {
+    fn new() -> Self {
+        ServerInfoCache {
+            info: ServerInfo {
+                os_name: None,
+                kernel_version: None,
+                host_name: None,
+                total_memory_mb: 0,
+                cpu_count: 0,
+                server_ip: String::new(),
+            },
+            last_updated: std::time::SystemTime::UNIX_EPOCH,
+            ttl: std::time::Duration::from_secs(60), // 60 second cache TTL
+        }
+    }
+
+    fn is_fresh(&self) -> bool {
+        self.last_updated
+            .elapsed()
+            .map(|elapsed| elapsed < self.ttl)
+            .unwrap_or(false)
+    }
+
+    fn needs_refresh(&self) -> bool {
+        !self.is_fresh()
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
 struct ServerInfo {
     os_name: Option<String>,
     kernel_version: Option<String>,
@@ -40,16 +82,43 @@ struct ServerInfo {
 
 #[tauri::command]
 fn get_server_info() -> ServerInfo {
+    // Try to get cached info first
+    let cache = SERVER_INFO_CACHE.read().unwrap();
+
+    if !cache.needs_refresh() {
+        // Return cached data
+        return cache.info.clone();
+    }
+
+    // Drop read lock before acquiring write lock
+    drop(cache);
+
+    let mut cache = SERVER_INFO_CACHE.write().unwrap();
+
+    // Double-check after acquiring write lock
+    if !cache.needs_refresh() {
+        // Another thread may have updated the cache while we were waiting
+        return cache.info.clone();
+    }
+
+    // Refresh system info
     let mut sys = System::new_all();
     sys.refresh_all();
-    ServerInfo {
+
+    let new_info = ServerInfo {
         os_name: System::name(),
         kernel_version: System::kernel_version(),
         host_name: System::host_name(),
         total_memory_mb: sys.total_memory() / (1024 * 1024), // bytes -> MB
         cpu_count: sys.cpus().len(),
         server_ip: get_server_ip(),
-    }
+    };
+
+    // Update cache
+    cache.info = new_info.clone();
+    cache.last_updated = std::time::SystemTime::now();
+
+    new_info
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

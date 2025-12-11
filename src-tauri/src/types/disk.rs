@@ -5,7 +5,7 @@
 use serde::{ Deserialize, Serialize };
 
 /// Dataset information structure
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DatasetInfo {
     pub name: String,
     pub disk_type: Option<String>,

@@ -3,13 +3,50 @@ use crate::error::AppError;
 use crate::middleware::validate_auth_token_for_command;
 use crate::types::service::SambaShare;
 use crate::types::{DHCPConfig, HTTPConfig, PackageStatus, ServiceControlRequest, TFTPConfig};
-use crate::utils::{append_log, run_command, run_command_output, run_command_output_no_sudo};
+use crate::utils::{append_log, run_command_async, run_command_output, run_command_output_no_sudo};
 use crate::{DHCP_CLIENTS_PATH, DHCP_CONFIG_PATH, TFTP_AUTOEXEC_PATH};
 use async_process::Command as AsyncCommand;
 use futures::io::AsyncWriteExt;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::process::Stdio;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+
+// Cache for system services information to reduce system calls
+use once_cell::sync::Lazy;
+
+static SERVICES_CACHE: Lazy<Arc<RwLock<ServicesCache>>> = Lazy::new(|| Arc::new(RwLock::new(ServicesCache::new())));
+
+#[derive(Debug, Clone)]
+struct ServicesCache {
+    service_statuses: HashMap<String, Value>,
+    package_statuses: Vec<PackageStatus>,
+    last_updated: std::time::SystemTime,
+    ttl: std::time::Duration,
+}
+
+impl ServicesCache {
+    fn new() -> Self {
+        ServicesCache {
+            service_statuses: HashMap::new(),
+            package_statuses: Vec::new(),
+            last_updated: std::time::SystemTime::UNIX_EPOCH,
+            ttl: std::time::Duration::from_secs(30), // 30 second cache TTL
+        }
+    }
+
+    fn is_fresh(&self) -> bool {
+        self.last_updated
+            .elapsed()
+            .map(|elapsed| elapsed < self.ttl)
+            .unwrap_or(false)
+    }
+
+    fn needs_refresh(&self) -> bool {
+        !self.is_fresh()
+    }
+}
 
 // Common auth validator
 fn validate_token(token: &str) -> Result<(), AppError> {
@@ -61,7 +98,7 @@ async fn write_with_sudo_tee(path: &str, content: &str) -> Result<(), AppError> 
 
 // Helper: Restart service async
 async fn restart_service_async(service: &str) -> Result<(), AppError> {
-    match run_command(["systemctl", "restart", service]) {
+    match run_command_async(["systemctl", "restart", service]).await {
         Ok(_) => Ok(()),
         Err(e) => Err(AppError::Command(format!(
             "Failed to restart {}: {}",
@@ -138,6 +175,24 @@ pub async fn get_services(token: String, zfs_pool: String) -> Result<Value, AppE
     validate_token(&token)?;
     append_log("INFO", "get_services called");
 
+    // Try to get cached data first
+    {
+        let cache = SERVICES_CACHE.read().await;
+
+        if !cache.needs_refresh() {
+            // Return cached data
+            return serde_json::to_value(cache.service_statuses.clone()).map_err(|e| AppError::Internal(e.to_string()));
+        }
+    } // Drop read lock
+
+    let mut cache = SERVICES_CACHE.write().await;
+
+    // Double-check after acquiring write lock
+    if !cache.needs_refresh() {
+        // Another thread may have updated the cache while we were waiting
+        return serde_json::to_value(cache.service_statuses.clone()).map_err(|e| AppError::Internal(e.to_string()));
+    }
+
     let service_map = [
         ("iscsi", "rtslib-fb-targetctl.service"),
         ("dhcp", "isc-dhcp-server.service"),
@@ -206,6 +261,10 @@ pub async fn get_services(token: String, zfs_pool: String) -> Result<Value, AppE
             "status": zfs_status
         }),
     );
+
+    // Update cache
+    cache.service_statuses = statuses.clone();
+    cache.last_updated = std::time::SystemTime::now();
 
     save_config_section(
         "services",
@@ -323,7 +382,13 @@ pub async fn control_service(
         })
         .ok_or_else(|| AppError::NotFound(format!("Unknown service: {}", service_key)))?;
 
-    crate::utils::run_command(&["systemctl", &req.action, service_name])?;
+    crate::utils::run_command_async(&["systemctl", &req.action, service_name]).await?;
+
+    // Invalidate cache since we've modified service state
+    {
+        let mut cache = SERVICES_CACHE.write().await;
+        cache.last_updated = std::time::SystemTime::UNIX_EPOCH; // Force refresh next time
+    }
 
     Ok(json!({
         "message": format!("Service '{}' {} issued successfully.", service_name, &req.action)
@@ -334,7 +399,7 @@ pub async fn control_service(
 pub async fn install_service(service: String, token: String) -> Result<(), AppError> {
     validate_token(&token)?;
 
-    match run_command(["apt-get", "install", "-y", &service]) {
+    match run_command_async(["apt-get", "install", "-y", &service]).await {
         Ok(_) => Ok(()),
         Err(e) => Err(AppError::Command(format!(
             "Failed to install {}: {}",
@@ -379,6 +444,26 @@ pub async fn save_service_config(
 
 #[tauri::command]
 pub async fn check_package_status() -> Result<Value, AppError> {
+    // Try to get cached data first
+    {
+        let cache = SERVICES_CACHE.read().await;
+
+        if !cache.needs_refresh() {
+            // Return cached data
+            return serde_json::to_value(cache.package_statuses.clone())
+                .map_err(|e| AppError::Internal(format!("Serialization failed: {}", e)));
+        }
+    } // Drop read lock
+
+    let mut cache = SERVICES_CACHE.write().await;
+
+    // Double-check after acquiring write lock
+    if !cache.needs_refresh() {
+        // Another thread may have updated the cache while we were waiting
+        return serde_json::to_value(cache.package_statuses.clone())
+            .map_err(|e| AppError::Internal(format!("Serialization failed: {}", e)));
+    }
+
     let packages = [
         ("isc-dhcp-server", "isc-dhcp-server"),
         ("tftpd-hpa", "tftpd-hpa"),
@@ -413,6 +498,10 @@ pub async fn check_package_status() -> Result<Value, AppError> {
         });
     }
 
+    // Update cache
+    cache.package_statuses = status_list.clone();
+    cache.last_updated = std::time::SystemTime::now();
+
     let services_value = serde_json::to_value(&status_list)
         .map_err(|e| AppError::Internal(format!("Serialization failed: {}", e)))?;
 
@@ -428,7 +517,7 @@ pub async fn check_package_status() -> Result<Value, AppError> {
 #[tauri::command]
 pub async fn install_packages() -> Result<String, AppError> {
     // Update
-    let _ = run_command(["apt", "update"]);
+    let _ = run_command_async(["apt", "update"]).await;
 
     let packages = [
         "isc-dhcp-server",
@@ -443,7 +532,7 @@ pub async fn install_packages() -> Result<String, AppError> {
     let mut args = vec!["apt", "install", "-y"];
     args.extend(packages);
 
-    match run_command(&args) {
+    match run_command_async(&args).await {
         Ok(_) => Ok("Packages installed successfully".to_string()),
         Err(e) => Err(AppError::Command(format!("Installation failed: {}", e))),
     }
@@ -451,7 +540,15 @@ pub async fn install_packages() -> Result<String, AppError> {
 
 #[tauri::command]
 pub async fn restart_service(service: &str) -> Result<(), AppError> {
-    restart_service_async(service).await
+    let result = restart_service_async(service).await;
+
+    // Invalidate cache since we've modified service state
+    if result.is_ok() {
+        let mut cache = SERVICES_CACHE.write().await;
+        cache.last_updated = std::time::SystemTime::UNIX_EPOCH; // Force refresh next time
+    }
+
+    result
 }
 
 #[tauri::command]
@@ -670,7 +767,7 @@ pub async fn configure_apache_server(
     )
     .await?;
 
-    let _ = run_command(["a2ensite", "diskless-server.conf"]);
+    let _ = run_command_async(["a2ensite", "diskless-server.conf"]).await;
     restart_service_async("apache2.service").await?;
 
     Ok("Apache server configured successfully".to_string())

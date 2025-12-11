@@ -1,6 +1,6 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Diskless Boot Manager",
+  "productName": "diskless-manager",
   "version": "1.0.0",
   "identifier": "com.diskless.local",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Diskless Boot Manager",
+        "title": "Diskless Manager",
         "width": 1680,
         "height": 1050,
         "resizable": true,

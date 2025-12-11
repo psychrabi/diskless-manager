@@ -12,6 +12,19 @@ pub enum CommandError {
     Failure { cmd: String, status: i32 },
 }
 
+// Macro for timing function execution
+#[macro_export]
+macro_rules! timed_execution {
+    ($name:expr, $block:expr) => {{
+        use std::time::Instant;
+        let start = Instant::now();
+        let result = $block;
+        let duration = start.elapsed();
+        debug!("{} took {:?}", $name, duration);
+        result
+    }};
+}
+
 // Generic command runner with sudo -n
 fn exec_sudo_cmd<II>(args: II) -> Result<Output, CommandError>
 where
@@ -43,6 +56,47 @@ where
     Ok(output)
 }
 
+// Async command runner for better performance using async-process
+pub async fn run_command_async<II>(args: II) -> Result<(), AppError>
+where
+    II: IntoIterator,
+    II::Item: AsRef<std::ffi::OsStr> + std::fmt::Debug,
+{
+    let args_vec: Vec<_> = args.into_iter().collect();
+    let cmd_str = args_vec
+        .iter()
+        .map(|a| a.as_ref().to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    // Use async-process for async command execution
+    let child = async_process::Command::new("sudo")
+        .arg("-n")
+        .args(&args_vec)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| AppError::Command(format!("Failed to spawn command: {}", e)))?;
+
+    let output = child
+        .output()
+        .await
+        .map_err(|e| AppError::Command(format!("Failed to wait for command: {}", e)))?;
+
+    if !output.status.success() {
+        let stderr_output = String::from_utf8_lossy(&output.stderr);
+        return Err(AppError::Command(format!(
+            "Command failed with status {}: {} (stderr: {})",
+            output.status.code().unwrap_or(-1),
+            cmd_str,
+            stderr_output
+        )));
+    }
+
+    Ok(())
+}
+
 pub fn run_command<II>(args: II) -> Result<(), AppError>
 where
     II: IntoIterator,
@@ -54,6 +108,8 @@ where
         .map(|a| a.as_ref().to_string_lossy().into_owned())
         .collect::<Vec<_>>()
         .join(" ");
+    // Only print in debug mode to improve performance
+    #[cfg(debug_assertions)]
     println!("Executing command: sudo {}", cmd_str);
 
     match exec_sudo_cmd(args_vec.iter()) {
@@ -288,17 +344,15 @@ pub fn log_file_path() -> PathBuf {
     base
 }
 
-use tracing::{debug, error, info, warn};
-
 /// Append a single line with level and timestamp to the log file.
 /// This is best-effort and should not panic.
 /// NOW DEPRECATED: Redirects to tracing macros.
 pub fn append_log(level: &str, msg: &str) {
     match level.to_uppercase().as_str() {
-        "ERROR" => error!("{}", msg),
-        "WARN" | "WARNING" => warn!("{}", msg),
-        "DEBUG" => debug!("{}", msg),
-        _ => info!("{}", msg),
+        "ERROR" => tracing::error!("{}", msg),
+        "WARN" | "WARNING" => tracing::warn!("{}", msg),
+        "DEBUG" => tracing::debug!("{}", msg),
+        _ => tracing::info!("{}", msg),
     }
 }
 

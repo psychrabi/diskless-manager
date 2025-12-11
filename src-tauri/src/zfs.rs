@@ -7,6 +7,7 @@ use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::process::Command;
 use tracing::debug;
+use std::sync::{Arc, RwLock};
 
 use crate::types::image::CreateImageRequest;
 use crate::types::{CreateZpoolRequest, Master, MasterData, Snapshot};
@@ -18,6 +19,44 @@ use crate::{
     middleware::validate_auth_token_for_command,
     types::image::{ArcstatInfo, ZpoolInfo},
 };
+
+// Import the timed execution macro
+use crate::timed_execution;
+
+// Cache for ZFS datasets and snapshots to reduce system calls
+use once_cell::sync::Lazy;
+
+static ZFS_CACHE: Lazy<Arc<RwLock<ZfsCache>>> = Lazy::new(|| Arc::new(RwLock::new(ZfsCache::new())));
+
+#[derive(Debug, Clone)]
+struct ZfsCache {
+    datasets: Vec<Snapshot>,
+    snapshots: Vec<Snapshot>,
+    last_updated: std::time::SystemTime,
+    ttl: std::time::Duration,
+}
+
+impl ZfsCache {
+    fn new() -> Self {
+        ZfsCache {
+            datasets: Vec::new(),
+            snapshots: Vec::new(),
+            last_updated: std::time::SystemTime::UNIX_EPOCH,
+            ttl: std::time::Duration::from_secs(30), // 30 second cache TTL
+        }
+    }
+
+    fn is_fresh(&self) -> bool {
+        self.last_updated
+            .elapsed()
+            .map(|elapsed| elapsed < self.ttl)
+            .unwrap_or(false)
+    }
+
+    fn needs_refresh(&self) -> bool {
+        !self.is_fresh()
+    }
+}
 
 // Helper to validate auth token, returning Err if invalid
 fn validate_auth(token: &str) -> Result<(), AppError> {
@@ -363,14 +402,127 @@ pub fn create_game_disk(token: String, name: String, size: String) -> Result<Val
 pub async fn get_images(token: String) -> Result<Vec<Master>, AppError> {
     validate_auth(&token)?;
 
-    let zpool = get_zpool_name();
-    let mut config = get_config();
-    let default_master = config
-        .settings
-        .get("default_master")
-        .and_then(|s| s.as_str())
-        .unwrap_or("")
-        .to_string();
+    timed_execution!("get_images", {
+        let zpool = get_zpool_name();
+        let mut config = get_config();
+        let default_master = config
+            .settings
+            .get("default_master")
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        // Get datasets and snapshots using cache
+        let (all_datasets, all_snaps) = get_cached_zfs_data(&zpool)?;
+
+        // Collect master_names: non -disk datasets + snapshots of -disk that end with -master
+        let mut master_names = vec![];
+        for ds in &all_datasets {
+            if !ds.name.to_lowercase().ends_with("-disk") {
+                master_names.push(ds.name.clone());
+            }
+        }
+        for snap in &all_snaps {
+            if let Some(ds_part) = snap.name.split_once('@') {
+                if ds_part.0.to_lowercase().ends_with("-disk") {
+                    master_names.push(snap.name.clone());
+                }
+            }
+        }
+        master_names.sort();
+        master_names.dedup();
+
+        // Collect unique parents for batch property check
+        let mut unique_parents = HashSet::new();
+        for master_name in &master_names {
+            if let Some(p) = master_name.rfind('/') {
+                unique_parents.insert(master_name[..p].to_string());
+            }
+        }
+        let parent_vec: Vec<&str> = unique_parents.iter().map(|s| s.as_str()).collect();
+        let mut image_filter = HashSet::new();
+        if !parent_vec.is_empty() {
+            if let Ok(get_out) = run_command_output_no_sudo(
+                &["zfs", "get", "-H", "-o", "name,value", "org.diskless:type"]
+                    .iter()
+                    .chain(&parent_vec)
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            ) {
+                for (name, val) in parse_property_output(&get_out) {
+                    if val == "image" {
+                        image_filter.insert(name);
+                    }
+                }
+            }
+        }
+
+        // For each master, get snapshots and build Master
+        let mut masters_data = vec![];
+        for master_name_ref in &master_names {
+            let master_name = master_name_ref.clone();
+            let is_default = master_name_ref == &default_master;
+            let parent = if let Some(p) = master_name_ref.rfind('/') {
+                &master_name_ref[..p]
+            } else {
+                continue;
+            };
+            if !image_filter.contains(parent) {
+                continue;
+            }
+
+            // Get snapshots of this master by filtering global list
+            let snapshots: Vec<Snapshot> = all_snaps
+                .iter()
+                .filter(|s| s.name.starts_with(&format!("{}@", master_name_ref)))
+                .cloned()
+                .collect();
+
+            // Get size from all_datasets ( "-" if not found, e.g., for snapshot masters)
+            let size = all_datasets
+                .iter()
+                .find(|ds| ds.name == *master_name_ref)
+                .map(|ds| ds.used.clone())
+                .unwrap_or_else(|| "-".to_string());
+
+            masters_data.push(Master {
+                id: master_name_ref.clone(),
+                name: master_name,
+                is_default,
+                size,
+                snapshots,
+            });
+        }
+
+        // Update config.json with the current masters list
+        config.masters = serde_json::to_value(&masters_data).unwrap_or(json!({}));
+        if let Err(e) = write_config(&config) {
+            eprintln!("Error writing masters to config: {}", e);
+        }
+
+        Ok(masters_data)
+    })
+}
+
+// Function to get ZFS data with caching
+fn get_cached_zfs_data(zpool: &str) -> Result<(Vec<Snapshot>, Vec<Snapshot>), AppError> {
+    let cache = ZFS_CACHE.read().unwrap();
+
+    if !cache.needs_refresh() {
+        // Return cached data
+        return Ok((cache.datasets.clone(), cache.snapshots.clone()));
+    }
+
+    // Drop read lock before acquiring write lock
+    drop(cache);
+
+    let mut cache = ZFS_CACHE.write().unwrap();
+
+    // Double-check after acquiring write lock
+    if !cache.needs_refresh() {
+        // Another thread may have updated the cache while we were waiting
+        return Ok((cache.datasets.clone(), cache.snapshots.clone()));
+    }
 
     // List all datasets (fs/vol)
     let ds_out = run_command_output_no_sudo(&[
@@ -382,7 +534,7 @@ pub async fn get_images(token: String) -> Result<Vec<Master>, AppError> {
         "-o",
         "name,creation,used",
         "-r",
-        &zpool,
+        zpool,
     ])
     .map_err(|e| AppError::Command(format!("Failed to run zfs list: {}", e)))?;
     let all_datasets = parse_zfs_list(&ds_out);
@@ -397,97 +549,17 @@ pub async fn get_images(token: String) -> Result<Vec<Master>, AppError> {
         "-o",
         "name,creation,used",
         "-r",
-        &zpool,
+        zpool,
     ])
     .map_err(|e| AppError::Command(format!("Failed to list snapshots: {}", e)))?;
     let all_snaps = parse_zfs_list(&snap_out);
 
-    // Collect master_names: non -disk datasets + snapshots of -disk that end with -master
-    let mut master_names = vec![];
-    for ds in &all_datasets {
-        if !ds.name.to_lowercase().ends_with("-disk") {
-            master_names.push(ds.name.clone());
-        }
-    }
-    for snap in &all_snaps {
-        if let Some(ds_part) = snap.name.split_once('@') {
-            if ds_part.0.to_lowercase().ends_with("-disk") {
-                master_names.push(snap.name.clone());
-            }
-        }
-    }
-    master_names.sort();
-    master_names.dedup();
+    // Update cache
+    cache.datasets = all_datasets;
+    cache.snapshots = all_snaps;
+    cache.last_updated = std::time::SystemTime::now();
 
-    // Collect unique parents for batch property check
-    let mut unique_parents = HashSet::new();
-    for master_name in &master_names {
-        if let Some(p) = master_name.rfind('/') {
-            unique_parents.insert(master_name[..p].to_string());
-        }
-    }
-    let parent_vec: Vec<&str> = unique_parents.iter().map(|s| s.as_str()).collect();
-    let mut image_filter = HashSet::new();
-    if !parent_vec.is_empty() {
-        if let Ok(get_out) = run_command_output_no_sudo(
-            &["zfs", "get", "-H", "-o", "name,value", "org.diskless:type"]
-                .iter()
-                .chain(&parent_vec)
-                .cloned()
-                .collect::<Vec<_>>(),
-        ) {
-            for (name, val) in parse_property_output(&get_out) {
-                if val == "image" {
-                    image_filter.insert(name);
-                }
-            }
-        }
-    }
-
-    // For each master, get snapshots and build Master
-    let mut masters_data = vec![];
-    for master_name_ref in &master_names {
-        let master_name = master_name_ref.clone();
-        let is_default = master_name_ref == &default_master;
-        let parent = if let Some(p) = master_name_ref.rfind('/') {
-            &master_name_ref[..p]
-        } else {
-            continue;
-        };
-        if !image_filter.contains(parent) {
-            continue;
-        }
-
-        // Get snapshots of this master by filtering global list
-        let snapshots: Vec<Snapshot> = all_snaps
-            .iter()
-            .filter(|s| s.name.starts_with(&format!("{}@", master_name_ref)))
-            .cloned()
-            .collect();
-
-        // Get size from all_datasets ( "-" if not found, e.g., for snapshot masters)
-        let size = all_datasets
-            .iter()
-            .find(|ds| ds.name == *master_name_ref)
-            .map(|ds| ds.used.clone())
-            .unwrap_or_else(|| "-".to_string());
-
-        masters_data.push(Master {
-            id: master_name_ref.clone(),
-            name: master_name,
-            is_default,
-            size,
-            snapshots,
-        });
-    }
-
-    // Update config.json with the current masters list
-    config.masters = serde_json::to_value(&masters_data).unwrap_or(json!({}));
-    if let Err(e) = write_config(&config) {
-        eprintln!("Error writing masters to config: {}", e);
-    }
-
-    Ok(masters_data)
+    Ok((cache.datasets.clone(), cache.snapshots.clone()))
 }
 
 pub fn save_master_config(master_data: &MasterData) -> bool {
@@ -762,7 +834,11 @@ pub fn set_default_image(token: String, name: &str) -> Result<bool, AppError> {
     }
     config.settings["default_master"] = Value::String(name.to_string());
     match write_config(&config) {
-        Ok(_) => Ok(true),
+        Ok(_) => {
+            // Invalidate cache since we've changed the default image
+            invalidate_default_image_cache();
+            Ok(true)
+        },
         Err(e) => {
             println!("Error saving default master: {}", e);
             Err(AppError::Config(format!(
@@ -847,9 +923,44 @@ pub async fn get_zfs_arcstat() -> Result<ArcstatInfo, AppError> {
     Ok(ArcstatInfo { size, hit_percent })
 }
 
+static DEFAULT_IMAGE_CACHE: Lazy<Arc<RwLock<DefaultImageCache>>> = Lazy::new(|| Arc::new(RwLock::new(DefaultImageCache::new())));
+
+#[derive(Debug, Clone)]
+struct DefaultImageCache {
+    overview: serde_json::Value,
+    last_updated: std::time::SystemTime,
+    ttl: std::time::Duration,
+}
+
+impl DefaultImageCache {
+    fn new() -> Self {
+        DefaultImageCache {
+            overview: serde_json::json!({
+                "name": null,
+                "creation_date": null,
+                "clones": null,
+                "message": "No default master image set"
+            }),
+            last_updated: std::time::SystemTime::UNIX_EPOCH,
+            ttl: std::time::Duration::from_secs(30), // 30 second cache TTL
+        }
+    }
+
+    fn is_fresh(&self) -> bool {
+        self.last_updated
+            .elapsed()
+            .map(|elapsed| elapsed < self.ttl)
+            .unwrap_or(false)
+    }
+
+    fn needs_refresh(&self) -> bool {
+        !self.is_fresh()
+    }
+}
+
 #[tauri::command]
 pub async fn get_default_image_overview() -> Result<serde_json::Value, AppError> {
-    let mut config = get_config();
+    let config = get_config(); // Use cached config
     let master_dataset = config
         .settings
         .get("default_master")
@@ -857,6 +968,7 @@ pub async fn get_default_image_overview() -> Result<serde_json::Value, AppError>
         .map(|s| s.to_string())
         .unwrap_or_default();
 
+    // For empty dataset, return immediately without caching
     if master_dataset.is_empty() {
         return Ok(json!({
             "name": null,
@@ -866,21 +978,46 @@ pub async fn get_default_image_overview() -> Result<serde_json::Value, AppError>
         }));
     }
 
+    // Try to get cached data first
+    {
+        let cache = DEFAULT_IMAGE_CACHE.read().unwrap();
+
+        if !cache.needs_refresh() {
+            // Return cached data
+            return Ok(cache.overview.clone());
+        }
+    } // Drop read lock
+
+    let mut cache = DEFAULT_IMAGE_CACHE.write().unwrap();
+
+    // Double-check after acquiring write lock
+    if !cache.needs_refresh() {
+        // Another thread may have updated the cache while we were waiting
+        return Ok(cache.overview.clone());
+    }
+
     // Check if the dataset exists
     if !zfs_exists(&master_dataset) {
         // Clear the invalid default_master from config
+        let mut config = get_config();
         if !config.settings.is_object() {
             config.settings = json!({});
         }
         config.settings["default_master"] = json!(null);
         let _ = write_config(&config);
 
-        return Ok(json!({
+        let overview = json!({
             "name": null,
             "creation_date": null,
             "clones": null,
             "message": format!("Default master image '{}' no longer exists and has been cleared from config", master_dataset)
-        }));
+        });
+
+        // Update cache
+        cache.overview = overview.clone();
+        cache.last_updated = std::time::SystemTime::now();
+
+        return Ok(overview);
     }
 
     // Dataset exists, get its information
@@ -901,11 +1038,24 @@ pub async fn get_default_image_overview() -> Result<serde_json::Value, AppError>
         ));
     }
 
-    Ok(json!({
+    let overview = json!({
         "name": master_dataset,
         "creation_date": lines[0],
         "clones": lines[1]
-    }))
+    });
+
+    // Update cache
+    cache.overview = overview.clone();
+    cache.last_updated = std::time::SystemTime::now();
+
+    Ok(overview)
+}
+
+// Function to invalidate the default image cache (to be called when operations change the default image)
+pub fn invalidate_default_image_cache() {
+    if let Ok(mut cache) = DEFAULT_IMAGE_CACHE.try_write() {
+        cache.last_updated = std::time::SystemTime::UNIX_EPOCH; // Force refresh next time
+    }
 }
 
 #[tauri::command]

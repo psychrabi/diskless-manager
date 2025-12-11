@@ -1,4 +1,4 @@
-# Diskless Boot Manager
+# Diskless Manager
 
 A web-based toolkit for managing diskless PXE/iSCSI boot environments using ZFS, iSCSI, DHCP, and TFTP.
 

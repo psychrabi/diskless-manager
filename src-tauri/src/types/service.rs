@@ -11,7 +11,7 @@ pub struct ServiceControlRequest {
 }
 
 /// Package status information
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PackageStatus {
     pub name: String,
     pub service: String,

@@ -1,10 +1,10 @@
-use crate::config::{get_config, get_zpool_name, read_config, write_config};
+use crate::config::{get_config, get_zpool_name, write_config};
 use crate::dhcp::{create_dhcp_entry, update_dhcp_config};
 use crate::error::AppError;
 use crate::iscsi::{cleanup_iscsi_target, setup_iscsi_target, setup_iscsi_target_with_game_disks};
-use crate::types::{AddClientRequest, AppConfig, Client, ControlRequest, DeprovisionRequest};
+use crate::types::{AddClientRequest, Client, ControlRequest, DeprovisionRequest};
 use crate::utils::{
-    run_command, run_command_check, run_command_output, run_command_output_no_sudo,
+    run_command, run_command_async, run_command_check, run_command_output, run_command_output_no_sudo,
 };
 use crate::zfs::{zfs_clone, zfs_destroy, zfs_exists};
 use tracing::{debug, error, info, warn};
@@ -16,7 +16,9 @@ use std::collections::HashMap;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
-use tokio::task;
+
+// Import the timed execution macro
+use crate::timed_execution;
 
 trait WaitTimeout {
     fn wait_timeout(&mut self, dur: Duration) -> std::io::Result<Option<std::process::ExitStatus>>;
@@ -56,50 +58,52 @@ pub async fn get_clients(
 ) -> Result<serde_json::Value, AppError> {
     // Validate authentication token
     validate_auth(&token)?;
-    let mut config: AppConfig = read_config();
+    timed_execution!("get_clients", {
+        let mut config = get_config(); // Use cached config instead of reading from disk
 
-    // Read config once, compute statuses concurrently with limited concurrency
-    // to avoid exhausting system resources (threads/processes).
-    let client_ips: Vec<String> = config.clients.iter().map(|c| c.ip.clone()).collect();
+        if let Some(id) = client_id {
+            let client = config
+                .clients
+                .iter()
+                .find(|c| c.id.eq_ignore_ascii_case(&id));
+            Ok(serde_json::json!(client))
+        } else {
+            // Update statuses for all clients concurrently with optimized ping
+            let client_count = config.clients.len();
+            if client_count > 0 {
+                // Use dynamic semaphore limiting based on client count for better performance
+                let max_concurrent = std::cmp::min(200, std::cmp::max(client_count, 50));
+                let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(max_concurrent));
 
-    // Use a semaphore to limit concurrency
-    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(50));
-    let mut handles = Vec::new();
+                let mut futures = Vec::new();
+                for (i, client) in config.clients.iter().enumerate() {
+                    if !client.ip.is_empty() && client.ip != "N/A" {
+                        let sem = semaphore.clone();
+                        let ip = client.ip.clone();
+                        let future = tokio::spawn(async move {
+                            let _permit = sem.acquire().await.unwrap();
+                            ping_host(ip).await
+                        });
+                        futures.push((i, future));
+                    }
+                }
 
-    for ip in client_ips {
-        let sem = semaphore.clone();
-        handles.push(tokio::spawn(async move {
-            let _permit = sem.acquire().await.unwrap();
-            task::spawn_blocking(move || get_client_status_realtime(ip)).await
-        }));
-    }
+                // Wait for all ping operations to complete
+                for (i, future) in futures {
+                    if let Ok(status) = future.await {
+                        if let Some(c) = config.clients.get_mut(i) {
+                            c.status = Some(status);
+                        }
+                    }
+                }
+            }
 
-    let results = futures::future::join_all(handles).await;
-
-    for (i, r) in results.into_iter().enumerate() {
-        // r is Result<Result<String, JoinError>, ...>
-        // We need to unwrap the join result
-        let status = match r {
-            Ok(Ok(s)) => s,             // Task joined successfully and returned status
-            _ => "Offline".to_string(), // Join error or other failure
-        };
-        if let Some(c) = config.clients.get_mut(i) {
-            c.status = Some(status);
+            Ok(serde_json::json!(config.clients))
         }
-    }
-
-    if let Some(id) = client_id {
-        let client = config
-            .clients
-            .iter()
-            .find(|c| c.id.eq_ignore_ascii_case(&id));
-        Ok(serde_json::json!(client))
-    } else {
-        Ok(serde_json::json!(config.clients))
-    }
+    })
 }
 
-// Helper function for status
+// Synchronous client status function for backward compatibility
 fn get_client_status_realtime(ip: String) -> String {
     // Consider ping reachability as Online
     let online = if ip.is_empty() || ip == "N/A" {
@@ -119,6 +123,25 @@ fn get_client_status_realtime(ip: String) -> String {
     } else {
         "Offline".to_string()
     }
+}
+
+// Async ping function using spawn_blocking for better efficiency
+async fn ping_host(ip: String) -> String {
+    tokio::task::spawn_blocking(move || {
+        match std::process::Command::new("ping")
+            .args(["-c", "1", "-W", "2", &ip])
+            .output()
+        {
+            Ok(out) => {
+                if out.status.success() {
+                    "Online".to_string()
+                } else {
+                    "Offline".to_string()
+                }
+            }
+            Err(_) => "Offline".to_string(),
+        }
+    }).await.unwrap_or_else(|_| "Offline".to_string())
 }
 
 fn get_client_by_id(client_id: &str) -> Option<Client> {
@@ -717,13 +740,13 @@ async fn add_client_logic(
 
     // Step 5: Restart DHCP service
     // If this fails, we warn but don't rollback as the configuration is valid
-    if let Err(e) = run_command(&["systemctl", "restart", "isc-dhcp-server.service"]) {
+    if let Err(e) = run_command_async(&["systemctl", "restart", "isc-dhcp-server.service"]).await {
         warn!(
             "Failed to restart DHCP service after adding client {}: {}",
             name, e
         );
     }
-
+    info!("Client {} added successfully", name);
     Ok(serde_json::json!({ "message": format!("Client {} added successfully", name) }))
 }
 
@@ -1017,14 +1040,12 @@ pub async fn delete_client(
     let paths = get_client_paths(&client_id, &client_info.mac);
 
     // Clean up DHCP configuration
-    if let Err(e) = update_dhcp_config(&client_id, "", false)
-        .await
-        .and_then(|_| {
-            run_command(&["systemctl", "restart", "isc-dhcp-server.service"])
-                .map_err(|e| e.to_string())
-        })
-    {
+    if let Err(e) = update_dhcp_config(&client_id, "", false).await {
         errors.push(format!("Failed to clean up DHCP config: {}", e));
+    } else {
+        if let Err(e) = run_command_async(&["systemctl", "restart", "isc-dhcp-server.service"]).await {
+            errors.push(format!("Failed to restart DHCP service: {}", e));
+        }
     }
 
     // Clean up iSCSI target
@@ -1422,7 +1443,7 @@ pub async fn reset_client(token: String, client_id: String) -> Result<serde_json
     );
     if let Err(e) = update_dhcp_config(&client_id, &dhcp_entry, false).await {
         warn!("Failed to update DHCP config after reset: {}", e);
-    } else if let Err(e) = run_command(&["systemctl", "restart", "isc-dhcp-server.service"]) {
+    } else if let Err(e) = run_command_async(&["systemctl", "restart", "isc-dhcp-server.service"]).await {
         warn!("Failed to restart DHCP service: {}", e);
     }
 

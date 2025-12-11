@@ -64,7 +64,8 @@ pub fn write_config(cfg: &AppConfig) -> Result<(), String> {
                 serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?
             ).map_err(|e| e.to_string())
         })?;
-    reload_config_from_disk();
+    // Update the cache directly instead of reading from disk again
+    set_config(cfg);
     append_log("INFO", "write_config success");
     Ok(())
 }
