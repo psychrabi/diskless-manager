@@ -1,6 +1,6 @@
 import { Button, Card, Input } from '@/components/ui';
 import { useAuth } from '@/contexts/auth';
-import { useNotification } from '@/contexts/notification';
+import { useToastStore } from '@/store/useToastStore';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { invoke } from '@tauri-apps/api/core';
 import { useForm } from 'react-hook-form';
@@ -16,7 +16,7 @@ const loginSchema = z.object({
 const Login = () => {
   const navigate = useNavigate();
   const { login: setAuth } = useAuth();
-  const { showNotification } = useNotification();
+  const { error, success } = useToastStore()
 
   const {
     register,
@@ -38,13 +38,12 @@ const Login = () => {
         request: { username: data.username, password: data.password }
       });
 
-
-
       // Set auth context immediately so ProtectedRoute sees it
       setAuth(response.user, response.token);
+      success('Login Successful', 'You have successfully logged in');
       navigate('/');
     } catch (e) {
-      showNotification('error', 'Login Failed', e.message || 'An unknown error occurred');
+      error('Login Failed', e.message || 'An unknown error occurred');
       reset({ password: '' }); // Clear password field on error
     }
   };
@@ -70,9 +69,6 @@ const Login = () => {
               className="w-full"
               error={errors.username?.message}
             />
-            {errors.username && (
-              <p className="mt-1 text-sm text-error">{errors.username.message}</p>
-            )}
           </div>
 
           <div>
@@ -87,9 +83,6 @@ const Login = () => {
               className="w-full"
               error={errors.password?.message}
             />
-            {errors.password && (
-              <p className="mt-1 text-sm text-error">{errors.password.message}</p>
-            )}
           </div>
 
           <Button

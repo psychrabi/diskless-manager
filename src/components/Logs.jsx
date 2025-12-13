@@ -24,14 +24,12 @@ const Logs = () => {
           <option key={key} value={svc.service}>{svc.name || svc.service}</option>
         ))}
       </Select>
-      <Button variant="ghost" size="icon" onClick={() => fetchLogs(logUnit)} title="Refresh Logs">
-        <RefreshCw className="h-4 w-4" />
-      </Button>
+      <Button variant="ghost" size="icon" onClick={() => fetchLogs(logUnit)} title="Refresh Logs" icon={RefreshCw} />
     </div>
   );
 
   return (
-    <Card title="Logs" actions={logOptions} className='max-h-[calc(100vh-7rem)]'>
+    <Card title="Logs" headerClass="p-4" actions={logOptions} className='max-h-[calc(100vh-7rem)]'>
       <Activity mode={logUnit !== 'app_log' ? 'visible' : 'hidden'}>
         <Card title={`${logUnit} Logs`} className="bg-base-200" headerClass="p-4" bodyClass="border-t-1">
           <pre className="bg-base-300 p-2 rounded  overflow-auto text-xs whitespace-pre-wrap max-h-[calc(100vh-20rem)]">

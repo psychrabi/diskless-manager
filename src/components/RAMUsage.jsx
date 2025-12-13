@@ -1,52 +1,17 @@
+import { useAppStore } from '@/store/useAppStore';
+import { useToastStore } from '@/store/useToastStore';
 import { invoke } from '@tauri-apps/api/core';
 import { RefreshCw } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
 import { Button, Card } from '../components/ui';
-import { useNotification } from '@/contexts/notification';
 export const RAMUsage = () => {
-  const [ramUsage, setRamUsage] = useState(null);
-  const [arcStat, setArcStat] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const { showNotification } = useNotification();
-
-  const fetchRamUsage = useCallback(async () => {
-    await invoke('get_ram_usage').then((response) => {
-      setRamUsage(response);
-      setLoading(false);
-      if (response.message) showNotification(response.message, 'success');
-    }).catch((err) => showNotification(err, 'error'));
-  }, [showNotification]);
-
-  const fetchArcStat = useCallback(async () => {
-    await invoke('get_zfs_arcstat').then((response) => {
-      setArcStat(response);
-    }).catch(() => setArcStat(null));
-  }, []);
+  const { ramUsage, arcStat } = useAppStore()
+  const { success, error } = useToastStore()
 
   const clearRamCache = async () => {
     await invoke('clear_ram_cache').then((response) => {
-      if (response.message) showNotification(response.message, 'success');
-    }).catch((err) => showNotification(err, 'error'));
+      if (response.message) success(response.message);
+    }).catch((err) => error(err));
   };
-
-  useEffect(() => {
-    fetchRamUsage();
-    fetchArcStat();
-    // Refresh every 5 minutes
-    const interval = setInterval(() => {
-      fetchRamUsage();
-      fetchArcStat();
-    }, 10000);
-    return () => clearInterval(interval);
-  }, [fetchRamUsage, fetchArcStat]);
-
-  if (loading) {
-    return (
-      <Card title="RAM Usage" icon={RefreshCw}>
-        <div className="text-center py-4 text-gray-500">Loading RAM usage...</div>
-      </Card>
-    );
-  }
 
   return (
     <Card title="RAM Usage" icon={RefreshCw} actions={<Button onClick={clearRamCache} variant="primary" className="w-full btn-xs">Clear Cache</Button>}>

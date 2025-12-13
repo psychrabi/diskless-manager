@@ -1,14 +1,14 @@
-import { useNotification } from '@/contexts/notification';
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
 import { Button, Card } from "../ui";
 import { Brush, BrushCleaning, Loader, RefreshCw } from 'lucide-react';
+import { useToastStore } from '@/store/useToastStore';
 
 export default function AppLogs({ tokenProp }) {
   const [logs, setLogs] = useState("");
   const [loading, setLoading] = useState(false);
   const token = tokenProp || localStorage.getItem("authToken") || "";
-  const { showNotification } = useNotification();
+  const { success, error } = useToastStore();
 
   async function load() {
     setLoading(true);
@@ -17,7 +17,7 @@ export default function AppLogs({ tokenProp }) {
       const text = resp && typeof resp === "object" && "text" in resp ? resp.text : String(resp ?? "");
       setLogs(text);
     } catch (e) {
-      showNotification('error', 'Failed to load logs', e?.message ?? String(e));
+      error(`Failed to load logs ${e?.message ?? String(e)}`);
       setLogs(''); // Clear logs on error
     } finally {
       setLoading(false);
@@ -28,10 +28,10 @@ export default function AppLogs({ tokenProp }) {
     setLoading(true);
     try {
       await invoke("clear_logs", { token });
-      showNotification('success', 'Logs cleared', 'Application logs have been cleared successfully.');
+      success('Application logs have been cleared successfully.');
       await load();
     } catch (e) {
-      showNotification('error', 'Failed to clear logs', e?.message ?? String(e));
+      error(`Failed to clear logs ${e?.message ?? String(e)}`);
       setLoading(false);
     }
   }

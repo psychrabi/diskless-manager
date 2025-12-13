@@ -1,10 +1,10 @@
 import { invoke } from '@tauri-apps/api/core';
 import { useCallback } from 'react';
-import { useNotification } from '@/contexts/notification';
 import { useAppStore } from '../store/useAppStore';
+import { useToastStore } from '../store/useToastStore';
 
 export const useServiceManager = () => {
-  const { showNotification } = useNotification();
+  const { success, error } = useToastStore()
   const setOpen = useAppStore(state => state.setOpen)
   const setConfig = useAppStore(state => state.setServiceConfig)
   const setTitle = useAppStore(state => state.setTitle)
@@ -21,10 +21,10 @@ export const useServiceManager = () => {
       serviceKey: serviceKey,
       req: { action: action }
     }).then((response) => {
-      if (response.message) showNotification(response.message, 'success');
+      if (response.message) success(response.message);
       fetchServices(); // Refresh services status
-    }).catch((error) => showNotification(error, 'error',));
-  }, [showNotification, fetchServices]);
+    }).catch((error) => error(error));
+  }, [success, fetchServices]);
 
   const handleServiceConfigView = useCallback(async (serviceKey, serviceName) => {
     setTitle(`Configuration: ${serviceName}`);
@@ -55,10 +55,10 @@ export const useServiceManager = () => {
       // Get token from localStorage
       const token = localStorage.getItem('authToken') || '';
       await invoke('save_service_config', { token, serviceKey: serviceKey, content: content });
-      showNotification('Configuration saved successfully', 'success');
+      success('Configuration saved successfully');
       fetchServices();
     } catch (err) {
-      showNotification(`Failed to save config: ${err.message || err}`, 'error');
+      error(`Failed to save config: ${err.message || err}`);
     } finally {
       setSaving(false);
       setOpen(false);

@@ -4,6 +4,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
 import { Outlet, useNavigate } from "react-router-dom";
 import { Loading } from "../ui";
+import { useToastStore } from "@/store/useToastStore";
+import Toast from "../ui/Toast";
 
 const PublicLayout = () => {
 
@@ -11,6 +13,8 @@ const PublicLayout = () => {
     const [preflightLoading, setPreflightLoading] = useState(true);
     const navigate = useNavigate();
     const { showNotification } = useNotification();
+    const { toasts } = useToastStore();
+
     // Preflight check before showing login
     useEffect(() => {
         let cancelled = false;
@@ -54,8 +58,12 @@ const PublicLayout = () => {
 
 
     return (<div className="min-h-screen flex items-center justify-center bg-base-200 text-base-content p-4">
-
         <Outlet />
+        <div className="fixed bottom-4 right-4 z-50 space-y-2">
+            {toasts.map((toast) => (
+                <Toast key={toast.id} toast={toast} />
+            ))}
+        </div>
     </div>);
 }
 

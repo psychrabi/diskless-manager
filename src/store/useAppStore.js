@@ -13,6 +13,10 @@ export const useAppStore = create()(
       masters: [],
       services: [],
       services_status: {},
+      zpoolStats: null,
+      zpools: [],
+      ramUsage: null,
+      arcStat: null,
       appConfig: null, // Renamed from config to avoid conflict with service config string
       serviceConfig: '', // Renamed from config
       error: null,
@@ -103,11 +107,28 @@ export const useAppStore = create()(
           console.error('Failed to fetch disk info:', err);
         }
       },
+      fetchRamUsage: async () => {
+        try {
+          const ramUsageRes = await invoke('get_ram_usage');
+          set({ ramUsage: ramUsageRes });
+        } catch (err) {
+          console.error('Failed to fetch ram usage:', err);
+        }
+      },
+
+      fetchArcStat: async () => {
+        try {
+          const arcStatRes = await invoke('get_zfs_arcstat');
+          set({ arcStat: arcStatRes });
+        } catch (err) {
+          console.error('Failed to fetch arc stat:', err);
+        }
+      },
 
       fetchData: async (showLoading = true) => {
         if (showLoading) set({ loading: true });
         set({ error: null });
-        const { fetchClients, fetchImages, fetchServices, fetchServerInfo, fetchDisks, fetchLicenseInfo } = get();
+        const { fetchClients, fetchImages, fetchServices, fetchServerInfo, fetchDisks, fetchLicenseInfo, fetchRamUsage, fetchArcStat } = get();
 
         try {
           await Promise.allSettled([
@@ -116,7 +137,9 @@ export const useAppStore = create()(
             fetchServices(),
             fetchServerInfo(),
             fetchDisks(),
-            fetchLicenseInfo()
+            fetchLicenseInfo(),
+            fetchRamUsage(),
+            fetchArcStat()
           ]);
         } catch (err) {
           set({ error: `Unexpected error loading data: ${err}` });

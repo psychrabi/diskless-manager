@@ -4,6 +4,8 @@ import { useNotification } from '@/contexts/notification';
 import { useAppStore } from '@/store/useAppStore';
 import { Activity, lazy, useEffect, useState, useRef } from 'react';
 import { Outlet, useNavigation, useLocation, useNavigate } from 'react-router-dom';
+import { useToastStore } from '@/store/useToastStore';
+import Toast from '../ui/Toast';
 
 const Sidebar = lazy(() => import("@/components/layouts/Sidebar"));
 const Header = lazy(() => import("@/components/layouts/Header"));
@@ -16,6 +18,7 @@ const AdminLayout = () => {
 	const isNavigating = Boolean(navigation.location);
 	const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 	const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+	const { toasts } = useToastStore();
 
 
 	const toggleSidebarCollapse = () => {
@@ -114,6 +117,11 @@ const AdminLayout = () => {
 						)}
 					</div>
 				</main>
+			</div>
+			<div className="fixed bottom-4 right-4 z-50 space-y-2">
+				{toasts.map((toast) => (
+					<Toast key={toast.id} toast={toast} />
+				))}
 			</div>
 		</div>
 	)

@@ -283,7 +283,7 @@ pub async fn get_service_config(token: String, service_key: String) -> Result<Va
     append_log("INFO", &format!("get_service_config: {}", service_key));
 
     match service_key.as_str() {
-        "zfs" => {
+        "zfsutils-linux" => {
             let zpool = run_command_output(["zpool", "status"])
                 .map_err(|e| AppError::Command(format!("zpool status failed: {}", e)))?;
             let zfs_list = run_command_output_no_sudo([
@@ -302,7 +302,7 @@ pub async fn get_service_config(token: String, service_key: String) -> Result<Va
             );
             Ok(json!({ "text": content }))
         }
-        "target" => {
+        "rtslib-fb-targetctl" => {
             let output = run_command_output(["targetcli", "ls"])
                 .map_err(|e| AppError::Command(format!("targetcli ls failed: {}", e)))?;
             let content = format!("=== TargetCLI Config ===\n\n{}", output);
@@ -314,7 +314,6 @@ pub async fn get_service_config(token: String, service_key: String) -> Result<Va
                 ("dhcp-clients", DHCP_CLIENTS_PATH),
                 ("tftp-autoexec", TFTP_AUTOEXEC_PATH),
                 ("tftpd-hpa", "/etc/default/tftpd-hpa"),
-                ("target", "/etc/rtslib-fb-target/saveconfig.json"),
                 (
                     "apache2",
                     "/etc/apache2/sites-available/diskless-server.conf",
@@ -394,7 +393,7 @@ pub async fn control_service(
     }
 
     Ok(json!({
-        "message": format!("Service '{}' {} issued successfully.", service_name, &req.action)
+        "message": format!("'{}' service {} successfully.", service_key, &req.action)
     }))
 }
 
