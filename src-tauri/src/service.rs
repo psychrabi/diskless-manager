@@ -540,18 +540,18 @@ pub async fn install_packages() -> Result<String, AppError> {
     }
 }
 
-#[tauri::command]
-pub async fn restart_service(service: &str) -> Result<(), AppError> {
-    let result = restart_service_async(service).await;
+// #[tauri::command]
+// pub async fn restart_service(service: &str) -> Result<(), AppError> {
+//     let result = restart_service_async(service).await;
 
-    // Invalidate cache since we've modified service state
-    if result.is_ok() {
-        let mut cache = SERVICES_CACHE.write().await;
-        cache.last_updated = std::time::SystemTime::UNIX_EPOCH; // Force refresh next time
-    }
+//     // Invalidate cache since we've modified service state
+//     if result.is_ok() {
+//         let mut cache = SERVICES_CACHE.write().await;
+//         cache.last_updated = std::time::SystemTime::UNIX_EPOCH; // Force refresh next time
+//     }
 
-    result
-}
+//     result
+// }
 
 #[tauri::command]
 pub async fn configure_dhcp_server(token: String, config: DHCPConfig) -> Result<String, AppError> {

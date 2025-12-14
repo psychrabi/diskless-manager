@@ -16,6 +16,10 @@ pub mod validation;
 mod zfs;
 use dirs;
 
+mod commands;
+mod core;
+mod state;
+
 use serde::Serialize;
 use std::sync::{Arc, RwLock};
 use sysinfo::System;
@@ -185,7 +189,7 @@ pub fn run() {
             service::save_service_config,
             service::check_package_status,
             service::install_packages,
-            service::restart_service,
+            // service::restart_service,
             service::configure_dhcp_server,
             service::configure_tftp_server,
             service::configure_apache_server,
@@ -211,7 +215,18 @@ pub fn run() {
             zfs::create_snapshot,
             zfs::set_default_image,
             zfs::rollback_image_snapshot,
-            zfs::get_default_image_overview
+            zfs::get_default_image_overview,
+            commands::services::list_services,
+            commands::services::get_service_status,
+            commands::services::start_service,
+            commands::services::stop_service,
+            commands::services::restart_service,
+            commands::system::get_system_info,
+            commands::system::get_server_status,
+            commands::system::initialize_server,
+            commands::system::check_dependencies,
+            commands::system::get_settings,
+            commands::system::save_settings,
         ])
         .setup(|app| {
             append_log("INFO", "Application startup");

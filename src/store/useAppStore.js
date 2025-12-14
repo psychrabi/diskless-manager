@@ -67,7 +67,7 @@ export const useAppStore = create()(
 
       fetchServices: async () => {
         try {
-          const servicesRes = await invoke('check_package_status');
+          const servicesRes = await invoke('list_services');
           const servicesData = Array.isArray(servicesRes) ? servicesRes : (servicesRes ? Object.values(servicesRes) : []);
           set({ services: servicesData });
         } catch (err) {
@@ -77,10 +77,19 @@ export const useAppStore = create()(
 
       fetchServerInfo: async () => {
         try {
-          const serverInfoRes = await invoke('get_server_info');
+          const serverInfoRes = await invoke('get_system_info');
           set({ serverInfo: serverInfoRes });
         } catch (err) {
           console.error('Failed to fetch server info:', err);
+        }
+      },
+
+      fetchDependencies: async () => {
+        try {
+          const dependenciesRes = await invoke('check_dependencies');
+          set({ dependencies: dependenciesRes });
+        } catch (err) {
+          console.error('Failed to fetch dependencies:', err);
         }
       },
 
@@ -128,13 +137,14 @@ export const useAppStore = create()(
       fetchData: async (showLoading = true) => {
         if (showLoading) set({ loading: true });
         set({ error: null });
-        const { fetchClients, fetchImages, fetchServices, fetchServerInfo, fetchDisks, fetchLicenseInfo, fetchRamUsage, fetchArcStat } = get();
+        const { fetchClients, fetchImages, fetchServices, fetchDependencies, fetchServerInfo, fetchDisks, fetchLicenseInfo, fetchRamUsage, fetchArcStat } = get();
 
         try {
           await Promise.allSettled([
             fetchClients(),
             fetchImages(),
             fetchServices(),
+            fetchDependencies(),
             fetchServerInfo(),
             fetchDisks(),
             fetchLicenseInfo(),
@@ -145,6 +155,7 @@ export const useAppStore = create()(
           set({ error: `Unexpected error loading data: ${err}` });
         } finally {
           if (showLoading) set({ loading: false });
+          // console.log(get().services)
         }
       },
 
@@ -222,3 +233,5 @@ export const useAppStore = create()(
     },
   )
 );
+
+

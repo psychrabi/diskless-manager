@@ -10,7 +10,7 @@ import { createHashRouter } from "react-router-dom";
 const Adminlayout = lazy(() => import("@/components/layouts/AdminLayout"));
 const ClientManagement = lazy(() => import("@/components/ClientManagement"));
 const ImageManagement = lazy(() => import("@/components/ImageManagement"));
-const ServiceManagement = lazy(() => import("@/components/ServiceManagement"));
+const Dashboard = lazy(() => import("@/components/Dashboard"));
 const Setup = lazy(() => import("@/components/Setup"));
 const SettingManagement = lazy(() => import("@/components/SettingsManagement"));
 const DisksManagement = lazy(() => import("@/components/DisksManagement"));
@@ -38,7 +38,7 @@ export const router = createHashRouter([
     children: [
       {
         index: true,
-        element: <ServiceManagement />,
+        element: <Dashboard />,
       },
       {
         path: "/clients",

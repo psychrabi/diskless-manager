@@ -49,57 +49,42 @@ const Login = () => {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-base-200 text-base-content p-4">
-      <Card className="w-full max-w-md">
-        <div className="text-center mb-6">
-          <h1 className="text-2xl font-bold text-base-content">Diskless Manager</h1>
-          <p className="text-base-content/70 mt-2">Sign in to your account</p>
-        </div>
+    <Card className="w-[24rem]">
+      <div className="text-center mb-6">
+        <h1 className="text-2xl font-bold text-primary">Diskless Manager</h1>
+        <p className="text-base-content/70 mt-2">Sign in to Diskless Manager</p>
+      </div>
 
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-          <div>
-            <label htmlFor="username" className="block text-sm font-medium text-base-content mb-1">
-              Username
-            </label>
-            <Input
-              id="username"
-              type="text"
-              register={register('username')}
-              placeholder="Enter your username"
-              className="w-full"
-              error={errors.username?.message}
-            />
-          </div>
+      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+        <Input
+          id="username"
+          type="text"
+          label="Username"
+          register={register('username')}
+          placeholder="Enter your username"
+          className="w-full"
+          error={errors.username?.message}
+        />
+        <Input
+          id="password"
+          type="password"
+          label="Password"
+          register={register('password')}
+          placeholder="Enter your password"
+          className="w-full"
+          error={errors.password?.message}
+        />
+        <Button
+          type="submit"
+          disabled={isSubmitting}
+          className="w-full"
+          variant="primary"
+        >
+          {isSubmitting ? 'Signing in...' : 'Sign in'}
+        </Button>
+      </form>
 
-          <div>
-            <label htmlFor="password" className="block text-sm font-medium text-base-content mb-1">
-              Password
-            </label>
-            <Input
-              id="password"
-              type="password"
-              register={register('password')}
-              placeholder="Enter your password"
-              className="w-full"
-              error={errors.password?.message}
-            />
-          </div>
-
-          <Button
-            type="submit"
-            disabled={isSubmitting}
-            className="w-full"
-            variant="primary"
-          >
-            {isSubmitting ? 'Signing in...' : 'Sign in'}
-          </Button>
-        </form>
-
-        <div className="mt-6 text-center text-sm text-base-content/70">
-          <p>Default credentials: admin / admin123</p>
-        </div>
-      </Card>
-    </div>
+    </Card>
   );
 };
 
