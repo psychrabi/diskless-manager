@@ -61,7 +61,7 @@ export const useClientActions = (fetchData, closeContextMenu, setClient, setIsMo
             if (fetchData) fetchData();
             if (closeContextMenu) closeContextMenu();
         } catch (error) {
-            showNotification('error', `Failed to ${action}`, error.message || String(error));
+            showNotification(`Failed to execute ${action}: ${error.message || String(error)}`, 'error');
         }
     }, [confirm, showNotification, closeContextMenu, fetchData, setClient, setIsModalOpen, setDeprovisionModal]);
 
@@ -70,15 +70,15 @@ export const useClientActions = (fetchData, closeContextMenu, setClient, setIsMo
     return {
         edit: (client) => handleAction(client, 'edit'),
 
-        reboot: (client) => handleAction(client, 'reboot', 'Reboot Client', `Are you sure you want to reboot client "${client.name}"?`, 'Reboot Client', 'control_client', { clientId: client.id, req: { action: 'reboot' } }, null, 'Client reboot cancelled.'),
+        reboot: (client) => handleAction(client, 'reboot', 'Reboot Client', `Are you sure you want to reboot client "${client.name}" ? `, 'Reboot Client', 'control_client', { clientId: client.id, req: { action: 'reboot' } }, "Client Rebooted", 'Client reboot cancelled.'),
 
-        shutdown: (client) => handleAction(client, 'shutdown', 'Shutdown Client', `Are you sure you want to shutdown client "${client.name}"?`, 'Shutdown Client', 'control_client', { clientId: client.id, req: { action: 'shutdown' } }, null, 'Client shutdown cancelled.'),
+        shutdown: (client) => handleAction(client, 'shutdown', 'Shutdown Client', `Are you sure you want to shutdown client "${client.name}" ? `, 'Shutdown Client', 'control_client', { clientId: client.id, req: { action: 'shutdown' } }, "Client Shutdown", 'Client shutdown cancelled.'),
 
-        wake: (client) => handleAction(client, 'wake', 'Wake Client', `Are you sure you want to wake client "${client.name}"?`, 'Wake Client', 'control_client', { clientId: client.id, req: { action: 'wake' } }, null, 'Client wake up cancelled.'),
+        wake: (client) => handleAction(client, 'wake', 'Wake Client', `Are you sure you want to wake client "${client.name}" ? `, 'Wake Client', 'control_client', { clientId: client.id, req: { action: 'wake' } }, "Client Woken", 'Client wake up cancelled.'),
 
-        remote: (client) => handleAction(client, 'remote', 'Remote Client', `Are you sure you want to remote client "${client.name}"?`, 'Remote Client', 'remote_client', { clientId: client.id }, null, 'Client remote connection cancelled.'),
+        remote: (client) => handleAction(client, 'remote', 'Remote Client', `Are you sure you want to remote client "${client.name}" ? `, 'Remote Client', 'remote_client', { clientId: client.id }, "Client Remotely Connected", 'Client remote connection cancelled.'),
 
-        reset: (client) => handleAction(client, 'reset', 'Reset client writeback', `Are you sure you want to reset client "${client.name}"? This will destroy their ZFS clone and remove configurations.`, 'Reset Client', 'reset_client', { clientId: client.id }, null, 'Client reset cancelled.'),
+        reset: (client) => handleAction(client, 'reset', 'Reset client writeback', `Are you sure you want to reset client "${client.name}" ? This will destroy their ZFS clone and remove configurations.`, 'Reset Client', 'reset_client', { clientId: client.id }, "Client Reset successfully", 'Client reset cancelled.'),
 
         resetToClean: async (client) => {
             if (!client) return;
@@ -93,22 +93,22 @@ export const useClientActions = (fetchData, closeContextMenu, setClient, setIsMo
                 client,
                 'resetToClean',
                 'Reset to Clean State',
-                `This will delete the writeback for "${client.name}" and recreate it from the snapshot. All changes will be lost. Continue?`,
+                `This will delete the writeback for "${client.name}" and recreate it from the snapshot.All changes will be lost.Continue ? `,
                 'Reset to Clean',
                 'reset_client_to_clean',
                 { clientId: client.id },
-                null,
+                "Client Reset to Clean successfully",
                 'Reset to clean cancelled.'
             );
         },
 
-        delete: (client) => handleAction(client, 'delete', 'Delete Client', `Are you sure you want to delete client "${client.name}"? This will destroy their ZFS clone and remove configurations.`, 'Delete Client', 'delete_client', { clientId: client.id }, null, 'Client deletion cancelled.'),
+        delete: (client) => handleAction(client, 'delete', 'Delete Client', `Are you sure you want to delete client "${client.name}" ? This will destroy their ZFS clone and remove configurations.`, 'Delete Client', 'delete_client', { clientId: client.id }, "Client Deleted successfully", 'Client deletion cancelled.'),
 
-        enableSuper: (client) => handleAction(client, 'enableSuper', 'Enable Super Client', `Client "${client.name}" will boot directly from master image. This skips clone/writeback. Continue?`, 'Enable Super', 'control_client', { clientId: client.id, req: { action: 'super', make_super: true } }, null, 'Enable Super cancelled.'),
+        enableSuper: (client) => handleAction(client, 'enableSuper', 'Enable Super Client', `Client "${client.name}" will boot directly from master image.This skips clone / writeback.Continue ? `, 'Enable Super', 'control_client', { clientId: client.id, req: { action: 'super', make_super: true } }, "Client Enabled Super successfully", 'Enable Super cancelled.'),
 
         disableSuper: (client) => {
             if (client.mode !== 'super') { showNotification('Client is not in Super mode.', 'error'); return; }
-            handleAction(client, 'disableSuper', 'Disable Super Client', `This will point ${client.name} back to its writeback clone. Continue?`, 'Disable Super', 'control_client', { clientId: client.id, req: { action: 'super', make_super: false } }, null, 'Disable Super cancelled.')
+            handleAction(client, 'disableSuper', 'Disable Super Client', `This will point ${client.name} back to its writeback clone.Continue ? `, 'Disable Super', 'control_client', { clientId: client.id, req: { action: 'super', make_super: false } }, "Client Disabled Super successfully", 'Disable Super cancelled.')
         },
 
         saveSuper: async (client) => {
@@ -118,7 +118,7 @@ export const useClientActions = (fetchData, closeContextMenu, setClient, setIsMo
 
             const ok = await confirm({
                 title: 'Save Super Client',
-                description: `This will save the current state of ${client.name} to a snapshot. Continue?`,
+                description: `This will save the current state of ${client.name} to a snapshot.Continue ? `,
                 confirmText: 'Save Super',
                 cancelText: 'Cancel',
                 confirmVariant: 'primary',
@@ -127,11 +127,11 @@ export const useClientActions = (fetchData, closeContextMenu, setClient, setIsMo
 
             if (!ok) { showNotification('Save Super cancelled.', 'info'); return; }
 
-            const suffix = window.prompt('Enter snapshot name (alphanumeric, _ or -):', `${client.name}-super-${Date.now()}`);
+            const suffix = window.prompt('Enter snapshot name (alphanumeric, _ or -):', `${client.name} -super- ${Date.now()} `);
             if (!suffix) { showNotification('Save Super cancelled.', 'info'); return; }
             if (!/^[-\w]+$/.test(suffix)) { showNotification('Invalid snapshot name.', 'error'); return; }
 
-            const snapshotName = `${client.master}@${suffix}`;
+            const snapshotName = `${client.master} @${suffix} `;
             const token = localStorage.getItem('authToken') || '';
 
             try {

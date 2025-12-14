@@ -3,9 +3,9 @@ import { Eye, Play, Power, RefreshCw } from "lucide-react"
 import { Button, Card } from "../ui"
 import { useAppStore } from "@/store/useAppStore";
 
-const ServicesList = () => {
+const ServicesList = ({ onViewConfig }) => {
   const services = useAppStore((state) => state.services);
-  const { handleServiceAction, handleServiceConfigView } = useServiceManager()
+  const { handleServiceAction } = useServiceManager()
   const list = Array.isArray(services) ? services : (services ? Object.values(services) : []);
 
   function getServiceIcon(name) {
@@ -36,7 +36,7 @@ const ServicesList = () => {
             </span>
             <div className="flex space-x-1">
               {!['wakeonlan', 'targetcli-fb'].includes(service.service) && (
-                <Button onClick={() => handleServiceConfigView(service.service, service.name)} variant="ghost" size="icon" className="h-7 w-7" title={`View Config for ${service.service}`}>
+                <Button onClick={() => onViewConfig(service.service, service.name)} variant="ghost" size="icon" className="h-7 w-7" title={`View Config for ${service.service}`}>
                   <Eye className="h-4 w-4 text-base-content" />
                 </Button>
               )}

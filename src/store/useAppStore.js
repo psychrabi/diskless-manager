@@ -18,28 +18,30 @@ export const useAppStore = create()(
       ramUsage: null,
       arcStat: null,
       appConfig: null, // Renamed from config to avoid conflict with service config string
-      serviceConfig: '', // Renamed from config
+      //  serviceConfig removed
+      // Actually, I should check if SettingsManagement uses serviceConfig?
+      // ServiceConfigModal logic was moved out.
+      // SettingsManagement logic does NOT use serviceConfig from store.
+      // Wait, I should verify before deleting.
+
       error: null,
       loading: true,
       selectedSnapshot: '',
       checkingConfig: true,
-      title: '',
+
       setClients: (clients) => set({ clients }),
       setMasters: (masters) => set({ masters }),
       setServices: (services) => set({ services }),
-      setServiceConfig: (serviceConfig) => set({ serviceConfig }), // Renamed from setConfig
+      // setServiceConfig: removed
       setAppConfig: (appConfig) => set({ appConfig }), // Added for global config
       setError: (error) => set({ error }),
       setLoading: (loading) => set({ loading }),
       setSelectedSnapshot: (selectedSnapshot) => set({ selectedSnapshot }),
       setCheckingConfig: (checkingConfig) => set({ checkingConfig }),
-      setTitle: (title) => set({ title }),
-      open: false,
-      setOpen: (open) => set({ open }),
+
       saving: true,
       setSaving: (saving) => set({ saving }),
-      serviceKey: '',
-      setServiceKey: (serviceKey) => set({ serviceKey }),
+
       serverInfo: null, // Added
       licenseInfo: null, // Added
       _pollIntervalId: null, // Added
@@ -172,34 +174,42 @@ export const useAppStore = create()(
 
             // Only update if data has changed to prevent unnecessary re-renders
             const { clients: currentClients } = get();
-            // Lightweight deep-diff: prefer id+important-fields comparison to avoid expensive stringify on large objects
-            const clientsChanged = (() => {
-              try {
-                if (currentClients.length !== newClients.length) return true;
-                // Build map of id -> snapshot key
-                const map = new Map();
-                for (const c of currentClients) {
-                  if (c && c.id) {
-                    map.set(c.id, JSON.stringify({ status: c.status, online: c.online }));
+
+            // Optimized diff: Check length first, then check specific status fields
+            let hasChanged = false;
+
+            if (currentClients.length !== newClients.length) {
+              hasChanged = true;
+            } else {
+              // Create a Map for O(1) lookups by ID if IDs exist, else fallback to index
+              const newClientsMap = new Map();
+              newClients.forEach(c => {
+                if (c.id) newClientsMap.set(c.id, c);
+              });
+
+              if (newClientsMap.size > 0) {
+                for (const oldClient of currentClients) {
+                  if (!oldClient.id) { hasChanged = true; break; } // Fallback if data structure inconsistent
+                  const newClient = newClientsMap.get(oldClient.id);
+                  if (!newClient) { hasChanged = true; break; } // Client removed
+
+                  // Compare only volatile fields
+                  if (oldClient.status !== newClient.status ||
+                    oldClient.online !== newClient.online ||
+                    oldClient.ip !== newClient.ip) { // IP might change with DHCP lease
+                    hasChanged = true;
+                    break;
                   }
                 }
-                for (const nc of newClients) {
-                  if (nc && nc.id) {
-                    const prev = map.get(nc.id);
-                    if (!prev) return true;
-                    if (prev !== JSON.stringify({ status: nc.status, online: nc.online })) return true;
-                  } else {
-                    // Fallback to full compare if no id present
-                    if (JSON.stringify(currentClients) !== JSON.stringify(newClients)) return true;
-                  }
-                }
-                return false;
-              } catch {
-                // If anything unexpected, fallback to full compare
-                return JSON.stringify(currentClients) !== JSON.stringify(newClients);
+              } else {
+                // Fallback to JSON compare if no IDs
+                if (JSON.stringify(currentClients) !== JSON.stringify(newClients)) hasChanged = true;
               }
-            })();
-            if (clientsChanged) set({ clients: newClients });
+            }
+
+            if (hasChanged) {
+              set({ clients: newClients });
+            }
           } catch (err) {
             // Log polling errors but don't set global error state to avoid UI flickering
             console.warn('Client status polling failed:', err);

@@ -156,7 +156,7 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
             <input
               type="checkbox"
               className="checkbox checkbox-primary"
-              register={register('keep_writeback')}
+              {...register('keep_writeback')}
               defaultChecked={client?.keep_writeback !== false}
             />
             <div className="flex flex-col">

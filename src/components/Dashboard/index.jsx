@@ -1,10 +1,18 @@
+import { useShallow } from 'zustand/react/shallow';
 import { useAppStore } from "@/store/useAppStore";
 import { Folder, Globe, RefreshCw, Save, Server, Settings } from "lucide-react";
 import React from "react";
 import { Button, Card } from "../ui";
 
 export default function Dashboard() {
-    const { services, fetchServices, dependencies, serverInfo } = useAppStore()
+    const { services, fetchServices, dependencies, serverInfo } = useAppStore(
+        useShallow(state => ({
+            services: state.services,
+            fetchServices: state.fetchServices,
+            dependencies: state.dependencies,
+            serverInfo: state.serverInfo
+        }))
+    )
     const serverStatus = [];
 
     function getServiceIcon(name) {

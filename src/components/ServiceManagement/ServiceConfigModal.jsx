@@ -1,38 +1,52 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useServiceManager } from '../../hooks/useServiceManager'
-import { useAppStore } from '../../store/useAppStore'
 import { Button, Modal } from '../ui'
 
-function ServiceConfigModal() {
-  const title = useAppStore(state => state.title)
-  const loading = useAppStore(state => state.loading)
-  const config = useAppStore(state => state.serviceConfig)
-  const setConfig = useAppStore(state => state.setServiceConfig)
-  const open = useAppStore(state => state.open)
-  const setOpen = useAppStore(state => state.setOpen)
+function ServiceConfigModal({ isOpen, onClose, title, serviceKey, initialConfig, initialLoading }) {
+  const [config, setConfig] = useState(initialConfig || '')
   const [editable, setEditable] = useState(false)
   const [saving, setSaving] = useState(false)
   const { handleConfigSave } = useServiceManager()
-  const serviceKey = useAppStore(state => state.serviceKey)
+
+  // Sync prop config to local state when it changes (e.g. data fetch completes)
+  useEffect(() => {
+    setConfig(initialConfig || '')
+  }, [initialConfig])
+
+  // Reset editable state when modal opens/closes
+  useEffect(() => {
+    if (!isOpen) {
+      setEditable(false)
+    }
+  }, [isOpen])
 
   const handleChange = e => {
     setConfig(e.target.value)
   }
 
-  const handleSave = () => {
+  const handleSave = async () => {
     setSaving(true)
-    handleConfigSave(serviceKey, config)
-    setSaving(false)
+    try {
+      await handleConfigSave(serviceKey, config)
+      setEditable(false)
+      onClose()
+    } catch (error) {
+      // Error is handled by toast in useServiceManager, but we need to stop loading
+      console.error(error)
+    } finally {
+      setSaving(false)
+    }
   }
 
   const handleCancel = () => {
     setEditable(false)
-    setOpen(false)
+    setConfig(initialConfig || '') // Reset to initial on cancel
+    onClose()
   }
 
   return (
-    <Modal isOpen={open} onClose={() => setOpen(false)} title={title} size="5xl">
-      {loading ? (
+    <Modal isOpen={isOpen} onClose={handleCancel} title={title} size="5xl">
+      {initialLoading ? (
         <div className="flex justify-center items-center h-40">
           <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-500"></div>
         </div>
@@ -53,9 +67,9 @@ function ServiceConfigModal() {
       )}
       <div className="mt-4 flex justify-end space-x-2">
         {editable ? (
-          <Button onClick={() => handleSave()} loading={saving} disabled={saving || loading}>Save</Button>
+          <Button onClick={() => handleSave()} loading={saving} disabled={saving || initialLoading}>Save</Button>
         ) :
-          <Button onClick={() => setEditable(true)} disabled={saving}>Edit</Button>
+          <Button onClick={() => setEditable(true)} disabled={saving || initialLoading}>Edit</Button>
         }
         <Button variant="outline" onClick={() => handleCancel()} disabled={saving}>Cancel</Button>
       </div>

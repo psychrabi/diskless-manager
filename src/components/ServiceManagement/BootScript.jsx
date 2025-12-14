@@ -1,12 +1,7 @@
-import { useServiceManager } from "@/hooks/useServiceManager";
 import { Eye } from "lucide-react";
 import { Button, Card } from "../ui";
-import { useAppStore } from "@/store/useAppStore";
 
-function BootScript() {
-  const serviceKey = useAppStore(state => state.serviceKey)
-  
-  const { handleServiceConfigView } = useServiceManager();
+function BootScript({ onViewConfig }) {
 
   return (
     <Card title={"Boot IPXE Script"} className="flex-1" titleClassName="text-base md:text-lg">
@@ -17,8 +12,7 @@ function BootScript() {
         <div className="flex space-x-1">
           <Button
             onClick={() => {
-              console.debug("open config modal for", serviceKey);
-              handleServiceConfigView('tftp-autoexec', "Boot Script");
+              onViewConfig('tftp-autoexec', "Boot Script");
             }}
             variant="ghost"
             size="icon"

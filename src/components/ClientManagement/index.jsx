@@ -1,5 +1,6 @@
 import { PlusCircle, Users } from 'lucide-react';
 import { memo, useCallback, useEffect, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { useAppStore } from '../../store/useAppStore';
 import { useClientActions } from '@/hooks/useClientActions';
 import { Button, Card } from '../ui';
@@ -12,7 +13,16 @@ const MemoizedClientTable = memo(ClientTable);
 const MemoizedContextMenu = memo(ContextMenu);
 
 const ClientManagement = () => {
-  const { clients, fetchClients, fetchImages, masters, startClientStatusPolling, stopClientStatusPolling } = useAppStore();
+  const { clients, fetchClients, fetchImages, masters, startClientStatusPolling, stopClientStatusPolling } = useAppStore(
+    useShallow((state) => ({
+      clients: state.clients,
+      fetchClients: state.fetchClients,
+      fetchImages: state.fetchImages,
+      masters: state.masters,
+      startClientStatusPolling: state.startClientStatusPolling,
+      stopClientStatusPolling: state.stopClientStatusPolling,
+    }))
+  );
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [client, setClient] = useState({
     name: '',
