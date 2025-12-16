@@ -1,10 +1,10 @@
+import { useToastStore } from '@/store/useToastStore';
 import { invoke } from '@tauri-apps/api/core';
-import { useState, useCallback } from 'react';
-import { useNotification } from '@/contexts/notification';
+import { useCallback, useState } from 'react';
 
 export const useSettings = () => {
     const [loading, setLoading] = useState(false);
-    const { showNotification } = useNotification();
+    const { error, success } = useToastStore();
 
     const readConfig = useCallback(async () => {
         try {
@@ -20,83 +20,83 @@ export const useSettings = () => {
         const token = localStorage.getItem('authToken') || '';
         try {
             await invoke('configure_dhcp_server', { token, config });
-            showNotification('DHCP configuration saved successfully', 'success');
+            success('DHCP configuration saved successfully', 'success');
             return true;
-        } catch (error) {
-            showNotification('error', 'Failed to configure DHCP server', error.message || 'An unknown error occurred');
+        } catch (err) {
+            error('Failed to configure DHCP server', err.message || 'An unknown error occurred');
             return false;
         } finally {
             setLoading(false);
         }
-    }, [showNotification]);
+    }, [success, error]);
 
     const updateTftp = useCallback(async (tftpConfig) => {
         setLoading(true);
         const token = localStorage.getItem('authToken') || '';
         try {
             const response = await invoke('configure_tftp_server', { token, tftpConfig });
-            if (response.message) showNotification(response.message, 'success');
+            if (response.message) success(response.message, 'success');
             return true;
-        } catch (error) {
-            showNotification('error', 'Failed to configure TFTP server', error.message || 'An unknown error occurred');
+        } catch (err) {
+            error('Failed to configure TFTP server', err.message || 'An unknown error occurred');
             return false;
         } finally {
             setLoading(false);
         }
-    }, [showNotification]);
+    }, [success, error]);
 
     const updateHttp = useCallback(async (httpConfig) => {
         setLoading(true);
         const token = localStorage.getItem('authToken') || '';
         try {
             const response = await invoke('configure_apache_server', { token, httpConfig });
-            if (response.message) showNotification(response.message, 'success');
+            if (response.message) success(response.message, 'success');
             return true;
-        } catch (error) {
-            showNotification('error', 'Failed to configure HTTP server', error.message || 'An unknown error occurred');
+        } catch (err) {
+            error('Failed to configure HTTP server', err.message || 'An unknown error occurred');
             return false;
         } finally {
             setLoading(false);
         }
-    }, [showNotification]);
+    }, [error, success]);
 
     const updatePassword = useCallback(async (oldPassword, newPassword) => {
         setLoading(true);
         const token = localStorage.getItem('authToken') || '';
         try {
             const response = await invoke('update_admin_password', { token, oldPassword, newPassword });
-            if (response) showNotification(response, 'success');
+            if (response) success(response);
             return true;
-        } catch (error) {
-            showNotification('error', 'Failed to update admin password', error.message || 'An unknown error occurred');
+        } catch (err) {
+            error('Failed to update admin password', err.message || 'An unknown error occurred');
             return false;
         } finally {
             setLoading(false);
         }
-    }, [showNotification]);
+    }, [error, success]);
 
     const getLicenseInfo = useCallback(async () => {
         try {
             return await invoke('get_license_info');
-        } catch (e) {
-            showNotification('error', 'Failed to load license info', e?.message || String(e));
+        } catch (err) {
+            error('Failed to load license info', err?.message || String(err));
             return null;
         }
-    }, [showNotification]);
+    }, [error]);
 
     const activateLicense = useCallback(async (key) => {
         setLoading(true);
         try {
             const resp = await invoke('activate_license', { key });
-            showNotification('success', 'License Activated', resp?.message || 'License activated successfully');
+            success('License Activated', resp?.message || 'License activated successfully');
             return true;
-        } catch (e) {
-            showNotification('error', 'License Activation Failed', e?.message || String(e));
+        } catch (err) {
+            error('License Activation Failed', err?.message || String(err));
             return false;
         } finally {
             setLoading(false);
         }
-    }, [showNotification]);
+    }, [success, error]);
 
     return {
         loading,

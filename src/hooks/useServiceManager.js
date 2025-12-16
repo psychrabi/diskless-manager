@@ -9,18 +9,6 @@ export const useServiceManager = () => {
   // Fetch services is still needed for actions
   const fetchServices = useAppStore(state => state.fetchServices)
 
-  const handleServiceAction = useCallback(async (serviceKey, action) => {
-    // Get token from localStorage
-    const token = localStorage.getItem('authToken') || '';
-    await invoke('control_service', {
-      token,
-      serviceKey: serviceKey,
-      req: { action: action }
-    }).then((response) => {
-      if (response.message) success(response.message);
-      fetchServices(); // Refresh services status
-    }).catch((error) => error(error));
-  }, [success, fetchServices]);
 
   const fetchServiceConfig = useCallback(async (serviceKey) => {
     try {
@@ -35,7 +23,7 @@ export const useServiceManager = () => {
       } else {
         configText = String(configData);
       }
-      return configText;
+      return { text: configText, path: configData.path };
     } catch (error) {
       throw new Error(`Error loading configuration: \n${error.message} `);
     }
@@ -55,7 +43,6 @@ export const useServiceManager = () => {
   };
 
   return {
-    handleServiceAction,
     fetchServiceConfig,
     handleConfigSave
   };

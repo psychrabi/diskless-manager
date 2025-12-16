@@ -29,7 +29,7 @@ pub struct ServerStatus {
 pub struct DependencyStatus {
     pub name: String,
     pub installed: bool,
-    // pub version: Option<String>,
+    pub version: Option<String>,
 }
 
 #[tauri::command]
@@ -163,9 +163,9 @@ pub async fn check_dependencies() -> Result<Vec<DependencyStatus>, String> {
         ("exportfs", "nfs-kernel-server"),
         ("apache2", "apache2"),
         ("smbd", "samba"),
-        ("nmbd", "samba"),
         ("wakeonlan", "wakeonlan"),
-        // ("freerdp3-x11", "freerdp3-x11"),
+        ("zfs", "zfsutils-linux"),
+        ("xfreerdp3", "freerdp3-x11"),
     ];
 
     let statuses: Vec<DependencyStatus> = dependencies
@@ -174,35 +174,21 @@ pub async fn check_dependencies() -> Result<Vec<DependencyStatus>, String> {
             let output = Command::new("which").arg(cmd).output();
             let installed = output.map(|o| o.status.success()).unwrap_or(false);
 
-            // let version = if installed {
-            //     if cmd == "targetcli" {
-            //         Command::new("pkexec")
-            //             .arg("targetcli")
-            //             .arg("--version")
-            //             .output()
-            //     } else if cmd == "apache2" {
-            //         Command::new("apache2ctl").arg("-v").output()
-            //     } else if cmd == "exportfs" {
-            //         // exportfs does not have a version flag, try rpc.mountd instead
-            //         Command::new("rpc.mountd").arg("--version").output()
-            //     } else {
-            //         Command::new(cmd).arg("--version").output()
-            //     }
-            //     .ok()
-            //     .and_then(|o| {
-            //         let stdout = String::from_utf8_lossy(&o.stdout);
-            //         let stderr = String::from_utf8_lossy(&o.stderr);
-            //         let output = if stdout.is_empty() { stderr } else { stdout };
-            //         output.lines().next().map(|s| s.to_string())
-            //     })
-            // } else {
-            //     None
-            // };
+            let version = Command::new("dpkg-query")
+                .args(["--showformat=${Version}\n", "--show", name])
+                .output()
+                .ok()
+                .and_then(|o| {
+                    let stdout = String::from_utf8_lossy(&o.stdout);
+                    let stderr = String::from_utf8_lossy(&o.stderr);
+                    let output = if stdout.is_empty() { stderr } else { stdout };
+                    output.lines().next().map(|s| s.to_string())
+                });
 
             DependencyStatus {
                 name: name.to_string(),
                 installed,
-                // version,
+                version,
             }
         })
         .collect();

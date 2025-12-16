@@ -1,11 +1,12 @@
-import z from 'zod';
-import { Button, Card } from '../ui';
-import { zodResolver } from '@hookform/resolvers/zod';
-import { useNotification } from '@/contexts/notification';
-import { useForm } from 'react-hook-form';
-import { Network } from 'lucide-react';
-import { useEffect } from 'react';
-import { useSettings } from '@/hooks/useSettings';
+import { useSettings } from "@/hooks/useSettings";
+import { useAppStore } from "@/store/useAppStore";
+import { useToastStore } from "@/store/useToastStore";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { Network } from "lucide-react";
+import { useEffect } from "react";
+import { useForm } from "react-hook-form";
+import z from "zod";
+import { Button, Card, Input } from "../ui";
 
 const dhcpSchema = z.object({
   subnet_ip: z.ipv4(),
@@ -39,25 +40,23 @@ const dhcpInitial = {
   boot_file_legacy: "ipxe.kpxe",
   boot_file_uefi32: "ipxe.efi",
   boot_file_uefi64: "ipxe.efi",
-}
-
-import { useAppStore } from '@/store/useAppStore';
+};
 
 // ...
 
 export default function DHCPConfigForm() {
-  const { showNotification } = useNotification();
+  const { info } = useToastStore();
   const { updateDhcp } = useSettings();
-  const config = useAppStore(state => state.appConfig);
+  const config = useAppStore((state) => state.appConfig);
 
   const {
     register,
     handleSubmit,
-    formState: { errors },
+    formState: { errors, isSubmitting },
     reset,
   } = useForm({
     resolver: zodResolver(dhcpSchema),
-    defaultValues: dhcpInitial
+    defaultValues: dhcpInitial,
   });
 
   // Load saved config when config from store changes
@@ -70,12 +69,12 @@ export default function DHCPConfigForm() {
   }, [config, reset]);
 
   const onSubmit = async (data) => {
-    showNotification(`Updating DHCP Configurations`, 'info');
+    info(`Updating DHCP Configurations`);
     await updateDhcp(data);
   };
 
   return (
-    <Card title="DHCP Server Configuration" icon={Network} >
+    <Card title="DHCP Server Configuration" icon={Network}>
       {Object.keys(errors).length > 0 && (
         <div className="mb-4 text-red-500 text-sm">
           {Object.entries(errors).map(([field, error]) => (
@@ -84,76 +83,110 @@ export default function DHCPConfigForm() {
         </div>
       )}
       <form onSubmit={handleSubmit(onSubmit)}>
-        <div className="">
-          <div className='flex gap-2 '>
-            <fieldset className='fieldset flex-1'>
-              <label className='fieldset-legend'>DHCP Start IP</label>
-              <input className="input w-full" id="dhcpstart_ip" {...register('start_ip')} placeholder="192.168.1.100" />
-            </fieldset>
-            <fieldset className='fieldset flex-1'>
-              <label className='fieldset-legend'>DHCP End IP</label>
-              <input className="input w-full" id="dhcpend_ip" {...register('end_ip')} placeholder="192.168.1.200" />
-            </fieldset>
-            <fieldset className='fieldset flex-1'>
-              <label className='fieldset-legend'>Subnet Mask</label>
-              <input className="input w-full" id="subnet_mask" {...register('subnet_mask')} placeholder="255.255.255.0" />
-            </fieldset>
-          </div>
-          <div className='flex gap-2'>
-            <fieldset className='fieldset flex-1'>
-              <label className='fieldset-legend'>Gateway IP</label>
-              <input className="input w-full" id="gateway_ip" {...register('gateway_ip')} placeholder="192.168.1.1" />
-            </fieldset>
-            <fieldset className='fieldset flex-1'>
-              <label className='fieldset-legend'>DNS Server 1</label>
-              <input className="input w-full" id="dns_server1" {...register('dns_server1')} placeholder="1.1.1.1" />
-            </fieldset>
-            <fieldset className='fieldset flex-1'>
-              <label className='fieldset-legend'>DNS Server 2</label>
-              <input className="input w-full" id="dns_server2" {...register('dns_server2')} placeholder="1.0.0.1" />
-            </fieldset>
-          </div>
-          <div className='flex gap-2'>
-            <fieldset className='fieldset flex-1'>
-              <label className='fieldset-legend'>Subnet IP</label>
-              <input className="input w-full" id="subnet_ip" {...register('subnet_ip')} placeholder="192.168.1.0" />
-            </fieldset>
-            <fieldset className='fieldset flex-1'>
-              <label className='fieldset-legend'>Boot Server</label>
-              <input className="input w-full" id="boot_server_ip" {...register('boot_server_ip')} placeholder="192.168.1.1" />
-            </fieldset>
-            <fieldset className='fieldset flex-1'>
-              <label className='fieldset-legend'>Broadcast IP</label>
-              <input className="input w-full" id="broadcast_ip" {...register('broadcast_ip')} placeholder="192.168.1.1" />
-            </fieldset>
-          </div>
-          <div className='flex gap-2'>
-            <fieldset className='fieldset flex-1'>
-              <label className='fieldset-legend'>Next Server IP</label>
-              <input className="input w-full" id="next_server_ip" {...register('next_server_ip')} placeholder="192.168.1.250" />
-            </fieldset>
-            <fieldset className='fieldset flex-1'>
-              <label className='fieldset-legend'>Boot Script</label>
-              <input className="input w-full" id="boot_script" {...register('boot_script')} placeholder="autoexec.ipxe" />
-            </fieldset>
-            <fieldset className='fieldset flex-1'>
-              <label className='fieldset-legend'>Legacy Boot File</label>
-              <input className="input w-full" id="boot_file_legacy" {...register('boot_file_legacy')} placeholder="ipxe.kpxe" />
-            </fieldset>
-          </div>
-          <div className='flex gap-2 mb-3'>
-            <fieldset className='fieldset flex-1'>
-              <label className='fieldset-legend'>UEFI 32-bit Boot File</label>
-              <input className="input w-full" id="boot_file_uefi32" {...register('boot_file_uefi32')} placeholder="ipxe.efi" />
-            </fieldset>
-            <fieldset className='fieldset flex-1'>
-              <label className='fieldset-legend'>UEFI 64-bit Boot File</label>
-              <input className="input w-full" id="boot_file_uefi64" {...register('boot_file_uefi64')} placeholder="ipxe.efi" />
-            </fieldset>
-          </div>
-          <Button variant="primary" type="submit">Save Server Settings</Button>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+          <Input
+            label="DHCP Start IP"
+            id="dhcpstart_ip"
+            register={register("start_ip")}
+            placeholder="192.168.1.100"
+            error={errors.start_ip?.message}
+          />
+          <Input
+            label="DHCP End IP"
+            id="dhcpend_ip"
+            register={register("end_ip")}
+            placeholder="192.168.1.200"
+            error={errors.end_ip?.message}
+          />
+          <Input
+            label="Subnet Mask"
+            id="subnet_mask"
+            register={register("subnet_mask")}
+            placeholder="255.255.255.0"
+            error={errors.subnet_mask?.message}
+          />
+          <Input
+            label="Gateway IP"
+            id="gateway_ip"
+            register={register("gateway_ip")}
+            placeholder="192.168.1.1"
+            error={errors.gateway_ip?.message}
+          />
+          <Input
+            label="DNS Server 1"
+            id="dns_server1"
+            register={register("dns_server1")}
+            placeholder="1.1.1.1"
+            error={errors.dns_server1?.message}
+          />
+          <Input
+            label="DNS Server 2"
+            id="dns_server2"
+            register={register("dns_server2")}
+            placeholder="1.0.0.1"
+            error={errors.dns_server2?.message}
+          />
+          <Input
+            label="Subnet IP"
+            id="subnet_ip"
+            register={register("subnet_ip")}
+            placeholder="192.168.1.0"
+            error={errors.subnet_ip?.message}
+          />
+          <Input
+            label="Boot Server IP"
+            id="boot_server_ip"
+            register={register("boot_server_ip")}
+            placeholder="192.168.1.1"
+            error={errors.boot_server_ip?.message}
+          />
+          <Input
+            label="Broadcast IP"
+            id="broadcast_ip"
+            register={register("broadcast_ip")}
+            placeholder="192.168.1.1"
+            error={errors.broadcast_ip?.message}
+          />
+          <Input
+            label="Next Server IP"
+            id="next_server_ip"
+            register={register("next_server_ip")}
+            placeholder="192.168.1.1"
+            error={errors.next_server_ip?.message}
+          />
+          <Input
+            label="Boot Script"
+            id="boot_script"
+            register={register("boot_script")}
+            placeholder="autoexec.ipxe"
+            error={errors.boot_script?.message}
+          />
+          <Input
+            label="Boot File Legacy"
+            id="boot_file_legacy"
+            register={register("boot_file_legacy")}
+            placeholder="ipxe.kpxe"
+            error={errors.boot_file_legacy?.message}
+          />
+          <Input
+            label="Boot File UEFI32"
+            id="boot_file_uefi32"
+            register={register("boot_file_uefi32")}
+            placeholder="ipxe.efi"
+            error={errors.boot_file_uefi32?.message}
+          />
+          <Input
+            label="Boot File UEFI64"
+            id="boot_file_uefi64"
+            register={register("boot_file_uefi64")}
+            placeholder="ipxe.efi"
+            error={errors.boot_file_uefi64?.message}
+          />
         </div>
+        <Button variant="primary" type="submit" disabled={isSubmitting}>
+          {isSubmitting ? "Saving..." : "Save DHCP Settings"}
+        </Button>
       </form>
     </Card>
-  )
+  );
 }

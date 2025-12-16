@@ -292,7 +292,7 @@ pub async fn get_service_config(token: String, service_key: String) -> Result<Va
                 "-t",
                 "all",
                 "-o",
-                "name,type,used,avail,refer,mountpoint",
+                "name,type,used,avail,referservice,mountpoint",
             ])
             .map_err(|e| AppError::Command(format!("zfs list failed: {}", e)))?;
 
@@ -300,13 +300,15 @@ pub async fn get_service_config(token: String, service_key: String) -> Result<Va
                 "=== ZFS Pool Status ===\n{}\n\n=== ZFS Datasets ===\n{}",
                 zpool, zfs_list
             );
-            Ok(json!({ "text": content }))
+            Ok(
+                json!({ "text": content, "path": "zpool status && zfs list -t all -o name,type,used,avail,refer,mountpoint" }),
+            )
         }
         "rtslib-fb-targetctl" => {
             let output = run_command_output(["targetcli", "ls"])
                 .map_err(|e| AppError::Command(format!("targetcli ls failed: {}", e)))?;
             let content = format!("=== TargetCLI Config ===\n\n{}", output);
-            Ok(json!({ "text": content }))
+            Ok(json!({ "text": content, "path": "targetcli ls" }))
         }
         _ => {
             let config_file_map = [
@@ -319,6 +321,7 @@ pub async fn get_service_config(token: String, service_key: String) -> Result<Va
                     "/etc/apache2/sites-available/diskless-server.conf",
                 ),
                 ("smbd", "/etc/samba/smb.conf"),
+                ("exportfs", "/etc/exports"),
             ];
 
             let path = config_file_map
@@ -342,7 +345,7 @@ pub async fn get_service_config(token: String, service_key: String) -> Result<Va
                         "INFO",
                         &format!("Read {}: {} bytes", service_key, content.len()),
                     );
-                    Ok(json!({ "text": content }))
+                    Ok(json!({ "text": content, "path": path }))
                 }
                 Err(e) => Err(AppError::Io(std::io::Error::other(format!(
                     "Failed to read {}: {}",
