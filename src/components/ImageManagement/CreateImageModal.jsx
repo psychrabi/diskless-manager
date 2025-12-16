@@ -11,6 +11,7 @@ import { useAppStore } from '@/store/useAppStore';
 const imageSchema = z.object({
   name: z.string().min(1, 'Image name is required'),
   size: z.string().min(1, 'Image Size is required'),
+  os: z.string().optional(),
 });
 
 const CreateImageModal = ({ openImageCreateModal, setOpenImageCreateModal }) => {
@@ -26,6 +27,7 @@ const CreateImageModal = ({ openImageCreateModal, setOpenImageCreateModal }) => 
     defaultValues: {
       name: "",
       size: "50G",
+      os: "windows",
     },
   });
 
@@ -37,7 +39,7 @@ const CreateImageModal = ({ openImageCreateModal, setOpenImageCreateModal }) => 
     // Get token from localStorage
     const token = localStorage.getItem('authToken') || '';
     try {
-      const response = await invoke('create_image', { request: { token, name: data.name, size: data.size } });
+      const response = await invoke('create_image', { request: { token, name: data.name, size: data.size, os: data.os } });
       if (response.message) showNotification(response.message, 'success');
       fetchImages(); // Refresh images
     } catch (error) {
@@ -54,6 +56,16 @@ const CreateImageModal = ({ openImageCreateModal, setOpenImageCreateModal }) => 
             className='input w-full' />
           {errors.name && <div className="text-red-500 text-xs">{errors.name.message}</div>}
         </fieldset>
+
+        <fieldset className={`fieldset`}>
+          <legend htmlFor='os' className='fieldset-legend'>Operating System</legend>
+          <select {...register('os')} id='os' className='select w-full'>
+            <option value="windows">Windows</option>
+            <option value="linux">Linux</option>
+          </select>
+          {errors.os && <div className="text-red-500 text-xs">{errors.os.message}</div>}
+        </fieldset>
+
         <fieldset className={`fieldset`}>
           <legend htmlFor='size' className='fieldset-legend'>Image Size</legend>
           <input {...register('size')} type='text' id='size' placeholder="e.g., 50G, 1T"

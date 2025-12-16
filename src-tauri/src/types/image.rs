@@ -11,6 +11,7 @@ pub struct Master {
     pub name: String,
     pub is_default: bool,
     pub size: String,
+    pub os: Option<String>,
     pub snapshots: Vec<Snapshot>,
 }
 
@@ -38,6 +39,7 @@ pub struct CreateImageRequest {
     pub token: String,
     pub name: String,
     pub size: String,
+    pub os: Option<String>,
 }
 
 /// Snapshot creation request

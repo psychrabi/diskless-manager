@@ -13,6 +13,7 @@ const ImageCard = React.memo(({ master, handleCreateSnapshot, handleRenameImage,
       <div className="flex items-center gap-2">
         <h4 className="text-lg font-medium break-all flex items-center gap-1">
           {master.name} {`(${master.size})`}
+          {master.os && <span className="badge badge-sm badge-neutral uppercase ml-1">{master.os}</span>}
           {master.is_default && <StarIcon className="h-4 w-4 text-warning fill-warning" />}
         </h4>
       </div>

@@ -6,8 +6,8 @@ use regex::Regex;
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::process::Command;
-use tracing::debug;
 use std::sync::{Arc, RwLock};
+use tracing::debug;
 
 use crate::types::image::CreateImageRequest;
 use crate::types::{CreateZpoolRequest, Master, MasterData, Snapshot};
@@ -26,7 +26,8 @@ use crate::timed_execution;
 // Cache for ZFS datasets and snapshots to reduce system calls
 use once_cell::sync::Lazy;
 
-static ZFS_CACHE: Lazy<Arc<RwLock<ZfsCache>>> = Lazy::new(|| Arc::new(RwLock::new(ZfsCache::new())));
+static ZFS_CACHE: Lazy<Arc<RwLock<ZfsCache>>> =
+    Lazy::new(|| Arc::new(RwLock::new(ZfsCache::new())));
 
 #[derive(Debug, Clone)]
 struct ZfsCache {
@@ -68,6 +69,27 @@ fn validate_auth(token: &str) -> Result<(), AppError> {
 // Check if a ZFS dataset/snapshot exists (returns 0 if exists)
 pub fn zfs_exists(dataset: &str) -> bool {
     run_command_check(&["zfs", "list", "-H", dataset]) == 0
+}
+
+// Get the OS type of a master image from ZFS property
+pub fn get_master_os(master_name: &str) -> Option<String> {
+    let output = run_command_output_no_sudo(&[
+        "zfs",
+        "get",
+        "-H",
+        "-o",
+        "value",
+        "org.diskless:os",
+        master_name,
+    ])
+    .ok()?;
+
+    let val = output.trim().to_string();
+    if val == "-" || val.is_empty() {
+        None
+    } else {
+        Some(val)
+    }
 }
 
 // Destroy a ZFS dataset/snapshot
@@ -176,6 +198,7 @@ fn create_zvol(
     size: &str,
 
     zvol_type: &str, // for logging
+    os: Option<&str>,
 ) -> Result<String, AppError> {
     let full_name = format!("{}/{}", parent, basename);
     if zfs_exists(&full_name) {
@@ -195,6 +218,15 @@ fn create_zvol(
         "volblocksize=128K",
         &full_name,
     ])?;
+
+    if let Some(os_type) = os {
+        run_command(&[
+            "zfs",
+            "set",
+            &format!("org.diskless:os={}", os_type),
+            &full_name,
+        ])?;
+    }
 
     let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let master_data = MasterData {
@@ -365,12 +397,19 @@ pub fn create_image(request: CreateImageRequest) -> Result<Value, AppError> {
     // Ensure parent exists
     ensure_parent_dataset(&parent_dataset, "org.diskless:type", "image")?;
 
-    let full_name = create_zvol(&parent_dataset, &request.name, &request.size, "image")?;
+    let full_name = create_zvol(
+        &parent_dataset,
+        &request.name,
+        &request.size,
+        "image",
+        request.os.as_deref(),
+    )?;
     Ok(json!({
         "message": format!("Master ZVOL '{}' created successfully.", full_name),
         "master": {
             "id": full_name.clone(),
             "name": full_name,
+            "os": request.os,
             "snapshots": []
         }
     }))
@@ -387,12 +426,13 @@ pub fn create_game_disk(token: String, name: String, size: String) -> Result<Val
     ensure_parent_dataset(&games_parent, "org.diskless:type", "games")?;
 
     let basename = format!("{}-games", name); // Append suffix as in original
-    let full_name = create_zvol(&games_parent, &basename, &size, "game_disk")?;
+    let full_name = create_zvol(&games_parent, &basename, &size, "game_disk", None)?;
     Ok(json!({
         "message": format!("Game Disk '{}' created successfully.", full_name),
         "master": {
             "id": full_name.clone(),
             "name": full_name,
+            "os": null,
             "snapshots": []
         }
     }))
@@ -457,6 +497,24 @@ pub async fn get_images(token: String) -> Result<Vec<Master>, AppError> {
             }
         }
 
+        // Batch fetch OS type for all masters
+        let mut master_os_map = std::collections::HashMap::new();
+        if !master_names.is_empty() {
+            if let Ok(get_out) = run_command_output_no_sudo(
+                &["zfs", "get", "-H", "-o", "name,value", "org.diskless:os"]
+                    .iter()
+                    .chain(&master_names.iter().map(|s| s.as_str()).collect::<Vec<_>>())
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            ) {
+                for (name, val) in parse_property_output(&get_out) {
+                    if val != "-" {
+                        master_os_map.insert(name, val);
+                    }
+                }
+            }
+        }
+
         // For each master, get snapshots and build Master
         let mut masters_data = vec![];
         for master_name_ref in &master_names {
@@ -485,11 +543,20 @@ pub async fn get_images(token: String) -> Result<Vec<Master>, AppError> {
                 .map(|ds| ds.used.clone())
                 .unwrap_or_else(|| "-".to_string());
 
+            let size = all_datasets
+                .iter()
+                .find(|ds| ds.name == *master_name_ref)
+                .map(|ds| ds.used.clone())
+                .unwrap_or_else(|| "-".to_string());
+
+            let os = master_os_map.get(master_name_ref).cloned();
+
             masters_data.push(Master {
                 id: master_name_ref.clone(),
                 name: master_name,
                 is_default,
                 size,
+                os,
                 snapshots,
             });
         }
@@ -838,7 +905,7 @@ pub fn set_default_image(token: String, name: &str) -> Result<bool, AppError> {
             // Invalidate cache since we've changed the default image
             invalidate_default_image_cache();
             Ok(true)
-        },
+        }
         Err(e) => {
             println!("Error saving default master: {}", e);
             Err(AppError::Config(format!(
@@ -923,7 +990,8 @@ pub async fn get_zfs_arcstat() -> Result<ArcstatInfo, AppError> {
     Ok(ArcstatInfo { size, hit_percent })
 }
 
-static DEFAULT_IMAGE_CACHE: Lazy<Arc<RwLock<DefaultImageCache>>> = Lazy::new(|| Arc::new(RwLock::new(DefaultImageCache::new())));
+static DEFAULT_IMAGE_CACHE: Lazy<Arc<RwLock<DefaultImageCache>>> =
+    Lazy::new(|| Arc::new(RwLock::new(DefaultImageCache::new())));
 
 #[derive(Debug, Clone)]
 struct DefaultImageCache {

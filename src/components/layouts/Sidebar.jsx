@@ -26,11 +26,12 @@ const menuItems = [
   { id: 'dashboard', to: '/', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'clients', to: '/clients', label: 'Clients', icon: Laptop2 },
   { id: 'disks', to: '/disks', label: 'Disks', icon: HardDrive },
-  { id: 'masters', to: '/masters', label: 'Images', icon: FilesIcon },
-  { id: 'settings', to: '/settings', label: 'Settings', icon: Settings },
-  { id: 'services', to: '/services', label: 'Configuration', icon: Settings },
+  { id: 'images', to: '/images', label: 'Images', icon: FilesIcon },
   { id: 'license', to: '/license', label: 'License', icon: KeyRound },
   { id: 'setup', to: '/setup', label: 'Setup', icon: SquareLibrary },
+  { id: 'services', to: '/services', label: 'Services', icon: Settings },
+  { id: 'settings', to: '/settings', label: 'System Settings', icon: Settings },
+  { id: 'application-settings', to: '/application-settings', label: 'Application Settings', icon: Settings },
   { id: 'logs', to: '/logs', label: 'Logs', icon: File },
 ];
 

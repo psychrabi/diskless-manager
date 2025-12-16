@@ -4,9 +4,10 @@ use crate::error::AppError;
 use crate::iscsi::{cleanup_iscsi_target, setup_iscsi_target, setup_iscsi_target_with_game_disks};
 use crate::types::{AddClientRequest, Client, ControlRequest, DeprovisionRequest};
 use crate::utils::{
-    run_command, run_command_async, run_command_check, run_command_output, run_command_output_no_sudo,
+    run_command, run_command_async, run_command_check, run_command_output,
+    run_command_output_no_sudo,
 };
-use crate::zfs::{zfs_clone, zfs_destroy, zfs_exists};
+use crate::zfs::{get_master_os, zfs_clone, zfs_destroy, zfs_exists};
 use tracing::{debug, error, info, warn};
 
 const IQN_BASE: &str = "iqn.2025-04.local.diskless";
@@ -141,7 +142,9 @@ async fn ping_host(ip: String) -> String {
             }
             Err(_) => "Offline".to_string(),
         }
-    }).await.unwrap_or_else(|_| "Offline".to_string())
+    })
+    .await
+    .unwrap_or_else(|_| "Offline".to_string())
 }
 
 fn get_client_by_id(client_id: &str) -> Option<Client> {
@@ -330,17 +333,59 @@ pub async fn remote_client(
         return Err(AppError::Validation("Client is not online".to_string()));
     }
 
-    // 3. Launch remote desktop (xfreerdp)
-    match launch_remote_desktop(&client_ip, "diskless") {
-        Ok(_) => Ok(serde_json::json!({
-            "message": format!("Remote desktop connection initiated to {}", client_id),
-            "ip": client_ip
-        })),
-        Err(e) => Err(AppError::Command(format!(
-            "Failed to launch remote desktop: {}",
-            e
-        ))),
+    // 3. Launch remote desktop (xfreerdp) or VNC based on OS
+    let master_os = get_master_os(&client.master)
+        .unwrap_or_default()
+        .to_lowercase();
+
+    if master_os.contains("linux") {
+        // Try VNC for Linux
+        match launch_vnc_viewer(&client_ip) {
+            Ok(_) => Ok(serde_json::json!({
+                "message": format!("VNC viewer initiated to {}", client_id),
+                "ip": client_ip
+            })),
+            Err(e) => Err(AppError::Command(format!(
+                "Failed to launch VNC viewer: {}",
+                e
+            ))),
+        }
+    } else {
+        // Default to RDP (Windows)
+        match launch_remote_desktop(&client_ip, "diskless") {
+            Ok(_) => Ok(serde_json::json!({
+                "message": format!("Remote desktop connection initiated to {}", client_id),
+                "ip": client_ip
+            })),
+            Err(e) => Err(AppError::Command(format!(
+                "Failed to launch remote desktop: {}",
+                e
+            ))),
+        }
     }
+}
+
+// Helper: Launch VNC viewer
+fn launch_vnc_viewer(client_ip: &str) -> Result<(), AppError> {
+    // Try generic vncviewer first, then specific ones if needed
+    let vnc_command = ["vncviewer", client_ip];
+
+    let mut child = Command::new(vnc_command[0])
+        .arg(vnc_command[1])
+        .spawn()
+        .map_err(|e| AppError::Command(format!("Failed to launch vncviewer: {}", e)))?;
+
+    // Wait briefly to check for immediate failures
+    let result = child.wait_timeout(Duration::from_secs(2)).unwrap_or(None);
+
+    if let Some(status) = result {
+        if !status.success() {
+            return Err(AppError::Command(
+                "VNC viewer exited with error".to_string(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 // Helper: Launch xfreerdp with fallback
@@ -1043,7 +1088,9 @@ pub async fn delete_client(
     if let Err(e) = update_dhcp_config(&client_id, "", false).await {
         errors.push(format!("Failed to clean up DHCP config: {}", e));
     } else {
-        if let Err(e) = run_command_async(&["systemctl", "restart", "isc-dhcp-server.service"]).await {
+        if let Err(e) =
+            run_command_async(&["systemctl", "restart", "isc-dhcp-server.service"]).await
+        {
             errors.push(format!("Failed to restart DHCP service: {}", e));
         }
     }
@@ -1123,26 +1170,54 @@ pub async fn control_client(
                     client_id
                 )));
             }
-            let output = Command::new("net")
-                .args([
-                    "rpc",
-                    "shutdown",
-                    "-r",
-                    "-I",
-                    &ip,
-                    "-U",
-                    "diskless%1",
-                    "-f",
-                    "-t",
-                    "0",
-                ])
-                .output()
-                .map_err(AppError::Io)?;
-            if !output.status.success() {
-                return Err(AppError::Command(format!(
-                    "Failed to reboot client: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                )));
+
+            let master_os = get_master_os(&client.master)
+                .unwrap_or_default()
+                .to_lowercase();
+
+            if master_os.contains("linux") {
+                // Linux: SSH reboot
+                let output = Command::new("ssh")
+                    .args([
+                        "-o",
+                        "StrictHostKeyChecking=no",
+                        "-o",
+                        "ConnectTimeout=5",
+                        &format!("root@{}", ip),
+                        "reboot",
+                    ])
+                    .output()
+                    .map_err(AppError::Io)?;
+
+                if !output.status.success() {
+                    return Err(AppError::Command(format!(
+                        "Failed to reboot Linux client (SSH): {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    )));
+                }
+            } else {
+                // Windows: NET RPC
+                let output = Command::new("net")
+                    .args([
+                        "rpc",
+                        "shutdown",
+                        "-r",
+                        "-I",
+                        &ip,
+                        "-U",
+                        "diskless%1",
+                        "-f",
+                        "-t",
+                        "0",
+                    ])
+                    .output()
+                    .map_err(AppError::Io)?;
+                if !output.status.success() {
+                    return Err(AppError::Command(format!(
+                        "Failed to reboot client: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    )));
+                }
             }
             Ok(
                 serde_json::json!({ "message": format!("Reboot command sent to {} ({})", name, ip) }),
@@ -1155,15 +1230,43 @@ pub async fn control_client(
                     client_id
                 )));
             }
-            let output = Command::new("net")
-                .args(["rpc", "shutdown", "-S", &ip, "-U", "diskless%1"])
-                .output()
-                .map_err(AppError::Io)?;
-            if !output.status.success() {
-                return Err(AppError::Command(format!(
-                    "Failed to shutdown client: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                )));
+
+            let master_os = get_master_os(&client.master)
+                .unwrap_or_default()
+                .to_lowercase();
+
+            if master_os.contains("linux") {
+                // Linux: SSH poweroff
+                let output = Command::new("ssh")
+                    .args([
+                        "-o",
+                        "StrictHostKeyChecking=no",
+                        "-o",
+                        "ConnectTimeout=5",
+                        &format!("root@{}", ip),
+                        "poweroff", // or 'shutdown -h now'
+                    ])
+                    .output()
+                    .map_err(AppError::Io)?;
+
+                if !output.status.success() {
+                    return Err(AppError::Command(format!(
+                        "Failed to shutdown Linux client (SSH): {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    )));
+                }
+            } else {
+                // Windows: NET RPC
+                let output = Command::new("net")
+                    .args(["rpc", "shutdown", "-S", &ip, "-U", "diskless%1"])
+                    .output()
+                    .map_err(AppError::Io)?;
+                if !output.status.success() {
+                    return Err(AppError::Command(format!(
+                        "Failed to shutdown client: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    )));
+                }
             }
             Ok(
                 serde_json::json!({ "message": format!("Shutdown command sent to {} ({})", name, ip) }),
@@ -1443,7 +1546,9 @@ pub async fn reset_client(token: String, client_id: String) -> Result<serde_json
     );
     if let Err(e) = update_dhcp_config(&client_id, &dhcp_entry, false).await {
         warn!("Failed to update DHCP config after reset: {}", e);
-    } else if let Err(e) = run_command_async(&["systemctl", "restart", "isc-dhcp-server.service"]).await {
+    } else if let Err(e) =
+        run_command_async(&["systemctl", "restart", "isc-dhcp-server.service"]).await
+    {
         warn!("Failed to restart DHCP service: {}", e);
     }
 
