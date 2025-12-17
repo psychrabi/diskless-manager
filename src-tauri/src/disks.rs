@@ -10,7 +10,8 @@ use std::sync::{Arc, RwLock};
 // Cache for ZFS pool and dataset information to reduce system calls
 use once_cell::sync::Lazy;
 
-static DISK_CACHE: Lazy<Arc<RwLock<DiskCache>>> = Lazy::new(|| Arc::new(RwLock::new(DiskCache::new())));
+static DISK_CACHE: Lazy<Arc<RwLock<DiskCache>>> =
+    Lazy::new(|| Arc::new(RwLock::new(DiskCache::new())));
 
 #[derive(Debug, Clone)]
 struct DiskCache {

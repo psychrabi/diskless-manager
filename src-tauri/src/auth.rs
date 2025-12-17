@@ -1,13 +1,13 @@
 //! Authentication module for JWT-based authentication
 use crate::types::User;
 use crate::utils::append_log;
-use bcrypt::{ hash, verify, DEFAULT_COST };
-use chrono::{ Duration, Utc };
-use jsonwebtoken::{ decode, encode, DecodingKey, EncodingKey, Header, Validation };
+use bcrypt::{hash, verify, DEFAULT_COST};
+use chrono::{Duration, Utc};
+use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use std::collections::HashMap;
 use std::env;
 
-use crate::types::{ Claims, LoginRequest, LoginResponse, UserResponse, AuthError };
+use crate::types::{AuthError, Claims, LoginRequest, LoginResponse, UserResponse};
 
 // Load JWT secret from environment variable
 // SECURITY: Never commit the actual secret to version control
@@ -93,9 +93,10 @@ pub fn authenticate_user(username: &str, password: &str) -> Result<LoginResponse
         exp: expiration,
     };
 
-    let token = encode(&Header::default(), &claims, &SECRET_ENCODING_KEY).map_err(|_| AuthError {
-        message: "Failed to generate token".to_string(),
-    })?;
+    let token =
+        encode(&Header::default(), &claims, &SECRET_ENCODING_KEY).map_err(|_| AuthError {
+            message: "Failed to generate token".to_string(),
+        })?;
 
     Ok(LoginResponse {
         token,
@@ -109,9 +110,10 @@ pub fn authenticate_user(username: &str, password: &str) -> Result<LoginResponse
 
 pub fn validate_token(token: &str) -> Result<Claims, AuthError> {
     let validation = Validation::default();
-    let decoded = decode::<Claims>(token, &SECRET_DECODING_KEY, &validation).map_err(|_| AuthError {
-        message: "Invalid token".to_string(),
-    })?;
+    let decoded =
+        decode::<Claims>(token, &SECRET_DECODING_KEY, &validation).map_err(|_| AuthError {
+            message: "Invalid token".to_string(),
+        })?;
 
     // Check if token is expired
     let now = Utc::now().timestamp();
@@ -163,7 +165,7 @@ pub fn validate_auth_token(token: &str) -> Result<Claims, AuthError> {
 pub fn update_admin_password(
     token: &str,
     old_password: &str,
-    new_password: &str
+    new_password: &str,
 ) -> Result<String, AuthError> {
     // validate token and ensure caller is admin
     let claims = validate_token(token)?;
@@ -214,7 +216,7 @@ pub fn update_admin_password(
         "admin_password".to_string(),
         serde_json::to_value(&hashed).map_err(|e| AuthError {
             message: format!("Failed to serialize password: {}", e),
-        })?
+        })?,
     );
     cfg.settings = serde_json::Value::Object(settings);
     crate::config::write_config(&cfg).map_err(|e| AuthError {

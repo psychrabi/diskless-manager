@@ -5,8 +5,8 @@ use std::fs;
 
 extern crate dirs;
 use crate::types::AppConfig;
-use serde_json::json;
 use crate::utils::append_log;
+use serde_json::json;
 
 static CONFIG_CACHE: OnceCell<RwLock<AppConfig>> = OnceCell::new();
 
@@ -50,8 +50,7 @@ pub fn read_config() -> AppConfig {
 // Write config.json
 pub fn write_config(cfg: &AppConfig) -> Result<(), String> {
     append_log("INFO", "write_config called");
-    dirs
-        ::config_dir()
+    dirs::config_dir()
         .ok_or("Could not find config directory".to_string())
         .and_then(|path| {
             let config_dir = path.join("com.diskless.local");
@@ -61,8 +60,9 @@ pub fn write_config(cfg: &AppConfig) -> Result<(), String> {
         .and_then(|config_path| {
             fs::write(
                 config_path,
-                serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?
-            ).map_err(|e| e.to_string())
+                serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())
         })?;
     // Update the cache directly instead of reading from disk again
     set_config(cfg);

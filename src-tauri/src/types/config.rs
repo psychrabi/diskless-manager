@@ -2,7 +2,7 @@
 //!
 //! This module contains all configuration-related types and structures.
 
-use serde::{ Deserialize, Serialize };
+use serde::{Deserialize, Serialize};
 
 /// Main configuration structure
 #[derive(Debug, Clone, Serialize, Deserialize)]

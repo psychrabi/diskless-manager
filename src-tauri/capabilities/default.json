@@ -7,6 +7,11 @@
   ],
   "permissions": [
     "core:default",
-    "process:default"    
+    "process:default",
+    "dialog:default",
+    "fs:default",
+    "notification:default",
+    "os:default",
+    "shell:default"
   ]
 }

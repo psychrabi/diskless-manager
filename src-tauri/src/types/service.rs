@@ -2,7 +2,7 @@
 //!
 //! This module contains all service-related types and structures.
 
-use serde::{ Deserialize, Serialize };
+use serde::{Deserialize, Serialize};
 
 /// Service control request
 #[derive(Debug, Deserialize)]

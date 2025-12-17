@@ -243,15 +243,15 @@ fn check_iscsi_port_conflict() -> Result<(), AppError> {
     // Check if port 3260 is in use by tgtd using ss
     // We use run_command_output which wraps sudo, but ss might work without sudo or with it.
     // Use sudo ss -tulpn to see process names.
-    let output = run_command_output(&["ss", "-tulpn", "sport", "=", ":3260"])
-        .unwrap_or_default(); 
+    let output = run_command_output(&["ss", "-tulpn", "sport", "=", ":3260"]).unwrap_or_default();
 
     if output.contains("tgtd") {
         return Err(AppError::Validation(
             "Port 3260 is in use by 'tgtd' (userspace iSCSI target). \
             This conflicts with the kernel iSCSI target (targetcli). \
             Please stop and disable the 'tgt' service: \
-            sudo systemctl stop tgt && sudo systemctl disable tgt".to_string()
+            sudo systemctl stop tgt && sudo systemctl disable tgt"
+                .to_string(),
         ));
     }
     Ok(())

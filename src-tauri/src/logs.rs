@@ -1,6 +1,6 @@
 use crate::middleware;
-use crate::utils;
 use crate::types::AuthError;
+use crate::utils;
 
 /// Return entire log content as string
 #[tauri::command]
