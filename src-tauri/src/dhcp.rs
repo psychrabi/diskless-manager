@@ -1,5 +1,5 @@
 use crate::{
-    utils::{append_log, get_server_ip, run_command, run_command_output},
+    cmd::{append_log, get_server_ip, run_command, run_command_output},
     DHCP_CLIENTS_PATH,
 };
 use regex::Regex;

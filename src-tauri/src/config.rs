@@ -4,8 +4,8 @@ use std::sync::RwLock;
 use std::fs;
 
 extern crate dirs;
+use crate::cmd::append_log;
 use crate::types::AppConfig;
-use crate::utils::append_log;
 use serde_json::json;
 
 static CONFIG_CACHE: OnceCell<RwLock<AppConfig>> = OnceCell::new();

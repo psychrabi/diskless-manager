@@ -9,9 +9,9 @@ use std::process::Command;
 use std::sync::{Arc, RwLock};
 use tracing::debug;
 
+use crate::cmd::{append_log, run_command, run_command_check, run_command_output_no_sudo};
 use crate::types::image::CreateImageRequest;
 use crate::types::{CreateZpoolRequest, Master, MasterData, Snapshot};
-use crate::utils::{append_log, run_command, run_command_check, run_command_output_no_sudo};
 use crate::{
     client::get_clients,
     config::{get_config, get_zpool_name, write_config},

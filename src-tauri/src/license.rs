@@ -1,6 +1,6 @@
+use crate::cmd::append_log;
 use crate::config;
 use crate::types::AuthError;
-use crate::utils::append_log;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;

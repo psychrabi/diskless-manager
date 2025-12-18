@@ -1,8 +1,8 @@
 // New ZFS management commands: list_zpools, list_datasets, create_zfs_dataset
 
 use crate::{
+    cmd::{run_command, run_command_check, run_command_output, run_command_output_no_sudo},
     types::{CreateDatasetRequest, DatasetInfo},
-    utils::{run_command, run_command_check, run_command_output, run_command_output_no_sudo},
 };
 use regex::Regex;
 use std::sync::{Arc, RwLock};

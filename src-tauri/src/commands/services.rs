@@ -1,4 +1,6 @@
 use crate::core::service::{ServiceInfo, ServiceManager, ServiceStatus};
+use crate::state::AppState;
+use tauri::State;
 
 #[tauri::command]
 pub async fn list_services() -> Result<Vec<ServiceInfo>, String> {
@@ -31,4 +33,18 @@ pub async fn restart_service(name: String) -> Result<String, String> {
     let manager = ServiceManager::new();
     manager.restart(&name).map_err(|e| e.to_string())?;
     Ok(format!("Service {} restarted", name))
+}
+
+#[tauri::command]
+pub async fn start_all_services() -> Result<String, String> {
+    let manager = ServiceManager::new();
+    manager.start_all().map_err(|e| e.to_string())?;
+    Ok("All services started successfully".to_string())
+}
+
+#[tauri::command]
+pub async fn stop_all_services() -> Result<String, String> {
+    let manager = ServiceManager::new();
+    manager.stop_all().map_err(|e| e.to_string())?;
+    Ok("All services stopped successfully".to_string())
 }

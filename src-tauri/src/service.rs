@@ -1,9 +1,9 @@
+use crate::cmd::{append_log, run_command_async, run_command_output, run_command_output_no_sudo};
 use crate::config::{get_config, set_config, write_config};
 use crate::error::AppError;
 use crate::middleware::validate_auth_token_for_command;
 use crate::types::service::SambaShare;
 use crate::types::{DHCPConfig, HTTPConfig, PackageStatus, ServiceControlRequest, TFTPConfig};
-use crate::utils::{append_log, run_command_async, run_command_output, run_command_output_no_sudo};
 use crate::{DHCP_CLIENTS_PATH, DHCP_CONFIG_PATH, TFTP_AUTOEXEC_PATH};
 use async_process::Command as AsyncCommand;
 use futures::io::AsyncWriteExt;
@@ -387,7 +387,7 @@ pub async fn control_service(
         })
         .ok_or_else(|| AppError::NotFound(format!("Unknown service: {}", service_key)))?;
 
-    crate::utils::run_command_async(&["systemctl", &req.action, service_name]).await?;
+    crate::cmd::run_command_async(&["systemctl", &req.action, service_name]).await?;
 
     // Invalidate cache since we've modified service state
     {

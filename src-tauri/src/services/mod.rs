@@ -9,7 +9,7 @@ pub use dhcp::DhcpService;
 pub use http::HttpService;
 pub use iscsi::IscsiService;
 pub use nfs::NfsService;
-// pub use samba::SambaService; // Exported but not used in ServiceManager yet
+pub use samba::SambaService; // Exported but not used in ServiceManager yet
 pub use tftp::TftpService;
 
 use crate::core::config::Settings;

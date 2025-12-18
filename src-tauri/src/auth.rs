@@ -1,6 +1,6 @@
 //! Authentication module for JWT-based authentication
+use crate::cmd::append_log;
 use crate::types::User;
-use crate::utils::append_log;
 use bcrypt::{hash, verify, DEFAULT_COST};
 use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};

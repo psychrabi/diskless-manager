@@ -1,8 +1,8 @@
 use tracing::info;
 use tracing::warn;
 
+use crate::cmd::{run_command, run_command_output, run_command_output_no_sudo};
 use crate::error::AppError;
-use crate::utils::{run_command, run_command_output, run_command_output_no_sudo};
 
 pub fn setup_iscsi_target(
     target_iqn: &str,

@@ -11,13 +11,15 @@ mod logs;
 mod middleware;
 mod service;
 pub mod types;
-mod utils;
+
 pub mod validation;
 mod zfs;
 use dirs;
 
+mod cmd;
 mod commands;
 mod core;
+mod services;
 mod state;
 
 use serde::Serialize;
@@ -26,7 +28,9 @@ use sysinfo::System;
 
 use tauri::Manager;
 
-use crate::utils::{append_log, get_server_ip};
+use state::AppState;
+
+use crate::cmd::{append_log, get_server_ip};
 
 // Legacy constants for backward compatibility - prefer using AppConfig
 const DHCP_CONFIG_PATH: &str = "/etc/dhcp/dhcpd.conf";
@@ -128,7 +132,7 @@ fn get_server_info() -> ServerInfo {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Initialize tracing with fixed log file
-    let log_path = utils::log_file_path();
+    let log_path = cmd::log_file_path();
     let file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -199,10 +203,10 @@ pub fn run() {
             service::configure_tftp_server,
             service::configure_apache_server,
             service::configure_samba_server,
-            utils::list_disks,
-            utils::get_ram_usage,
-            utils::clear_ram_cache,
-            utils::get_service_logs,
+            cmd::list_disks,
+            cmd::get_ram_usage,
+            cmd::clear_ram_cache,
+            cmd::get_service_logs,
             logs::get_logs,
             logs::clear_logs,
             license::activate_license,
@@ -221,17 +225,42 @@ pub fn run() {
             zfs::set_default_image,
             zfs::rollback_image_snapshot,
             zfs::get_default_image_overview,
+            // Service commands
             commands::services::list_services,
             commands::services::get_service_status,
             commands::services::start_service,
             commands::services::stop_service,
             commands::services::restart_service,
+            commands::services::start_all_services,
+            commands::services::stop_all_services,
+            // System commands
             commands::system::get_system_info,
             commands::system::get_server_status,
             commands::system::initialize_server,
             commands::system::check_dependencies,
             commands::system::get_settings,
             commands::system::save_settings,
+            // Client commands
+            commands::clients::list_clients,
+            commands::clients::get_client,
+            commands::clients::add_client_command,
+            commands::clients::update_client_command,
+            commands::clients::delete_client_command,
+            commands::clients::get_client_boot_history,
+            // Image commands
+            commands::images::list_images,
+            commands::images::get_image,
+            commands::images::create_image_command,
+            commands::images::import_image,
+            commands::images::delete_image_command,
+            commands::images::clone_image,
+            commands::images::create_snapshot_command,
+            commands::images::get_image_info,
+            commands::images::resize_image,
+            commands::images::verify_image,
+            // Version commands
+            commands::versions::list_versions,
+            commands::versions::get_version_history,
         ])
         .setup(|app| {
             append_log("INFO", "Application startup");
@@ -249,6 +278,22 @@ pub fn run() {
                     }
                 }
             }
+
+            // Initialize application state
+            tauri::async_runtime::block_on(async {
+                match AppState::new().await {
+                    Ok(state) => {
+                        app.manage(state);
+                        tracing::info!("Application state initialized");
+                        Ok::<(), Box<dyn std::error::Error>>(())
+                    }
+                    Err(e) => {
+                        let error_msg = format!("Failed to initialize state: {}", e);
+                        tracing::error!("{}", error_msg);
+                        Err(error_msg.into())
+                    }
+                }
+            })?;
 
             // Setup system tray
             #[cfg(desktop)]
