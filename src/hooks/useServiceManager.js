@@ -1,6 +1,5 @@
 
 import { invoke } from '@tauri-apps/api/core';
-import { useCallback } from 'react';
 import { useAppStore } from '../store/useAppStore';
 import { useToastStore } from '../store/useToastStore';
 
@@ -10,7 +9,7 @@ export const useServiceManager = () => {
   const fetchServices = useAppStore(state => state.fetchServices)
 
 
-  const fetchServiceConfig = useCallback(async (serviceKey) => {
+  const fetchServiceConfig = async (serviceKey) => {
     try {
       const token = localStorage.getItem('authToken') || '';
       const configData = await invoke('get_service_config', { token, serviceKey });
@@ -24,10 +23,10 @@ export const useServiceManager = () => {
         configText = String(configData);
       }
       return { text: configText, path: configData.path };
-    } catch (error) {
-      throw new Error(`Error loading configuration: \n${error.message} `);
+    } catch (err) {
+      error(`Error loading configuration: \n${err.message} `);
     }
-  }, []);
+  };
 
   const handleConfigSave = async (serviceKey, content) => {
     try {
@@ -37,8 +36,7 @@ export const useServiceManager = () => {
       success('Configuration saved successfully');
       fetchServices();
     } catch (err) {
-      error(`Failed to save config: ${err.message || err} `);
-      throw err; // Re-throw so caller can handle loading state
+      error(`Failed to save config: ${err.message || err} `);      
     }
   };
 

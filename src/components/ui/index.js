@@ -1,6 +1,9 @@
 import { lazy } from "react";
 
 // Properly implement lazy loading with dynamic imports
+const Activity = lazy(() =>
+  import("./Activity.jsx").then((module) => ({ default: module.Activity }))
+);
 const Card = lazy(() =>
   import("./Card.jsx").then((module) => ({ default: module.Card }))
 );
@@ -36,6 +39,7 @@ const Error = lazy(() =>
 export * from './Table';
 
 export {
+  Activity,
   Card,
   Button,
   Modal,

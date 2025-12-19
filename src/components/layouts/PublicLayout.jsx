@@ -2,14 +2,15 @@ import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
-import { Outlet, useNavigate } from "react-router-dom";
+import { Outlet, useNavigate, useLocation } from "react-router-dom";
 import { Loading } from "../ui";
 import Toast from "../ui/Toast";
 
 const PublicLayout = () => {
-  const { setServices } = useAppStore();
+  const { setDependencies } = useAppStore();
   const [preflightLoading, setPreflightLoading] = useState(true);
   const navigate = useNavigate();
+  const location = useLocation();
   const { toasts, error } = useToastStore();
 
   // Preflight check before showing login
@@ -17,15 +18,19 @@ const PublicLayout = () => {
     let cancelled = false;
     (async () => {
       try {
-        const res = await invoke("check_package_status");
+        const res = await invoke("check_dependencies");
         const list = Array.isArray(res) ? res : res ? Object.values(res) : [];
         if (!cancelled) {
-          setServices(list);
+          setDependencies(list);
           const allServicesInstalled = list.every((svc) => svc?.installed);
           const poolExists = await invoke("zfs_pool_exists");
 
-          // Only redirect to setup if services are not installed
-          if (!allServicesInstalled || !poolExists) {
+          // Only redirect to setup if services are not installed OR pool missing
+          // AND we are not already on setup page
+          if (
+            (!allServicesInstalled || !poolExists) &&
+            location.pathname !== "/setup"
+          ) {
             navigate("/setup");
           }
         }
@@ -42,11 +47,11 @@ const PublicLayout = () => {
       }
 
       try {
-        await invoke("get_license");
-      } catch (error) {
+        await invoke("get_license_info");
+      } catch (err) {
         error(
           `License Check Failed : ${
-            error.message || "An unknown error occurred."
+            err.message || "An unknown error occurred."
           }`
         );
       }
@@ -54,7 +59,7 @@ const PublicLayout = () => {
     return () => {
       cancelled = true;
     };
-  }, [navigate, setServices, error]);
+  }, [navigate, setDependencies, error, location.pathname]);
 
   if (preflightLoading) {
     return <Loading message="Performing preflight checks..." />;

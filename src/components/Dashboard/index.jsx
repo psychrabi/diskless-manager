@@ -1,40 +1,20 @@
 import { useAppStore } from "@/store/useAppStore";
-import {
-  Disc,
-  Folder,
-  Globe,
-  Laptop,
-  MemoryStick,
-  RefreshCw,
-  Save,
-  Server,
-  Settings,
-} from "lucide-react";
-import React from "react";
+import { Disc, Laptop, MemoryStick, Server, Settings } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
-import { Button, Card } from "../ui";
+import { Card } from "../ui";
+import ClientOverviewCard from "./ClientOverviewCard";
+import MasterImageOverviewCard from "./MasterImageOverviewCard";
+import ServerInfoCard from "./ServerInfoCard";
+import ServicesStatus from "./ServicesStatus";
+import ZfsPoolCard from "./ZfsPoolCard";
 
 export default function Dashboard() {
-  const { services, fetchServices, serverInfo } = useAppStore(
+  const { serverInfo } = useAppStore(
     useShallow((state) => ({
-      services: state.services,
-      fetchServices: state.fetchServices,
       serverInfo: state.serverInfo,
     }))
   );
   const serverStatus = [];
-
-  function getServiceIcon(name) {
-    const icons = {
-      "isc-dhcp-server": Globe,
-      "tftpd-hpa": Folder,
-      target: Save,
-      "nfs-kernel-server": Folder,
-      smbd: Folder,
-      apache2: Globe,
-    };
-    return icons[name] || Settings;
-  }
 
   return (
     <Card
@@ -101,99 +81,19 @@ export default function Dashboard() {
       </div>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
         {/* System Information */}
-        <div className="card bg-base-100 shadow-xl border border-base-200/50">
-          <div className="card-body p-6">
-            <h2 className="card-title text-xl mb-4">System Information</h2>
-            {serverInfo ? (
-              <div className="space-y-4">
-                <div className="flex justify-between border-b border-base-200 pb-2">
-                  <span className="text-base-content/70">Hostname</span>
-                  <span className="font-medium">{serverInfo.hostname}</span>
-                </div>
-                <div className="flex justify-between border-b border-base-200 pb-2">
-                  <span className="text-base-content/70">Operating System</span>
-                  <span className="font-medium">{serverInfo.os}</span>
-                </div>
-                <div className="flex justify-between border-b border-base-200 pb-2">
-                  <span className="text-base-content/70">Kernel</span>
-                  <span className="font-medium text-sm">
-                    {serverInfo.kernel}
-                  </span>
-                </div>
-                <div className="flex justify-between border-b border-base-200 pb-2">
-                  <span className="text-base-content/70">Uptime</span>
-                  <span className="font-medium">{serverInfo.uptime}</span>
-                </div>
-                <div className="flex justify-between border-b border-base-200 pb-2">
-                  <span className="text-base-content/70">CPU Cores</span>
-                  <span className="font-medium">{serverInfo.cpu_count}</span>
-                </div>
-                <div className="flex justify-between border-b border-base-200 pb-2">
-                  <span className="text-base-content/70">Total Memory</span>
-                  <span className="font-medium">{serverInfo.memory_total}</span>
-                </div>
-              </div>
-            ) : (
-              <div className="flex flex-col items-center justify-center h-48 text-base-content/50">
-                <span className="loading loading-dots loading-md mb-2"></span>
-                <p>System information unavailable</p>
-              </div>
-            )}
-          </div>
-        </div>
+        <ServerInfoCard />
 
         {/* Services Status */}
-        <Card
-          title="Services Status"
-          className="col-span-2"
-          actions={
-            <Button
-              variant="ghost"
-              size="icon"
-              icon={RefreshCw}
-              onClick={() => fetchServices()}
-              title="Refresh all services"
-            />
-          }
-        >
-          <div className="">
-            {services.length > 0 ? (
-              <ul className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {services.map((service) => (
-                  <li
-                    key={service.name}
-                    className="flex items-center justify-between p-3 bg-base-200 rounded-lg hover:bg-base-200 transition-colors"
-                  >
-                    <div className="flex items-center gap-3">
-                      <span className="text-xl opacity-80">
-                        {React.createElement(getServiceIcon(service.name))}
-                      </span>
-                      <div>
-                        <p className="font-medium text-base-content">
-                          {service.display_name}
-                        </p>
-                        <p className="text-xs text-base-content/60">
-                          {service.name}
-                        </p>
-                      </div>
-                    </div>
-                    <span
-                      className={`badge ${
-                        service.running ? "badge-success" : "badge-error"
-                      } badge-sm font-semibold`}
-                    >
-                      {service.running ? "Running" : "Stopped"}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <div className="flex flex-col items-center justify-center h-48 text-base-content/50">
-                <p>No services found</p>
-              </div>
-            )}
-          </div>
-        </Card>
+        <ServicesStatus />
+
+        {/* ZFS Pool */}
+        <ZfsPoolCard />
+
+        {/* Client Overview */}
+        <ClientOverviewCard />
+
+        {/* Master Image Overview */}
+        <MasterImageOverviewCard />
       </div>
     </Card>
   );

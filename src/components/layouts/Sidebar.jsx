@@ -1,4 +1,4 @@
-import { Button } from "@/components/ui";
+import { Activity, Button } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { exit } from "@tauri-apps/plugin-process";
 
@@ -16,7 +16,6 @@ import {
   Settings,
   SquareLibrary,
 } from "lucide-react";
-import { Activity } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 
 const menuItems = [

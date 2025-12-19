@@ -1,9 +1,11 @@
 use crate::cmd::append_log;
 use crate::config;
+use crate::state::AppState;
 use crate::types::AuthError;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+use tauri::State;
 
 const LICENSE_SERVER_URL: &str = "https://license.example.com/api/verify"; // replace with real SaaS license server
 
@@ -45,7 +47,7 @@ pub fn verify_license_remote(key: &str) -> Result<LicenseVerifyResponse, String>
 }
 
 #[tauri::command]
-pub fn activate_license(key: &str) -> Result<String, AuthError> {
+pub async fn activate_license(state: State<'_, AppState>, key: &str) -> Result<String, AuthError> {
     if key.trim().is_empty() {
         return Err(AuthError {
             message: "License key cannot be empty".to_string(),
@@ -53,7 +55,9 @@ pub fn activate_license(key: &str) -> Result<String, AuthError> {
     }
     if key.trim() == "trial" {
         // special case for trial license
-        let mut cfg = config::read_config();
+        let mut cfg = config::read_config(state.clone())
+            .await
+            .map_err(|e| AuthError { message: e })?;
         let mut settings = cfg.settings.as_object().cloned().unwrap_or_default();
         // set trial license
         settings.insert(
@@ -75,9 +79,11 @@ pub fn activate_license(key: &str) -> Result<String, AuthError> {
             })?,
         );
         cfg.settings = serde_json::Value::Object(settings);
-        config::write_config(&cfg).map_err(|e| AuthError {
-            message: format!("failed to save license: {}", e),
-        })?;
+        config::write_config(&state.db_pool, &cfg)
+            .await
+            .map_err(|e| AuthError {
+                message: format!("failed to save license: {}", e),
+            })?;
         append_log("INFO", &format!("Trial License activated: {}", key));
         Ok("Trial License activated".to_string())
     } else {
@@ -93,7 +99,9 @@ pub fn activate_license(key: &str) -> Result<String, AuthError> {
         }
 
         // write license key and status to config
-        let mut cfg = config::read_config();
+        let mut cfg = config::read_config(state.clone())
+            .await
+            .map_err(|e| AuthError { message: e })?;
         let mut settings = cfg.settings.as_object().cloned().unwrap_or_default();
         settings.insert(
             "license_key".to_string(),
@@ -116,9 +124,11 @@ pub fn activate_license(key: &str) -> Result<String, AuthError> {
             );
         }
         cfg.settings = serde_json::Value::Object(settings);
-        config::write_config(&cfg).map_err(|e| AuthError {
-            message: format!("failed to save license: {}", e),
-        })?;
+        config::write_config(&state.db_pool, &cfg)
+            .await
+            .map_err(|e| AuthError {
+                message: format!("failed to save license: {}", e),
+            })?;
 
         append_log("INFO", &format!("License activated: {}", key));
         Ok("License activated".to_string())
@@ -126,96 +136,43 @@ pub fn activate_license(key: &str) -> Result<String, AuthError> {
 }
 
 pub fn ensure_license_valid() -> Result<(), AuthError> {
-    // read local config
-    let cfg = config::read_config();
-    if let Some(obj) = cfg.settings.as_object() {
-        // Check if the license status is valid and the license_expires is in the future
-        if let (Some(status), Some(expires)) = (
-            obj.get("license_status").and_then(|v| v.as_str()),
-            obj.get("license_expires").and_then(|v| v.as_str()),
-        ) {
-            if status == "valid" {
-                if let Ok(expiry_date) = chrono::NaiveDate::parse_from_str(expires, "%Y-%m-%d") {
-                    if expiry_date >= chrono::Local::now().naive_local().date() {
-                        return Ok(());
-                    } else {
-                        return Err(AuthError {
-                            message: "License has expired.".to_string(),
-                        });
-                    }
-                }
-            }
-        }
-        use chrono::{NaiveDate, Utc};
-
-        if let Some(val) = obj.get("license_status") {
-            if val.as_str() == Some("valid") {
-                if let Some(exp_val) = obj.get("license_expires").and_then(|v| v.as_str()) {
-                    if let Ok(exp_date) = NaiveDate::parse_from_str(exp_val, "%Y-%m-%d") {
-                        let today = Utc::now().date_naive();
-                        if exp_date >= today {
-                            return Ok(());
-                        } else {
-                            return Err(AuthError {
-                                message: "License has expired.".to_string(),
-                            });
-                        }
-                    } else {
-                        return Err(AuthError {
-                            message: "Invalid license expiration date format.".to_string(),
-                        });
-                    }
-                } else {
-                    return Err(AuthError {
-                        message: "License expiration date missing.".to_string(),
-                    });
-                }
-            }
-        }
-        // removed stray early return so remote re-check can run if license_key exists
-        // if let Some(val) = obj.get("license_key") {
-        //     if let Some(_key) = val.as_str() {
-        //         // try to verify remote (best-effort)
-        //         match verify_license_remote(key) {
-        //             Ok(r) => {
-        //                 if r.valid {
-        //                     // persist valid status
-        //                     let mut cfg2 = config::read_config();
-        //                     let mut settings = cfg2.settings.as_object().cloned().unwrap_or_default();
-        //                     settings.insert("license_status".to_string(), serde_json::to_value("valid").unwrap_or_else(|_| serde_json::Value::String("valid".into())));
-        //                     if let Some(ex) = r.expires_at {
-        //                         settings.insert("license_expires".to_string(), serde_json::to_value(ex).unwrap_or(serde_json::Value::Null));
-        //                     }
-        //                     cfg2.settings = serde_json::Value::Object(settings);
-        //                     let _ = config::write_config(&cfg2);
-        //                     return Ok(());
-        //                 } else {
-        //                     return Err(AuthError { message: r.message.unwrap_or_else(|| "License invalid".to_string()) });
-        //                 }
-        //             }
-        //             Err(e) => {
-        //                 // If remote check fails, allow local cached valid status only.
-        //                 if let Some(val) = obj.get("license_status") {
-        //                     if val.as_str() == Some("valid") {
-        //                         append_log("WARN", "License server unreachable, using cached license status");
-        //                         return Ok(());
-        //                     }
-        //                 }
-        //                 return Err(AuthError { message: format!("License verification failed: {}", e) });
-        //             }
-        //         }
-        //     }
-        // }
-    }
-    Err(AuthError {
+    let cfg = config::get_config();
+    let settings = cfg.settings.as_object().ok_or_else(|| AuthError {
         message: "License not activated. Please activate to use the application.".to_string(),
-    })
+    })?;
+
+    let status = settings.get("license_status").and_then(|v| v.as_str());
+    let expires = settings.get("license_expires").and_then(|v| v.as_str());
+
+    match (status, expires) {
+        (Some("valid"), Some(exp_str)) => {
+            if let Ok(exp_date) = chrono::NaiveDate::parse_from_str(exp_str, "%Y-%m-%d") {
+                let today = chrono::Local::now().naive_local().date();
+                if exp_date >= today {
+                    Ok(())
+                } else {
+                    Err(AuthError {
+                        message: "License has expired.".to_string(),
+                    })
+                }
+            } else {
+                Err(AuthError {
+                    message: "Invalid license expiration date format.".to_string(),
+                })
+            }
+        }
+        _ => Err(AuthError {
+            message:
+                "License not activated or status invalid. Please activate to use the application."
+                    .to_string(),
+        }),
+    }
 }
 
 /// Return current license details (for dashboard display)
 #[tauri::command]
 pub fn get_license_info() -> Result<LicenseInfo, String> {
-    let cfg = config::read_config();
+    let cfg = config::get_config();
     let mut key: Option<String> = None;
     let mut status: Option<String> = None;
     let mut expires: Option<String> = None;

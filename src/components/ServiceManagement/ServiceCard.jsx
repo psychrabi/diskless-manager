@@ -57,7 +57,7 @@ export default function ServiceCard({
       key={service.name}
       actions={
         <div
-          className={`badge rounded-full ${
+          className={`badge rounded-full hidden xl:block ${
             service.running ? "badge-success" : "badge-error"
           } gap-2`}
         >
@@ -83,14 +83,6 @@ export default function ServiceCard({
       </div>
 
       <div className="card-actions">
-        <Button
-          icon={Eye}
-          variant="info"
-          className="flex-1"
-          onClick={() => onViewConfig(service.name, service.display_name)}
-        >
-          View Config
-        </Button>
         {service.running ? (
           <>
             <Button
@@ -120,6 +112,14 @@ export default function ServiceCard({
             Start
           </Button>
         )}
+        <Button
+          icon={Eye}
+          variant="info"
+          className="flex-1"
+          onClick={() => onViewConfig(service.name, service.display_name)}
+        >
+          View Config
+        </Button>
       </div>
     </Card>
   );

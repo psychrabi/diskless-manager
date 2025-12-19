@@ -4,6 +4,7 @@ import { useServiceManager } from "../../hooks/useServiceManager";
 import { Card } from "../ui";
 import ServiceConfigModal from "./ServiceConfigModal";
 import ServicesList from "./ServicesList";
+import BootScript from "./BootScript";
 
 const ServiceManagement = () => {
   const { fetchServiceConfig } = useServiceManager();
@@ -53,6 +54,7 @@ const ServiceManagement = () => {
       <div className="min-h-[calc(100vh-13rem)] space-y-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           <ServicesList onViewConfig={handleViewConfig} />
+          <BootScript onViewConfig={handleViewConfig} />
         </div>
         <ServiceConfigModal
           isOpen={modalState.isOpen}

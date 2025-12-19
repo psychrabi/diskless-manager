@@ -168,14 +168,17 @@ pub async fn check_dependencies() -> Result<Vec<DependencyStatus>, String> {
         ("xfreerdp3", "freerdp3-x11"),
     ];
 
-    let statuses: Vec<DependencyStatus> = dependencies
-        .into_iter()
-        .map(|(cmd, name)| {
-            let output = Command::new("which").arg(cmd).output();
+    let mut handles = Vec::new();
+
+    for (cmd, name) in dependencies {
+        let cmd = cmd.to_string();
+        let name = name.to_string();
+        handles.push(tokio::spawn(async move {
+            let output = Command::new("which").arg(&cmd).output();
             let installed = output.map(|o| o.status.success()).unwrap_or(false);
 
             let version = Command::new("dpkg-query")
-                .args(["--showformat=${Version}\n", "--show", name])
+                .args(["--showformat=${Version}\n", "--show", &name])
                 .output()
                 .ok()
                 .and_then(|o| {
@@ -186,12 +189,20 @@ pub async fn check_dependencies() -> Result<Vec<DependencyStatus>, String> {
                 });
 
             DependencyStatus {
-                name: name.to_string(),
+                name,
                 installed,
                 version,
             }
-        })
-        .collect();
+        }));
+    }
+
+    let mut statuses = Vec::new();
+    for handle in handles {
+        match handle.await {
+            Ok(status) => statuses.push(status),
+            Err(e) => return Err(format!("Task join error: {}", e)),
+        }
+    }
 
     Ok(statuses)
 }

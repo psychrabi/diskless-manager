@@ -24,15 +24,15 @@ const ProtectedRoute = lazy(() =>
 export const router = createHashRouter([
   {
     path: "/",
-    element: (
-      <PublicRoute>
-        <PublicLayout />
-      </PublicRoute>
-    ),
+    element: <PublicLayout />,
     children: [
       {
         path: "/login",
-        element: <Login />,
+        element: (
+          <PublicRoute>
+            <Login />
+          </PublicRoute>
+        ),
       },
       {
         path: "/setup",

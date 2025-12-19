@@ -1,6 +1,4 @@
 use crate::core::service::{ServiceInfo, ServiceManager, ServiceStatus};
-use crate::state::AppState;
-use tauri::State;
 
 #[tauri::command]
 pub async fn list_services() -> Result<Vec<ServiceInfo>, String> {

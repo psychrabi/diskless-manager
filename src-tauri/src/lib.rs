@@ -14,13 +14,12 @@ pub mod types;
 
 pub mod validation;
 mod zfs;
-use dirs;
 
 mod cmd;
 mod commands;
 mod core;
 mod services;
-mod state;
+pub mod state;
 
 use serde::Serialize;
 use std::sync::{Arc, RwLock};
@@ -131,22 +130,19 @@ fn get_server_info() -> ServerInfo {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Initialize tracing with fixed log file
-    let log_path = cmd::log_file_path();
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-        .expect("Failed to open log file");
-
-    let (non_blocking, _guard) = tracing_appender::non_blocking(file);
-
-    tracing_subscriber::fmt()
-        .with_writer(non_blocking)
-        .with_max_level(tracing::Level::INFO)
-        .init();
-
     tauri::Builder::default()
+        .plugin(
+            tauri_plugin_log::Builder::default()
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                        file_name: Some("diskless-manager".into()),
+                    }),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Webview),
+                ])
+                .level(log::LevelFilter::Info)
+                .build(),
+        )
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_notification::init())
@@ -196,9 +192,6 @@ pub fn run() {
             service::install_service,
             service::get_service_config,
             service::save_service_config,
-            service::check_package_status,
-            service::install_packages,
-            // service::restart_service,
             service::configure_dhcp_server,
             service::configure_tftp_server,
             service::configure_apache_server,
@@ -264,22 +257,8 @@ pub fn run() {
         ])
         .setup(|app| {
             append_log("INFO", "Application startup");
-            // Ensure config.json exists on first run
-            if let Some(base) = dirs::config_dir() {
-                let config_dir = base.join("com.diskless.local");
-                let config_path = config_dir.join("config.json");
-                if !config_path.exists() {
-                    if let Err(e) = std::fs::create_dir_all(&config_dir) {
-                        eprintln!("[WARN] Failed to create config directory: {}", e);
-                    } else if let Err(e) = config::write_config(&types::AppConfig::default()) {
-                        eprintln!("[WARN] Failed to create default config.json: {}", e);
-                    } else {
-                        println!("Created default config at {}", config_path.display());
-                    }
-                }
-            }
+            // config.json creation and migration is now handled inside AppState::new() during initialization.
 
-            // Initialize application state
             tauri::async_runtime::block_on(async {
                 match AppState::new().await {
                     Ok(state) => {
@@ -341,16 +320,6 @@ pub fn run() {
                     .build(app)?;
             }
 
-            // app.get_webview_window("main").unwrap().open_devtools();
-            if cfg!(debug_assertions) {
-                if let Err(e) = app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                ) {
-                    eprintln!("[WARN] Failed to initialize logging plugin: {}", e);
-                }
-            }
             append_log("INFO", "Tauri setup completed");
             Ok(())
         })

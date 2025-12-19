@@ -58,7 +58,7 @@ pub fn authenticate_user(username: &str, password: &str) -> Result<LoginResponse
     // - Otherwise use the password_hash from the USERS map.
     let mut password_hash = user.password_hash.clone();
     if username == "admin" {
-        let cfg = crate::config::read_config();
+        let cfg = crate::config::get_config();
         if let Some(obj) = cfg.settings.as_object() {
             if let Some(val) = obj.get("admin_password") {
                 if let Some(s) = val.as_str() {
@@ -128,7 +128,10 @@ pub fn validate_token(token: &str) -> Result<Claims, AuthError> {
 
 // Tauri command for login
 #[tauri::command]
-pub fn login(request: LoginRequest) -> Result<LoginResponse, AuthError> {
+pub fn login(
+    _state: tauri::State<'_, crate::state::AppState>,
+    request: LoginRequest,
+) -> Result<LoginResponse, AuthError> {
     let username = request.username.clone();
     let password = request.password.clone();
 
@@ -162,7 +165,8 @@ pub fn validate_auth_token(token: &str) -> Result<Claims, AuthError> {
 
 // Tauri command for updating admin password
 #[tauri::command]
-pub fn update_admin_password(
+pub async fn update_admin_password(
+    state: tauri::State<'_, crate::state::AppState>,
     token: &str,
     old_password: &str,
     new_password: &str,
@@ -177,7 +181,7 @@ pub fn update_admin_password(
 
     // determine current admin password hash (config override or default USERS)
     let mut current_hash = None;
-    let cfg = crate::config::read_config();
+    let cfg = crate::config::get_config();
     if let Some(obj) = cfg.settings.as_object() {
         if let Some(val) = obj.get("admin_password") {
             if let Some(s) = val.as_str() {
@@ -210,7 +214,7 @@ pub fn update_admin_password(
     })?;
 
     // update config with the hashed password
-    let mut cfg = crate::config::read_config();
+    let mut cfg = crate::config::get_config();
     let mut settings = cfg.settings.as_object().cloned().unwrap_or_default();
     settings.insert(
         "admin_password".to_string(),
@@ -219,9 +223,11 @@ pub fn update_admin_password(
         })?,
     );
     cfg.settings = serde_json::Value::Object(settings);
-    crate::config::write_config(&cfg).map_err(|e| AuthError {
-        message: format!("Failed to save admin password: {}", e),
-    })?;
+    crate::config::write_config(&state.db_pool, &cfg)
+        .await
+        .map_err(|e| AuthError {
+            message: format!("Failed to save admin password: {}", e),
+        })?;
 
     append_log("INFO", "admin password updated");
     Ok("Admin password updated successfully".to_string())

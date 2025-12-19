@@ -17,8 +17,10 @@ use crate::{
     config::{get_config, get_zpool_name, write_config},
     error::AppError,
     middleware::validate_auth_token_for_command,
+    state::AppState,
     types::image::{ArcstatInfo, ZpoolInfo},
 };
+use tauri::State;
 
 // Import the timed execution macro
 use crate::timed_execution;
@@ -138,12 +140,13 @@ fn parse_property_output(output: &str) -> Vec<(String, String)> {
 
 // Check for dependent clients (returns Ok(Vec<String>) of names if any, Err if fetch fails)
 async fn check_dependent_clients(
+    state: &State<'_, AppState>,
     base: &str,
     is_snapshot: bool,
     token: &str,
 ) -> Result<Vec<String>, AppError> {
     let key = if is_snapshot { "snapshot" } else { "master" };
-    let clients_result = get_clients(token.to_string(), None).await;
+    let clients_result = get_clients(state.clone(), token.to_string(), None).await;
     match clients_result {
         Ok(clients_json) => {
             if let Some(clients) = clients_json.as_array() {
@@ -192,11 +195,11 @@ fn validate_size(size: &str) -> Result<(), AppError> {
 }
 
 // Generic ZVOL creation (used by image and game disk)
-fn create_zvol(
+async fn create_zvol(
+    pool: &sqlx::SqlitePool,
     parent: &str,
     basename: &str,
     size: &str,
-
     zvol_type: &str, // for logging
     os: Option<&str>,
 ) -> Result<String, AppError> {
@@ -236,7 +239,7 @@ fn create_zvol(
         created_at: now.clone(),
         last_modified: now,
     };
-    if !save_master_config(&master_data) {
+    if !save_master_config(pool, &master_data).await {
         return Err(AppError::Config("Failed to update config.json".to_string()));
     }
 
@@ -245,6 +248,21 @@ fn create_zvol(
         &format!("create_{} start: {}", zvol_type, full_name),
     );
     Ok(full_name)
+}
+
+pub async fn save_master_config(pool: &sqlx::SqlitePool, master_data: &MasterData) -> bool {
+    let mut config = get_config();
+    if !config.masters.is_object() {
+        config.masters = json!({});
+    }
+    config.masters[&master_data.name] = serde_json::to_value(master_data).unwrap();
+    match crate::config::write_config(pool, &config).await {
+        Ok(_) => true,
+        Err(e) => {
+            println!("Error saving master config: {}", e);
+            false
+        }
+    }
 }
 
 // Ensure parent dataset exists with property
@@ -262,7 +280,10 @@ fn ensure_parent_dataset(parent: &str, prop: &str, prop_val: &str) -> Result<(),
 }
 
 #[tauri::command]
-pub fn create_image(request: CreateImageRequest) -> Result<Value, AppError> {
+pub async fn create_image(
+    state: tauri::State<'_, crate::state::AppState>,
+    request: CreateImageRequest,
+) -> Result<Value, AppError> {
     validate_auth(&request.token)?;
     validate_name(&request.name)?;
     validate_size(&request.size)?;
@@ -398,12 +419,14 @@ pub fn create_image(request: CreateImageRequest) -> Result<Value, AppError> {
     ensure_parent_dataset(&parent_dataset, "org.diskless:type", "image")?;
 
     let full_name = create_zvol(
+        &state.db_pool,
         &parent_dataset,
         &request.name,
         &request.size,
         "image",
         request.os.as_deref(),
-    )?;
+    )
+    .await?;
     Ok(json!({
         "message": format!("Master ZVOL '{}' created successfully.", full_name),
         "master": {
@@ -416,7 +439,12 @@ pub fn create_image(request: CreateImageRequest) -> Result<Value, AppError> {
 }
 
 #[tauri::command]
-pub fn create_game_disk(token: String, name: String, size: String) -> Result<Value, AppError> {
+pub async fn create_game_disk(
+    state: State<'_, AppState>,
+    token: String,
+    name: String,
+    size: String,
+) -> Result<Value, AppError> {
     validate_auth(&token)?;
     validate_name(&name)?;
     validate_size(&size)?;
@@ -426,7 +454,15 @@ pub fn create_game_disk(token: String, name: String, size: String) -> Result<Val
     ensure_parent_dataset(&games_parent, "org.diskless:type", "games")?;
 
     let basename = format!("{}-games", name); // Append suffix as in original
-    let full_name = create_zvol(&games_parent, &basename, &size, "game_disk", None)?;
+    let full_name = create_zvol(
+        &state.db_pool,
+        &games_parent,
+        &basename,
+        &size,
+        "game_disk",
+        None,
+    )
+    .await?;
     Ok(json!({
         "message": format!("Game Disk '{}' created successfully.", full_name),
         "master": {
@@ -439,7 +475,10 @@ pub fn create_game_disk(token: String, name: String, size: String) -> Result<Val
 }
 
 #[tauri::command]
-pub async fn get_images(token: String) -> Result<Vec<Master>, AppError> {
+pub async fn get_images(
+    state: tauri::State<'_, crate::state::AppState>,
+    token: String,
+) -> Result<Vec<Master>, AppError> {
     validate_auth(&token)?;
 
     timed_execution!("get_images", {
@@ -563,7 +602,7 @@ pub async fn get_images(token: String) -> Result<Vec<Master>, AppError> {
 
         // Update config.json with the current masters list
         config.masters = serde_json::to_value(&masters_data).unwrap_or(json!({}));
-        if let Err(e) = write_config(&config) {
+        if let Err(e) = write_config(&state.db_pool, &config).await {
             eprintln!("Error writing masters to config: {}", e);
         }
 
@@ -629,28 +668,18 @@ fn get_cached_zfs_data(zpool: &str) -> Result<(Vec<Snapshot>, Vec<Snapshot>), Ap
     Ok((cache.datasets.clone(), cache.snapshots.clone()))
 }
 
-pub fn save_master_config(master_data: &MasterData) -> bool {
-    let mut config = get_config();
-    if !config.masters.is_object() {
-        config.masters = json!({});
-    }
-    config.masters[&master_data.name] = serde_json::to_value(master_data).unwrap();
-    match write_config(&config) {
-        Ok(_) => true,
-        Err(e) => {
-            println!("Error saving master config: {}", e);
-            false
-        }
-    }
-}
-
-async fn common_delete(token: String, entity: &str, is_snapshot: bool) -> Result<Value, AppError> {
+async fn common_delete(
+    state: &State<'_, AppState>,
+    token: String,
+    entity: &str,
+    is_snapshot: bool,
+) -> Result<Value, AppError> {
     eprintln!("=== common_delete AUTH START: {}", entity);
     validate_auth(&token)?;
     eprintln!("=== common_delete AUTH OK");
 
     eprintln!("=== common_delete DEPENDENTS START");
-    let dependents = check_dependent_clients(entity, is_snapshot, &token)
+    let dependents = check_dependent_clients(state, entity, is_snapshot, &token)
         .await
         .map_err(|e| {
             eprintln!("=== common_delete DEPENDENTS ERR: {}", e);
@@ -675,7 +704,7 @@ async fn common_delete(token: String, entity: &str, is_snapshot: bool) -> Result
         Ok(()) => {
             eprintln!("=== common_delete ZFS DESTROY OK");
             if !is_snapshot {
-                let _ = delete_image_config(entity);
+                let _ = delete_image_config(&state.db_pool, entity).await;
             }
             append_log(
                 "INFO",
@@ -708,7 +737,7 @@ async fn common_delete(token: String, entity: &str, is_snapshot: bool) -> Result
 }
 
 // Enhanced: Clear default if deleted master was default
-pub fn delete_image_config(master_name: &str) -> bool {
+pub async fn delete_image_config(pool: &sqlx::SqlitePool, master_name: &str) -> bool {
     let mut config = get_config();
     let was_default = config
         .settings
@@ -727,7 +756,7 @@ pub fn delete_image_config(master_name: &str) -> bool {
                 eprintln!("=== delete_image_config: Cleared default_master after delete");
             }
 
-            if let Err(e) = write_config(&config) {
+            if let Err(e) = write_config(pool, &config).await {
                 eprintln!("Error writing config file: {}", e);
                 return false;
             }
@@ -739,11 +768,12 @@ pub fn delete_image_config(master_name: &str) -> bool {
 
 #[tauri::command]
 pub async fn delete_image(
+    state: State<'_, AppState>,
     token: String,
     master_name: String,
 ) -> Result<serde_json::Value, AppError> {
     eprintln!("=== delete_image START: {}", master_name); // Terminal log
-    let result = common_delete(token, &master_name, false).await;
+    let result = common_delete(&state, token, &master_name, false).await;
     eprintln!("=== delete_image END: {:?}", result); // Will show if it completes
     result
 }
@@ -751,7 +781,11 @@ pub async fn delete_image(
 // Create a ZFS snapshot
 
 #[tauri::command]
-pub fn create_snapshot(token: String, snapshot_name: String) -> Result<Value, String> {
+pub async fn create_snapshot(
+    state: State<'_, AppState>,
+    token: String,
+    snapshot_name: String,
+) -> Result<Value, String> {
     // Validate authentication token
     crate::middleware::validate_auth_token_for_command(&token)
         .map_err(|e| format!("Authentication failed: {}", e.message))?;
@@ -793,7 +827,9 @@ pub fn create_snapshot(token: String, snapshot_name: String) -> Result<Value, St
             if !snapshots.iter().any(|v| v == &json!(snapshot_name)) {
                 snapshots.push(json!(snapshot_name));
             }
-            write_config(&config).map_err(|e| format!("Failed to write config: {}", e))?;
+            write_config(&state.db_pool, &config)
+                .await
+                .map_err(|e| format!("Failed to write config: {}", e))?;
         }
     }
     Ok(json!({
@@ -802,17 +838,21 @@ pub fn create_snapshot(token: String, snapshot_name: String) -> Result<Value, St
 }
 
 #[tauri::command]
-pub async fn delete_snapshot(token: String, snapshot_name: String) -> Result<Value, AppError> {
-    validate_auth(&token)?;
-
+pub async fn delete_snapshot(
+    state: State<'_, AppState>,
+    token: String,
+    snapshot_name: String,
+) -> Result<serde_json::Value, AppError> {
+    eprintln!("=== delete_snapshot START: {}", snapshot_name);
     let zpool = get_zpool_name();
     if !snapshot_name.contains('@') || !snapshot_name.starts_with(&format!("{}/", &zpool)) {
         return Err(AppError::Validation(
             "Invalid snapshot name format.".to_string(),
         ));
     }
-
-    common_delete(token, &snapshot_name, true).await
+    let result = common_delete(&state, token, &snapshot_name, true).await;
+    eprintln!("=== delete_snapshot END: {:?}", result);
+    result
 }
 
 #[tauri::command]
@@ -840,7 +880,10 @@ pub fn get_zpool_list() -> Vec<ZpoolInfo> {
 }
 
 #[tauri::command]
-pub fn zfs_pool_exists(pool_name: Option<String>) -> Result<bool, AppError> {
+pub async fn zfs_pool_exists(
+    state: State<'_, AppState>,
+    pool_name: Option<String>,
+) -> Result<bool, AppError> {
     if pool_name.is_none() {
         let output = Command::new("zpool")
             .args(["list", "-H"])
@@ -862,14 +905,17 @@ pub fn zfs_pool_exists(pool_name: Option<String>) -> Result<bool, AppError> {
             }
             config.settings["zpool_name"] = json!(pool.clone());
             config.settings["zfsPool"] = json!(pool);
-            let _ = write_config(&config);
+            let _ = write_config(&state.db_pool, &config).await;
         }
         Ok(exists)
     }
 }
 
 #[tauri::command]
-pub fn create_zfs_pool(req: CreateZpoolRequest) -> Result<(), AppError> {
+pub async fn create_zfs_pool(
+    state: State<'_, AppState>,
+    req: CreateZpoolRequest,
+) -> Result<(), AppError> {
     let status = run_command(&["zpool", "create", &req.name, &format!("/dev/{}", req.disk)]);
     if status.is_err() {
         return Err(AppError::Command("Failed to create ZFS pool".to_string()));
@@ -880,7 +926,7 @@ pub fn create_zfs_pool(req: CreateZpoolRequest) -> Result<(), AppError> {
     settings.insert("zpool_name".to_string(), json!(req.name.clone()));
     settings.insert("zfsPool".to_string(), json!(req.name));
     config.settings = json!(settings);
-    write_config(&config).map_err(|e| {
+    write_config(&state.db_pool, &config).await.map_err(|e| {
         AppError::Config(format!(
             "ZFS pool created, but failed to update config: {}",
             e
@@ -891,33 +937,26 @@ pub fn create_zfs_pool(req: CreateZpoolRequest) -> Result<(), AppError> {
 }
 
 #[tauri::command]
-pub fn set_default_image(token: String, name: &str) -> Result<bool, AppError> {
-    // Validate authentication token
-    crate::middleware::validate_auth_token_for_command(&token)
-        .map_err(|e| AppError::Auth(e.message))?;
+pub async fn set_default_image(
+    state: State<'_, AppState>,
+    token: String,
+    master_name: String,
+) -> Result<Value, AppError> {
+    validate_auth(&token)?;
     let mut config = get_config();
     if !config.settings.is_object() {
         config.settings = json!({});
     }
-    config.settings["default_master"] = Value::String(name.to_string());
-    match write_config(&config) {
-        Ok(_) => {
-            // Invalidate cache since we've changed the default image
-            invalidate_default_image_cache();
-            Ok(true)
-        }
-        Err(e) => {
-            println!("Error saving default master: {}", e);
-            Err(AppError::Config(format!(
-                "Error saving default master: {}",
-                e
-            )))
-        }
-    }
+    config.settings["default_master"] = json!(master_name);
+    write_config(&state.db_pool, &config)
+        .await
+        .map_err(|e| AppError::Config(e))?;
+    Ok(json!({"message": "Successfully set default image"}))
 }
 
 #[tauri::command]
 pub async fn rollback_image_snapshot(
+    state: State<'_, AppState>,
     token: String,
     _master_name: String,
     snapshot_name: String,
@@ -925,7 +964,7 @@ pub async fn rollback_image_snapshot(
     validate_auth(&token)?;
 
     // Rollback the snapshot (destroys newer snapshots and their clones)
-    if let Err(e) = run_command(["zfs", "rollback", "-r", &snapshot_name]) {
+    if let Err(e) = run_command(&["zfs", "rollback", "-r", &snapshot_name]) {
         return Err(AppError::Command(format!(
             "Failed to rollback snapshot: {}",
             e
@@ -933,7 +972,7 @@ pub async fn rollback_image_snapshot(
     }
 
     // Get clients and recreate clones for those using exactly this snapshot
-    let clients_result = get_clients("".to_string(), None).await;
+    let clients_result = get_clients(state, token, None).await;
     let mut recreated = vec![];
     if let Ok(clients_json) = clients_result {
         if let Some(clients) = clients_json.as_array() {
@@ -1027,7 +1066,9 @@ impl DefaultImageCache {
 }
 
 #[tauri::command]
-pub async fn get_default_image_overview() -> Result<serde_json::Value, AppError> {
+pub async fn get_default_image_overview(
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, AppError> {
     let config = get_config(); // Use cached config
     let master_dataset = config
         .settings
@@ -1049,19 +1090,9 @@ pub async fn get_default_image_overview() -> Result<serde_json::Value, AppError>
     // Try to get cached data first
     {
         let cache = DEFAULT_IMAGE_CACHE.read().unwrap();
-
         if !cache.needs_refresh() {
-            // Return cached data
             return Ok(cache.overview.clone());
         }
-    } // Drop read lock
-
-    let mut cache = DEFAULT_IMAGE_CACHE.write().unwrap();
-
-    // Double-check after acquiring write lock
-    if !cache.needs_refresh() {
-        // Another thread may have updated the cache while we were waiting
-        return Ok(cache.overview.clone());
     }
 
     // Check if the dataset exists
@@ -1072,7 +1103,7 @@ pub async fn get_default_image_overview() -> Result<serde_json::Value, AppError>
             config.settings = json!({});
         }
         config.settings["default_master"] = json!(null);
-        let _ = write_config(&config);
+        let _ = write_config(&state.db_pool, &config).await;
 
         let overview = json!({
             "name": null,
@@ -1082,8 +1113,11 @@ pub async fn get_default_image_overview() -> Result<serde_json::Value, AppError>
         });
 
         // Update cache
-        cache.overview = overview.clone();
-        cache.last_updated = std::time::SystemTime::now();
+        {
+            let mut cache = DEFAULT_IMAGE_CACHE.write().unwrap();
+            cache.overview = overview.clone();
+            cache.last_updated = std::time::SystemTime::now();
+        }
 
         return Ok(overview);
     }
@@ -1113,8 +1147,11 @@ pub async fn get_default_image_overview() -> Result<serde_json::Value, AppError>
     });
 
     // Update cache
-    cache.overview = overview.clone();
-    cache.last_updated = std::time::SystemTime::now();
+    {
+        let mut cache = DEFAULT_IMAGE_CACHE.write().unwrap();
+        cache.overview = overview.clone();
+        cache.last_updated = std::time::SystemTime::now();
+    }
 
     Ok(overview)
 }
@@ -1128,6 +1165,7 @@ pub fn invalidate_default_image_cache() {
 
 #[tauri::command]
 pub async fn rename_image(
+    state: State<'_, AppState>,
     token: String,
     old_name: String,
     new_name: String,
@@ -1157,7 +1195,7 @@ pub async fn rename_image(
         )));
     }
 
-    let dependents = check_dependent_clients(&old_name, false, &token).await?;
+    let dependents = check_dependent_clients(&state, &old_name, false, &token).await?;
     if !dependents.is_empty() {
         return Ok(json!({
             "error": "Master has dependent clients",
@@ -1183,18 +1221,16 @@ pub async fn rename_image(
         }
     }
 
-    // Update config if default
-    let mut config = get_config();
+    let mut config = get_config(); // Get config here
     if config.settings.get("default_master") == Some(&json!(old_name)) {
         config.settings["default_master"] = json!(new_master_zvol_name.clone());
-        let _ = write_config(&config);
+        let _ = write_config(&state.db_pool, &config).await;
     }
 
-    // Update master entry
     if let Some(masters) = config.masters.as_object_mut() {
         if let Some(master_data) = masters.remove(&old_name) {
             masters.insert(new_master_zvol_name.clone(), master_data);
-            let _ = write_config(&config);
+            let _ = write_config(&state.db_pool, &config).await;
         }
     }
 

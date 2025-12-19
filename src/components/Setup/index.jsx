@@ -1,105 +1,88 @@
+import { useServiceManager } from "@/hooks/useServiceManager";
+import { useSettings } from "@/hooks/useSettings";
 import { useToastStore } from "@/store/useToastStore";
 import { invoke } from "@tauri-apps/api/core";
-import { TableConfig } from "lucide-react";
-import { useEffect, useState } from "react";
-import { useForm } from "react-hook-form";
+import {
+  CheckCircle,
+  ChevronRight,
+  Code,
+  Database,
+  Globe,
+  Network,
+  Package,
+  Share2,
+} from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useShallow } from "zustand/shallow";
 import { useAppStore } from "../../store/useAppStore";
-import {
-  Button,
-  Card,
-  Input,
-  Select,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "../ui";
+import BootScriptStep from "./BootScriptStep";
+import DependencyStep from "./DependencyStep";
+import DHCPStep from "./DHCPStep";
+import FinishedStep from "./FinishedStep";
+import HTTPStep from "./HTTPStep";
+import SambaStep from "./SambaStep";
+import StorageStep from "./StorageStep";
+import TFTPStep from "./TFTPStep";
 
 const Setup = () => {
   const navigate = useNavigate();
   const [disks, setDisks] = useState([]);
   const [poolExists, setPoolExists] = useState(null);
   const [installing, setInstalling] = useState("");
-  const { poolName } = useAppStore();
-  const { error, success } = useToastStore();
+  const [activeStep, setActiveStep] = useState(1);
+  const [checking, setChecking] = useState(false);
+  const { poolName, appConfig, fetchConfig } = useAppStore();
+  const { error, success, info } = useToastStore();
+  const { updateDhcp, updateTftp, updateHttp } = useSettings();
+  const { handleConfigSave } = useServiceManager();
 
-  const { services, setServices, dependencies } = useAppStore(
+  const { dependencies, fetchDependencies } = useAppStore(
     useShallow((state) => ({
-      services: state.services,
-      setServices: state.setServices,
-      dependencies: state.dependencies,
+      dependencies: state.dependencies || [],
+      fetchDependencies: state.fetchDependencies,
     }))
   );
 
-  const {
-    register,
-    handleSubmit,
-    formState: { isSubmitting },
-  } = useForm();
+  const checkAll = useCallback(async () => {
+    setChecking(true);
+    try {
+      const d = await invoke("list_disks");
+      setDisks(d);
 
-  // Fetch initial data and re-check zpool when poolName changes
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const d = await invoke("list_disks");
-        if (!cancelled) setDisks(d);
-      } catch (e) {
-        error(
-          `Failed to list disks ${e.message || "An unknown error occurred"}`
-        );
-        console.warn("list_disks failed:", e);
-        if (!cancelled) setDisks([]);
-      }
+      const exists = await invoke("zfs_pool_exists");
+      setPoolExists(exists);
 
-      try {
-        const exists = await invoke("zfs_pool_exists");
-        if (!cancelled) setPoolExists(exists);
-      } catch (e) {
-        error(
-          `Failed to check ZFS pool existence ${
-            e.message || "An unknown error occurred"
-          }`
-        );
-        console.warn("zfs_pool_exists failed:", e);
-        if (!cancelled) setPoolExists(false);
-      }
-
-      try {
-        const updated = await invoke("check_package_status");
-        const list = Array.isArray(updated)
-          ? updated
-          : updated
-          ? Object.values(updated)
-          : [];
-        if (!cancelled) setServices(list);
-      } catch (e) {
-        error(
-          `Failed to check package status ${
-            e.message || "An unknown error occurred"
-          }`
-        );
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [poolName, setServices, error]);
-
-  // Navigate to dashboard when everything is ready
-  useEffect(() => {
-    const allServicesInstalled = !(services || []).some(
-      (svc) => !svc?.installed
-    );
-    // only go to dashboard when services are installed AND zpool exists
-    if (allServicesInstalled && poolExists) {
-      navigate("/");
+      await fetchDependencies();
+      await fetchConfig();
+    } catch (e) {
+      console.warn("Initial check failed:", e);
+    } finally {
+      setChecking(false);
     }
-  }, [services, navigate, poolExists]);
+  }, [fetchDependencies, fetchConfig]);
+
+  useEffect(() => {
+    checkAll();
+  }, [poolName, checkAll]);
+
+  const allServicesInstalled =
+    dependencies.length > 0 && !dependencies.some((svc) => !svc.installed);
+
+  // Auto-progress logic - only advance if we are on the current step
+  const prevInstalled = useRef(allServicesInstalled);
+  const prevPool = useRef(poolExists);
+
+  useEffect(() => {
+    if (allServicesInstalled && !prevInstalled.current && activeStep === 1) {
+      setActiveStep(2);
+    }
+    if (poolExists && !prevPool.current && activeStep === 2) {
+      setActiveStep(3);
+    }
+    prevInstalled.current = allServicesInstalled;
+    prevPool.current = poolExists;
+  }, [allServicesInstalled, poolExists, activeStep]);
 
   const handleCreatePool = async (data) => {
     try {
@@ -107,10 +90,10 @@ const Setup = () => {
         req: { name: data.name, disk: data.disk },
       });
       success(`ZFS pool ${data.name} created successfully.`);
+      const exists = await invoke("zfs_pool_exists");
+      setPoolExists(exists);
     } catch (e) {
-      error(
-        `Failed to create ZFS pool ${e.message || "An unknown error occurred"}`
-      );
+      error(`Failed to create ZFS pool: ${e}`);
     }
   };
 
@@ -121,107 +104,258 @@ const Setup = () => {
         service,
         token: localStorage.getItem("authToken") || "",
       });
-      success(`Service ${service} installed successfully.`);
-      const updated = await invoke("check_package_status");
-      const list = Array.isArray(updated)
-        ? updated
-        : updated
-        ? Object.values(updated)
-        : [];
-      setServices(list);
+      success(`Package ${service} installed successfully.`);
+      await fetchDependencies();
     } catch (e) {
-      error(
-        `Failed to install service ${e.message || "An unknown error occurred"}`
-      );
+      error(`Failed to install package: ${e}`);
     } finally {
       setInstalling("");
     }
   };
 
-  const isZfsInstalled = services?.some(
-    (s) => s.name === "zfsutils-linux" && s.installed
-  );
-  const zfsNotInstalledMessage = !isZfsInstalled && (
-    <div className="alert alert-warning  relative my-4 transition-opacity duration-300">
-      <span>
-        zfsutils-linux package is not installed. Please install it to create ZFS
-        pools.
-      </span>
-    </div>
-  );
+  const handleDhcpSubmit = async (data) => {
+    info(`Updating DHCP Configurations`);
+    const ok = await updateDhcp(data);
+    if (ok) setActiveStep(4);
+  };
+
+  const handleTftpSubmit = async (data) => {
+    info(`Updating TFTP Configurations`);
+    const ok = await updateTftp(data);
+    if (ok) setActiveStep(5);
+  };
+
+  const handleHttpSubmit = async (data) => {
+    info(`Updating HTTP Configurations`);
+    const ok = await updateHttp(data);
+    if (ok) setActiveStep(6);
+  };
+
+  const handleSambaSubmit = async (shares) => {
+    info(`Updating Samba Configurations`);
+    try {
+      const token = localStorage.getItem("authToken") || "";
+      await invoke("configure_samba_server", { token, shares });
+      success("Samba configuration saved successfully");
+      setActiveStep(7);
+    } catch (e) {
+      error(`Failed to configure Samba: ${e}`);
+    }
+  };
+
+  const handleBootScriptSubmit = async (content) => {
+    info(`Updating Boot Script`);
+    try {
+      await handleConfigSave("tftp-autoexec", content);
+      setActiveStep(8);
+    } catch (e) {
+      error(`Failed to update boot script: ${e}`);
+    }
+  };
+
+  const steps = [
+    {
+      id: 1,
+      title: "Dependencies",
+      icon: Package,
+      status: allServicesInstalled ? "complete" : "current",
+    },
+    {
+      id: 2,
+      title: "Storage",
+      icon: Database,
+      status: poolExists
+        ? "complete"
+        : allServicesInstalled
+        ? "current"
+        : "upcoming",
+    },
+    {
+      id: 3,
+      title: "DHCP",
+      icon: Network,
+      status: appConfig?.settings?.dhcp
+        ? "complete"
+        : activeStep === 3
+        ? "current"
+        : "upcoming",
+    },
+    {
+      id: 4,
+      title: "TFTP",
+      icon: Network,
+      status: appConfig?.settings?.tftp
+        ? "complete"
+        : activeStep === 4
+        ? "current"
+        : "upcoming",
+    },
+    {
+      id: 5,
+      title: "HTTP",
+      icon: Globe,
+      status: appConfig?.settings?.http
+        ? "complete"
+        : activeStep === 5
+        ? "current"
+        : "upcoming",
+    },
+    {
+      id: 6,
+      title: "Samba",
+      icon: Share2,
+      status: appConfig?.settings?.samba
+        ? "complete"
+        : activeStep === 6
+        ? "current"
+        : "upcoming",
+    },
+    {
+      id: 7,
+      title: "Boot",
+      icon: Code,
+      status:
+        activeStep > 7 ? "complete" : activeStep === 7 ? "current" : "upcoming",
+    },
+    {
+      id: 8,
+      title: "Finished",
+      icon: CheckCircle,
+      status: activeStep === 8 ? "current" : "upcoming",
+    },
+  ];
 
   return (
-    <Card title="Initial Setup" icon={TableConfig}>
-      <Card title="ZFS Pool Create" className={`bg-base-300`}>
-        <form onSubmit={handleSubmit(handleCreatePool)}>
-          <div className="space-y-4">
-            <Select
-              register={register("disk")}
-              disabled={!isZfsInstalled}
-              label="Select a disk to create ZFS Pool:"
+    <div className="max-w-3xl min-w-3xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <div className="text-center space-y-2">
+        <h1 className="text-4xl font-black tracking-tight bg-gradient-to-r from-primary to-secondary bg-clip-text text-transparent">
+          System Setup
+        </h1>
+        <p className="text-base-content/60 text-lg">
+          Configure your server for diskless booting
+        </p>
+      </div>
+
+      {/* Modern Stepper */}
+      <div className="flex justify-between items-center px-4 relative">
+        {steps.map((step) => (
+          <div
+            key={step.id}
+            className="relative z-10 flex flex-col items-center cursor-pointer group"
+            onClick={() => setActiveStep(step.id)}
+          >
+            <div
+              className={`w-12 h-12 rounded-full flex items-center justify-center border-4 transition-all duration-300 ${
+                step.status === "complete"
+                  ? "bg-success border-success text-success-content scale-110 group-hover:bg-success/80"
+                  : step.status === "current" || activeStep === step.id
+                  ? "bg-primary border-primary text-primary-content scale-110 shadow-lg shadow-primary/20"
+                  : "bg-base-100 border-base-300 text-base-content/40 group-hover:border-primary/50"
+              }`}
             >
-              <option value="">-- Select Disk --</option>
-              {disks.map((disk) => (
-                <option key={disk.name} value={disk.name}>
-                  {" "}
-                  {disk.name} ({disk.size}){" "}
-                </option>
-              ))}
-            </Select>
-            <Input
-              register={register("name")}
-              disabled={!isZfsInstalled}
-              placeholder="ZFS Pool Name"
-              label="ZFS Pool Name"
-            />
-            <Button
-              variant="primary"
-              type="submit"
-              disabled={!isZfsInstalled || isSubmitting || poolExists}
+              <step.icon size={20} />
+            </div>
+            <span
+              className={`mt-2 text-sm font-bold ${
+                activeStep === step.id
+                  ? "text-primary"
+                  : step.status === "upcoming"
+                  ? "text-base-content/40"
+                  : "text-base-content"
+              }`}
             >
-              Create ZFS Pool
-            </Button>
+              {step.title}
+            </span>
           </div>
-        </form>
-      </Card>
-      {zfsNotInstalledMessage}
-      <Card title="System Dependencies" className="bg-base-200 mt-4">
-        <div className="overflow-x-auto">
-          <Table className="border border-base-300">
-            <TableHeader>
-              <TableRow>
-                <TableHead>Service Name</TableHead>
-                <TableHead>Version</TableHead>
-                <TableHead>Installed</TableHead>
-                <TableHead>Action</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {dependencies.map((svc) => (
-                <TableRow key={svc.name}>
-                  <TableCell>{svc.name}</TableCell>
-                  <TableCell>{svc.version}</TableCell>
-                  <TableCell>
-                    {svc.installed ? "Installed" : "Not Installed"}
-                  </TableCell>
-                  <TableCell>
-                    {!svc.installed && (
-                      <button
-                        className="btn btn-success btn-sm"
-                        disabled={installing === svc.name}
-                        onClick={() => handleInstallService(svc.name)}
-                      >
-                        {installing === svc.name ? "Installing..." : "Install"}
-                      </button>
-                    )}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+        ))}
+      </div>
+
+      <div className="min-h-[calc(100vh-32rem)]">
+        {activeStep === 1 && (
+          <DependencyStep
+            dependencies={dependencies}
+            checking={checking}
+            onRefresh={checkAll}
+            onInstall={handleInstallService}
+            installing={installing}
+          />
+        )}
+
+        {activeStep === 2 && (
+          <StorageStep
+            disks={disks}
+            poolExists={poolExists}
+            poolName={poolName}
+            onSubmit={handleCreatePool}
+          />
+        )}
+
+        {activeStep === 3 && (
+          <DHCPStep
+            onSubmit={handleDhcpSubmit}
+            initialConfig={appConfig?.settings?.dhcp}
+          />
+        )}
+
+        {activeStep === 4 && (
+          <TFTPStep
+            onSubmit={handleTftpSubmit}
+            initialConfig={appConfig?.settings?.tftp}
+          />
+        )}
+
+        {activeStep === 5 && (
+          <HTTPStep
+            onSubmit={handleHttpSubmit}
+            initialConfig={appConfig?.settings?.http}
+          />
+        )}
+
+        {activeStep === 6 && (
+          <SambaStep
+            onSubmit={handleSambaSubmit}
+            initialConfig={appConfig?.settings?.samba?.[0]}
+          />
+        )}
+
+        {activeStep === 7 && (
+          <BootScriptStep onSubmit={handleBootScriptSubmit} />
+        )}
+
+        {activeStep === 8 && (
+          <FinishedStep
+            onNavigateHome={() => {
+              setActiveStep(8);
+              navigate("/");
+            }}
+          />
+        )}
+      </div>
+
+      {activeStep < 8 ? (
+        <div className="flex justify-between items-center text-xs text-base-content/40">
+          <span>
+            Status: {checking ? "Refreshing..." : "Configuration in progress"}
+          </span>
+          <span
+            className="flex items-center gap-1 cursor-pointer hover:text-primary transition-colors"
+            onClick={() => navigate("/")}
+          >
+            Skip for now <ChevronRight size={14} />
+          </span>
         </div>
-      </Card>
-    </Card>
+      ) : (
+        <div className="flex justify-between items-center text-xs text-base-content/40">
+          <span>Status: Setup completed</span>
+          <span
+            className="flex items-center gap-1 cursor-pointer hover:text-primary transition-colors"
+            onClick={() => navigate("/")}
+          >
+            Go to Dashboard <ChevronRight size={14} />
+          </span>
+        </div>
+      )}
+    </div>
   );
 };
 

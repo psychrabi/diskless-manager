@@ -59,7 +59,10 @@ fn main() {
                 use_game_disk,
             };
 
-            match app_lib::client::add_client_impl(req).await {
+            let state = app_lib::state::AppState::new()
+                .await
+                .expect("Failed to initialize AppState");
+            match app_lib::client::add_client_impl(&state, req).await {
                 Ok(v) => info!("Success auto adding: {}", v),
                 Err(e) => {
                     eprintln!("Error: {}", e);

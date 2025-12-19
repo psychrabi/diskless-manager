@@ -12,6 +12,7 @@ export const useAppStore = create()(
       clients: [],
       masters: [],
       services: [],
+      dependencies: [],
       services_status: {},
       zpoolStats: null,
       zpools: [],
@@ -32,6 +33,7 @@ export const useAppStore = create()(
       setClients: (clients) => set({ clients }),
       setMasters: (masters) => set({ masters }),
       setServices: (services) => set({ services }),
+      setDependencies: (dependencies) => set({ dependencies }),
       // setServiceConfig: removed
       setAppConfig: (appConfig) => set({ appConfig }), // Added for global config
       setError: (error) => set({ error }),
