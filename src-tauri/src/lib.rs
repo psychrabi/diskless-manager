@@ -87,47 +87,6 @@ struct ServerInfo {
     server_ip: String,
 }
 
-#[tauri::command]
-fn get_server_info() -> ServerInfo {
-    // Try to get cached info first
-    let cache = SERVER_INFO_CACHE.read().unwrap();
-
-    if !cache.needs_refresh() {
-        // Return cached data
-        return cache.info.clone();
-    }
-
-    // Drop read lock before acquiring write lock
-    drop(cache);
-
-    let mut cache = SERVER_INFO_CACHE.write().unwrap();
-
-    // Double-check after acquiring write lock
-    if !cache.needs_refresh() {
-        // Another thread may have updated the cache while we were waiting
-        return cache.info.clone();
-    }
-
-    // Refresh system info
-    let mut sys = System::new_all();
-    sys.refresh_all();
-
-    let new_info = ServerInfo {
-        os_name: System::name(),
-        kernel_version: System::kernel_version(),
-        host_name: System::host_name(),
-        total_memory_mb: sys.total_memory() / (1024 * 1024), // bytes -> MB
-        cpu_count: sys.cpus().len(),
-        server_ip: get_server_ip(),
-    };
-
-    // Update cache
-    cache.info = new_info.clone();
-    cache.last_updated = std::time::SystemTime::now();
-
-    new_info
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -163,7 +122,6 @@ pub fn run() {
                 .set_focus();
         }))
         .invoke_handler(tauri::generate_handler![
-            get_server_info,
             auth::login,
             auth::validate_auth_token,
             auth::update_admin_password,
@@ -176,9 +134,6 @@ pub fn run() {
             client::remote_client,
             client::reset_client,
             client::reset_client_to_clean,
-            client::deprovision_client,
-            client::deprovision_client_by_id,
-            client::get_deprovision_status,
             client::get_client_overview,
             config::read_config,
             config::save_config,

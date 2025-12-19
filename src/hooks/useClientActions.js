@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useNotification } from '@/contexts/notification';
 import { useCallback } from 'react';
 
-export const useClientActions = (fetchData, closeContextMenu, setClient, setIsModalOpen, setDeprovisionModal) => {
+export const useClientActions = (fetchData, closeContextMenu, setClient, setIsModalOpen) => {
     const { showNotification } = useNotification();
     const confirm = useConfirm();
 
@@ -27,12 +27,6 @@ export const useClientActions = (fetchData, closeContextMenu, setClient, setIsMo
         if (action === 'edit') {
             setClient(client);
             setIsModalOpen(true);
-            closeContextMenu();
-            return;
-        }
-
-        if (action === 'deprovision') {
-            setDeprovisionModal({ isOpen: true, client: client });
             closeContextMenu();
             return;
         }
@@ -63,7 +57,7 @@ export const useClientActions = (fetchData, closeContextMenu, setClient, setIsMo
         } catch (error) {
             showNotification(`Failed to execute ${action}: ${error.message || String(error)}`, 'error');
         }
-    }, [confirm, showNotification, closeContextMenu, fetchData, setClient, setIsModalOpen, setDeprovisionModal]);
+    }, [confirm, showNotification, closeContextMenu, fetchData, setClient, setIsModalOpen]);
 
 
     // Wrapper functions to match original interface
@@ -143,7 +137,5 @@ export const useClientActions = (fetchData, closeContextMenu, setClient, setIsMo
                 showNotification('error', 'Failed to save super', error.message || String(error));
             }
         },
-
-        deprovision: (client) => handleAction(client, 'deprovision')
     };
 };

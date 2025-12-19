@@ -106,15 +106,6 @@ pub struct ControlRequest {
     pub make_super: Option<bool>,
 }
 
-/// Request to deprovision a client
-#[derive(Debug, Deserialize)]
-pub struct DeprovisionRequest {
-    pub mac: String,
-    pub force: Option<bool>,
-    pub keep_zfs: Option<bool>,
-    pub dry_run: Option<bool>,
-}
-
 /// Client overview information
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ClientOverview {
