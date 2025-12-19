@@ -17,6 +17,7 @@ const SettingsManagement = () => {
   return (
     <Card title="System Settings" icon={Settings} className="bg-base-300">
       <div className="min-h-[calc(100vh-14rem)] space-y-6">
+        {/* DHCP Server Configuration */}
         <DHCPConfigForm />
         <div className="grid gap-6 md:grid-cols-2">
           {/* TFTP Server Configuration */}
@@ -25,8 +26,7 @@ const SettingsManagement = () => {
           {/* TFTP Server Configuration */}
           <HTTPConfigForm />
         </div>
-        {/* Information Panel */}
-
+        {/* Boot Process Overview Card */}
         <BootProcessOverview />
       </div>
     </Card>

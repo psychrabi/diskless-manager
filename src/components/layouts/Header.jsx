@@ -1,15 +1,15 @@
-import { Button } from '@/components/ui';
-import { Shield, User, LogOut, Menu, Sun, Moon } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
-import { useAuth } from '@/contexts/auth';
-import { useTheme } from '@/contexts/theme';
+import { Button } from "@/components/ui";
+import { useAuth } from "@/contexts/auth";
+import { useTheme } from "@/contexts/theme";
+import { LogOut, Menu, Moon, Shield, Sun } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 
 const Header = ({ onToggleSidebar }) => {
   const navigate = useNavigate();
   const { logout, user } = useAuth();
   const { theme, setTheme } = useTheme();
 
-  const toggleTheme = () => setTheme(theme === 'dark' ? 'light' : 'dark');
+  const toggleTheme = () => setTheme(theme === "dark" ? "light" : "dark");
 
   return (
     <div className="bg-base-100 border-b border-base-300 px-6 py-3 shadow-2xl">
@@ -25,21 +25,38 @@ const Header = ({ onToggleSidebar }) => {
           >
             <Menu className="h-6 w-6" />
           </Button>
-          <h1 className="text-2xl text-base-content font-bold">Diskless Boot Server Manager</h1>
-          <p className="text-sm text-base-content/70">Administrator Dashboard</p>
+          <h1 className="text-2xl text-base-content font-bold">
+            Diskless Boot Server Manager
+          </h1>
+          <p className="text-sm text-base-content/70">
+            Administrator Dashboard
+          </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="ghost" className="flex items-center gap-2" onClick={toggleTheme} title={`${theme === 'dark' ? 'Light' : 'Dark'} Mode`}>
-            {theme === 'dark' ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+          <Button
+            variant="ghost"
+            className="flex items-center gap-2"
+            onClick={toggleTheme}
+            title={`${theme === "dark" ? "Light" : "Dark"} Mode`}
+          >
+            {theme === "dark" ? (
+              <Sun className="h-5 w-5" />
+            ) : (
+              <Moon className="h-5 w-5" />
+            )}
           </Button>
-          <Button variant="success" className="flex items-center gap-2 capitalize">
-            <Shield className="h-4 w-4" />{user.role}
+          <Button
+            variant="success"
+            className="flex items-center gap-2 capitalize"
+          >
+            <Shield className="h-4 w-4" />
+            {user.role}
           </Button>
           <Button
             variant="destructive"
             onClick={() => {
               logout();
-              navigate('/login');
+              navigate("/login");
             }}
             className="flex items-center gap-2"
           >
@@ -50,6 +67,6 @@ const Header = ({ onToggleSidebar }) => {
       </div>
     </div>
   );
-}
+};
 
 export default Header;

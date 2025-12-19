@@ -1,50 +1,49 @@
-import { Button, Card, Input } from '@/components/ui';
-import { useAuth } from '@/contexts/auth';
-import { useToastStore } from '@/store/useToastStore';
-import { zodResolver } from '@hookform/resolvers/zod';
-import { invoke } from '@tauri-apps/api/core';
-import { useForm } from 'react-hook-form';
-import { useNavigate } from 'react-router-dom';
-import { z } from 'zod';
+import { Button, Card, Input } from "@/components/ui";
+import { useAuth } from "@/contexts/auth";
+import { useToastStore } from "@/store/useToastStore";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { invoke } from "@tauri-apps/api/core";
+import { useForm } from "react-hook-form";
+import { useNavigate } from "react-router-dom";
+import { z } from "zod";
 
 // Define validation schema
 const loginSchema = z.object({
-  username: z.string().min(1, 'Username is required'),
-  password: z.string().min(6, 'Password must be at least 6 characters')
+  username: z.string().min(1, "Username is required"),
+  password: z.string().min(6, "Password must be at least 6 characters"),
 });
 
 const Login = () => {
   const navigate = useNavigate();
   const { login: setAuth } = useAuth();
-  const { error, success } = useToastStore()
+  const { error, success } = useToastStore();
 
   const {
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
-    reset
+    reset,
   } = useForm({
     resolver: zodResolver(loginSchema),
     defaultValues: {
-      username: '',
-      password: ''
-    }
+      username: "",
+      password: "",
+    },
   });
 
   const onSubmit = async (data) => {
-
     try {
-      const response = await invoke('login', {
-        request: { username: data.username, password: data.password }
+      const response = await invoke("login", {
+        request: { username: data.username, password: data.password },
       });
 
       // Set auth context immediately so ProtectedRoute sees it
       setAuth(response.user, response.token);
-      success('Login Successful', 'You have successfully logged in');
-      navigate('/');
+      success("Login Successful", "You have successfully logged in");
+      navigate("/");
     } catch (e) {
-      error('Login Failed', e.message || 'An unknown error occurred');
-      reset({ password: '' }); // Clear password field on error
+      error("Login Failed", e.message || "An unknown error occurred");
+      reset({ password: "" }); // Clear password field on error
     }
   };
 
@@ -60,7 +59,7 @@ const Login = () => {
           id="username"
           type="text"
           label="Username"
-          register={register('username')}
+          register={register("username")}
           placeholder="Enter your username"
           className="w-full"
           error={errors.username?.message}
@@ -69,7 +68,7 @@ const Login = () => {
           id="password"
           type="password"
           label="Password"
-          register={register('password')}
+          register={register("password")}
           placeholder="Enter your password"
           className="w-full"
           error={errors.password?.message}
@@ -80,10 +79,9 @@ const Login = () => {
           className="w-full"
           variant="primary"
         >
-          {isSubmitting ? 'Signing in...' : 'Sign in'}
+          {isSubmitting ? "Signing in..." : "Sign in"}
         </Button>
       </form>
-
     </Card>
   );
 };

@@ -1,4 +1,4 @@
-import { Package, RefreshCw, Check } from "lucide-react";
+import { Check, Package, RefreshCw } from "lucide-react";
 import {
   Button,
   Card,

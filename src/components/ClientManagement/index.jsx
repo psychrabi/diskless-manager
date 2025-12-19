@@ -1,8 +1,8 @@
+import { useClientActions } from "@/hooks/useClientActions";
 import { PlusCircle, Users } from "lucide-react";
 import { memo, useCallback, useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "../../store/useAppStore";
-import { useClientActions } from "@/hooks/useClientActions";
 import { Button, Card } from "../ui";
 import { ContextMenu } from "../ui/ContextMenu";
 import ClientFormModal from "./ClientFormModal";
@@ -27,7 +27,7 @@ const ClientManagement = () => {
       masters: state.masters,
       startClientStatusPolling: state.startClientStatusPolling,
       stopClientStatusPolling: state.stopClientStatusPolling,
-    }))
+    })),
   );
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [client, setClient] = useState({
@@ -67,7 +67,7 @@ const ClientManagement = () => {
     refreshData,
     closeContextMenu,
     setClient,
-    setIsModalOpen
+    setIsModalOpen,
   );
 
   const handleClientFormModalOpen = useCallback(() => {
@@ -80,7 +80,7 @@ const ClientManagement = () => {
         a.name.localeCompare(b.name, undefined, {
           numeric: true,
           sensitivity: "base",
-        })
+        }),
       );
       const lastClient = sortedClients[sortedClients.length - 1];
 

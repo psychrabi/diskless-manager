@@ -1,7 +1,7 @@
+import { useServiceManager } from "@/hooks/useServiceManager";
 import { Code } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "../ui";
-import { useServiceManager } from "@/hooks/useServiceManager";
 
 const defaultScript = `#!ipxe
 

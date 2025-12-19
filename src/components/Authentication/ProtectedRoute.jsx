@@ -1,6 +1,6 @@
-import { useAuth } from '@/contexts/auth';
-import { useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useAuth } from "@/contexts/auth";
+import { useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 
 const ProtectedRoute = ({ children }) => {
   const { user, token } = useAuth();
@@ -8,10 +8,9 @@ const ProtectedRoute = ({ children }) => {
 
   useEffect(() => {
     if (!user || !token) {
-      navigate('/login');
+      navigate("/login");
     }
   }, [user, token, navigate]);
-
 
   if (user && token) {
     return children;

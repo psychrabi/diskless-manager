@@ -1,5 +1,3 @@
-import React from "react";
-import { Button, Card } from "../ui";
 import {
   Eye,
   Folder,
@@ -13,6 +11,7 @@ import {
   Settings,
   StopCircle,
 } from "lucide-react";
+import { Button, Card } from "../ui";
 
 export default function ServiceCard({
   onViewConfig,

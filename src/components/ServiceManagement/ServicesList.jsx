@@ -9,7 +9,7 @@ const ServicesList = ({ onViewConfig }) => {
       startService: state.startService,
       stopService: state.stopService,
       restartService: state.restartService,
-    }))
+    })),
   );
 
   return services?.length === 0 ? (

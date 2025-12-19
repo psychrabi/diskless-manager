@@ -1,9 +1,9 @@
-name: 'Publish Release'
+name: "Publish Release"
 on:
   push:
     tags:
-      - 'v*'
-    branches: '*'
+      - "v*"
+    branches: "*"
   workflow_dispatch:
 
 env:
@@ -40,8 +40,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: 'ubuntu-latest'
-            args: ''
+          - platform: "ubuntu-latest"
+            args: ""
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Checkout repository
@@ -69,11 +69,11 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: './src-tauri -> target'
+          workspaces: "./src-tauri -> target"
 
       - name: Install frontend dependencies
         run: bun install
-      
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         # if u get Error: Resource not accessible by integration
@@ -96,7 +96,7 @@ jobs:
         if: ${{ github.ref_type == 'branch' && matrix.platform == 'ubuntu-latest' }}
         uses: actions/upload-artifact@v4
         with:
-          name: 'Linux Distributions'
+          name: "Linux Distributions"
           path: |
             src-tauri/target/release/bundle/deb/*.deb
             src-tauri/target/release/bundle/AppImage/*.AppImage

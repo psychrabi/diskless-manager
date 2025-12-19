@@ -1,21 +1,21 @@
-import { useZfs } from '@/hooks/useZfs';
-import { useAppStore } from '@/store/useAppStore';
-import { HardDrive, PlusCircle } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
-import { Button, Card } from '../ui';
-import DiskFormModal from './DiskFormModal';
-import DiskTable from './DiskTable';
+import { useZfs } from "@/hooks/useZfs";
+import { useAppStore } from "@/store/useAppStore";
+import { HardDrive, PlusCircle } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { Button, Card } from "../ui";
+import DiskFormModal from "./DiskFormModal";
+import DiskTable from "./DiskTable";
 
 export default function DisksManagement() {
   const fetchDisks = useAppStore((state) => state.fetchDisks);
   const zpools = useAppStore((state) => state.zpools);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [selectedPool, setSelectedPool] = useState('');
+  const [selectedPool, setSelectedPool] = useState("");
   const { datasets, fetchDatasets } = useZfs();
 
   const handleDiskFormModalOpen = useCallback(() => {
-    setIsModalOpen(true)
-  }, [])
+    setIsModalOpen(true);
+  }, []);
 
   // Set default pool when zpools are loaded
   useEffect(() => {
@@ -37,15 +37,31 @@ export default function DisksManagement() {
   }, [selectedPool, fetchDatasets, fetchDisks]);
 
   return (
-    <Card title="Disk Management" icon={HardDrive} className="bg-base-300" actions={
-      <Button variant="primary" onClick={() => handleDiskFormModalOpen()} icon={PlusCircle} >
-        Add Disk
-      </Button>
-    } >
+    <Card
+      title="Disk Management"
+      icon={HardDrive}
+      className="bg-base-300"
+      actions={
+        <Button
+          variant="primary"
+          onClick={() => handleDiskFormModalOpen()}
+          icon={PlusCircle}
+        >
+          Add Disk
+        </Button>
+      }
+    >
       <div className="min-h-[calc(100vh-15rem)]">
         <DiskTable datasets={datasets} onRefresh={refresh} />
       </div>
-      {isModalOpen && <DiskFormModal zpools={zpools} isOpen={isModalOpen} setIsOpen={setIsModalOpen} refresh={refresh} />}
+      {isModalOpen && (
+        <DiskFormModal
+          zpools={zpools}
+          isOpen={isModalOpen}
+          setIsOpen={setIsModalOpen}
+          refresh={refresh}
+        />
+      )}
     </Card>
   );
 }

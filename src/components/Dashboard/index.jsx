@@ -12,7 +12,7 @@ export default function Dashboard() {
   const { serverInfo } = useAppStore(
     useShallow((state) => ({
       serverInfo: state.serverInfo,
-    }))
+    })),
   );
   const serverStatus = [];
 

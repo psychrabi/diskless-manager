@@ -2,9 +2,9 @@ import { Server } from "lucide-react";
 import { useCallback, useState } from "react";
 import { useServiceManager } from "../../hooks/useServiceManager";
 import { Card } from "../ui";
+import BootScript from "./BootScript";
 import ServiceConfigModal from "./ServiceConfigModal";
 import ServicesList from "./ServicesList";
-import BootScript from "./BootScript";
 
 const ServiceManagement = () => {
   const { fetchServiceConfig } = useServiceManager();
@@ -42,7 +42,7 @@ const ServiceManagement = () => {
         }));
       }
     },
-    [fetchServiceConfig]
+    [fetchServiceConfig],
   );
 
   const closeModal = useCallback(() => {

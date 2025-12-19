@@ -1,6 +1,6 @@
-import { List, RefreshCw } from "lucide-react";
-import { Card } from "../ui";
+import { RefreshCw } from "lucide-react";
 import { useAppStore } from "../../store/useAppStore";
+import { Card } from "../ui";
 
 const ServerInfoCard = () => {
   const serverInfo = useAppStore((state) => state.serverInfo);

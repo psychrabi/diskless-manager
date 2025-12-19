@@ -1,98 +1,118 @@
-import { useConfirm } from '@/contexts/confirmDialog';
-import { useZfs } from '@/hooks/useZfs';
-import { useState } from 'react';
-import { Button, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui';
-import RenameDiskModal from './RenameDiskModal';
-import { useNotification } from '@/contexts/notification';
+import { useConfirm } from "@/contexts/confirmDialog";
+import { useNotification } from "@/contexts/notification";
+import { useZfs } from "@/hooks/useZfs";
+import { useState } from "react";
+import {
+  Button,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "../ui";
+import RenameDiskModal from "./RenameDiskModal";
 
 const DiskTable = ({ datasets, onRefresh }) => {
-	const [selectedDisk, setSelectedDisk] = useState(null);
-	const [isRenameModalOpen, setIsRenameModalOpen] = useState(false);
-	const confirm = useConfirm();
-	const { deleteDataset } = useZfs();
-	const { showNotification } = useNotification();
+  const [selectedDisk, setSelectedDisk] = useState(null);
+  const [isRenameModalOpen, setIsRenameModalOpen] = useState(false);
+  const confirm = useConfirm();
+  const { deleteDataset } = useZfs();
+  const { showNotification } = useNotification();
 
-	const handleRenameDisk = (disk) => {
-		setSelectedDisk(disk);
-		setIsRenameModalOpen(true);
-	};
+  const handleRenameDisk = (disk) => {
+    setSelectedDisk(disk);
+    setIsRenameModalOpen(true);
+  };
 
-	const handleDeleteDisk = async (disk) => {
-		const ok = await confirm({
-			title: 'Delete disk',
-			description: `Are you sure you want to delete disk "${disk.name}"? This action cannot be undone and might affect clones.`,
-			confirmText: 'Delete disk',
-			cancelText: 'Cancel',
-			confirmVariant: 'primary',
-			size: '2xl',
-		});
-		if (ok) {
-			const success = await deleteDataset(disk.name);
-			if (success) {
-				showNotification({
-					title: 'Disk deleted',
-					message: `Disk "${disk.name}" deleted successfully`,
-					type: 'success',
-				});
-				onRefresh();
-			}
-		}
-	};
+  const handleDeleteDisk = async (disk) => {
+    const ok = await confirm({
+      title: "Delete disk",
+      description: `Are you sure you want to delete disk "${disk.name}"? This action cannot be undone and might affect clones.`,
+      confirmText: "Delete disk",
+      cancelText: "Cancel",
+      confirmVariant: "primary",
+      size: "2xl",
+    });
+    if (ok) {
+      const success = await deleteDataset(disk.name);
+      if (success) {
+        showNotification({
+          title: "Disk deleted",
+          message: `Disk "${disk.name}" deleted successfully`,
+          type: "success",
+        });
+        onRefresh();
+      }
+    }
+  };
 
-	return (
-		<>
-			<Table className='bg-base-100 rounded-lg' aria-label="ZFS datasets list">
-				<TableHeader>
-					<TableRow>
-						<TableHead>Name</TableHead>
-						<TableHead>Type</TableHead>
-						<TableHead>Used</TableHead>
-						<TableHead>Available</TableHead>
-						<TableHead>Referenced</TableHead>
-						<TableHead>Mount Point</TableHead>
-						<TableHead>Actions</TableHead>
-					</TableRow>
-				</TableHeader>
-				<TableBody>
-					{datasets.map((dataset) => (
-						<TableRow key={dataset.name}>
-							<TableCell>{dataset.name}</TableCell>
-							<TableCell>
-								<span className="badge badge-primary badge-sm">
-									{dataset.disk_type || '-'}
-								</span>
-							</TableCell>
-							<TableCell>{dataset.used}</TableCell>
-							<TableCell>{dataset.available}</TableCell>
-							<TableCell>{dataset.referenced}</TableCell>
-							<TableCell className="text-sm text-base-content/70">{dataset.mountpoint}</TableCell>
-							<TableCell>
-								<div className='flex gap-2'>
-									<Button variant='ghost' size='sm' onClick={() => handleRenameDisk(dataset)}>
-										Rename
-									</Button>
-									<Button variant='destructive' size='sm' onClick={() => handleDeleteDisk(dataset)}>
-										Delete
-									</Button>
-								</div>
-							</TableCell>
-						</TableRow>
-					))}
-				</TableBody>
-			</Table>
-			{datasets.length === 0 && (
-				<p className='text-center py-4 text-base-content/60'>No datasets available.</p>
-			)}
-			{isRenameModalOpen && selectedDisk && (
-				<RenameDiskModal
-					openRenameModal={isRenameModalOpen}
-					setOpenRenameModal={setIsRenameModalOpen}
-					selectedDisk={selectedDisk}
-					refresh={onRefresh}
-				/>
-			)}
-		</>
-	);
+  return (
+    <>
+      <Table className="bg-base-100 rounded-lg" aria-label="ZFS datasets list">
+        <TableHeader>
+          <TableRow>
+            <TableHead>Name</TableHead>
+            <TableHead>Type</TableHead>
+            <TableHead>Used</TableHead>
+            <TableHead>Available</TableHead>
+            <TableHead>Referenced</TableHead>
+            <TableHead>Mount Point</TableHead>
+            <TableHead>Actions</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {datasets.map((dataset) => (
+            <TableRow key={dataset.name}>
+              <TableCell>{dataset.name}</TableCell>
+              <TableCell>
+                <span className="badge badge-primary badge-sm">
+                  {dataset.disk_type || "-"}
+                </span>
+              </TableCell>
+              <TableCell>{dataset.used}</TableCell>
+              <TableCell>{dataset.available}</TableCell>
+              <TableCell>{dataset.referenced}</TableCell>
+              <TableCell className="text-sm text-base-content/70">
+                {dataset.mountpoint}
+              </TableCell>
+              <TableCell>
+                <div className="flex gap-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => handleRenameDisk(dataset)}
+                  >
+                    Rename
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => handleDeleteDisk(dataset)}
+                  >
+                    Delete
+                  </Button>
+                </div>
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+      {datasets.length === 0 && (
+        <p className="text-center py-4 text-base-content/60">
+          No datasets available.
+        </p>
+      )}
+      {isRenameModalOpen && selectedDisk && (
+        <RenameDiskModal
+          openRenameModal={isRenameModalOpen}
+          setOpenRenameModal={setIsRenameModalOpen}
+          selectedDisk={selectedDisk}
+          refresh={onRefresh}
+        />
+      )}
+    </>
+  );
 };
 
 export default DiskTable;

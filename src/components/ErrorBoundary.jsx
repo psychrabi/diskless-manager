@@ -1,6 +1,6 @@
-import { AlertTriangle, Home, RefreshCw } from 'lucide-react';
-import React from 'react';
-import { Button } from './ui';
+import { AlertTriangle, Home, RefreshCw } from "lucide-react";
+import React from "react";
+import { Button } from "./ui";
 
 class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -40,14 +40,14 @@ class ErrorBoundary extends React.Component {
                 </Button>
                 <Button
                   variant="outline"
-                  onClick={() => window.location.href = '/'}
+                  onClick={() => (window.location.href = "/")}
                   className="gap-2"
                 >
                   <Home className="h-4 w-4" />
                   Go Home
                 </Button>
               </div>
-              {import.meta.env.VITE_APP_ENV === 'development' && (
+              {import.meta.env.VITE_APP_ENV === "development" && (
                 <div className="mt-6 text-left w-full collapse collapse-arrow border border-base-300 bg-base-200 rounded-box">
                   <input type="checkbox" />
                   <div className="collapse-title font-medium">
@@ -57,7 +57,8 @@ class ErrorBoundary extends React.Component {
                     <pre className="text-xs overflow-auto max-h-40 p-2">
                       {this.state.error && this.state.error.toString()}
                       <br />
-                      {this.state.errorInfo && this.state.errorInfo.componentStack}
+                      {this.state.errorInfo &&
+                        this.state.errorInfo.componentStack}
                     </pre>
                   </div>
                 </div>
@@ -72,4 +73,4 @@ class ErrorBoundary extends React.Component {
   }
 }
 
-export default ErrorBoundary; 
+export default ErrorBoundary;

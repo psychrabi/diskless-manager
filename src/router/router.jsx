@@ -12,13 +12,13 @@ const SettingManagement = lazy(() => import("@/components/SettingsManagement"));
 const ServiceManagement = lazy(() => import("@/components/ServiceManagement"));
 const DisksManagement = lazy(() => import("@/components/DisksManagement"));
 const LicenseManagement = lazy(() => import("@/components/LicenseManagement"));
-const ApplicationSettings = lazy(() =>
-  import("@/components/ApplicationMangement")
+const ApplicationSettings = lazy(
+  () => import("@/components/ApplicationMangement"),
 );
 const Logs = lazy(() => import("@/components/Logs"));
 const Login = lazy(() => import("@/components/Authentication/Login"));
-const ProtectedRoute = lazy(() =>
-  import("@/components/Authentication/ProtectedRoute")
+const ProtectedRoute = lazy(
+  () => import("@/components/Authentication/ProtectedRoute"),
 );
 
 export const router = createHashRouter([

@@ -9,7 +9,7 @@ export default function ServicesStatus() {
     useShallow((state) => ({
       services: state.services,
       fetchServices: state.fetchServices,
-    }))
+    })),
   );
 
   function getServiceIcon(name) {

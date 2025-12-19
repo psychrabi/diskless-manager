@@ -23,6 +23,7 @@ A web-based toolkit for managing diskless PXE/iSCSI boot environments using ZFS,
 ## 📋 Requirements
 
 ### System Requirements
+
 - Linux with ZFS support
 - React 19.2 (for frontend)
 - Tauri v2 and Rust (for backend)
@@ -33,6 +34,7 @@ A web-based toolkit for managing diskless PXE/iSCSI boot environments using ZFS,
 - OpenSSH Server (for remote management)
 
 ### System Packages
+
 ```bash
 sudo apt update
 sudo apt install \
@@ -49,6 +51,7 @@ sudo apt install \
 ```
 
 ### Required Services
+
 ```bash
 # Check service status
 sudo systemctl status \
@@ -79,6 +82,7 @@ sudo systemctl start \
 ```
 
 ### Samba Configuration
+
 ```bash
 # Create diskless user for Samba
 sudo smbpasswd -a diskless
@@ -97,8 +101,8 @@ sudo smbpasswd -a diskless
    valid users = diskless
 ```
 
-
 ### System Packages
+
 ```bash
 sudo apt install \
     zfsutils-linux \
@@ -122,6 +126,7 @@ sudo apt install \
    cd diskless-manager
    ```
 2. **Setup the App**
+
    ```bash
    bun install
    ```
@@ -138,6 +143,7 @@ sudo apt install \
 ## ⚙️ Configuration
 
 1. **Backend Settings** (`~/.config/com.diskless.local/config.json`):
+
    ```json
    {
      "zfs_pool": "diskless",
@@ -174,6 +180,7 @@ source ~/.bashrc
 ```
 
 ⚠️ **Security Notes:**
+
 - Never commit the actual JWT_SECRET to version control
 - Use a different secret for development and production
 - Keep your secret secure and rotate it periodically
@@ -182,6 +189,7 @@ source ~/.bashrc
 ## 🚀 Usage
 
 1. **Start App**
+
    ```bash
    bun tauri dev
    ```

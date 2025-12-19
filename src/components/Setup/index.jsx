@@ -41,7 +41,7 @@ const Setup = () => {
     useShallow((state) => ({
       dependencies: state.dependencies || [],
       fetchDependencies: state.fetchDependencies,
-    }))
+    })),
   );
 
   const checkAll = useCallback(async () => {
@@ -167,8 +167,8 @@ const Setup = () => {
       status: poolExists
         ? "complete"
         : allServicesInstalled
-        ? "current"
-        : "upcoming",
+          ? "current"
+          : "upcoming",
     },
     {
       id: 3,
@@ -177,8 +177,8 @@ const Setup = () => {
       status: appConfig?.settings?.dhcp
         ? "complete"
         : activeStep === 3
-        ? "current"
-        : "upcoming",
+          ? "current"
+          : "upcoming",
     },
     {
       id: 4,
@@ -187,8 +187,8 @@ const Setup = () => {
       status: appConfig?.settings?.tftp
         ? "complete"
         : activeStep === 4
-        ? "current"
-        : "upcoming",
+          ? "current"
+          : "upcoming",
     },
     {
       id: 5,
@@ -197,8 +197,8 @@ const Setup = () => {
       status: appConfig?.settings?.http
         ? "complete"
         : activeStep === 5
-        ? "current"
-        : "upcoming",
+          ? "current"
+          : "upcoming",
     },
     {
       id: 6,
@@ -207,8 +207,8 @@ const Setup = () => {
       status: appConfig?.settings?.samba
         ? "complete"
         : activeStep === 6
-        ? "current"
-        : "upcoming",
+          ? "current"
+          : "upcoming",
     },
     {
       id: 7,
@@ -249,8 +249,8 @@ const Setup = () => {
                 step.status === "complete"
                   ? "bg-success border-success text-success-content scale-110 group-hover:bg-success/80"
                   : step.status === "current" || activeStep === step.id
-                  ? "bg-primary border-primary text-primary-content scale-110 shadow-lg shadow-primary/20"
-                  : "bg-base-100 border-base-300 text-base-content/40 group-hover:border-primary/50"
+                    ? "bg-primary border-primary text-primary-content scale-110 shadow-lg shadow-primary/20"
+                    : "bg-base-100 border-base-300 text-base-content/40 group-hover:border-primary/50"
               }`}
             >
               <step.icon size={20} />
@@ -260,8 +260,8 @@ const Setup = () => {
                 activeStep === step.id
                   ? "text-primary"
                   : step.status === "upcoming"
-                  ? "text-base-content/40"
-                  : "text-base-content"
+                    ? "text-base-content/40"
+                    : "text-base-content"
               }`}
             >
               {step.title}

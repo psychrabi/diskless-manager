@@ -75,8 +75,8 @@ export const useAppStore = create()(
           const servicesData = Array.isArray(servicesRes)
             ? servicesRes
             : servicesRes
-            ? Object.values(servicesRes)
-            : [];
+              ? Object.values(servicesRes)
+              : [];
           set({ services: servicesData });
         } catch (err) {
           console.error("Failed to fetch services:", err);
@@ -90,7 +90,7 @@ export const useAppStore = create()(
             services: get().services.map((service) =>
               service.name === name
                 ? { ...service, status: "running" }
-                : service
+                : service,
             ),
           });
           await get().fetchServices();
@@ -106,7 +106,7 @@ export const useAppStore = create()(
             services: get().services.map((service) =>
               service.name === name
                 ? { ...service, status: "stopped" }
-                : service
+                : service,
             ),
           });
           await get().fetchServices();
@@ -122,7 +122,7 @@ export const useAppStore = create()(
             services: get().services.map((service) =>
               service.name === name
                 ? { ...service, status: "restarting" }
-                : service
+                : service,
             ),
           });
           await get().fetchServices();
@@ -321,6 +321,6 @@ export const useAppStore = create()(
     {
       name: "diskless", // name of the item in the storage (must be unique)
       storage: createJSONStorage(() => localStorage), // (optional) by default, 'localStorage' is used
-    }
-  )
+    },
+  ),
 );

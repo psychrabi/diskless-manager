@@ -5,9 +5,7 @@ import {
   Power,
   RefreshCw,
   ScreenShare,
-  Star,
   Trash2,
-  XCircle,
 } from "lucide-react";
 import { useRef } from "react";
 import { useOnClickOutside } from "../../hooks/useOnClickOutside";

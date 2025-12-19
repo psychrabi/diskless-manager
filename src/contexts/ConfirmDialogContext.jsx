@@ -1,17 +1,17 @@
-import React, { useCallback, useRef, useState } from 'react';
-import { Modal, Button } from '@/components/ui';
-import { ConfirmDialogContext } from './confirmDialog';
+import { Button, Modal } from "@/components/ui";
+import { useCallback, useRef, useState } from "react";
+import { ConfirmDialogContext } from "./confirmDialog";
 
 export const ConfirmDialogProvider = ({ children }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [options, setOptions] = useState({
-    title: 'Confirm',
-    description: '',
+    title: "Confirm",
+    description: "",
     content: null,
-    confirmText: 'Confirm',
-    cancelText: 'Cancel',
-    confirmVariant: 'primary',
-    size: 'md',
+    confirmText: "Confirm",
+    cancelText: "Cancel",
+    confirmVariant: "primary",
+    size: "md",
   });
 
   const resolverRef = useRef(null);
@@ -43,16 +43,24 @@ export const ConfirmDialogProvider = ({ children }) => {
   return (
     <ConfirmDialogContext.Provider value={{ confirm }}>
       {children}
-      <Modal isOpen={isOpen} onClose={handleCancel} title={options.title} size={options.size}>
+      <Modal
+        isOpen={isOpen}
+        onClose={handleCancel}
+        title={options.title}
+        size={options.size}
+      >
         <div className="space-y-4">
           {options.description && <p>{options.description}</p>}
           {options.content}
           <div className="flex justify-end space-x-3">
-            <Button variant={options.confirmVariant || 'primary'} onClick={handleConfirm}>
-              {options.confirmText || 'Confirm'}
+            <Button
+              variant={options.confirmVariant || "primary"}
+              onClick={handleConfirm}
+            >
+              {options.confirmText || "Confirm"}
             </Button>
             <Button variant="destructive" onClick={handleCancel}>
-              {options.cancelText || 'Cancel'}
+              {options.cancelText || "Cancel"}
             </Button>
           </div>
         </div>
@@ -60,5 +68,3 @@ export const ConfirmDialogProvider = ({ children }) => {
     </ConfirmDialogContext.Provider>
   );
 };
-
-

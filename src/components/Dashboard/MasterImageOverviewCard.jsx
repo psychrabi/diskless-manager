@@ -1,8 +1,8 @@
-import { invoke } from '@tauri-apps/api/core';
-import { HardDrive, RefreshCw } from 'lucide-react';  // Add Refresh icon
-import { useEffect, useState } from 'react';
-import { Card, Button } from '../ui';  // Assume Button component
-import { useNotification } from '@/contexts/notification';
+import { useNotification } from "@/contexts/notification";
+import { invoke } from "@tauri-apps/api/core";
+import { HardDrive, RefreshCw } from "lucide-react"; // Add Refresh icon
+import { useEffect, useState } from "react";
+import { Button, Card } from "../ui"; // Assume Button component
 
 const MasterImageOverviewCard = () => {
   const [overview, setOverview] = useState(null);
@@ -14,20 +14,27 @@ const MasterImageOverviewCard = () => {
     setError(null);
     setLoading(true);
     try {
-      const data = await invoke('get_default_image_overview');
+      const data = await invoke("get_default_image_overview");
       setOverview(data);
     } catch (err) {
       console.error(err);
-      let errorMsg = err || 'An unknown error occurred';
+      let errorMsg = err || "An unknown error occurred";
       // Map specific errors
-      if (errorMsg.includes('not set in config') || errorMsg.includes('please set a new one')) {
-        errorMsg = 'Set a default image first.';
-      } else if (errorMsg.includes('deleted or not present')) {
-        errorMsg = 'Master image is deleted or not present.';
+      if (
+        errorMsg.includes("not set in config") ||
+        errorMsg.includes("please set a new one")
+      ) {
+        errorMsg = "Set a default image first.";
+      } else if (errorMsg.includes("deleted or not present")) {
+        errorMsg = "Master image is deleted or not present.";
       }
       setError(errorMsg);
       if (showErrorToast) {
-        showNotification('error', 'Failed to load master image overview', errorMsg);
+        showNotification(
+          "error",
+          "Failed to load master image overview",
+          errorMsg,
+        );
       }
       setOverview(null);
     } finally {
@@ -37,9 +44,9 @@ const MasterImageOverviewCard = () => {
 
   useEffect(() => {
     fetchMasterImageOverview();
-  }, []);  // Run once on mount
+  }, []); // Run once on mount
 
-  const handleRetry = () => fetchMasterImageOverview(false);  // No duplicate toast
+  const handleRetry = () => fetchMasterImageOverview(false); // No duplicate toast
 
   return (
     <Card title="Default Image Overview" icon={HardDrive}>
@@ -65,7 +72,7 @@ const MasterImageOverviewCard = () => {
             <span className="font-semibold">Created:</span>
             {overview.creation_date}
           </li>
-          {overview.clones && overview.clones !== '-' && (
+          {overview.clones && overview.clones !== "-" && (
             <li className="flex justify-between">
               <span className="font-semibold">Clones:</span>
               {overview.clones}
@@ -73,7 +80,9 @@ const MasterImageOverviewCard = () => {
           )}
         </ul>
       ) : (
-        <div className="text-red-500 text-center py-4">Set a default image first.</div>
+        <div className="text-red-500 text-center py-4">
+          Set a default image first.
+        </div>
       )}
     </Card>
   );

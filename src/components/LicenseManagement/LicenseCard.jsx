@@ -1,11 +1,11 @@
-import { useAppStore } from '@/store/useAppStore';
-import { Card } from '../ui';
-import { Key, Lock } from 'lucide-react';
+import { useAppStore } from "@/store/useAppStore";
+import { Key } from "lucide-react";
+import { Card } from "../ui";
 
 export default function LicenseCard() {
-  const license = useAppStore(state => state.licenseInfo) || {};
+  const license = useAppStore((state) => state.licenseInfo) || {};
 
-  // We assume license info is fetched by parent or layout if needed, 
+  // We assume license info is fetched by parent or layout if needed,
   // but for Dashboard we might need to ensure it's fetched.
   // However, AdminLayout calls fetchData which calls fetchServerInfo etc.
   // Wait, fetchData does NOT call fetchLicenseInfo yet!
@@ -20,14 +20,19 @@ export default function LicenseCard() {
     // For now let's just show what we have.
   }
 
-
-
   return (
     <Card title="License Information" icon={Key}>
       <ul className="space-y-2">
-        <li><strong>Status:</strong> {license.license_status || 'not activated'}</li>
-        <li><strong>Expires:</strong> {license.license_expires || '—'}</li>
-        <li><strong>Key:</strong> {license.license_key ? license.license_key : '—'}</li>
+        <li>
+          <strong>Status:</strong> {license.license_status || "not activated"}
+        </li>
+        <li>
+          <strong>Expires:</strong> {license.license_expires || "—"}
+        </li>
+        <li>
+          <strong>Key:</strong>{" "}
+          {license.license_key ? license.license_key : "—"}
+        </li>
       </ul>
     </Card>
   );

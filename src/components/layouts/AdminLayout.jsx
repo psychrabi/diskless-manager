@@ -1,16 +1,16 @@
-import { Activity, Error, Loading, Notification } from "@/components/ui";
 import ErrorBoundary from "@/components/ErrorBoundary";
+import { Activity, Error, Loading, Notification } from "@/components/ui";
 import { useNotification } from "@/contexts/notification";
 import { useAppStore } from "@/store/useAppStore";
+import { useToastStore } from "@/store/useToastStore";
 import { invoke } from "@tauri-apps/api/core";
-import { lazy, useEffect, useState, useRef } from "react";
+import { lazy, useEffect, useRef, useState } from "react";
 import {
   Outlet,
-  useNavigation,
   useLocation,
   useNavigate,
+  useNavigation,
 } from "react-router-dom";
-import { useToastStore } from "@/store/useToastStore";
 import Toast from "../ui/Toast";
 
 const Sidebar = lazy(() => import("@/components/layouts/Sidebar"));

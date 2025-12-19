@@ -58,7 +58,7 @@ const Sidebar = ({
         "fixed inset-y-0 left-0 z-40 flex h-full flex-col bg-base-100 text-base-content shadow-md transform transition-all duration-200 ease-in-out",
         "lg:static lg:translate-x-0",
         isOpen ? "translate-x-0" : "-translate-x-full",
-        isCollapsed ? "w-20" : "w-64"
+        isCollapsed ? "w-20" : "w-64",
       )}
       role="navigation"
       aria-label="Sidebar"
@@ -66,7 +66,7 @@ const Sidebar = ({
       <div
         className={cn(
           "flex h-16 items-center border-b border-base-300",
-          isCollapsed ? "justify-center px-2" : "px-6 gap-2"
+          isCollapsed ? "justify-center px-2" : "px-6 gap-2",
         )}
       >
         <Gamepad />
@@ -89,7 +89,7 @@ const Sidebar = ({
                       : "text-base-content/70 hover:bg-base-200 hover:text-base-content",
                     isCollapsed
                       ? "justify-center w-10 h-10"
-                      : "w-full justify-start gap-3"
+                      : "w-full justify-start gap-3",
                   )
                 }
                 onClick={() => {
@@ -118,7 +118,7 @@ const Sidebar = ({
           className={cn(
             "w-full text-base-content/70 hover:bg-base-200 hover:text-base-content",
             isCollapsed ? "justify-center" : "justify-start gap-3",
-            "group relative"
+            "group relative",
           )}
           onClick={() => navigate("/license")}
         >
@@ -136,7 +136,7 @@ const Sidebar = ({
           className={cn(
             "w-full text-base-content/70 hover:bg-base-200 hover:text-base-content",
             isCollapsed ? "justify-center" : "justify-start gap-3",
-            "group relative"
+            "group relative",
           )}
           onClick={onToggleCollapse}
         >
@@ -156,7 +156,7 @@ const Sidebar = ({
           className={cn(
             "w-full text-base-content/70 hover:bg-base-200 hover:text-base-content",
             isCollapsed ? "justify-center" : "justify-start gap-3",
-            "group relative"
+            "group relative",
           )}
           onClick={() => {
             if (onClose) onClose();

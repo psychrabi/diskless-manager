@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { AuthContext } from './auth';
-import { useNotification } from '@/contexts/notification';
+import { useNotification } from "@/contexts/notification";
+import { invoke } from "@tauri-apps/api/core";
+import { useCallback, useEffect, useState } from "react";
+import { AuthContext } from "./auth";
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
@@ -13,35 +13,42 @@ export const AuthProvider = ({ children }) => {
   const logout = useCallback(() => {
     setUser(null);
     setToken(null);
-    localStorage.removeItem('authToken');
-    localStorage.removeItem('user');
+    localStorage.removeItem("authToken");
+    localStorage.removeItem("user");
   }, []);
 
-  const validateToken = useCallback(async (authToken) => {
-    try {
-      await invoke('validate_auth_token', { token: authToken });
-      // Token is valid, do nothing
-    } catch (error) {
-      showNotification('error', 'Authentication Failed', error.message || 'Your session has expired. Please log in again.');
-      logout();
-    }
-  }, [logout, showNotification]);
+  const validateToken = useCallback(
+    async (authToken) => {
+      try {
+        await invoke("validate_auth_token", { token: authToken });
+        // Token is valid, do nothing
+      } catch (error) {
+        showNotification(
+          "error",
+          "Authentication Failed",
+          error.message || "Your session has expired. Please log in again.",
+        );
+        logout();
+      }
+    },
+    [logout, showNotification],
+  );
 
   useEffect(() => {
     (async () => {
-      const storedToken = localStorage.getItem('authToken');
-      const storedUser = localStorage.getItem('user');
+      const storedToken = localStorage.getItem("authToken");
+      const storedUser = localStorage.getItem("user");
 
       if (storedToken && storedUser) {
         try {
           const parsedUser = JSON.parse(storedUser);
           setToken(storedToken);
           setUser(parsedUser);
-          
+
           await validateToken(storedToken);
         } catch {
-          localStorage.removeItem('authToken');
-          localStorage.removeItem('user');
+          localStorage.removeItem("authToken");
+          localStorage.removeItem("user");
         }
       }
       setLoading(false);
@@ -51,8 +58,8 @@ export const AuthProvider = ({ children }) => {
   const login = (userData, authToken) => {
     setUser(userData);
     setToken(authToken);
-    localStorage.setItem('authToken', authToken);
-    localStorage.setItem('user', JSON.stringify(userData));
+    localStorage.setItem("authToken", authToken);
+    localStorage.setItem("user", JSON.stringify(userData));
   };
 
   const value = {
@@ -60,12 +67,8 @@ export const AuthProvider = ({ children }) => {
     token,
     login,
     logout,
-    loading
+    loading,
   };
 
-  return (
-    <AuthContext.Provider value={value}>
-      {children}
-    </AuthContext.Provider>
-  );
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };

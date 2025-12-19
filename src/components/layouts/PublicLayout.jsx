@@ -2,7 +2,7 @@ import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
-import { Outlet, useNavigate, useLocation } from "react-router-dom";
+import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { Loading } from "../ui";
 import Toast from "../ui/Toast";
 
@@ -38,7 +38,7 @@ const PublicLayout = () => {
         error(
           `Preflight Check Failed : ${
             e.message || "An unknown error occurred."
-          }`
+          }`,
         );
         console.warn("Preflight check failed:", e);
         // Proceed to login UI even if preflight fails
@@ -52,7 +52,7 @@ const PublicLayout = () => {
         error(
           `License Check Failed : ${
             err.message || "An unknown error occurred."
-          }`
+          }`,
         );
       }
     })();
