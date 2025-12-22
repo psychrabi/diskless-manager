@@ -1,6 +1,5 @@
 import ErrorBoundary from "@/components/ErrorBoundary";
-import { Activity, Error, Loading, Notification } from "@/components/ui";
-import { useNotification } from "@/contexts/notification";
+import { Activity, Error, Loading } from "@/components/ui";
 import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
 import { invoke } from "@tauri-apps/api/core";
@@ -19,7 +18,6 @@ const Header = lazy(() => import("@/components/layouts/Header"));
 const AdminLayout = () => {
   const { error, fetchData, loading } = useAppStore();
   const [activeTab, setActiveTab] = useState("dashboard");
-  const { notification } = useNotification();
   const navigation = useNavigation();
   const isNavigating = Boolean(navigation.location);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -150,7 +148,6 @@ const AdminLayout = () => {
               </div>
             )}
             {error && <Error error={error} />}
-            {notification && <Notification />}
             {isNavigating ? (
               <Loading />
             ) : (

@@ -1,4 +1,3 @@
-import { useNotification } from "@/contexts/notification";
 import { useZfs } from "@/hooks/useZfs";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Save } from "lucide-react";
@@ -14,7 +13,6 @@ const diskSchema = z.object({
 });
 
 const DiskFormModal = ({ zpools, isOpen, setIsOpen, refresh }) => {
-  const { showNotification } = useNotification();
   const { createDataset } = useZfs();
 
   const defaultValues = { zpool: "", name: "", usage_type: "image", size: "" };
@@ -31,7 +29,6 @@ const DiskFormModal = ({ zpools, isOpen, setIsOpen, refresh }) => {
   });
 
   const onSubmit = async (data) => {
-    showNotification(`Adding new disk ${data.name}`, "info");
     const success = await createDataset(data);
     if (success) {
       refresh();

@@ -1,16 +1,16 @@
-import { useNotification } from "@/contexts/notification";
 import { useSettings } from "@/hooks/useSettings";
 import { useAppStore } from "@/store/useAppStore";
+import { useToastStore } from "@/store/useToastStore";
 import { File } from "lucide-react";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { Button, Card } from "../ui";
 
 export default function LicenseActivation() {
-  const { showNotification } = useNotification();
   const { activateLicense } = useSettings();
   const licenseInfo = useAppStore((state) => state.licenseInfo);
   const fetchLicenseInfo = useAppStore((state) => state.fetchLicenseInfo);
+  const { error, info } = useToastStore();
 
   const { register, handleSubmit, reset } = useForm({
     defaultValues: { license_key: "" },
@@ -20,11 +20,7 @@ export default function LicenseActivation() {
 
   const onSubmit = async (data) => {
     if (!data.license_key || !data.license_key.trim()) {
-      showNotification(
-        "error",
-        "License Key Required",
-        "Please enter a license key",
-      );
+      error("License Key Required: Please enter a license key");
       return;
     }
     setLoading(true);
@@ -64,11 +60,7 @@ export default function LicenseActivation() {
             variant="secondary"
             onClick={() => {
               reset();
-              showNotification(
-                "info",
-                "Form Reset",
-                "License activation form has been reset.",
-              );
+            info("License activation form has been reset.");
             }}
             disabled={loading}
           >

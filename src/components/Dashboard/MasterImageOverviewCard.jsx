@@ -1,4 +1,4 @@
-import { useNotification } from "@/contexts/notification";
+import { useToastStore } from "@/store/useToastStore";
 import { invoke } from "@tauri-apps/api/core";
 import { HardDrive, RefreshCw } from "lucide-react"; // Add Refresh icon
 import { useEffect, useState } from "react";
@@ -7,11 +7,11 @@ import { Button, Card } from "../ui"; // Assume Button component
 const MasterImageOverviewCard = () => {
   const [overview, setOverview] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const { showNotification } = useNotification();
+  const [error, setError] = useState("");
+  const { error: showError } = useToastStore();
 
   const fetchMasterImageOverview = async (showErrorToast = true) => {
-    setError(null);
+    setError("");
     setLoading(true);
     try {
       const data = await invoke("get_default_image_overview");
@@ -28,12 +28,14 @@ const MasterImageOverviewCard = () => {
       } else if (errorMsg.includes("deleted or not present")) {
         errorMsg = "Master image is deleted or not present.";
       }
-      setError(errorMsg);
+      const errorText =
+        typeof errorMsg === "string"
+          ? errorMsg
+          : errorMsg?.message || String(errorMsg);
+      setError(errorText);
       if (showErrorToast) {
-        showNotification(
-          "error",
-          "Failed to load master image overview",
-          errorMsg,
+        showError(
+          `Failed to load master image overview: ${errorText}`,
         );
       }
       setOverview(null);

@@ -1,4 +1,4 @@
-import { useNotification } from "@/contexts/notification";
+import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { invoke } from "@tauri-apps/api/core";
 import { Save } from "lucide-react";
@@ -22,7 +22,7 @@ const RenameImageModal = ({
   selectedImage,
   refresh,
 }) => {
-  const { showNotification } = useNotification();
+  const { success, info, error } = useToastStore();
 
   const {
     register,
@@ -43,10 +43,7 @@ const RenameImageModal = ({
     const baseName =
       selectedImage.split("/").pop()?.replace("-master", "") || "";
 
-    showNotification(
-      `Renaming image from ${baseName} to ${data.newName}`,
-      "info",
-    );
+    info(`Renaming image from ${baseName} to ${data.newName}`);
 
     setOpenRenameModal(false);
 
@@ -58,14 +55,14 @@ const RenameImageModal = ({
       newName: data.newName,
     })
       .then((response) => {
-        if (response.message) showNotification(response.message, "success");
+        if (response.message) success(response.message);
         reset();
       })
       .catch((error) => {
-        showNotification(
-          "error",
-          "Failed to rename image",
-          error.message || "An unknown error occurred",
+        error(
+          `Failed to rename image: ${
+            error.message || "An unknown error occurred"
+          }`,
         );
       })
       .finally(() => {

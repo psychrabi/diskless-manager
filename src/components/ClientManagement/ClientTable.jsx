@@ -69,7 +69,7 @@ const VirtuosoTableComponents = {
   TableRow: React.forwardRef((props, ref) => {
     // Destructure to avoid passing non-DOM props to tr, but capture item and context
     // eslint-disable-next-line no-unused-vars
-    const { item, itemProps, context, ...rest } = props;
+    const { item, context, ...rest } = props;
     return (
       <tr
         {...rest}
@@ -177,9 +177,6 @@ const ClientTable = ({ handleClientContextMenu }) => {
               </TableCell>
             </>
           )}
-          itemProps={(index) => ({
-            "data-index": index,
-          })}
         />
       )}
     </div>

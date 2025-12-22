@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useState } from "react";
 
 import { useConfirm } from "@/contexts/confirmDialog";
-import { useNotification } from "@/contexts/notification";
+import { useToastStore } from "@/store/useToastStore";
 import { formatBytes, formatDate } from "../utils/helpers";
 
 export const useMasterManager = () => {
@@ -17,7 +17,7 @@ export const useMasterManager = () => {
     useState(false);
   const [snapshotToDelete, setSnapshotToDelete] = useState(null);
   const [isDeleteMasterModalOpen, setIsDeleteMasterModalOpen] = useState(false);
-  const { showNotification } = useNotification();
+  const { success, error } = useToastStore();
   const confirm = useConfirm();
 
   // --- Master/Snapshot Actions ---
@@ -36,10 +36,10 @@ export const useMasterManager = () => {
       request: { token, name: newMasterName, size: newMasterSize },
     })
       .then((response) => {
-        if (response.message) showNotification(response.message, "success");
+        if (response.message) success(response.message);
       })
       .catch((error) => {
-        showNotification(error, "error");
+        error(error?.message || String(error));
       })
       .finally(() => {
         window.location.reload();
@@ -55,10 +55,10 @@ export const useMasterManager = () => {
       snapshotName,
     })
       .then((response) => {
-        if (response.message) showNotification(response.message, "success");
+        if (response.message) success(response.message);
       })
       .catch((error) => {
-        showNotification(error, "error");
+        error(error?.message || String(error));
       })
       .finally(() => {
         window.location.reload();
@@ -84,13 +84,13 @@ export const useMasterManager = () => {
         snapshotName: snapshot,
       })
         .then((response) => {
-          if (response.message) showNotification(response.message, "success");
+          if (response.message) success(response.message);
         })
         .catch((error) => {
-          showNotification(error.error, "error");
+          error(error?.error || String(error));
         });
     } else {
-      showNotification("Snapshot deletion cancelled", "error");
+      error("Snapshot deletion cancelled");
     }
   };
 
@@ -112,13 +112,13 @@ export const useMasterManager = () => {
         snapshotName: snapshot,
       })
         .then((response) => {
-          if (response.message) showNotification(response.message, "success");
+          if (response.message) success(response.message);
         })
         .catch((error) => {
-          showNotification(error.error, "error");
+          error(error?.error || String(error));
         });
     } else {
-      showNotification("Snapshot rollback cancelled", "error");
+      error("Snapshot rollback cancelled");
     }
   };
 
@@ -127,10 +127,10 @@ export const useMasterManager = () => {
     const token = localStorage.getItem("authToken") || "";
     invoke("set_default_image", { token, name: masterName })
       .then((response) => {
-        if (response.message) showNotification(response.message, "success");
+        if (response.message) success(response.message);
       })
       .catch((error) => {
-        showNotification(error.error, "error");
+        error(error?.error || String(error));
       })
       .finally(() => {
         window.location.reload();
@@ -156,14 +156,14 @@ export const useMasterManager = () => {
           masterName: image,
         });
         console.log("=== JS: Invoke resolved with", response);
-        if (response.message) showNotification(response.message, "success");
-        if (response.error) showNotification(response.error, "error");
+        if (response.message) success(response.message);
+        if (response.error) error(response.error);
       } catch (error) {
         console.error("=== JS: Invoke rejected with", error);
-        showNotification(error?.error || "Unknown error", "error");
+        error(error?.error || "Unknown error");
       }
     } else {
-      showNotification("Image deletion cancelled", "error");
+      error("Image deletion cancelled");
     }
   };
 

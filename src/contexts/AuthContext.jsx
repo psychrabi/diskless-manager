@@ -1,4 +1,4 @@
-import { useNotification } from "@/contexts/notification";
+import { useToastStore } from "@/store/useToastStore";
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useState } from "react";
 import { AuthContext } from "./auth";
@@ -7,7 +7,7 @@ export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [token, setToken] = useState(null);
   const [loading, setLoading] = useState(true);
-  const { showNotification } = useNotification();
+  const { error } = useToastStore();
 
   // Define logout and validateToken BEFORE useEffect to avoid TDZ / uninitialized variable errors
   const logout = useCallback(() => {
@@ -22,16 +22,14 @@ export const AuthProvider = ({ children }) => {
       try {
         await invoke("validate_auth_token", { token: authToken });
         // Token is valid, do nothing
-      } catch (error) {
-        showNotification(
-          "error",
-          "Authentication Failed",
-          error.message || "Your session has expired. Please log in again.",
+      } catch (err) {
+        error(
+          err.message || "Your session has expired. Please log in again.",
         );
         logout();
       }
     },
-    [logout, showNotification],
+    [logout, error],
   );
 
   useEffect(() => {

@@ -1,4 +1,4 @@
-import { useNotification } from "@/contexts/notification";
+import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { invoke } from "@tauri-apps/api/core";
 import { Save } from "lucide-react";
@@ -15,7 +15,7 @@ const CreateSnapshotModal = ({
   setOpenSnapshotCreateModal,
   selectedImage,
 }) => {
-  const { showNotification } = useNotification();
+  const { success, info, error } = useToastStore();
   const {
     register,
     handleSubmit,
@@ -30,7 +30,7 @@ const CreateSnapshotModal = ({
 
   const onSubmit = async (data) => {
     const fullSnapshotName = `${selectedImage}@${data.name}`;
-    showNotification(`Adding new snapshot ${fullSnapshotName}`, "info");
+    info(`Adding new snapshot ${fullSnapshotName}`);
     // Get token from localStorage
     const token = localStorage.getItem("authToken") || "";
     await invoke("create_snapshot", {
@@ -39,13 +39,13 @@ const CreateSnapshotModal = ({
       snapshotName: fullSnapshotName,
     })
       .then((response) => {
-        if (response.message) showNotification(response.message, "success");
+        if (response.message) success(response.message);
       })
       .catch((error) => {
-        showNotification(
-          "error",
-          "Failed to create snapshot",
-          error.message || "An unknown error occurred",
+        error(
+          `Failed to create snapshot: ${
+            error.message || "An unknown error occurred"
+          }`,
         );
       });
     setOpenSnapshotCreateModal(false);

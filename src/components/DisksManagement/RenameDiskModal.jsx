@@ -1,4 +1,4 @@
-import { useNotification } from "@/contexts/notification";
+import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { invoke } from "@tauri-apps/api/core";
 import { Save } from "lucide-react";
@@ -22,7 +22,7 @@ const RenameDiskModal = ({
   selectedDisk,
   refresh,
 }) => {
-  const { showNotification } = useNotification();
+  const { success, info, error } = useToastStore();
   const {
     register,
     handleSubmit,
@@ -42,10 +42,7 @@ const RenameDiskModal = ({
     const baseName = selectedDisk.name
       ? selectedDisk.name.split("/").pop()
       : "";
-    showNotification(
-      `Renaming disk from ${baseName} to ${data.newName}`,
-      "info",
-    );
+    info(`Renaming disk from ${baseName} to ${data.newName}`);
     setOpenRenameModal(false);
 
     // Get token from localStorage
@@ -56,14 +53,14 @@ const RenameDiskModal = ({
       new: data.newName,
     })
       .then((response) => {
-        if (response.message) showNotification(response.message, "success");
+        if (response.message) success(response.message);
         reset();
       })
-      .catch((error) => {
-        showNotification(
-          "error",
-          "Failed to rename disk",
-          error.message || "An unknown error occurred",
+      .catch((err) => {
+        error(
+          `Failed to rename disk: ${
+            err.message || "An unknown error occurred"
+          }`,
         );
       })
       .finally(() => {
@@ -74,7 +71,7 @@ const RenameDiskModal = ({
   const handleClose = () => {
     setOpenRenameModal(false);
     reset();
-    showNotification("Disk rename cancelled", "info");
+    info("Disk rename cancelled");
   };
 
   // Extract display name from the full ZFS path (e.g., "tank/images/ubuntu" -> "ubuntu")

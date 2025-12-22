@@ -61,7 +61,7 @@ const DependencyStep = ({
                   <TableCell className="text-center">
                     {svc.installed ? (
                       <span className="badge badge-success badge-sm gap-1">
-                        <Check size={12} /> Installede
+                        <Check size={12} /> Installed
                       </span>
                     ) : (
                       <span className="badge badge-warning badge-sm gap-1">

@@ -1,10 +1,10 @@
-import { useNotification } from "@/contexts/notification";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { invoke } from "@tauri-apps/api/core";
 import { Save } from "lucide-react";
 import { useEffect } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
+import { useToastStore } from "@/store/useToastStore";
 import { Button, Input, Modal, Select } from "../ui";
 
 const clientSchema = z.object({
@@ -28,7 +28,7 @@ const clientSchema = z.object({
 });
 
 const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
-  const { showNotification } = useNotification();
+  const { success, info } = useToastStore();
 
   const defaultValues = {
     name: client?.name || "",
@@ -71,37 +71,36 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
 
   const onSubmit = async (data) => {
     const token = localStorage.getItem("authToken") || "";
-    if (!client.id) {
-      showNotification(`Adding new client ${data.name}`, "info");
-      await invoke("add_client", { token, req: data });
-      showNotification(
-        "success",
-        "Client Added",
-        `Client ${data.name} added successfully.`,
-      );
-    } else {
-      showNotification(`Editing client ${data.name}`, "info");
-      await invoke("edit_client", {
-        token,
-        clientId: client.id,
-        data: {
-          name: data.name,
-          mac: data.mac,
-          ip: data.ip,
-          master: data.master,
-          snapshot: data.snapshot || null,
-          pxe_mode: data.pxe_mode,
-          keep_writeback: data.keep_writeback,
-          use_game_disk: data.use_game_disk,
-        },
-      });
-      showNotification(
-        "success",
-        "Client Updated",
-        `Client ${data.name} updated successfully.`,
-      );
+    try {
+      if (!client.id) {
+        info(`Adding new client ${data.name}`);
+        await invoke("add_client", { token, req: data });
+        success(`Client ${data.name} added successfully.`);
+      } else {
+        info(`Editing client ${data.name}`);
+        await invoke("edit_client", {
+          token,
+          clientId: client.id,
+          data: {
+            name: data.name,
+            mac: data.mac,
+            ip: data.ip,
+            master: data.master,
+            snapshot: data.snapshot || null,
+            pxe_mode: data.pxe_mode,
+            keep_writeback: data.keep_writeback,
+            use_game_disk: data.use_game_disk,
+          },
+        });
+        success(`Client ${data.name} updated successfully.`);
+      }
+      setIsOpen(false);
+      reset(defaultValues);
+      await refresh();
+    } catch (e) {
+      // Let existing error handling via toasts/console from invoke callers surface
+      console.error("Failed to submit client form", e);
     }
-    refresh();
   };
 
   const selectedMaster = useWatch({

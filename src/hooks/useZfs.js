@@ -1,11 +1,11 @@
-import { useNotification } from "@/contexts/notification";
+import { useToastStore } from "@/store/useToastStore";
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useState } from "react";
 
 export const useZfs = () => {
   const [datasets, setDatasets] = useState([]);
   const [loading, setLoading] = useState(false);
-  const { showNotification } = useNotification();
+  const { success, error } = useToastStore();
 
   const fetchDatasets = useCallback(
     async (pool) => {
@@ -18,17 +18,15 @@ export const useZfs = () => {
         const res = await invoke("list_datasets", { zpool: pool });
         setDatasets(res || []);
       } catch (e) {
-        showNotification(
-          "error",
-          "Failed to list datasets",
-          e.message || "An unknown error occurred",
+        error(
+          `Failed to list datasets: ${e.message || "An unknown error occurred"}`,
         );
         console.error(String(e));
       } finally {
         setLoading(false);
       }
     },
-    [showNotification],
+    [error],
   );
 
   const createDataset = useCallback(
@@ -42,22 +40,18 @@ export const useZfs = () => {
             size: data.size ?? "",
           },
         });
-        showNotification(
-          "success",
-          "Dataset Created",
-          `Dataset ${data.name} created successfully.`,
-        );
+        success(`Dataset ${data.name} created successfully.`);
         return true;
       } catch (e) {
-        showNotification(
-          "error",
-          "Failed to create dataset",
-          e.message || "An unknown error occurred",
+        error(
+          `Failed to create dataset: ${
+            e.message || "An unknown error occurred"
+          }`,
         );
         return false;
       }
     },
-    [showNotification],
+    [success, error],
   );
 
   const deleteDataset = useCallback(
@@ -69,18 +63,14 @@ export const useZfs = () => {
           dataset: name,
           recursive: true,
         });
-        if (response.message) showNotification(response.message, "success");
+        if (response.message) success(response.message);
         return true;
       } catch (e) {
-        showNotification(
-          "error",
-          "Failed to delete disk",
-          e.error || "An unknown error occurred",
-        );
+        error(`Failed to delete disk: ${e.error || "An unknown error occurred"}`);
         return false;
       }
     },
-    [showNotification],
+    [success, error],
   );
 
   return {

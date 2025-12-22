@@ -1,5 +1,5 @@
-import { useNotification } from "@/contexts/notification";
 import { useAppStore } from "@/store/useAppStore";
+import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { invoke } from "@tauri-apps/api/core";
 import { Save } from "lucide-react";
@@ -17,8 +17,8 @@ const CreateImageModal = ({
   openImageCreateModal,
   setOpenImageCreateModal,
 }) => {
-  const { showNotification } = useNotification();
   const fetchImages = useAppStore((state) => state.fetchImages);
+  const { success, info, error } = useToastStore();
 
   const {
     register,
@@ -34,7 +34,7 @@ const CreateImageModal = ({
   });
 
   const onSubmit = async (data) => {
-    showNotification(`Adding new ZFS image ${data.name}`, "info");
+    info(`Adding new ZFS image ${data.name}`);
 
     setOpenImageCreateModal(false);
 
@@ -44,13 +44,13 @@ const CreateImageModal = ({
       const response = await invoke("create_image", {
         request: { token, name: data.name, size: data.size, os: data.os },
       });
-      if (response.message) showNotification(response.message, "success");
+      if (response.message) success(response.message);
       fetchImages(); // Refresh images
-    } catch (error) {
-      showNotification(
-        "error",
-        "Failed to create image",
-        error.message || "An unknown error occurred",
+    } catch (err) {
+      error(
+        `Failed to create image: ${
+          err.message || "An unknown error occurred"
+        }`,
       );
     }
   };

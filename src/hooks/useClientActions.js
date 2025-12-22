@@ -1,5 +1,5 @@
 import { useConfirm } from "@/contexts/confirmDialog";
-import { useNotification } from "@/contexts/notification";
+import { useToastStore } from "@/store/useToastStore";
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback } from "react";
 
@@ -9,7 +9,7 @@ export const useClientActions = (
   setClient,
   setIsModalOpen,
 ) => {
-  const { showNotification } = useNotification();
+  const { success, error: showError, info } = useToastStore();
   const confirm = useConfirm();
 
   const handleAction = useCallback(
@@ -31,7 +31,7 @@ export const useClientActions = (
         ["reboot", "shutdown", "remote"].includes(action) &&
         client.status !== "Online"
       ) {
-        showNotification(`Client must be online to ${action}.`, "error");
+        showError(`Client must be online to ${action}.`);
         return;
       }
       if (
@@ -50,11 +50,10 @@ export const useClientActions = (
         // Wake is special case: "Client must be offline to wake"
         // Others: "Client must be offline to..."
         // So generally, offline required for these.
-        showNotification(
+        showError(
           `Client must be offline to ${
             action === "edit" ? "make changes" : action
           }.`,
-          "error",
         );
         return;
       }
@@ -77,7 +76,7 @@ export const useClientActions = (
       });
 
       if (!ok) {
-        if (cancelMsg) showNotification(cancelMsg, "info");
+        if (cancelMsg) info(cancelMsg);
         closeContextMenu();
         return;
       }
@@ -86,20 +85,18 @@ export const useClientActions = (
       const token = localStorage.getItem("authToken") || "";
       try {
         const response = await invoke(invokeCmd, { token, ...invokeArgs });
-        if (response && response.message)
-          showNotification(response.message, "success");
+        if (response && response.message) success(response.message);
         if (fetchData) fetchData();
         if (closeContextMenu) closeContextMenu();
       } catch (error) {
-        showNotification(
+        showError(
           `Failed to execute ${action}: ${error.message || String(error)}`,
-          "error",
         );
       }
     },
     [
       confirm,
-      showNotification,
+      showError,
       closeContextMenu,
       fetchData,
       setClient,
@@ -181,9 +178,8 @@ export const useClientActions = (
 
       // Check if client is in non-persistent mode
       if (client.keep_writeback !== false) {
-        showNotification(
+        showError(
           "Client is in persistent mode. Only non-persistent clients can be reset to clean state.",
-          "error",
         );
         return;
       }
@@ -229,7 +225,7 @@ export const useClientActions = (
 
     disableSuper: (client) => {
       if (client.mode !== "super") {
-        showNotification("Client is not in Super mode.", "error");
+        showError("Client is not in Super mode.");
         return;
       }
       handleAction(
@@ -248,11 +244,11 @@ export const useClientActions = (
     saveSuper: async (client) => {
       if (!client) return;
       if (client.mode !== "super") {
-        showNotification("Client is not in Super mode.", "error");
+        showError("Client is not in Super mode.");
         return;
       }
       if (client.status !== "Offline") {
-        showNotification("Client must be offline to save Super.", "error");
+        showError("Client must be offline to save Super.");
         return;
       }
 
@@ -266,7 +262,7 @@ export const useClientActions = (
       });
 
       if (!ok) {
-        showNotification("Save Super cancelled.", "info");
+        info("Save Super cancelled.");
         return;
       }
 
@@ -275,11 +271,11 @@ export const useClientActions = (
         `${client.name} -super- ${Date.now()} `,
       );
       if (!suffix) {
-        showNotification("Save Super cancelled.", "info");
+        info("Save Super cancelled.");
         return;
       }
       if (!/^[-\w]+$/.test(suffix)) {
-        showNotification("Invalid snapshot name.", "error");
+        showError("Invalid snapshot name.");
         return;
       }
 
@@ -291,14 +287,12 @@ export const useClientActions = (
           token,
           snapshotName,
         });
-        if (response.message) showNotification(response.message, "success");
+        if (response.message) success(response.message);
         fetchData();
         closeContextMenu();
       } catch (error) {
-        showNotification(
-          "error",
-          "Failed to save super",
-          error.message || String(error),
+        showError(
+          `Failed to save super: ${error.message || String(error)}`,
         );
       }
     },
