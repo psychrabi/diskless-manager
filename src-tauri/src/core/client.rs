@@ -7,30 +7,45 @@ use uuid::Uuid;
 pub struct Client {
     pub id: String,
     pub name: String,
-    pub mac_address: String,
-    pub ip_address: Option<String>,
-    pub image_id: String,
+    pub mac: String,
+    pub ip: String,
+    pub master: String, // Using 'master' to match legacy model
     pub boot_mode: String,
     pub enabled: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub snapshot: Option<String>,
+    pub block_store: Option<String>,
+    pub target_iqn: Option<String>,
+    pub writeback: Option<String>,
+    pub last_modified: Option<String>,
+    pub block_device: Option<String>,
+    pub status: Option<String>,
+    pub mode: Option<String>,
+    pub pxe_mode: Option<String>,
+    pub keep_writeback: Option<bool>,
+    pub use_game_disk: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateClientRequest {
     pub name: String,
-    pub mac_address: String,
-    pub ip_address: Option<String>,
-    pub image_id: String,
-    pub boot_mode: Option<String>,
+    pub mac: String,
+    pub ip: String,
+    pub master: String,
+    pub snapshot: Option<String>,
+    pub keep_writeback: Option<bool>,
+    pub use_game_disk: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateClientRequest {
     pub name: Option<String>,
-    pub ip_address: Option<String>,
-    pub image_id: Option<String>,
-    pub boot_mode: Option<String>,
+    pub ip: Option<String>,
+    pub master: Option<String>,
+    pub snapshot: Option<String>,
+    pub keep_writeback: Option<bool>,
+    pub use_game_disk: Option<bool>,
     pub enabled: Option<bool>,
 }
 
@@ -47,18 +62,29 @@ pub struct BootLogEntry {
 
 impl Client {
     pub fn new(req: CreateClientRequest) -> anyhow::Result<Self> {
-        let mac = normalize_mac(&req.mac_address)?;
+        let mac = normalize_mac(&req.mac)?;
 
         Ok(Self {
             id: Uuid::new_v4().to_string(),
             name: req.name,
-            mac_address: mac,
-            ip_address: req.ip_address,
-            image_id: req.image_id,
-            boot_mode: req.boot_mode.unwrap_or_else(|| "uefi".to_string()),
+            mac,
+            ip: req.ip,
+            master: req.master,
+            boot_mode: "uefi".to_string(), // Default to UEFI for new clients
             enabled: true,
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            snapshot: req.snapshot,
+            block_store: None,
+            target_iqn: None,
+            writeback: None,
+            last_modified: Some(Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()),
+            block_device: None,
+            status: None,
+            mode: None,
+            pxe_mode: Some("uefi".to_string()),
+            keep_writeback: req.keep_writeback,
+            use_game_disk: req.use_game_disk,
         })
     }
 }
@@ -90,90 +116,84 @@ pub struct ClientManager {
     pool: SqlitePool,
 }
 
+#[derive(sqlx::FromRow)]
+struct ClientRow {
+    id: String,
+    name: String,
+    mac: String,
+    ip: String,
+    master: String,
+    boot_mode: String,
+    enabled: bool,
+    created_at: String,
+    updated_at: String,
+    snapshot: Option<String>,
+    block_store: Option<String>,
+    target_iqn: Option<String>,
+    writeback: Option<String>,
+    last_modified: Option<String>,
+    block_device: Option<String>,
+    status: Option<String>,
+    mode: Option<String>,
+    keep_writeback: Option<bool>,
+    use_game_disk: Option<bool>,
+}
+
 impl ClientManager {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
     }
 
     pub async fn list(&self) -> anyhow::Result<Vec<Client>> {
-        let rows = sqlx::query_as::<
-            _,
-            (
-                String,
-                String,
-                String,
-                Option<String>,
-                String,
-                String,
-                bool,
-                String,
-                String,
-            ),
-        >(
+        let rows = sqlx::query_as::<_, ClientRow>(
             r#"
-            SELECT id, name, mac_address, ip_address, image_id, boot_mode, enabled, created_at, updated_at 
-            FROM clients 
+            SELECT id, name, mac, ip, master, boot_mode, enabled, created_at, updated_at,
+                   snapshot, block_store, target_iqn, writeback, last_modified,
+                   block_device, status, mode, keep_writeback, use_game_disk
+            FROM clients
             ORDER BY name
             "#,
         )
         .fetch_all(&self.pool)
         .await?;
 
-        let clients = rows
+        let clients: Vec<Client> = rows
             .into_iter()
-            .filter_map(
-                |(
-                    id,
-                    name,
-                    mac_address,
-                    ip_address,
-                    image_id,
-                    boot_mode,
-                    enabled,
-                    created_at,
-                    updated_at,
-                )| {
-                    Some(Client {
-                        id,
-                        name,
-                        mac_address,
-                        ip_address,
-                        image_id,
-                        boot_mode,
-                        enabled,
-                        created_at: DateTime::parse_from_rfc3339(&created_at)
-                            .ok()?
-                            .with_timezone(&Utc),
-                        updated_at: DateTime::parse_from_rfc3339(&updated_at)
-                            .ok()?
-                            .with_timezone(&Utc),
-                    })
-                },
-            )
+            .map(|row| Client {
+                id: row.id,
+                name: row.name,
+                mac: row.mac,
+                ip: row.ip,
+                master: row.master,
+                boot_mode: row.boot_mode,
+                enabled: row.enabled,
+                created_at: DateTime::parse_from_rfc3339(&row.created_at).expect("Failed to parse created_at").into(),
+                updated_at: DateTime::parse_from_rfc3339(&row.updated_at).expect("Failed to parse updated_at").into(),
+                snapshot: row.snapshot,
+                block_store: row.block_store,
+                target_iqn: row.target_iqn,
+                writeback: row.writeback,
+                last_modified: row.last_modified,
+                block_device: row.block_device,
+                status: row.status,
+                mode: row.mode,
+                pxe_mode: Some("uefi".to_string()), // Default to UEFI
+                keep_writeback: row.keep_writeback,
+                use_game_disk: row.use_game_disk,
+            })
             .collect();
 
         Ok(clients)
     }
 
     pub async fn get(&self, id: &str) -> anyhow::Result<Client> {
-        let row = sqlx::query_as::<
-            _,
-            (
-                String,
-                String,
-                String,
-                Option<String>,
-                String,
-                String,
-                bool,
-                String,
-                String,
-            ),
-        >(
+        let row = sqlx::query_as::<_, ClientRow>(
             r#"
-            SELECT id, name, mac_address, ip_address, image_id, boot_mode, enabled, created_at, updated_at 
-            FROM clients 
-            WHERE id = ? OR name = ? OR mac_address = ?
+            SELECT id, name, mac, ip, master, boot_mode, enabled, created_at, updated_at,
+                   snapshot, block_store, target_iqn, writeback, last_modified,
+                   block_device, status, mode, keep_writeback, use_game_disk
+            FROM clients
+            WHERE id = ? OR name = ? OR mac = ?
             "#,
         )
         .bind(id)
@@ -183,28 +203,27 @@ impl ClientManager {
         .await?
         .ok_or_else(|| anyhow::anyhow!("Client not found: {}", id))?;
 
-        let (
-            id,
-            name,
-            mac_address,
-            ip_address,
-            image_id,
-            boot_mode,
-            enabled,
-            created_at,
-            updated_at,
-        ) = row;
-
         Ok(Client {
-            id,
-            name,
-            mac_address,
-            ip_address,
-            image_id,
-            boot_mode,
-            enabled,
-            created_at: DateTime::parse_from_rfc3339(&created_at)?.with_timezone(&Utc),
-            updated_at: DateTime::parse_from_rfc3339(&updated_at)?.with_timezone(&Utc),
+            id: row.id,
+            name: row.name,
+            mac: row.mac,
+            ip: row.ip,
+            master: row.master,
+            boot_mode: row.boot_mode,
+            enabled: row.enabled,
+            created_at: DateTime::parse_from_rfc3339(&row.created_at).expect("Failed to parse created_at").into(),
+            updated_at: DateTime::parse_from_rfc3339(&row.updated_at).expect("Failed to parse updated_at").into(),
+            snapshot: row.snapshot,
+            block_store: row.block_store,
+            target_iqn: row.target_iqn,
+            writeback: row.writeback,
+            last_modified: row.last_modified,
+            block_device: row.block_device,
+            status: row.status,
+            mode: row.mode,
+            pxe_mode: Some("uefi".to_string()), // Default to UEFI
+            keep_writeback: row.keep_writeback,
+            use_game_disk: row.use_game_disk,
         })
     }
 
@@ -213,27 +232,35 @@ impl ClientManager {
 
         sqlx::query(
             r#"
-            INSERT INTO clients (id, name, mac_address, ip_address, image_id, boot_mode, enabled, created_at, updated_at) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO clients (id, name, mac, ip, master, boot_mode, enabled, created_at, updated_at,
+                                snapshot, block_store, target_iqn, writeback, last_modified,
+                                block_device, status, mode, keep_writeback, use_game_disk)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&client.id)
         .bind(&client.name)
-        .bind(&client.mac_address)
-        .bind(&client.ip_address)
-        .bind(&client.image_id)
+        .bind(&client.mac)
+        .bind(&client.ip)
+        .bind(&client.master)
         .bind(&client.boot_mode)
         .bind(client.enabled)
         .bind(client.created_at.to_rfc3339())
         .bind(client.updated_at.to_rfc3339())
+        .bind(&client.snapshot)
+        .bind(&client.block_store)
+        .bind(&client.target_iqn)
+        .bind(&client.writeback)
+        .bind(&client.last_modified)
+        .bind(&client.block_device)
+        .bind(&client.status)
+        .bind(&client.mode)
+        .bind(&client.keep_writeback)
+        .bind(&client.use_game_disk)
         .execute(&self.pool)
         .await?;
 
-        tracing::info!(
-            "Client '{}' created with MAC {}",
-            client.name,
-            client.mac_address
-        );
+        tracing::info!("Client '{}' created with MAC {}", client.name, client.mac);
         Ok(client)
     }
 
@@ -243,31 +270,49 @@ impl ClientManager {
         if let Some(name) = req.name {
             client.name = name;
         }
-        if let Some(ip) = req.ip_address {
-            client.ip_address = Some(ip);
+        if let Some(ip) = req.ip {
+            client.ip = ip;
         }
-        if let Some(image_id) = req.image_id {
-            client.image_id = image_id;
+        if let Some(master) = req.master {
+            client.master = master;
         }
-        if let Some(boot_mode) = req.boot_mode {
-            client.boot_mode = boot_mode;
+        if let Some(snapshot) = req.snapshot {
+            client.snapshot = Some(snapshot);
+        }
+        if let Some(keep_writeback) = req.keep_writeback {
+            client.keep_writeback = Some(keep_writeback);
+        }
+        if let Some(use_game_disk) = req.use_game_disk {
+            client.use_game_disk = Some(use_game_disk);
         }
         if let Some(enabled) = req.enabled {
             client.enabled = enabled;
         }
         client.updated_at = Utc::now();
+        client.last_modified = Some(client.updated_at.format("%Y-%m-%d %H:%M:%S").to_string());
 
         sqlx::query(
             r#"
-            UPDATE clients 
-            SET name = ?, ip_address = ?, image_id = ?, boot_mode = ?, enabled = ?, updated_at = ? 
+            UPDATE clients
+            SET name = ?, ip = ?, master = ?, snapshot = ?, block_store = ?, target_iqn = ?,
+                writeback = ?, last_modified = ?, block_device = ?, status = ?, mode = ?,
+                keep_writeback = ?, use_game_disk = ?, enabled = ?, updated_at = ?
             WHERE id = ?
             "#,
         )
         .bind(&client.name)
-        .bind(&client.ip_address)
-        .bind(&client.image_id)
-        .bind(&client.boot_mode)
+        .bind(&client.ip)
+        .bind(&client.master)
+        .bind(&client.snapshot)
+        .bind(&client.block_store)
+        .bind(&client.target_iqn)
+        .bind(&client.writeback)
+        .bind(&client.last_modified)
+        .bind(&client.block_device)
+        .bind(&client.status)
+        .bind(&client.mode)
+        .bind(&client.keep_writeback)
+        .bind(&client.use_game_disk)
         .bind(client.enabled)
         .bind(client.updated_at.to_rfc3339())
         .bind(&client.id)

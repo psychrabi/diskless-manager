@@ -35,6 +35,11 @@ impl AppState {
         // Perform migration from config.json if it exists and DB is empty
         Self::migrate_from_json(&config_path, &pool, &mut settings).await?;
 
+        // Load config from database and populate the cache
+        if let Ok(config) = crate::config::read_config_db(&pool).await {
+            crate::config::set_config(&config);
+        }
+
         tracing::info!("Database initialized at {}", db_path.display());
 
         Ok(Self {

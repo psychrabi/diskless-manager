@@ -2,6 +2,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use app_lib::types::AddClientRequest;
+use app_lib::client;
+use app_lib::state::AppState;
 use clap::{Parser, Subcommand};
 use tracing::info;
 
@@ -59,10 +61,10 @@ fn main() {
                 use_game_disk,
             };
 
-            let state = app_lib::state::AppState::new()
+            let state = AppState::new()
                 .await
                 .expect("Failed to initialize AppState");
-            match app_lib::client::add_client_impl(&state, req).await {
+            match client::add_client_impl(&state, req).await {
                 Ok(v) => info!("Success auto adding: {}", v),
                 Err(e) => {
                     eprintln!("Error: {}", e);

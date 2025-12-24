@@ -80,7 +80,7 @@ subnet {subnet} netmask {netmask} {{
         let clients = client_manager.list().await?;
 
         for client in clients {
-            if let Some(ip) = &client.ip_address {
+            if !client.ip.is_empty() && client.ip != "N/A" {
                 dhcp_config.push_str(&format!(
                     r#"
 host {name} {{
@@ -90,8 +90,8 @@ host {name} {{
 }}
 "#,
                     name = client.name,
-                    mac = client.mac_address,
-                    ip = ip,
+                    mac = client.mac,
+                    ip = client.ip,
                 ));
             }
         }

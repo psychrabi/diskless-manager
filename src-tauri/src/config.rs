@@ -1,8 +1,6 @@
 use once_cell::sync::OnceCell;
 use std::sync::RwLock;
 
-use std::fs;
-
 extern crate dirs;
 use crate::cmd::append_log;
 use crate::types::AppConfig;
@@ -15,9 +13,9 @@ static CONFIG_CACHE: OnceCell<RwLock<AppConfig>> = OnceCell::new();
 
 pub fn get_config() -> AppConfig {
     let cache = CONFIG_CACHE.get_or_init(|| {
-        // Fallback to reading from disk if DB not initialized yet (should not happen after setup)
-        let config = read_config_legacy();
-        RwLock::new(config)
+        // Initialize with default config - the actual config should be loaded from DB
+        // and cached when the application starts up via read_config_db
+        RwLock::new(AppConfig::default())
     });
     cache.read().unwrap().clone()
 }
@@ -26,25 +24,6 @@ pub fn set_config(config: &AppConfig) {
     let cache = CONFIG_CACHE.get_or_init(|| RwLock::new(config.clone()));
     let mut w = cache.write().unwrap();
     *w = config.clone();
-}
-
-pub fn reload_config_from_disk() {
-    let config = read_config_legacy();
-    set_config(&config);
-}
-
-// Internal helper for legacy reading
-fn read_config_legacy() -> AppConfig {
-    dirs::config_dir()
-        .map(|path| {
-            let config_path = path.join("com.diskless.local").join("config.json");
-            if let Ok(content) = fs::read_to_string(config_path) {
-                serde_json::from_str(&content).unwrap_or_default()
-            } else {
-                AppConfig::default()
-            }
-        })
-        .unwrap_or_default()
 }
 
 pub async fn write_config(pool: &sqlx::SqlitePool, config: &AppConfig) -> Result<(), String> {
@@ -78,8 +57,8 @@ pub async fn write_config(pool: &sqlx::SqlitePool, config: &AppConfig) -> Result
         sqlx::query(
             r#"
             INSERT OR REPLACE INTO clients (
-                id, name, mac, ip, master, snapshot, block_store, target_iqn, 
-                writeback, block_device, status, mode, pxe_mode, keep_writeback, 
+                id, name, mac, ip, master, snapshot, block_store, target_iqn,
+                writeback, block_device, status, mode, pxe_mode, keep_writeback,
                 use_game_disk, created_at, last_modified
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
@@ -176,9 +155,9 @@ pub async fn read_config_db(pool: &sqlx::SqlitePool) -> Result<AppConfig, String
     // Get clients from DB
     let clients = sqlx::query_as::<_, ClientRow>(
         r#"
-        SELECT id, name, mac, ip, master, snapshot, block_store, target_iqn, 
-               writeback, block_device, status, mode, pxe_mode, keep_writeback, 
-               use_game_disk, created_at, last_modified 
+        SELECT id, name, mac, ip, master, snapshot, block_store, target_iqn,
+               writeback, block_device, status, mode, pxe_mode, keep_writeback,
+               use_game_disk, created_at, last_modified
         FROM clients
         "#,
     )
@@ -208,7 +187,7 @@ pub async fn read_config_db(pool: &sqlx::SqlitePool) -> Result<AppConfig, String
         });
     }
 
-    // Update cache
+    // Update cache with the loaded config
     set_config(&config);
     Ok(config)
 }

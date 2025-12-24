@@ -23,13 +23,11 @@ pub mod state;
 
 use serde::Serialize;
 use std::sync::{Arc, RwLock};
-use sysinfo::System;
-
 use tauri::Manager;
 
 use state::AppState;
 
-use crate::cmd::{append_log, get_server_ip};
+use crate::cmd::append_log;
 
 // Legacy constants for backward compatibility - prefer using AppConfig
 const DHCP_CONFIG_PATH: &str = "/etc/dhcp/dhcpd.conf";

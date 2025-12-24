@@ -9,7 +9,6 @@ use crate::iscsi::{cleanup_iscsi_target, setup_iscsi_target, setup_iscsi_target_
 use crate::state::AppState;
 use crate::types::{AddClientRequest, Client, ControlRequest};
 use crate::zfs::{get_master_os, zfs_clone, zfs_destroy, zfs_exists};
-use serde_json::json;
 use sqlx::SqlitePool;
 use tauri::State;
 use tracing::{debug, error, info, warn};
@@ -971,8 +970,8 @@ pub async fn delete_client(
     // Also attempt to delete from SQL clients table (best-effort)
     let db_result = sqlx::query(
         r#"
-        DELETE FROM clients 
-        WHERE id = ?1 OR name = ?2 OR mac_address = ?3
+        DELETE FROM clients
+        WHERE id = ?1 OR name = ?2 OR mac = ?3
         "#,
     )
     .bind(&client_id)

@@ -34,6 +34,13 @@ pub async fn add_client_command(
             format!("Client added but DHCP config update failed: {}", e)
         })?;
         tracing::info!("DHCP configuration regenerated after adding client");
+
+        // Reload DHCP service to apply changes
+        if let Err(e) = dhcp_service.reload().await {
+            tracing::warn!("Failed to reload DHCP service: {}", e);
+        } else {
+            tracing::info!("DHCP service reloaded successfully after adding client");
+        }
     }
 
     Ok(client)
@@ -60,6 +67,13 @@ pub async fn update_client_command(
             format!("Client updated but DHCP config update failed: {}", e)
         })?;
         tracing::info!("DHCP configuration regenerated after updating client");
+
+        // Reload DHCP service to apply changes
+        if let Err(e) = dhcp_service.reload().await {
+            tracing::warn!("Failed to reload DHCP service: {}", e);
+        } else {
+            tracing::info!("DHCP service reloaded successfully after updating client");
+        }
     }
 
     Ok(client)
@@ -79,6 +93,13 @@ pub async fn delete_client_command(state: State<'_, AppState>, id: String) -> Re
             format!("Client deleted but DHCP config update failed: {}", e)
         })?;
         tracing::info!("DHCP configuration regenerated after deleting client");
+
+        // Reload DHCP service to apply changes
+        if let Err(e) = dhcp_service.reload().await {
+            tracing::warn!("Failed to reload DHCP service: {}", e);
+        } else {
+            tracing::info!("DHCP service reloaded successfully after deleting client");
+        }
     }
 
     Ok(())
