@@ -27,3 +27,5 @@ src-tauri/config.json
 ./src-tauri/config.json
 .cursor/*
 .env
+.qwen/
+gha-creds-*.json

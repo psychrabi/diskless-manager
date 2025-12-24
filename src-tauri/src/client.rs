@@ -9,6 +9,7 @@ use crate::iscsi::{cleanup_iscsi_target, setup_iscsi_target, setup_iscsi_target_
 use crate::state::AppState;
 use crate::types::{AddClientRequest, Client, ControlRequest};
 use crate::zfs::{get_master_os, zfs_clone, zfs_destroy, zfs_exists};
+use serde_json::json;
 use sqlx::SqlitePool;
 use tauri::State;
 use tracing::{debug, error, info, warn};
@@ -965,7 +966,24 @@ pub async fn delete_client(
     }
 
     // Remove from configuration
-    if !delete_client_config(&state.db_pool, &client_id).await {
+    let deleted_from_config = delete_client_config(&state.db_pool, &client_id).await;
+
+    // Also attempt to delete from SQL clients table (best-effort)
+    let db_result = sqlx::query(
+        r#"
+        DELETE FROM clients 
+        WHERE id = ?1 OR name = ?2 OR mac_address = ?3
+        "#,
+    )
+    .bind(&client_id)
+    .bind(&client.name)
+    .bind(&client.mac)
+    .execute(&state.db_pool)
+    .await;
+
+    let db_rows_affected = db_result.as_ref().map(|r| r.rows_affected()).unwrap_or(0);
+
+    if !deleted_from_config {
         return Err(AppError::Config(format!(
             "Failed to delete client {} from configuration",
             client_id

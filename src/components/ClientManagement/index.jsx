@@ -138,7 +138,7 @@ const ClientManagement = () => {
           icon={PlusCircle}
           disabled={masters.length === 0}
         >
-          Add Client{" "}
+          Add Client
           {masters.length === 0 && (
             <span className="text-xs text-error ml-2 self-center">
               (Requires Master Image)
@@ -148,17 +148,37 @@ const ClientManagement = () => {
       }
     >
       <div className="min-h-[calc(100vh-15rem)]">
-        <MemoizedClientTable
-          handleClientContextMenu={handleClientContextMenu}
-        />
-        <MemoizedContextMenu
-          isOpen={contextMenu.isOpen}
-          xPos={contextMenu.x}
-          yPos={contextMenu.y}
-          targetClient={contextMenu.client}
-          onClose={closeContextMenu}
-          actions={contextActions}
-        />
+        {clients.length === 0 ? (
+          <div className="card bg-base-100 shadow-xl border border-base-200/50">
+            <div className="card-body items-center text-center p-12">
+              <div className="w-20 h-20 bg-base-200 rounded-full flex items-center justify-center text-4xl mb-4">
+                💻
+              </div>
+              <h2 className="card-title text-2xl mb-2">No Clients Registered</h2>
+              <p className="text-base-content/60 max-w-md mb-6">
+                Add your first PXE boot client to get started managing your
+                diskless infrastructure.
+              </p>
+              <button className="btn btn-primary" onClick={handleClientFormModalOpen}>
+                Add Client
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+
+            <MemoizedClientTable
+              handleClientContextMenu={handleClientContextMenu}
+            />
+            <MemoizedContextMenu
+              isOpen={contextMenu.isOpen}
+              xPos={contextMenu.x}
+              yPos={contextMenu.y}
+              targetClient={contextMenu.client}
+              onClose={closeContextMenu}
+              actions={contextActions}
+            />
+          </>)}
       </div>
       <ClientFormModal
         client={client}
