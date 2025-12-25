@@ -8,6 +8,9 @@
     "process:default",
     "dialog:default",
     "fs:default",
+    "fs:allow-write-text-file",
+    "fs:allow-write-file",
+    "fs:allow-mkdir",
     "notification:default",
     "os:default",
     "shell:default"

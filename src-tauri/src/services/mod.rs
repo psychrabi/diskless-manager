@@ -9,7 +9,7 @@ pub use dhcp::DhcpService;
 pub use http::HttpService;
 pub use iscsi::IscsiService;
 pub use nfs::NfsService;
-pub use samba::SambaService; // Exported but not used in ServiceManager yet
+pub use samba::SambaService;
 pub use tftp::TftpService;
 
 use crate::core::config::Settings;
@@ -26,12 +26,13 @@ pub struct ServiceStatus {
 }
 
 pub struct ServiceManager {
-    settings: Settings,
-    dhcp: DhcpService,
-    tftp: TftpService,
-    iscsi: IscsiService,
-    nfs: NfsService,
-    http: HttpService, // TODO: Implement HTTP service
+    pub settings: Settings,
+    pub dhcp: DhcpService,
+    pub tftp: TftpService,
+    pub iscsi: IscsiService,
+    pub nfs: NfsService,
+    pub http: HttpService,
+    pub samba: SambaService,
 }
 
 impl ServiceManager {
@@ -42,6 +43,7 @@ impl ServiceManager {
             iscsi: IscsiService::new(settings.clone()),
             nfs: NfsService::new(settings.clone()),
             http: HttpService::new(settings.clone()),
+            samba: SambaService::new(settings.clone()),
             settings,
         }
     }
@@ -55,6 +57,9 @@ impl ServiceManager {
         }
         if self.settings.nfs.enabled {
             self.nfs.generate_config().await?;
+        }
+        if self.settings.samba.enabled {
+            self.samba.generate_config().await?;
         }
         // HTTP config is generated on start
         self.http.generate_config().await?;
@@ -74,6 +79,9 @@ impl ServiceManager {
         if self.settings.nfs.enabled {
             self.nfs.start().await?;
         }
+        if self.settings.samba.enabled {
+            self.samba.start().await?;
+        }
         // Always start HTTP for iPXE boot
         self.http.start().await?;
         Ok(())
@@ -85,6 +93,7 @@ impl ServiceManager {
         self.tftp.stop().await?;
         self.iscsi.stop().await?;
         self.nfs.stop().await?;
+        self.samba.stop().await?;
         Ok(())
     }
 
@@ -95,6 +104,7 @@ impl ServiceManager {
         statuses.insert("iscsi".to_string(), self.iscsi.status().await?);
         statuses.insert("nfs".to_string(), self.nfs.status().await?);
         statuses.insert("http".to_string(), self.http.status().await?);
+        statuses.insert("samba".to_string(), self.samba.status().await?);
         Ok(statuses)
     }
 
@@ -105,6 +115,7 @@ impl ServiceManager {
             "iscsi" => self.iscsi.start().await,
             "nfs" => self.nfs.start().await,
             "http" => self.http.start().await,
+            "samba" => self.samba.start().await,
             _ => Err(anyhow::anyhow!("Unknown service: {}", service)),
         }
     }
@@ -116,6 +127,7 @@ impl ServiceManager {
             "iscsi" => self.iscsi.stop().await,
             "nfs" => self.nfs.stop().await,
             "http" => self.http.stop().await,
+            "samba" => self.samba.stop().await,
             _ => Err(anyhow::anyhow!("Unknown service: {}", service)),
         }
     }
@@ -127,6 +139,7 @@ impl ServiceManager {
             "iscsi" => self.iscsi.status().await,
             "nfs" => self.nfs.status().await,
             "http" => self.http.status().await,
+            "samba" => self.samba.status().await,
             _ => Err(anyhow::anyhow!("Unknown service: {}", service)),
         }
     }
@@ -138,6 +151,7 @@ impl ServiceManager {
             "iscsi" => self.iscsi.reload().await,
             "nfs" => self.nfs.reload().await,
             "http" => self.http.reload().await,
+            "samba" => self.samba.reload().await,
             _ => Err(anyhow::anyhow!("Unknown service: {}", service)),
         }
     }
@@ -154,6 +168,31 @@ impl ServiceManager {
     pub async fn remove_iscsi_target(&self, name: &str) -> anyhow::Result<()> {
         self.iscsi.remove_target(name).await
     }
+
+    pub async fn get_config(&self, service: &str) -> anyhow::Result<String> {
+        // Map the service names that may come from the frontend to internal service names
+        let internal_service = match service {
+            "apache2" => "http",
+            "smbd" => "samba",
+            "tftpd-hpa" => "tftp",
+            "isc-dhcp-server" => "dhcp",
+            "nfs-kernel-server" => "nfs",
+            "rtslib-fb-targetctl" => "iscsi",
+            // If it's already an internal service name, use it as is
+            "http" | "samba" | "tftp" | "dhcp" | "nfs" | "iscsi" => service,
+            _ => return Err(anyhow::anyhow!("Unknown service: {}", service)),
+        };
+
+        match internal_service {
+            "dhcp" => self.dhcp.get_config().await,
+            "tftp" => self.tftp.get_config().await,
+            "iscsi" => self.iscsi.get_config().await,
+            "nfs" => self.nfs.get_config().await,
+            "http" => self.http.get_config().await,
+            "samba" => self.samba.get_config().await,
+            _ => Err(anyhow::anyhow!("Unknown service: {}", internal_service)),
+        }
+    }
 }
 
 // Helper function to check if a systemd service is running
@@ -169,13 +208,13 @@ pub async fn is_systemd_service_running(service: &str) -> anyhow::Result<bool> {
 // Helper function to get PID of a service
 pub async fn get_service_pid(service: &str) -> anyhow::Result<Option<u32>> {
     let output = Command::new("systemctl")
-        .args(["show", "-p", "MainPID", service])
+        .args(["show", "-p", "ExecMainPID", service])
         .output()
         .await?;
 
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
-        if let Some(pid_str) = stdout.strip_prefix("MainPID=") {
+        if let Some(pid_str) = stdout.strip_prefix("ExecMainPID=") {
             if let Ok(pid) = pid_str.trim().parse::<u32>() {
                 if pid > 0 {
                     return Ok(Some(pid));

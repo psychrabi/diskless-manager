@@ -10,7 +10,6 @@ pub struct Client {
     pub mac: String,
     pub ip: String,
     pub master: String, // Using 'master' to match legacy model
-    pub boot_mode: String,
     pub enabled: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -70,7 +69,6 @@ impl Client {
             mac,
             ip: req.ip,
             master: req.master,
-            boot_mode: "uefi".to_string(), // Default to UEFI for new clients
             enabled: true,
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -123,7 +121,6 @@ struct ClientRow {
     mac: String,
     ip: String,
     master: String,
-    boot_mode: String,
     enabled: bool,
     created_at: String,
     updated_at: String,
@@ -147,7 +144,7 @@ impl ClientManager {
     pub async fn list(&self) -> anyhow::Result<Vec<Client>> {
         let rows = sqlx::query_as::<_, ClientRow>(
             r#"
-            SELECT id, name, mac, ip, master, boot_mode, enabled, created_at, updated_at,
+            SELECT id, name, mac, ip, master, enabled, created_at, updated_at,
                    snapshot, block_store, target_iqn, writeback, last_modified,
                    block_device, status, mode, keep_writeback, use_game_disk
             FROM clients
@@ -165,10 +162,13 @@ impl ClientManager {
                 mac: row.mac,
                 ip: row.ip,
                 master: row.master,
-                boot_mode: row.boot_mode,
                 enabled: row.enabled,
-                created_at: DateTime::parse_from_rfc3339(&row.created_at).expect("Failed to parse created_at").into(),
-                updated_at: DateTime::parse_from_rfc3339(&row.updated_at).expect("Failed to parse updated_at").into(),
+                created_at: DateTime::parse_from_rfc3339(&row.created_at)
+                    .expect("Failed to parse created_at")
+                    .into(),
+                updated_at: DateTime::parse_from_rfc3339(&row.updated_at)
+                    .expect("Failed to parse updated_at")
+                    .into(),
                 snapshot: row.snapshot,
                 block_store: row.block_store,
                 target_iqn: row.target_iqn,
@@ -189,7 +189,7 @@ impl ClientManager {
     pub async fn get(&self, id: &str) -> anyhow::Result<Client> {
         let row = sqlx::query_as::<_, ClientRow>(
             r#"
-            SELECT id, name, mac, ip, master, boot_mode, enabled, created_at, updated_at,
+            SELECT id, name, mac, ip, master, enabled, created_at, updated_at,
                    snapshot, block_store, target_iqn, writeback, last_modified,
                    block_device, status, mode, keep_writeback, use_game_disk
             FROM clients
@@ -209,10 +209,14 @@ impl ClientManager {
             mac: row.mac,
             ip: row.ip,
             master: row.master,
-            boot_mode: row.boot_mode,
+
             enabled: row.enabled,
-            created_at: DateTime::parse_from_rfc3339(&row.created_at).expect("Failed to parse created_at").into(),
-            updated_at: DateTime::parse_from_rfc3339(&row.updated_at).expect("Failed to parse updated_at").into(),
+            created_at: DateTime::parse_from_rfc3339(&row.created_at)
+                .expect("Failed to parse created_at")
+                .into(),
+            updated_at: DateTime::parse_from_rfc3339(&row.updated_at)
+                .expect("Failed to parse updated_at")
+                .into(),
             snapshot: row.snapshot,
             block_store: row.block_store,
             target_iqn: row.target_iqn,
@@ -232,7 +236,7 @@ impl ClientManager {
 
         sqlx::query(
             r#"
-            INSERT INTO clients (id, name, mac, ip, master, boot_mode, enabled, created_at, updated_at,
+            INSERT INTO clients (id, name, mac, ip, master, enabled, created_at, updated_at,
                                 snapshot, block_store, target_iqn, writeback, last_modified,
                                 block_device, status, mode, keep_writeback, use_game_disk)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -243,7 +247,6 @@ impl ClientManager {
         .bind(&client.mac)
         .bind(&client.ip)
         .bind(&client.master)
-        .bind(&client.boot_mode)
         .bind(client.enabled)
         .bind(client.created_at.to_rfc3339())
         .bind(client.updated_at.to_rfc3339())

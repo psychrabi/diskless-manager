@@ -24,16 +24,14 @@ export const useSettings = () => {
         success("DHCP configuration saved successfully", "success");
         return true;
       } catch (err) {
-        error(
-          "Failed to configure DHCP server",
-          err.message || "An unknown error occurred",
-        );
+        console.log(err);
+        error("Failed to configure DHCP server: " + (err.message ?? err));
         return false;
       } finally {
         setLoading(false);
       }
     },
-    [success, error],
+    [success, error]
   );
 
   const updateTftp = useCallback(
@@ -50,14 +48,14 @@ export const useSettings = () => {
       } catch (err) {
         error(
           "Failed to configure TFTP server",
-          err.message || "An unknown error occurred",
+          err.message || "An unknown error occurred"
         );
         return false;
       } finally {
         setLoading(false);
       }
     },
-    [success, error],
+    [success, error]
   );
 
   const updateHttp = useCallback(
@@ -74,14 +72,14 @@ export const useSettings = () => {
       } catch (err) {
         error(
           "Failed to configure HTTP server",
-          err.message || "An unknown error occurred",
+          err.message || "An unknown error occurred"
         );
         return false;
       } finally {
         setLoading(false);
       }
     },
-    [error, success],
+    [error, success]
   );
 
   const updatePassword = useCallback(
@@ -99,14 +97,14 @@ export const useSettings = () => {
       } catch (err) {
         error(
           "Failed to update admin password",
-          err.message || "An unknown error occurred",
+          err.message || "An unknown error occurred"
         );
         return false;
       } finally {
         setLoading(false);
       }
     },
-    [error, success],
+    [error, success]
   );
 
   const getLicenseInfo = useCallback(async () => {
@@ -125,7 +123,7 @@ export const useSettings = () => {
         const resp = await invoke("activate_license", { key });
         success(
           "License Activated",
-          resp?.message || "License activated successfully",
+          resp?.message || "License activated successfully"
         );
         return true;
       } catch (err) {
@@ -135,7 +133,7 @@ export const useSettings = () => {
         setLoading(false);
       }
     },
-    [success, error],
+    [success, error]
   );
 
   return {

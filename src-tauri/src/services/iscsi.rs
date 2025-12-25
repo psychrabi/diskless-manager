@@ -1,6 +1,7 @@
 use crate::core::config::Settings;
 use crate::core::image::Image;
 use crate::services::{get_service_pid, is_systemd_service_running, ServiceStatus};
+use std::path::PathBuf;
 use tokio::process::Command;
 
 pub struct IscsiService {
@@ -145,19 +146,43 @@ impl IscsiService {
         Ok(())
     }
 
-    pub async fn status(&self) -> anyhow::Result<ServiceStatus> {
-        let running = is_systemd_service_running("target").await?;
-        // target.service usually exits after configuration, but there might be a kernel thread or
-        // we can check if the modules are loaded. However, usually checking 'target' service status is enough
-        // or checking for 'configfs' mount.
-        // For simplicity, let's keep checking the systemd service 'target' (or 'targetcli' depending on distro).
-        // On many systems it is 'target.service'.
+    pub async fn get_config(&self) -> anyhow::Result<String> {
+        // Use targetcli to get the current configuration
+        let output = tokio::process::Command::new("pkexec")
+            .arg("targetcli")
+            .arg("ls")
+            .output()
+            .await?;
 
-        let header_pid = get_service_pid("target").await?; // Might be None as it's a oneshot service often
+        if output.status.success() {
+            let config = String::from_utf8_lossy(&output.stdout);
+            Ok(config.to_string())
+        } else {
+            // If targetcli fails, fall back to reading the saveconfig.json file
+            let config_path = PathBuf::from("/etc/target/saveconfig.json");
+            if config_path.exists() {
+                let content = std::fs::read_to_string(&config_path)?;
+                Ok(content)
+            } else {
+                // Return a default configuration structure
+                let default_config = r#"{
+    "storage_objects": {},
+    "targets": {}
+}"#;
+                Ok(default_config.to_string())
+            }
+        }
+    }
+
+    pub async fn status(&self) -> anyhow::Result<ServiceStatus> {
+        let running = is_systemd_service_running("rtslib-fb-targetctl").await?;
+        // Check the actual service that we start/stop
+
+        let pid = get_service_pid("rtslib-fb-targetctl").await?;
 
         Ok(ServiceStatus {
             running,
-            pid: header_pid,
+            pid,
             message: if running {
                 "iSCSI target service is active".to_string()
             } else {

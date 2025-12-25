@@ -57,7 +57,7 @@ pub struct HTTPConfig {
 }
 
 /// Samba share configuration
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SambaShare {
     pub name: String,
     pub path: String,

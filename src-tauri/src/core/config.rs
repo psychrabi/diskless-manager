@@ -9,6 +9,8 @@ pub struct Settings {
     pub iscsi: IscsiConfig,
     pub nfs: NfsConfig,
     #[serde(default)]
+    pub http: HTTPConfig,
+    #[serde(default)]
     pub samba: SambaConfig,
     pub storage: StorageConfig,
 }
@@ -53,6 +55,23 @@ impl Default for DhcpConfig {
             gateway: "192.168.1.1".to_string(),
             dns_servers: vec!["8.8.8.8".to_string(), "8.8.4.4".to_string()],
             lease_time: 86400,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HTTPConfig {
+    pub enabled: bool,
+    pub root_dir: PathBuf,
+    pub port: u16,
+}
+
+impl Default for HTTPConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            root_dir: PathBuf::from("/var/lib/tftpboot"),
+            port: 80,
         }
     }
 }
@@ -177,6 +196,7 @@ impl Default for Settings {
             tftp: TftpConfig::default(),
             iscsi: IscsiConfig::default(),
             nfs: NfsConfig::default(),
+            http: HTTPConfig::default(),
             samba: SambaConfig::default(),
             storage: StorageConfig::default(),
         }

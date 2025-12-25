@@ -1,13 +1,13 @@
-import { Server } from "lucide-react";
+import { PlayCircle, Server, StopCircle } from "lucide-react";
 import { useCallback, useState } from "react";
 import { useServiceManager } from "../../hooks/useServiceManager";
-import { Card } from "../ui";
+import { Button, Card } from "../ui";
 import BootScript from "./BootScript";
 import ServiceConfigModal from "./ServiceConfigModal";
 import ServicesList from "./ServicesList";
 
 const ServiceManagement = () => {
-  const { fetchServiceConfig } = useServiceManager();
+  const { fetchServiceConfig, startAllServices, stopAllServices } = useServiceManager();
   const [modalState, setModalState] = useState({
     isOpen: false,
     serviceKey: "",
@@ -50,7 +50,28 @@ const ServiceManagement = () => {
   }, []);
 
   return (
-    <Card title="Service Management" icon={Server} className="bg-base-300 ">
+    <Card title="Service Management" icon={Server} className="bg-base-300" actions={
+      <>
+        <Button
+          icon={PlayCircle}
+          variant="success"
+
+          onClick={() => startAllServices()}
+          title="Start all services"
+        >
+          Start All
+        </Button>
+        <Button
+          icon={StopCircle}
+          variant="destructive"
+
+          onClick={() => stopAllServices()}
+          title="Stop all services"
+        >
+          Stop All
+        </Button>
+      </>
+    }>
       <div className="min-h-[calc(100vh-13rem)] space-y-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           <ServicesList onViewConfig={handleViewConfig} />

@@ -49,8 +49,31 @@ export const useServiceManager = () => {
     }
   };
 
+  const startAllServices = async () => {
+    try {
+      const token = localStorage.getItem("authToken") || "";
+      await invoke("start_all_services", { token });
+      success("All services started successfully");
+      fetchServices();
+    } catch (err) {
+      error(`Failed to start services: ${err.message || err} `);
+    }
+  };
+
+  const stopAllServices = async () => {
+    try {
+      const token = localStorage.getItem("authToken") || "";
+      await invoke("stop_all_services", { token });
+      success("All services stopped successfully");
+      fetchServices();
+    } catch (err) {
+      error(`Failed to stop services: ${err.message || err} `);
+    }
+  };
   return {
     fetchServiceConfig,
     handleConfigSave,
+    startAllServices,
+    stopAllServices,
   };
 };

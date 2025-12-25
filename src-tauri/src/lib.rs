@@ -36,54 +36,6 @@ pub const TFTP_AUTOEXEC_PATH: &str = "/srv/tftp/autoexec.ipxe";
 // Cache for server info to avoid frequent system calls
 use once_cell::sync::Lazy;
 
-static SERVER_INFO_CACHE: Lazy<Arc<RwLock<ServerInfoCache>>> =
-    Lazy::new(|| Arc::new(RwLock::new(ServerInfoCache::new())));
-
-#[derive(Debug, Clone)]
-struct ServerInfoCache {
-    info: ServerInfo,
-    last_updated: std::time::SystemTime,
-    ttl: std::time::Duration,
-}
-
-impl ServerInfoCache {
-    fn new() -> Self {
-        ServerInfoCache {
-            info: ServerInfo {
-                os_name: None,
-                kernel_version: None,
-                host_name: None,
-                total_memory_mb: 0,
-                cpu_count: 0,
-                server_ip: String::new(),
-            },
-            last_updated: std::time::SystemTime::UNIX_EPOCH,
-            ttl: std::time::Duration::from_secs(60), // 60 second cache TTL
-        }
-    }
-
-    fn is_fresh(&self) -> bool {
-        self.last_updated
-            .elapsed()
-            .map(|elapsed| elapsed < self.ttl)
-            .unwrap_or(false)
-    }
-
-    fn needs_refresh(&self) -> bool {
-        !self.is_fresh()
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct ServerInfo {
-    os_name: Option<String>,
-    kernel_version: Option<String>,
-    host_name: Option<String>,
-    total_memory_mb: u64,
-    cpu_count: usize,
-    server_ip: String,
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -139,15 +91,22 @@ pub fn run() {
             disks::create_zfs_dataset,
             disks::delete_zfs_dataset,
             disks::rename_zfs_dataset,
-            service::get_services,
-            service::control_service,
+            // Old service commands (to be replaced gradually)
             service::install_service,
-            service::get_service_config,
             service::save_service_config,
             service::configure_dhcp_server,
             service::configure_tftp_server,
             service::configure_apache_server,
             service::configure_samba_server,
+            // New services architecture commands
+            commands::services::list_services,
+            commands::services::get_service_status,
+            commands::services::get_service_config,
+            commands::services::start_service,
+            commands::services::stop_service,
+            commands::services::restart_service,
+            commands::services::start_all_services,
+            commands::services::stop_all_services,
             cmd::list_disks,
             cmd::get_ram_usage,
             cmd::clear_ram_cache,
@@ -170,14 +129,6 @@ pub fn run() {
             zfs::set_default_image,
             zfs::rollback_image_snapshot,
             zfs::get_default_image_overview,
-            // Service commands
-            commands::services::list_services,
-            commands::services::get_service_status,
-            commands::services::start_service,
-            commands::services::stop_service,
-            commands::services::restart_service,
-            commands::services::start_all_services,
-            commands::services::stop_all_services,
             // System commands
             commands::system::get_system_info,
             commands::system::get_server_status,

@@ -55,18 +55,20 @@ impl AppState {
                 mac TEXT NOT NULL UNIQUE,
                 ip TEXT NOT NULL UNIQUE,
                 master TEXT,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT,
+                updated_at TEXT
                 snapshot TEXT,
                 block_store TEXT,
                 target_iqn TEXT,
                 writeback TEXT,
+                last_modified TEXT
                 block_device TEXT,
                 status TEXT,
                 mode TEXT,
                 pxe_mode TEXT NOT NULL DEFAULT 'uefi',
                 keep_writeback INTEGER NOT NULL DEFAULT 1,
                 use_game_disk INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT,
-                last_modified TEXT
             )
             "#,
         )
