@@ -2,11 +2,10 @@ use once_cell::sync::OnceCell;
 use std::sync::RwLock;
 
 extern crate dirs;
-use crate::cmd::append_log;
-use crate::types::AppConfig;
-use serde_json::json;
-
 use crate::state::AppState;
+use crate::types::AppConfig;
+use log::info;
+use serde_json::json;
 use tauri::State;
 
 static CONFIG_CACHE: OnceCell<RwLock<AppConfig>> = OnceCell::new();
@@ -94,7 +93,7 @@ pub async fn read_config(state: State<'_, AppState>) -> Result<AppConfig, String
 }
 
 pub async fn read_config_db(pool: &sqlx::SqlitePool) -> Result<AppConfig, String> {
-    append_log("DEBUG", "read_config_db called");
+    info!("read_config_db called");
 
     let mut config = AppConfig::default();
 

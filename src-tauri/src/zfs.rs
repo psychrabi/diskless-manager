@@ -2,6 +2,7 @@
 
 use chrono::Local;
 
+use log::info;
 use regex::Regex;
 use serde_json::{json, Value};
 use std::collections::HashSet;
@@ -9,7 +10,7 @@ use std::process::Command;
 use std::sync::{Arc, RwLock};
 use tracing::debug;
 
-use crate::cmd::{append_log, run_command, run_command_check, run_command_output_no_sudo};
+use crate::cmd::{run_command, run_command_check, run_command_output_no_sudo};
 use crate::types::image::CreateImageRequest;
 use crate::types::{CreateZpoolRequest, Master, MasterData, Snapshot};
 use crate::{
@@ -273,10 +274,7 @@ async fn create_zvol(
         return Err(AppError::Config("Failed to update config.json".to_string()));
     }
 
-    append_log(
-        "INFO",
-        &format!("create_{} start: {}", zvol_type, full_name),
-    );
+    info!("create_{} start: {}", zvol_type, full_name);
     Ok(full_name)
 }
 
@@ -726,13 +724,10 @@ async fn common_delete(
             if !is_snapshot {
                 let _ = delete_image_config(&state.db_pool, entity).await;
             }
-            append_log(
-                "INFO",
-                &format!(
-                    "delete_{}: {}",
-                    if is_snapshot { "snapshot" } else { "image" },
-                    entity
-                ),
+            info!(
+                "delete_{}: {}",
+                if is_snapshot { "snapshot" } else { "image" },
+                entity
             );
             Ok(json!({
                 "message": format!("{} {} deleted successfully", if is_snapshot { "Snapshot" } else { "Master" }, entity)

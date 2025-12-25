@@ -1,7 +1,7 @@
-use crate::cmd::append_log;
 use crate::config;
 use crate::state::AppState;
 use crate::types::AuthError;
+use log::info;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -84,7 +84,7 @@ pub async fn activate_license(state: State<'_, AppState>, key: &str) -> Result<S
             .map_err(|e| AuthError {
                 message: format!("failed to save license: {}", e),
             })?;
-        append_log("INFO", &format!("Trial License activated: {}", key));
+        info!("Trial License activated: {}", key);
         Ok("Trial License activated".to_string())
     } else {
         // verify with remote
@@ -130,7 +130,7 @@ pub async fn activate_license(state: State<'_, AppState>, key: &str) -> Result<S
                 message: format!("failed to save license: {}", e),
             })?;
 
-        append_log("INFO", &format!("License activated: {}", key));
+        info!("License activated: {}", key);
         Ok("License activated".to_string())
     }
 }

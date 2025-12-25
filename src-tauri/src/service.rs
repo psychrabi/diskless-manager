@@ -1,4 +1,4 @@
-use crate::cmd::{append_log, run_command_async, run_command_output, run_command_output_no_sudo};
+use crate::cmd::{run_command_async, run_command_output, run_command_output_no_sudo};
 use crate::config::{get_config, set_config, write_config};
 use crate::error::AppError;
 use crate::middleware::validate_auth_token_for_command;
@@ -8,6 +8,7 @@ use crate::types::{DHCPConfig, HTTPConfig, PackageStatus, ServiceControlRequest,
 use crate::{DHCP_CLIENTS_PATH, DHCP_CONFIG_PATH, TFTP_AUTOEXEC_PATH};
 use async_process::Command as AsyncCommand;
 use futures::io::AsyncWriteExt;
+use log::info;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::process::{Command, Stdio};
@@ -155,7 +156,7 @@ pub async fn get_services(
     zfs_pool: String,
 ) -> Result<Value, AppError> {
     validate_token(&token)?;
-    append_log("INFO", "get_services called");
+    info!("get_services called");
 
     // Try to get cached data first
     {
@@ -263,7 +264,7 @@ pub async fn get_services(
 #[tauri::command]
 pub async fn get_service_config(token: String, service_key: String) -> Result<Value, AppError> {
     validate_token(&token)?;
-    append_log("INFO", &format!("get_service_config: {}", service_key));
+    info!("get_service_config: {}", service_key);
 
     match service_key.as_str() {
         "zfsutils-linux" => {
@@ -291,7 +292,7 @@ pub async fn get_service_config(token: String, service_key: String) -> Result<Va
             let output = run_command_output(["targetcli", "ls"])
                 .map_err(|e| AppError::Command(format!("targetcli ls failed: {}", e)))?;
             let content = format!("=== TargetCLI Config ===\n\n{}", output);
-            Ok(json!({ "text": content, "path": "targetcli ls" }))
+            Ok(json!({ "text": content, "path": "sudo targetcli ls" }))
         }
         _ => {
             let config_file_map = [
@@ -304,7 +305,7 @@ pub async fn get_service_config(token: String, service_key: String) -> Result<Va
                     "/etc/apache2/sites-available/diskless-server.conf",
                 ),
                 ("smbd", "/etc/samba/smb.conf"),
-                ("exportfs", "/etc/exports"),
+                ("nfs-kernel-server", "/etc/exports"),
             ];
 
             let path = config_file_map
@@ -324,10 +325,7 @@ pub async fn get_service_config(token: String, service_key: String) -> Result<Va
 
             match run_command_output(["cat", path]) {
                 Ok(content) => {
-                    append_log(
-                        "INFO",
-                        &format!("Read {}: {} bytes", service_key, content.len()),
-                    );
+                    info!("Read {}: {} bytes", service_key, content.len());
                     Ok(json!({ "text": content, "path": path }))
                 }
                 Err(e) => Err(AppError::Io(std::io::Error::other(format!(
@@ -346,10 +344,7 @@ pub async fn control_service(
     req: ServiceControlRequest,
 ) -> Result<Value, AppError> {
     validate_token(&token)?;
-    append_log(
-        "INFO",
-        &format!("control_service: {} {}", service_key, req.action),
-    );
+    info!("control_service: {} {}", service_key, req.action);
 
     let service_map = [
         ("rtslib-fb-targetctl", "rtslib-fb-targetctl.service"),

@@ -1,7 +1,8 @@
 use crate::{
-    cmd::{append_log, get_server_ip, run_command, run_command_output},
+    cmd::{get_server_ip, run_command, run_command_output},
     DHCP_CLIENTS_PATH,
 };
+use log::{error, info};
 use regex::Regex;
 use tokio::fs as async_fs;
 
@@ -10,12 +11,9 @@ pub async fn update_dhcp_config(
     dhcp_entry: &str,
     is_new: bool,
 ) -> Result<(), String> {
-    append_log(
-        "INFO",
-        &format!(
-            "update_dhcp_config: client_id={}, is_new={}",
-            client_id, is_new
-        ),
+    info!(
+        "update_dhcp_config: client_id={}, is_new={}",
+        client_id, is_new
     );
 
     // Acquire lock to prevent race conditions
@@ -79,13 +77,13 @@ pub async fn update_dhcp_config(
 
     if let Err(e) = run_command(["mv", &temp_path, DHCP_CLIENTS_PATH]) {
         let msg = format!("Sudo mv failed: {}", e);
-        append_log("ERROR", &msg);
+        error!("{:?}", &msg);
         let _ = async_fs::remove_file(&dhcp_backup_path).await;
         let _ = async_fs::remove_file(&temp_path).await;
         return Err(msg);
     }
 
-    append_log("INFO", &format!("DHCP updated for {}", client_id));
+    info!("DHCP updated for {}", client_id);
     let _ = async_fs::remove_file(&dhcp_backup_path).await;
 
     // Lock is automatically released when lock_file goes out of scope
@@ -115,10 +113,7 @@ pub fn create_dhcp_entry(name: &str, mac: &str, ip: &str, target_iqn: &str) -> S
         target_iqn = target_iqn,
         server_ip = server_ip,
     );
-    append_log(
-        "DEBUG",
-        &format!("DHCP entry for {}: {} bytes", name, entry.len()),
-    );
+    info!("DHCP entry for {}: {} bytes", name, entry.len());
     entry
 }
 

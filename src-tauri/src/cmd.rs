@@ -344,18 +344,6 @@ pub fn log_file_path() -> PathBuf {
     base
 }
 
-/// Append a single line with level and timestamp to the log file.
-/// This is best-effort and should not panic.
-/// NOW DEPRECATED: Redirects to tracing macros.
-pub fn append_log(level: &str, msg: &str) {
-    match level.to_uppercase().as_str() {
-        "ERROR" => tracing::error!("{}", msg),
-        "WARN" | "WARNING" => tracing::warn!("{}", msg),
-        "DEBUG" => tracing::debug!("{}", msg),
-        _ => tracing::info!("{}", msg),
-    }
-}
-
 /// Read the whole log file as a string (returns empty string on error)
 pub fn read_logs() -> String {
     fs::read_to_string(log_file_path()).unwrap_or_default()

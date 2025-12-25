@@ -1,9 +1,9 @@
 //! Authentication module for JWT-based authentication
-use crate::cmd::append_log;
 use crate::types::User;
 use bcrypt::{hash, verify, DEFAULT_COST};
 use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+use log::{info, warn};
 use std::collections::HashMap;
 use std::env;
 
@@ -135,7 +135,7 @@ pub fn login(
     let username = request.username.clone();
     let password = request.password.clone();
 
-    append_log("INFO", &format!("login attempt: user={}", username));
+    info!("login attempt: user={}", username);
 
     // gate login behind activated license
     // ensure_license_valid()?;
@@ -144,12 +144,12 @@ pub fn login(
 
     match &auth_result {
         Ok(response) => {
-            append_log("INFO", &format!("login success: user={}", username));
+            info!("login success: user={}", username);
             // response is a &LoginResponse — return an owned value
             Ok(response.clone())
         }
         Err(_) => {
-            append_log("WARN", &format!("login failed: user={}", username));
+            warn!("login failed: user={}", username);
             Err(AuthError {
                 message: "Invalid username or password".to_string(),
             })
@@ -229,6 +229,6 @@ pub async fn update_admin_password(
             message: format!("Failed to save admin password: {}", e),
         })?;
 
-    append_log("INFO", "admin password updated");
+    info!("admin password updated");
     Ok("Admin password updated successfully".to_string())
 }

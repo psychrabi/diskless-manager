@@ -1,7 +1,7 @@
 use crate::cmd;
 use crate::middleware;
 use crate::types::AuthError;
-
+use log::info;
 /// Return entire log content as string
 #[tauri::command]
 pub fn get_logs(token: String) -> Result<serde_json::Value, String> {
@@ -17,7 +17,7 @@ pub fn get_logs(token: String) -> Result<serde_json::Value, String> {
 pub fn clear_logs(token: String) -> Result<serde_json::Value, String> {
     middleware::validate_auth_token_for_command(&token)
         .map_err(|e| format!("Authentication failed: {}", e.message))?;
-    cmd::append_log("INFO", "Log cleared by user");
+    info!("Log cleared by user");
     cmd::clear_logs().map_err(|e| e.to_string())?;
     Ok(serde_json::json!({ "message": "Logs cleared" }))
 }
