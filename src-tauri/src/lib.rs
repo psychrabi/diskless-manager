@@ -21,13 +21,12 @@ mod core;
 mod services;
 pub mod state;
 
+use log::info;
 use serde::Serialize;
 use std::sync::{Arc, RwLock};
 use tauri::Manager;
 
 use state::AppState;
-
-use crate::cmd::append_log;
 
 // Legacy constants for backward compatibility - prefer using AppConfig
 const DHCP_CONFIG_PATH: &str = "/etc/dhcp/dhcpd.conf";
@@ -123,6 +122,9 @@ pub fn run() {
             auth::login,
             auth::validate_auth_token,
             auth::update_admin_password,
+            auth::initialize_admin_user,
+            auth::check_admin_exists,
+            auth::revoke_token,
             middleware::authenticate,
             client::get_clients,
             client::add_client,
@@ -209,7 +211,7 @@ pub fn run() {
             commands::versions::get_version_history,
         ])
         .setup(|app| {
-            append_log("INFO", "Application startup");
+            info!("Application startup");
             // config.json creation and migration is now handled inside AppState::new() during initialization.
 
             tauri::async_runtime::block_on(async {
@@ -273,7 +275,7 @@ pub fn run() {
                     .build(app)?;
             }
 
-            append_log("INFO", "Tauri setup completed");
+            info!("Tauri setup completed");
             Ok(())
         })
         .run(tauri::generate_context!())

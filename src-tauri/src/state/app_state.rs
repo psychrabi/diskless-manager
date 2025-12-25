@@ -21,7 +21,7 @@ impl AppState {
 
         let config_path = config_dir.join("config.json");
 
-        let mut settings = Settings::load(&config_path.with_extension("toml"))?;
+        let settings = Settings::load(&config_path.with_extension("toml"))?;
 
         // Initialize database in the same directory
         let db_path = config_dir.join("diskless.db");
@@ -31,9 +31,6 @@ impl AppState {
 
         // Run migrations
         Self::init_database(&pool).await?;
-
-        // Perform migration from config.json if it exists and DB is empty
-        Self::migrate_from_json(&config_path, &pool, &mut settings).await?;
 
         // Load config from database and populate the cache
         if let Ok(config) = crate::config::read_config_db(&pool).await {
@@ -47,89 +44,6 @@ impl AppState {
             db_pool: pool,
             config_path,
         })
-    }
-
-    async fn migrate_from_json(
-        json_path: &std::path::Path,
-        pool: &SqlitePool,
-        settings: &mut Settings,
-    ) -> anyhow::Result<()> {
-        if !json_path.exists() {
-            return Ok(());
-        }
-
-        // Check if DB is already populated (simplistic check)
-        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM clients")
-            .fetch_one(pool)
-            .await?;
-
-        if count.0 > 0 {
-            // Already migrated or has data
-            return Ok(());
-        }
-
-        tracing::info!("Migrating data from config.json to SQLite...");
-
-        let content = std::fs::read_to_string(json_path)?;
-        let config: crate::types::AppConfig = serde_json::from_str(&content)?;
-
-        // Migrate clients
-        for client in config.clients {
-            sqlx::query(
-                r#"
-                INSERT INTO clients (
-                    id, name, mac, ip, master, snapshot, block_store, target_iqn, 
-                    writeback, block_device, status, mode, pxe_mode, keep_writeback, 
-                    use_game_disk, created_at, last_modified
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                "#,
-            )
-            .bind(&client.id)
-            .bind(&client.name)
-            .bind(&client.mac)
-            .bind(&client.ip)
-            .bind(&client.master)
-            .bind(&client.snapshot)
-            .bind(&client.block_store)
-            .bind(&client.target_iqn)
-            .bind(&client.writeback)
-            .bind(&client.block_device)
-            .bind(&client.status)
-            .bind(&client.mode)
-            .bind(client.pxe_mode.unwrap_or_else(|| "uefi".to_string()))
-            .bind(client.keep_writeback.unwrap_or(true))
-            .bind(client.use_game_disk.unwrap_or(false))
-            .bind(&client.created_at)
-            .bind(&client.last_modified)
-            .execute(pool)
-            .await?;
-        }
-
-        // Migrate masters and services to app_config table
-        sqlx::query("INSERT INTO app_config (key, value) VALUES (?, ?)")
-            .bind("masters")
-            .bind(serde_json::to_string(&config.masters)?)
-            .execute(pool)
-            .await?;
-
-        sqlx::query("INSERT INTO app_config (key, value) VALUES (?, ?)")
-            .bind("services")
-            .bind(serde_json::to_string(&config.services)?)
-            .execute(pool)
-            .await?;
-
-        sqlx::query("INSERT INTO app_config (key, value) VALUES (?, ?)")
-            .bind("settings_legacy")
-            .bind(serde_json::to_string(&config.settings)?)
-            .execute(pool)
-            .await?;
-
-        // Mark as migrated or rename file
-        let backup_path = json_path.with_extension("json.bak");
-        std::fs::rename(json_path, backup_path)?;
-
-        tracing::info!("Migration completed successfully.");
-        Ok(())
     }
 
     async fn init_database(pool: &SqlitePool) -> anyhow::Result<()> {

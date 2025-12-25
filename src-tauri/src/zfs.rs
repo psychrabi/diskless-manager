@@ -582,12 +582,6 @@ pub async fn get_images(
                 .map(|ds| ds.used.clone())
                 .unwrap_or_else(|| "-".to_string());
 
-            let size = all_datasets
-                .iter()
-                .find(|ds| ds.name == *master_name_ref)
-                .map(|ds| ds.used.clone())
-                .unwrap_or_else(|| "-".to_string());
-
             let os = master_os_map.get(master_name_ref).cloned();
 
             masters_data.push(Master {
