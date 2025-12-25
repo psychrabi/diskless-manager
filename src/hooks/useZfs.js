@@ -19,14 +19,14 @@ export const useZfs = () => {
         setDatasets(res || []);
       } catch (e) {
         error(
-          `Failed to list datasets: ${e.message || "An unknown error occurred"}`,
+          `Failed to list datasets: ${e.message || "An unknown error occurred"}`
         );
         console.error(String(e));
       } finally {
         setLoading(false);
       }
     },
-    [error],
+    [error]
   );
 
   const createDataset = useCallback(
@@ -46,12 +46,12 @@ export const useZfs = () => {
         error(
           `Failed to create dataset: ${
             e.message || "An unknown error occurred"
-          }`,
+          }`
         );
         return false;
       }
     },
-    [success, error],
+    [success, error]
   );
 
   const deleteDataset = useCallback(
@@ -66,16 +66,19 @@ export const useZfs = () => {
         if (response.message) success(response.message);
         return true;
       } catch (e) {
-        error(`Failed to delete disk: ${e.error || "An unknown error occurred"}`);
+        error(
+          `Failed to delete disk: ${e.error || "An unknown error occurred"}`
+        );
         return false;
       }
     },
-    [success, error],
+    [success, error]
   );
 
   return {
     datasets,
     loading,
+    setDatasets,
     fetchDatasets,
     createDataset,
     deleteDataset,

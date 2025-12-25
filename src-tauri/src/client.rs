@@ -1,14 +1,13 @@
-use crate::cmd::{
-    run_command, run_command_async, run_command_check, run_command_output,
-    run_command_output_no_sudo,
-};
+use crate::cmd::{run_command, run_command_async, run_command_check, run_command_output_no_sudo};
 use crate::config::{get_config, get_zpool_name};
 use crate::dhcp::{create_dhcp_entry, update_dhcp_config};
 use crate::error::AppError;
 use crate::iscsi::{cleanup_iscsi_target, setup_iscsi_target, setup_iscsi_target_with_game_disks};
 use crate::state::AppState;
 use crate::types::{AddClientRequest, Client, ControlRequest};
-use crate::zfs::{get_master_os, zfs_clone, zfs_destroy, zfs_exists};
+use crate::zfs::{
+    get_master_os, get_writeback_or_default_dataset, zfs_clone, zfs_destroy, zfs_exists,
+};
 use sqlx::SqlitePool;
 use tauri::State;
 use tracing::{debug, error, info, warn};
@@ -190,17 +189,8 @@ fn check_duplicate_client(name: &str, mac: &str, ip: &str) -> Option<String> {
 }
 
 pub fn get_client_paths(client_id: &str, client_mac: &str) -> HashMap<String, String> {
-    let clone = format!("{}/{}-disk", get_zpool_name(), client_id.to_uppercase());
-    let target_iqn = format!(
-        "iqn.2025-04.local.diskless:{}",
-        client_mac.to_lowercase().replace(':', "-")
-    );
-    let block_store = format!("block_{}", client_id.to_lowercase());
-    let mut map = HashMap::new();
-    map.insert("clone".to_string(), clone);
-    map.insert("target_iqn".to_string(), target_iqn);
-    map.insert("block_store".to_string(), block_store);
-    map
+    // Use get_client_paths_with_master to ensure we use writeback dataset if available
+    get_client_paths_with_master(client_id, client_mac, "") // Empty master since we only need paths
 }
 
 pub fn get_client_paths_with_master(
@@ -208,7 +198,19 @@ pub fn get_client_paths_with_master(
     client_mac: &str,
     _master: &str,
 ) -> HashMap<String, String> {
-    get_client_paths(client_id, client_mac)
+    // If a dataset with org.diskless:type=writeback exists, use it as the parent for client clones.
+    let clone_path = get_writeback_or_default_dataset(client_id);
+
+    let target_iqn = format!(
+        "iqn.2025-04.local.diskless:{}",
+        client_mac.to_lowercase().replace(':', "-")
+    );
+    let block_store = format!("block_{}", client_id.to_lowercase());
+    let mut map = HashMap::new();
+    map.insert("clone".to_string(), clone_path);
+    map.insert("target_iqn".to_string(), target_iqn);
+    map.insert("block_store".to_string(), block_store);
+    map
 }
 
 pub async fn save_client_config(pool: &SqlitePool, client_data: &Client) -> bool {
@@ -982,7 +984,7 @@ pub async fn delete_client(
 
     let db_rows_affected = db_result.as_ref().map(|r| r.rows_affected()).unwrap_or(0);
 
-    if !deleted_from_config {
+    if !deleted_from_config || db_rows_affected == 0 {
         return Err(AppError::Config(format!(
             "Failed to delete client {} from configuration",
             client_id
@@ -1192,7 +1194,8 @@ pub async fn control_client(
                 }))
             } else {
                 // Demote: point iSCSI back to client's writeback clone (ZFS)
-                let clone_path = format!("{}/{}-disk", get_zpool_name(), client.id.to_uppercase());
+                let paths = get_client_paths_with_master(&client.id, &client.mac, &client.master);
+                let clone_path = paths.get("clone").cloned().unwrap_or_default();
 
                 // Debug: Let's also try a simple zfs list command to see what's available
                 debug!("Testing ZFS list command for master: {}", client.master);
@@ -1351,14 +1354,14 @@ pub async fn reset_client(
         }
     };
 
-    // Get paths for the client
+    // Get paths for the client, including the correct clone path that respects writeback datasets
     let current_paths = get_client_paths(&client_id, &client_info.mac);
     let target_iqn = current_paths.get("target_iqn").cloned().unwrap_or_default();
     let block_store = current_paths
         .get("block_store")
         .cloned()
         .unwrap_or_default();
-    let clone = format!("{}/{}-disk", get_zpool_name(), client_id.to_uppercase());
+    let clone = current_paths.get("clone").cloned().unwrap_or_default();
 
     // 1. Clean up existing iSCSI resources
     if let Err(e) = cleanup_iscsi_target(&target_iqn, &block_store) {

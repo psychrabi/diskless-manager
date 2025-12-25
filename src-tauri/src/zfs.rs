@@ -104,6 +104,36 @@ pub fn zfs_clone(snapshot: &str, clone: &str) -> Result<(), AppError> {
     run_command(&["zfs", "clone", snapshot, clone])
 }
 
+// Get the writeback dataset path if one exists, otherwise return the default zpool path
+pub fn get_writeback_or_default_dataset(client_name: &str) -> String {
+    let zpool = get_zpool_name();
+    let mut writeback_path = format!("{}/{}-disk", zpool, client_name.to_uppercase()); // Default writeback path if Writeback disk is not set.
+
+    if let Ok(pool_list) =
+        run_command_output_no_sudo(&["zfs", "list", "-H", "-o", "name", "-r", &zpool])
+    {
+        if let Some(parent) = pool_list.lines().filter(|l| !l.is_empty()).find_map(|ds| {
+            match run_command_output_no_sudo(&[
+                "zfs",
+                "get",
+                "-H",
+                "-o",
+                "value",
+                "org.diskless:type",
+                ds,
+            ]) {
+                Ok(v) if v.trim() == "writeback" => Some(ds.to_string()),
+                _ => None,
+            }
+        }) {
+            // Use found writeback dataset as parent for the clone path (preserve existing naming convention)
+            writeback_path = format!("{}/{}-disk", parent, client_name.to_uppercase());
+        }
+    }
+
+    writeback_path
+}
+
 // Parse output of 'zfs list -H -o name,creation,used' (tab-separated)
 pub fn parse_zfs_list(output: &str) -> Vec<Snapshot> {
     output
@@ -399,14 +429,10 @@ pub async fn create_image(
                 parent_dataset = image_datasets[0].clone();
             }
         } else {
-            debug!(
-                "No top-level image datasets found, using default: {}",
-                parent_dataset
-            );
-            eprintln!(
-                "=== CREATE_IMAGE: No top-level image datasets found, using default: {}",
-                parent_dataset
-            );
+            // No image datasets found - fail the operation instead of using default
+            return Err(AppError::Config(
+                "No image-disk found. Please create a ZFS dataset with org.diskless:type=image property before creating images.".to_string()
+            ));
         }
     }
 
@@ -970,7 +996,6 @@ pub async fn rollback_image_snapshot(
     let mut recreated = vec![];
     if let Ok(clients_json) = clients_result {
         if let Some(clients) = clients_json.as_array() {
-            let zpool = get_zpool_name();
             for client in clients {
                 let client_snapshot = client
                     .get("snapshot")
@@ -978,7 +1003,7 @@ pub async fn rollback_image_snapshot(
                     .unwrap_or("");
                 let client_id = client.get("id").and_then(|v| v.as_str()).unwrap_or("");
                 let client_name = client.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                let client_clone = format!("{}/{}-disk", zpool, client_name.to_uppercase());
+                let client_clone = get_writeback_or_default_dataset(client_name);
                 if client_snapshot == snapshot_name {
                     let _ = zfs_destroy(&client_clone);
                     if zfs_clone(&snapshot_name, &client_clone).is_ok() {

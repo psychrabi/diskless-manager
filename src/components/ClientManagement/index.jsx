@@ -1,6 +1,7 @@
 import { useClientActions } from "@/hooks/useClientActions";
-import { PlusCircle, Users } from "lucide-react";
+import { Laptop, PlusCircle, Users } from "lucide-react";
 import { memo, useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "../../store/useAppStore";
 import { Button, Card } from "../ui";
@@ -131,7 +132,7 @@ const ClientManagement = () => {
       title="Client Management"
       icon={Users}
       className="bg-base-300"
-      actions={
+      actions={clients.length > 0 &&
         <Button
           variant="primary"
           onClick={handleClientFormModalOpen}
@@ -139,12 +140,7 @@ const ClientManagement = () => {
           disabled={masters.length === 0}
         >
           Add Client
-          {masters.length === 0 && (
-            <span className="text-xs text-error ml-2 self-center">
-              (Requires Master Image)
-            </span>
-          )}
-        </Button>
+        </Button >
       }
     >
       <div className="min-h-[calc(100vh-15rem)]">
@@ -152,16 +148,26 @@ const ClientManagement = () => {
           <div className="card bg-base-100 shadow-xl border border-base-200/50">
             <div className="card-body items-center text-center p-12">
               <div className="w-20 h-20 bg-base-200 rounded-full flex items-center justify-center text-4xl mb-4">
-                💻
+                <Laptop />
               </div>
               <h2 className="card-title text-2xl mb-2">No Clients Registered</h2>
               <p className="text-base-content/60 max-w-md mb-6">
                 Add your first PXE boot client to get started managing your
                 diskless infrastructure.
               </p>
-              <button className="btn btn-primary" onClick={handleClientFormModalOpen}>
+              <Button
+                variant="primary"
+                onClick={handleClientFormModalOpen}
+                icon={PlusCircle}
+                disabled={masters.length === 0}
+              >
                 Add Client
-              </button>
+              </Button>
+              {masters.length === 0 && (
+                <Link to="/images" className="btn btn-link">
+                  Add a boot image first
+                </Link>
+              )}
             </div>
           </div>
         ) : (
@@ -188,7 +194,7 @@ const ClientManagement = () => {
         setIsOpen={setIsModalOpen}
         refresh={refreshData}
       />
-    </Card>
+    </Card >
   );
 };
 
