@@ -1,3 +1,4 @@
+import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { invoke } from "@tauri-apps/api/core";
@@ -12,7 +13,7 @@ const renameImageSchema = z.object({
     .min(1, "New name is required")
     .regex(
       /^[\w-]+$/,
-      "Name can only contain alphanumeric characters, underscores, and hyphens",
+      "Name can only contain alphanumeric characters, underscores, and hyphens"
     ),
 });
 
@@ -22,6 +23,7 @@ const RenameImageModal = ({
   selectedImage,
   refresh,
 }) => {
+  const fetchImages = useAppStore((state) => state.fetchImages);
   const { success, info, error } = useToastStore();
 
   const {
@@ -54,19 +56,17 @@ const RenameImageModal = ({
       oldName: selectedImage,
       newName: data.newName,
     })
-      .then((response) => {
+      .then(async (response) => {
         if (response.message) success(response.message);
+        await fetchImages();
         reset();
       })
       .catch((error) => {
         error(
           `Failed to rename image: ${
             error.message || "An unknown error occurred"
-          }`,
+          }`
         );
-      })
-      .finally(() => {
-        refresh && refresh();
       });
   };
 

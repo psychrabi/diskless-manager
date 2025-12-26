@@ -1,4 +1,3 @@
-import { useZfs } from "@/hooks/useZfs";
 import { useAppStore } from "@/store/useAppStore";
 import { HardDrive, PlusCircle } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
@@ -11,7 +10,7 @@ export default function DisksManagement() {
   const zpools = useAppStore((state) => state.zpools);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedPool, setSelectedPool] = useState("");
-  const { datasets, fetchDatasets } = useZfs();
+  const { datasets, fetchDatasets } = useAppStore();
 
   const handleDiskFormModalOpen = useCallback(() => {
     setIsModalOpen(true);
@@ -41,14 +40,16 @@ export default function DisksManagement() {
       title="Disk Management"
       icon={HardDrive}
       className="bg-base-300"
-      actions={datasets.length > 0 &&
-        <Button
-          variant="primary"
-          onClick={() => handleDiskFormModalOpen()}
-          icon={PlusCircle}
-        >
-          Add Disk
-        </Button>
+      actions={
+        datasets.length > 0 && (
+          <Button
+            variant="primary"
+            onClick={() => handleDiskFormModalOpen()}
+            icon={PlusCircle}
+          >
+            Add Disk
+          </Button>
+        )
       }
     >
       <div className="min-h-[calc(100vh-15rem)]">
@@ -62,7 +63,10 @@ export default function DisksManagement() {
               <p className="text-base-content/60 max-w-md mb-6">
                 Create your first Boot image for clients to boot from.
               </p>
-              <button className="btn btn-primary" onClick={handleDiskFormModalOpen}>
+              <button
+                className="btn btn-primary"
+                onClick={handleDiskFormModalOpen}
+              >
                 Add Disk
               </button>
             </div>

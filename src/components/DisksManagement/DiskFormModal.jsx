@@ -1,4 +1,5 @@
-import { useZfs } from "@/hooks/useZfs";
+import { useAppStore } from "@/store/useAppStore";
+import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Save } from "lucide-react";
 import { useForm, useWatch } from "react-hook-form";
@@ -13,7 +14,8 @@ const diskSchema = z.object({
 });
 
 const DiskFormModal = ({ zpools, isOpen, setIsOpen, refresh }) => {
-  const { createDataset } = useZfs();
+  const createDataset = useAppStore((state) => state.createDataset);
+  const { success, error } = useToastStore();
 
   const defaultValues = { zpool: "", name: "", usage_type: "image", size: "" };
 
@@ -29,10 +31,13 @@ const DiskFormModal = ({ zpools, isOpen, setIsOpen, refresh }) => {
   });
 
   const onSubmit = async (data) => {
-    const success = await createDataset(data);
-    if (success) {
+    const result = await createDataset(data);
+    if (result.success) {
+      success(result.message);
       refresh();
       setIsOpen(false);
+    } else {
+      error(result.error);
     }
   };
 

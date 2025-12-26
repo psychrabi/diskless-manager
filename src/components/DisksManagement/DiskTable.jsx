@@ -1,5 +1,5 @@
 import { useConfirm } from "@/contexts/confirmDialog";
-import { useZfs } from "@/hooks/useZfs";
+import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
 import { useState } from "react";
 import {
@@ -17,8 +17,8 @@ const DiskTable = ({ datasets, onRefresh }) => {
   const [selectedDisk, setSelectedDisk] = useState(null);
   const [isRenameModalOpen, setIsRenameModalOpen] = useState(false);
   const confirm = useConfirm();
-  const { deleteDataset } = useZfs();
-  const { success } = useToastStore();
+  const deleteDataset = useAppStore((state) => state.deleteDataset);
+  const { success, error } = useToastStore();
 
   const handleRenameDisk = (disk) => {
     setSelectedDisk(disk);
@@ -35,10 +35,12 @@ const DiskTable = ({ datasets, onRefresh }) => {
       size: "2xl",
     });
     if (ok) {
-      const success = await deleteDataset(disk.name);
-      if (success) {
-        success(`Disk "${disk.name}" deleted successfully`);
+      const result = await deleteDataset(disk.name);
+      if (result.success) {
+        success(result.message);
         onRefresh();
+      } else {
+        error(result.error);
       }
     }
   };

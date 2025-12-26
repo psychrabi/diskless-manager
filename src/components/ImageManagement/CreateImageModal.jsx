@@ -45,12 +45,14 @@ const CreateImageModal = ({
         request: { token, name: data.name, size: data.size, os: data.os },
       });
       if (response.message) success(response.message);
-      fetchImages(); // Refresh images
+
+      // Small delay to ensure backend completes, then refresh
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      await fetchImages(); // Refresh images
+      console.log("=== JS: Images refreshed after create");
     } catch (err) {
       error(
-        `Failed to create image: ${
-          err.message || "An unknown error occurred"
-        }`,
+        `Failed to create image: ${err.message || "An unknown error occurred"}`
       );
     }
   };

@@ -1,20 +1,24 @@
 import { File, HardDrive, PlusCircle } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { useZfs } from "../../hooks/useZfs";
 import { useAppStore } from "../../store/useAppStore";
 import { Button, Card } from "../ui";
 import CreateImageModal from "./CreateImageModal";
 import { ImagesList } from "./ImagesList";
 
 const ImageManagement = () => {
+  // Use a more specific selector to ensure re-renders
   const masters = useAppStore((state) => state.masters);
+  const fetchDatasets = useAppStore((state) => state.fetchDatasets);
+  const datasets = useAppStore((state) => state.datasets);
+  const zpools = useAppStore((state) => state.zpools);
   const [openImageCreateModal, setOpenImageCreateModal] = useState(false);
-  const { datasets } = useZfs();
+  const [selectedPool, setSelectedPool] = useState("");
 
   // Check if there are any image disks (datasets with org.diskless:type=image)
-  const hasImageDisk = datasets.some(dataset =>
-    dataset.disk_type && dataset.disk_type.toLowerCase() === 'image'
+  const hasImageDisk = datasets.some(
+    (dataset) =>
+      dataset.disk_type && dataset.disk_type.toLowerCase() === "image"
   );
 
   const handleCreateImage = () => {
@@ -23,21 +27,41 @@ const ImageManagement = () => {
     }
   };
 
+  // Set default pool when zpools are loaded
+  useEffect(() => {
+    if (zpools.length > 0 && !selectedPool) {
+      setSelectedPool(zpools[0]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [zpools]);
+
+  useEffect(() => {
+    if (selectedPool) {
+      fetchDatasets(selectedPool);
+    }
+  }, [selectedPool, fetchDatasets]);
+
   return (
     <Card
       title="Image Management"
       className="bg-base-300"
       icon={HardDrive}
-      actions={masters.length > 0 &&
-        <Button
-          variant="primary"
-          onClick={handleCreateImage}
-          icon={PlusCircle}
-          disabled={!hasImageDisk}
-          title={!hasImageDisk ? "No image disk found. Create an image disk first." : "Create Image"}
-        >
-          Create Image
-        </Button>
+      actions={
+        masters.length > 0 && (
+          <Button
+            variant="primary"
+            onClick={handleCreateImage}
+            icon={PlusCircle}
+            disabled={!hasImageDisk}
+            title={
+              !hasImageDisk
+                ? "No image disk found. Create an image disk first."
+                : "Create Image"
+            }
+          >
+            Create Image
+          </Button>
+        )
       }
     >
       <div className="space-y-6 min-h-[calc(100vh-14rem)]">
@@ -51,8 +75,7 @@ const ImageManagement = () => {
               <p className="text-base-content/60 max-w-md mb-6">
                 {!hasImageDisk
                   ? "No image disk found. Create an image disk first in the Disks Management section."
-                  : "Create your first Boot image for clients to boot from."
-                }
+                  : "Create your first Boot image for clients to boot from."}
               </p>
               <Button
                 variant="primary"
@@ -67,7 +90,6 @@ const ImageManagement = () => {
                   Create an image disk first.
                 </Link>
               )}
-
             </div>
           </div>
         ) : (

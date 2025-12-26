@@ -451,6 +451,13 @@ pub async fn create_image(
         request.os.as_deref(),
     )
     .await?;
+
+    // Invalidate cache so get_images returns fresh data
+    {
+        let mut cache = ZFS_CACHE.write().unwrap();
+        cache.last_updated = std::time::SystemTime::UNIX_EPOCH;
+    }
+
     Ok(json!({
         "message": format!("Master ZVOL '{}' created successfully.", full_name),
         "master": {
@@ -789,6 +796,13 @@ pub async fn delete_image(
 ) -> Result<serde_json::Value, AppError> {
     eprintln!("=== delete_image START: {}", master_name); // Terminal log
     let result = common_delete(&state, token, &master_name, false).await;
+
+    // Invalidate cache after deletion so get_images returns fresh data
+    if result.is_ok() {
+        let mut cache = ZFS_CACHE.write().unwrap();
+        cache.last_updated = std::time::SystemTime::UNIX_EPOCH;
+    }
+
     eprintln!("=== delete_image END: {:?}", result); // Will show if it completes
     result
 }
@@ -847,6 +861,13 @@ pub async fn create_snapshot(
                 .map_err(|e| format!("Failed to write config: {}", e))?;
         }
     }
+
+    // Invalidate cache so get_images returns fresh data
+    {
+        let mut cache = ZFS_CACHE.write().unwrap();
+        cache.last_updated = std::time::SystemTime::UNIX_EPOCH;
+    }
+
     Ok(json!({
         "message": format!("Snapshot {} created", snapshot_name)
     }))
@@ -866,6 +887,13 @@ pub async fn delete_snapshot(
         ));
     }
     let result = common_delete(&state, token, &snapshot_name, true).await;
+
+    // Invalidate cache after deletion so get_images returns fresh data
+    if result.is_ok() {
+        let mut cache = ZFS_CACHE.write().unwrap();
+        cache.last_updated = std::time::SystemTime::UNIX_EPOCH;
+    }
+
     eprintln!("=== delete_snapshot END: {:?}", result);
     result
 }
@@ -1007,6 +1035,12 @@ pub async fn rollback_image_snapshot(
                 }
             }
         }
+    }
+
+    // Invalidate cache so get_images returns fresh data
+    {
+        let mut cache = ZFS_CACHE.write().unwrap();
+        cache.last_updated = std::time::SystemTime::UNIX_EPOCH;
     }
 
     Ok(json!({
@@ -1246,6 +1280,12 @@ pub async fn rename_image(
             masters.insert(new_master_zvol_name.clone(), master_data);
             let _ = write_config(&state.db_pool, &config).await;
         }
+    }
+
+    // Invalidate cache so get_images returns fresh data
+    {
+        let mut cache = ZFS_CACHE.write().unwrap();
+        cache.last_updated = std::time::SystemTime::UNIX_EPOCH;
     }
 
     Ok(json!({

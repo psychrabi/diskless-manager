@@ -24,7 +24,8 @@ export const useAppStore = create()(
       // ServiceConfigModal logic was moved out.
       // SettingsManagement logic does NOT use serviceConfig from store.
       // Wait, I should verify before deleting.
-
+      datasets: [],
+      setDatasets: (datasets) => set({ datasets }),
       error: null,
       loading: true,
       selectedSnapshot: "",
@@ -63,9 +64,70 @@ export const useAppStore = create()(
         try {
           const token = localStorage.getItem("authToken") || "";
           const mastersRes = await invoke("get_images", { token });
+
           set({ masters: mastersRes || [] });
         } catch (err) {
           console.error("Failed to fetch images:", err);
+        }
+      },
+
+      fetchDatasets: async (zpool) => {
+        if (!zpool) {
+          set({ datasets: [] });
+          return;
+        }
+        try {
+          const datasetsRes = await invoke("list_datasets", { zpool });
+          set({ datasets: datasetsRes || [] });
+        } catch (err) {
+          console.error("Failed to fetch datasets:", err);
+        }
+      },
+
+      createDataset: async (data) => {
+        try {
+          await invoke("create_zfs_dataset", {
+            req: {
+              zpool: data.zpool,
+              name: data.name,
+              usage_type: data.usage_type,
+              size: data.size ?? "",
+            },
+          });
+          return {
+            success: true,
+            message: `Dataset ${data.name} created successfully.`,
+          };
+        } catch (err) {
+          return {
+            success: false,
+            error: `Failed to create dataset: ${
+              err.message || "An unknown error occurred"
+            }`,
+          };
+        }
+      },
+
+      deleteDataset: async (name) => {
+        const token = localStorage.getItem("authToken") || "";
+        try {
+          const response = await invoke("delete_zfs_dataset", {
+            token,
+            dataset: name,
+            recursive: true,
+          });
+          return {
+            success: true,
+            message:
+              response.message || `Dataset ${name} deleted successfully.`,
+          };
+        } catch (err) {
+          return {
+            success: false,
+            error: `Failed to delete disk: ${
+              err.error || "An unknown error occurred"
+            }`,
+          };
         }
       },
 
@@ -75,8 +137,8 @@ export const useAppStore = create()(
           const servicesData = Array.isArray(servicesRes)
             ? servicesRes
             : servicesRes
-              ? Object.values(servicesRes)
-              : [];
+            ? Object.values(servicesRes)
+            : [];
           set({ services: servicesData });
         } catch (err) {
           console.error("Failed to fetch services:", err);
@@ -90,7 +152,7 @@ export const useAppStore = create()(
             services: get().services.map((service) =>
               service.name === name
                 ? { ...service, status: "running" }
-                : service,
+                : service
             ),
           });
           await get().fetchServices();
@@ -106,7 +168,7 @@ export const useAppStore = create()(
             services: get().services.map((service) =>
               service.name === name
                 ? { ...service, status: "stopped" }
-                : service,
+                : service
             ),
           });
           await get().fetchServices();
@@ -122,7 +184,7 @@ export const useAppStore = create()(
             services: get().services.map((service) =>
               service.name === name
                 ? { ...service, status: "restarting" }
-                : service,
+                : service
             ),
           });
           await get().fetchServices();
@@ -321,6 +383,6 @@ export const useAppStore = create()(
     {
       name: "diskless", // name of the item in the storage (must be unique)
       storage: createJSONStorage(() => localStorage), // (optional) by default, 'localStorage' is used
-    },
-  ),
+    }
+  )
 );

@@ -1,3 +1,4 @@
+import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { invoke } from "@tauri-apps/api/core";
@@ -15,11 +16,12 @@ const CreateSnapshotModal = ({
   setOpenSnapshotCreateModal,
   selectedImage,
 }) => {
+  const fetchImages = useAppStore((state) => state.fetchImages);
   const { success, info, error } = useToastStore();
   const {
     register,
     handleSubmit,
-    formState: { errors },
+    formState: { errors, isSubmitting },
   } = useForm({
     resolver: zodResolver(snapshotSchema),
     defaultValues: {
@@ -30,7 +32,6 @@ const CreateSnapshotModal = ({
 
   const onSubmit = async (data) => {
     const fullSnapshotName = `${selectedImage}@${data.name}`;
-    info(`Adding new snapshot ${fullSnapshotName}`);
     // Get token from localStorage
     const token = localStorage.getItem("authToken") || "";
     await invoke("create_snapshot", {
@@ -38,17 +39,18 @@ const CreateSnapshotModal = ({
       masterName: selectedImage,
       snapshotName: fullSnapshotName,
     })
-      .then((response) => {
+      .then(async (response) => {
+        setOpenSnapshotCreateModal(false);
+        await fetchImages();
         if (response.message) success(response.message);
       })
-      .catch((error) => {
+      .catch((err) => {
         error(
           `Failed to create snapshot: ${
-            error.message || "An unknown error occurred"
-          }`,
+            err.message || "An unknown error occurred"
+          }`
         );
       });
-    setOpenSnapshotCreateModal(false);
   };
 
   return (
@@ -79,13 +81,19 @@ const CreateSnapshotModal = ({
           <strong className="font-semibold">{selectedImage}</strong>.
         </p>
         <div className="mt-6 flex justify-end space-x-3">
-          <Button type="submit" variant="primary" icon={Save}>
-            Create Snapshot
+          <Button
+            type="submit"
+            variant="primary"
+            icon={Save}
+            disabled={isSubmitting}
+          >
+            {isSubmitting ? "Creating..." : "Create Snapshot"}
           </Button>
           <Button
             type="button"
             variant="destructive"
             onClick={() => setOpenSnapshotCreateModal(false)}
+            disabled={isSubmitting}
           >
             Cancel
           </Button>
