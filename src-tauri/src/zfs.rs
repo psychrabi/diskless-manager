@@ -927,14 +927,7 @@ pub async fn zfs_pool_exists(
     state: State<'_, AppState>,
     pool_name: Option<String>,
 ) -> Result<bool, AppError> {
-    if pool_name.is_none() {
-        let output = Command::new("zpool")
-            .args(["list", "-H"])
-            .output()
-            .map_err(|e| AppError::Io(e))?;
-        Ok(output.status.success() && !output.stdout.is_empty())
-    } else {
-        let pool = pool_name.unwrap();
+    if let Some(pool) = pool_name {
         let status = Command::new("zpool")
             .args(["list", &pool])
             .status()
@@ -951,6 +944,12 @@ pub async fn zfs_pool_exists(
             let _ = write_config(&state.db_pool, &config).await;
         }
         Ok(exists)
+    } else {
+        let output = Command::new("zpool")
+            .args(["list", "-H"])
+            .output()
+            .map_err(AppError::Io)?;
+        Ok(output.status.success() && !output.stdout.is_empty())
     }
 }
 
@@ -993,7 +992,7 @@ pub async fn set_default_image(
     config.settings["default_master"] = json!(master_name);
     write_config(&state.db_pool, &config)
         .await
-        .map_err(|e| AppError::Config(e))?;
+        .map_err(AppError::Config)?;
     Ok(json!({"message": "Successfully set default image"}))
 }
 

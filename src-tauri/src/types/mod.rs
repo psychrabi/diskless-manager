@@ -8,7 +8,6 @@ pub mod client;
 pub mod config;
 pub mod disk;
 pub mod image;
-pub mod service;
 
 // Re-export commonly used types
 pub use auth::{AuthError, Claims, LoginRequest, LoginResponse, User, UserResponse};
@@ -21,7 +20,4 @@ pub use disk::{
 pub use image::{
     ArcstatInfo, CreateImageRequest, CreateSnapshotRequest, ImageOperationResponse, Master,
     MasterData, Snapshot, ZpoolInfo,
-};
-pub use service::{
-    DHCPConfig, HTTPConfig, PackageStatus, SambaShare, ServiceControlRequest, TFTPConfig,
 };

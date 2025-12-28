@@ -3,9 +3,9 @@ import { useForm } from "react-hook-form";
 import { Button, Input } from "../ui";
 
 const tftpInitial = {
-  tftp_root: "/srv/tftp",
-  tftp_server_ip: "0.0.0.0",
-  tftp_options: "--secure",
+  root_dir: "/srv/tftp",
+  server_ip: "0.0.0.0",
+  options: "--secure",
 };
 
 const TFTPStep = ({ onSubmit, isSubmitting, initialConfig }) => {
@@ -33,20 +33,20 @@ const TFTPStep = ({ onSubmit, isSubmitting, initialConfig }) => {
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         <Input
           label="TFTP Root Directory"
-          register={register("tftp_root")}
-          error={errors.tftp_root}
+          register={register("root_dir")}
+          error={errors.root_dir}
           placeholder="/srv/tftp"
         />
         <Input
           label="TFTP Server IP"
-          register={register("tftp_server_ip")}
-          error={errors.tftp_server_ip}
+          register={register("server_ip")}
+          error={errors.server_ip}
           placeholder="0.0.0.0"
         />
         <Input
           label="TFTP Options"
-          register={register("tftp_options")}
-          error={errors.tftp_options}
+          register={register("options")}
+          error={errors.options}
           placeholder="--secure"
         />
 

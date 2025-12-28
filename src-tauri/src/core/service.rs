@@ -84,7 +84,7 @@ impl ServiceManager {
     }
 
     pub fn start(&self, name: &str) -> anyhow::Result<()> {
-        let output = Command::new("pkexec")
+        let output = Command::new("sudo")
             .arg("systemctl")
             .arg("start")
             .arg(name)
@@ -100,7 +100,7 @@ impl ServiceManager {
     }
 
     pub fn stop(&self, name: &str) -> anyhow::Result<()> {
-        let output = Command::new("pkexec")
+        let output = Command::new("sudo")
             .arg("systemctl")
             .arg("stop")
             .arg(name)
@@ -116,7 +116,7 @@ impl ServiceManager {
     }
 
     pub fn restart(&self, name: &str) -> anyhow::Result<()> {
-        let output = Command::new("pkexec")
+        let output = Command::new("sudo")
             .arg("systemctl")
             .arg("restart")
             .arg(name)
@@ -143,10 +143,8 @@ impl ServiceManager {
         let mut started = Vec::new();
 
         for service in services {
-            if !self.is_running(service) {
-                if self.start(service).is_ok() {
-                    started.push(service.to_string());
-                }
+            if !self.is_running(service) && self.start(service).is_ok() {
+                started.push(service.to_string());
             }
         }
 
@@ -165,10 +163,8 @@ impl ServiceManager {
         let mut stopped = Vec::new();
 
         for service in services {
-            if self.is_running(service) {
-                if self.stop(service).is_ok() {
-                    stopped.push(service.to_string());
-                }
+            if self.is_running(service) && self.stop(service).is_ok() {
+                stopped.push(service.to_string());
             }
         }
 

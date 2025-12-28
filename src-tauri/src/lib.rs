@@ -1,4 +1,3 @@
-mod app_config;
 mod auth;
 pub mod client;
 mod config;
@@ -22,8 +21,7 @@ mod services;
 pub mod state;
 
 use log::info;
-use serde::Serialize;
-use std::sync::{Arc, RwLock};
+
 use tauri::Manager;
 
 use state::AppState;
@@ -32,9 +30,6 @@ use state::AppState;
 const DHCP_CONFIG_PATH: &str = "/etc/dhcp/dhcpd.conf";
 const DHCP_CLIENTS_PATH: &str = "/etc/dhcp/clients.conf";
 pub const TFTP_AUTOEXEC_PATH: &str = "/srv/tftp/autoexec.ipxe";
-
-// Cache for server info to avoid frequent system calls
-use once_cell::sync::Lazy;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -56,12 +51,11 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
-        .on_window_event(|window, event| match event {
-            tauri::WindowEvent::CloseRequested { api, .. } => {
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 window.hide().unwrap();
                 api.prevent_close();
             }
-            _ => {}
         })
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -98,6 +92,7 @@ pub fn run() {
             service::configure_tftp_server,
             service::configure_apache_server,
             service::configure_samba_server,
+            service::configure_nfs_server,
             // New services architecture commands
             commands::services::list_services,
             commands::services::get_service_status,
@@ -107,6 +102,7 @@ pub fn run() {
             commands::services::restart_service,
             commands::services::start_all_services,
             commands::services::stop_all_services,
+            commands::services::configure_service,
             cmd::list_disks,
             cmd::get_ram_usage,
             cmd::clear_ram_cache,

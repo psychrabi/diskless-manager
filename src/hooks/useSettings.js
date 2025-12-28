@@ -18,9 +18,31 @@ export const useSettings = () => {
   const updateDhcp = useCallback(
     async (config) => {
       setLoading(true);
-      const token = localStorage.getItem("authToken") || "";
       try {
-        await invoke("configure_dhcp_server", { token, config });
+        // First, get the current settings
+        const currentSettings = await invoke("get_settings");
+
+        // Update the DHCP settings
+        const updatedSettings = {
+          ...currentSettings,
+          dhcp: {
+            ...currentSettings.dhcp,
+            start_ip: config.start_ip,
+            end_ip: config.end_ip,
+            subnet_mask: config.subnet_mask,
+            gateway_ip: config.gateway_ip,
+            dns_server1: config.dns_server1,
+            dns_server2: config.dns_server2,
+            enabled: config.enabled,
+          },
+        };
+
+        // Save the updated settings
+        await invoke("save_settings", { settings: updatedSettings });
+
+        // Configure the DHCP service using the new settings
+        await invoke("configure_service", { serviceName: "dhcp" });
+
         success("DHCP configuration saved successfully", "success");
         return true;
       } catch (err) {
@@ -37,19 +59,30 @@ export const useSettings = () => {
   const updateTftp = useCallback(
     async (tftpConfig) => {
       setLoading(true);
-      const token = localStorage.getItem("authToken") || "";
       try {
-        const response = await invoke("configure_tftp_server", {
-          token,
-          tftpConfig,
-        });
-        if (response.message) success(response.message, "success");
+        // First, get the current settings
+        const currentSettings = await invoke("get_settings");
+
+        // Update the TFTP settings
+        const updatedSettings = {
+          ...currentSettings,
+          tftp: {
+            ...currentSettings.tftp,
+            root_dir: tftpConfig.root_dir,
+            enabled: true, // Enable TFTP service
+          },
+        };
+
+        // Save the updated settings
+        await invoke("save_settings", { settings: updatedSettings });
+
+        // Configure the TFTP service using the new settings
+        await invoke("configure_service", { serviceName: "tftp" });
+
+        success("TFTP configuration saved successfully", "success");
         return true;
       } catch (err) {
-        error(
-          "Failed to configure TFTP server",
-          err.message || "An unknown error occurred"
-        );
+        error(err);
         return false;
       } finally {
         setLoading(false);
@@ -61,13 +94,27 @@ export const useSettings = () => {
   const updateHttp = useCallback(
     async (httpConfig) => {
       setLoading(true);
-      const token = localStorage.getItem("authToken") || "";
       try {
-        const response = await invoke("configure_apache_server", {
-          token,
-          httpConfig,
-        });
-        if (response.message) success(response.message, "success");
+        // First, get the current settings
+        const currentSettings = await invoke("get_settings");
+
+        // Update the HTTP settings
+        const updatedSettings = {
+          ...currentSettings,
+          http: {
+            ...currentSettings.http,
+            root_dir: httpConfig.root_dir,
+            enabled: true, // Enable HTTP service
+          },
+        };
+
+        // Save the updated settings
+        await invoke("save_settings", { settings: updatedSettings });
+
+        // Configure the HTTP service using the new settings
+        await invoke("configure_service", { serviceName: "http" });
+
+        success("HTTP configuration saved successfully", "success");
         return true;
       } catch (err) {
         error(

@@ -13,9 +13,10 @@ export default function TFTPConfigForm() {
 
   const { register, handleSubmit, reset } = useForm({
     defaultValues: {
-      tftp_root: "/srv/tftp",
-      tftp_server_ip: "0.0.0.0",
-      tftp_options: "--secure",
+      root_dir: "/srv/tftp",
+      server_ip: "0.0.0.0",
+      port: "69",
+      options: "--secure",
     },
   });
 
@@ -36,22 +37,30 @@ export default function TFTPConfigForm() {
       <form onSubmit={handleSubmit(onSubmit)}>
         <div className="space-y-4">
           <Input
-            id="tftp_root"
-            register={register("tftp_root")}
+            id="root_dir"
+            register={register("root_dir")}
             label="TFTP Root Directory"
             className="w-full"
             placeholder="/srv/tftp"
           />
           <Input
-            id="tftp_server_ip"
-            register={register("tftp_server_ip")}
+            id="server_ip"
+            register={register("server_ip")}
             label="TFTP Server IP"
             className="w-full"
             placeholder="0.0.0.0"
           />
           <Input
-            id="tftp_options"
-            register={register("tftp_options")}
+            id="port"
+            register={register("port")}
+            label="TFTP Server Port"
+            className="w-full"
+            placeholder="69"
+          />
+          <Input
+
+            id="options"
+            register={register("options")}
             label="TFTP Options"
             className="w-full"
             placeholder="--secure"

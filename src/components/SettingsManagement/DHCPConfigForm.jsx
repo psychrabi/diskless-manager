@@ -9,6 +9,7 @@ import z from "zod";
 import { Button, Card, Input } from "../ui";
 
 const dhcpSchema = z.object({
+  enabled: z.boolean(),
   subnet_ip: z.ipv4(),
   start_ip: z.ipv4(),
   end_ip: z.ipv4(),
@@ -26,6 +27,7 @@ const dhcpSchema = z.object({
 });
 
 const dhcpInitial = {
+  enabled: true,
   subnet_ip: "192.168.1.0",
   start_ip: "192.168.1.120",
   end_ip: "192.168.1.130",
@@ -61,8 +63,11 @@ export default function DHCPConfigForm() {
 
   // Load saved config when config from store changes
   useEffect(() => {
+    console.log(config);
+
     if (config?.settings?.dhcp) {
       reset(config.settings.dhcp);
+      console.log(config);
     } else {
       reset(dhcpInitial);
     }
@@ -84,6 +89,14 @@ export default function DHCPConfigForm() {
       )}
       <form onSubmit={handleSubmit(onSubmit)}>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+          <input
+            label="Enabled"
+            id="enabled"
+            className="checkbox"
+            {...register("enabled")}
+            type="checkbox"
+            defaultChecked={dhcpInitial.enabled}
+          />
           <Input
             label="DHCP Start IP"
             id="dhcpstart_ip"

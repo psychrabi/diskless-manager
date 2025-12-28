@@ -4,16 +4,18 @@ mod iscsi;
 mod nfs;
 mod samba;
 mod tftp;
-
 pub use dhcp::DhcpService;
 pub use http::HttpService;
 pub use iscsi::IscsiService;
 pub use nfs::NfsService;
 pub use samba::SambaService;
+use std::process::Stdio;
 pub use tftp::TftpService;
+use tokio::io::AsyncWriteExt;
 
 use crate::core::config::Settings;
 use crate::core::image::Image;
+use crate::error::AppError;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
 use tokio::process::Command;
@@ -64,6 +66,18 @@ impl ServiceManager {
         // HTTP config is generated on start
         self.http.generate_config().await?;
         Ok(())
+    }
+
+    pub async fn generate_service_config(&self, service: &str) -> anyhow::Result<()> {
+        match service {
+            "dhcp" => self.dhcp.generate_config().await,
+            "tftp" => self.tftp.generate_config().await,
+            "iscsi" => self.iscsi.generate_config().await,
+            "nfs" => self.nfs.generate_config().await,
+            "http" => self.http.generate_config().await,
+            "samba" => self.samba.generate_config().await,
+            _ => Err(anyhow::anyhow!("Unknown service: {}", service)),
+        }
     }
 
     pub async fn start_all(&self) -> anyhow::Result<()> {
@@ -223,4 +237,40 @@ pub async fn get_service_pid(service: &str) -> anyhow::Result<Option<u32>> {
         }
     }
     Ok(None)
+}
+
+// Helper function to Write content to path using sudo tee (async)
+pub async fn write_with_sudo_tee(path: &str, content: &str) -> Result<(), AppError> {
+    let mut child = Command::new("sudo")
+        .arg("-n")
+        .arg("tee")
+        .arg(path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| AppError::Command(format!("Failed to spawn sudo tee for {}: {}", path, e)))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(content.as_bytes()).await.map_err(|e| {
+            AppError::Io(std::io::Error::other(format!(
+                "Failed to write to stdin for {}: {}",
+                path, e
+            )))
+        })?;
+    }
+
+    let status = child
+        .wait()
+        .await
+        .map_err(|e| AppError::Command(format!("Failed to wait for tee on {}: {}", path, e)))?;
+
+    if !status.success() {
+        Err(AppError::Command(format!(
+            "Failed to write {}: Command exited with status {}",
+            path, status
+        )))
+    } else {
+        Ok(())
+    }
 }

@@ -1,5 +1,7 @@
 use crate::core::config::Settings;
-use crate::services::{get_service_pid, is_systemd_service_running, ServiceStatus};
+use crate::services::{
+    get_service_pid, is_systemd_service_running, write_with_sudo_tee, ServiceStatus,
+};
 use std::path::PathBuf;
 use tokio::process::Command;
 
@@ -13,8 +15,38 @@ impl SambaService {
     }
 
     pub async fn start(&self) -> anyhow::Result<()> {
-        // Create share directory if it doesn't exist
-        std::fs::create_dir_all(&self.settings.samba.share_path)?;
+        // Create share directory if it doesn't exist using elevated privileges
+        let share_path = &self.settings.samba.share_path;
+        let share_path_str = share_path.to_string_lossy();
+        let mkdir_result = Command::new("pkexec")
+            .args(["mkdir", "-p", &share_path_str])
+            .status()
+            .await;
+
+        if let Err(e) = mkdir_result {
+            tracing::error!(
+                "Failed to execute pkexec for creating Samba share directory {}: {}",
+                share_path.display(),
+                e
+            );
+            return Err(anyhow::anyhow!(
+                "Failed to execute pkexec for creating Samba share directory {}: {}",
+                share_path.display(),
+                e
+            ));
+        }
+
+        let mkdir_status = mkdir_result.unwrap();
+        if !mkdir_status.success() {
+            tracing::error!(
+                "Failed to create Samba share directory {}: pkexec mkdir returned non-zero exit code",
+                share_path.display()
+            );
+            return Err(anyhow::anyhow!(
+                "Failed to create Samba share directory {}: pkexec mkdir returned non-zero exit code",
+                share_path.display()
+            ));
+        }
 
         // Generate and write Samba configuration
         self.generate_config().await?;
@@ -36,12 +68,12 @@ impl SambaService {
 
     pub async fn stop(&self) -> anyhow::Result<()> {
         Command::new("pkexec")
-            .args(["systemctl", "start", "smbd"])
+            .args(["systemctl", "stop", "smbd"])
             .status()
             .await?;
 
         Command::new("pkexec")
-            .args(["systemctl", "start", "nmbd"])
+            .args(["systemctl", "stop", "nmbd"])
             .status()
             .await?;
 
@@ -77,7 +109,7 @@ impl SambaService {
             running,
             pid,
             message: if running {
-                format!("Samba server is running (smbd + nmbd)")
+                "Samba server is running (smbd + nmbd)".to_string()
             } else if smbd_running {
                 "Only smbd is running".to_string()
             } else if nmbd_running {
@@ -177,38 +209,7 @@ impl SambaService {
             if config.read_only { "yes" } else { "no" },
         );
 
-        // Use pkexec to write to system configuration file
-        use tokio::process::Command;
-        let mut child = Command::new("pkexec")
-            .arg("tee")
-            .arg("/etc/samba/smb.conf")
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::null())
-            .spawn()
-            .map_err(|e| anyhow::anyhow!("Failed to spawn pkexec tee: {}", e))?;
-
-        if let Some(ref mut stdin) = child.stdin {
-            use tokio::io::AsyncWriteExt;
-            stdin
-                .write_all(smb_conf.as_bytes())
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to write config to stdin: {}", e))?;
-            stdin
-                .flush()
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to flush stdin: {}", e))?;
-        }
-
-        let status = child
-            .wait()
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to wait for pkexec tee: {}", e))?;
-
-        if !status.success() {
-            return Err(anyhow::anyhow!(
-                "Failed to write Samba config file with pkexec tee"
-            ));
-        }
+        write_with_sudo_tee("/etc/samba/smb.conf", &smb_conf).await?;
 
         tracing::info!("Samba configuration written to /etc/samba/smb.conf");
         Ok(())

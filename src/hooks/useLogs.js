@@ -12,20 +12,23 @@ export const useLogs = () => {
       if (!unit) return;
       setLoading(true);
       try {
-        const out = await invoke("get_service_logs", { unit, lines });
+        const out = await invoke("get_service_logs", {
+          serviceName: unit,
+          lines,
+        });
         setLogs(out);
       } catch (err) {
         console.error(err);
         error(
           `Failed to fetch logs: ${
             err?.message || String(err) || "Unknown error"
-          }`,
+          }`
         );
       } finally {
         setLoading(false);
       }
     },
-    [error],
+    [error]
   );
 
   return {

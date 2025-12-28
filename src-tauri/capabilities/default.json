@@ -7,7 +7,13 @@
     "core:default",
     "process:default",
     "dialog:default",
-    "fs:default",
+    {
+      "identifier": "fs:scope",
+      "allow": ["/srv/**"]
+    },
+    "fs:allow-read-dir",
+    "fs:allow-read-file",
+    "fs:allow-read-text-file",
     "fs:allow-write-text-file",
     "fs:allow-write-file",
     "fs:allow-mkdir",

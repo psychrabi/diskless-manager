@@ -3,9 +3,9 @@ import { useForm } from "react-hook-form";
 import { Button, Input } from "../ui";
 
 const httpInitial = {
-  http_root: "/srv/tftp",
-  http_server_ip: "*",
-  http_server_port: "80",
+  root_dir: "/srv/tftp",
+  server_ip: "*",
+  port: "80",
 };
 
 const HTTPStep = ({ onSubmit, isSubmitting, initialConfig }) => {
@@ -33,21 +33,21 @@ const HTTPStep = ({ onSubmit, isSubmitting, initialConfig }) => {
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         <Input
           label="HTTP Root Directory"
-          register={register("http_root")}
-          error={errors.http_root}
+          register={register("root_dir")}
+          error={errors.root_dir}
           placeholder="/srv/http"
         />
         <div className="grid grid-cols-2 gap-4">
           <Input
             label="Server IP"
-            register={register("http_server_ip")}
-            error={errors.http_server_ip}
+            register={register("server_ip")}
+            error={errors.server_ip}
             placeholder="*"
           />
           <Input
             label="Server Port"
-            register={register("http_server_port")}
-            error={errors.http_server_port}
+            register={register("port")}
+            error={errors.port}
             placeholder="80"
           />
         </div>

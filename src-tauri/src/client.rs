@@ -12,7 +12,6 @@ use sqlx::SqlitePool;
 use tauri::State;
 use tracing::{debug, error, info, warn};
 
-const IQN_BASE: &str = "iqn.2025-04.local.diskless";
 use chrono::Local;
 
 use std::collections::HashMap;
@@ -78,7 +77,7 @@ pub async fn get_clients(
             let client_count = config.clients.len();
             if client_count > 0 {
                 // Use dynamic semaphore limiting based on client count for better performance
-                let max_concurrent = std::cmp::min(200, std::cmp::max(client_count, 50));
+                let max_concurrent = client_count.clamp(50, 200);
                 let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(max_concurrent));
 
                 let mut futures = Vec::new();
@@ -495,7 +494,7 @@ pub async fn add_client_impl(
 
     let name = if req.name.trim().is_empty() {
         // Generate name from IP last octet
-        if let Some(last) = ip.split('.').last() {
+        if let Some(last) = ip.split('.').next_back() {
             if let Ok(num) = last.parse::<u8>() {
                 format!("PC{:03}", num)
             } else {
@@ -601,7 +600,7 @@ async fn add_client_logic(
             mode: None,
             pxe_mode: Some("uefi".to_string()),
             keep_writeback: keep_writeback.or(Some(true)), // Default to true for backward compatibility
-            use_game_disk: use_game_disk,
+            use_game_disk,
         };
         if !save_client_config(&state.db_pool, &client_data).await {
             return Err(AppError::Config(format!(
@@ -763,8 +762,6 @@ async fn add_client_logic(
         master: master.clone(),
         snapshot: if used_master_directly {
             None
-        } else if snapshot.is_empty() {
-            None
         } else {
             Some(snapshot.clone())
         },
@@ -786,7 +783,7 @@ async fn add_client_logic(
         },
         pxe_mode: Some("uefi".to_string()),
         keep_writeback: keep_writeback.or(Some(true)), // Default to true for backward compatibility
-        use_game_disk: use_game_disk,
+        use_game_disk,
     };
 
     if !save_client_config(&state.db_pool, &client_data).await {
@@ -909,7 +906,7 @@ pub async fn edit_client(
             create_dhcp_entry(&new_name, &new_mac, &new_ip, &current_paths["target_iqn"]);
         update_dhcp_config(&client_id, &dhcp_entry, false)
             .await
-            .map_err(|e| AppError::Config(e))?;
+            .map_err(AppError::Config)?;
         save_client_config(&state.db_pool, &client_info).await;
         return Ok(
             serde_json::json!({"message": format!("Successfully updated client {}", client_id)}),

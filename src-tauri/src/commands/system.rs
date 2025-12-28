@@ -136,19 +136,48 @@ pub async fn initialize_server(state: State<'_, AppState>) -> Result<String, Str
     let settings = state.settings.read().await;
 
     // Create directories
-    let dirs = [
-        &settings.tftp.root_dir,
-        &settings.iscsi.targets_dir,
-        &settings.nfs.exports_dir,
-        &settings.samba.share_path,
-        &settings.storage.images_dir,
-        &settings.storage.snapshots_dir,
-    ];
-
-    for dir in dirs {
-        std::fs::create_dir_all(dir)
-            .map_err(|e| format!("Failed to create {}: {}", dir.display(), e))?;
-    }
+    std::fs::create_dir_all(&settings.tftp.root_dir).map_err(|e| {
+        format!(
+            "Failed to create {:?}: {}",
+            settings.tftp.root_dir,
+            e
+        )
+    })?;
+    std::fs::create_dir_all(&settings.iscsi.targets_dir).map_err(|e| {
+        format!(
+            "Failed to create {:?}: {}",
+            settings.iscsi.targets_dir,
+            e
+        )
+    })?;
+    std::fs::create_dir_all(&settings.nfs.exports_dir).map_err(|e| {
+        format!(
+            "Failed to create {:?}: {}",
+            settings.nfs.exports_dir,
+            e
+        )
+    })?;
+    std::fs::create_dir_all(&settings.samba.share_path).map_err(|e| {
+        format!(
+            "Failed to create {:?}: {}",
+            settings.samba.share_path,
+            e
+        )
+    })?;
+    std::fs::create_dir_all(&settings.storage.images_dir).map_err(|e| {
+        format!(
+            "Failed to create {:?}: {}",
+            settings.storage.images_dir,
+            e
+        )
+    })?;
+    std::fs::create_dir_all(&settings.storage.snapshots_dir).map_err(|e| {
+        format!(
+            "Failed to create {:?}: {}",
+            settings.storage.snapshots_dir,
+            e
+        )
+    })?;
 
     Ok("Server initialized successfully".to_string())
 }
@@ -215,11 +244,20 @@ pub async fn get_settings(state: State<'_, AppState>) -> Result<Settings, String
 
 #[tauri::command]
 pub async fn save_settings(state: State<'_, AppState>, settings: Settings) -> Result<(), String> {
+    // Update the in-memory settings
     let mut current = state.settings.write().await;
     *current = settings.clone();
-    current
-        .save(&state.config_path)
-        .map_err(|e| e.to_string())?;
-    tracing::info!("Settings saved to {}", state.config_path.display());
+
+    // Update the settings in the database
+    let current_config = crate::config::get_config();
+    let mut new_config = current_config;
+    new_config.settings = serde_json::to_value(&*current)
+        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
+
+    crate::config::write_config(&state.db_pool, &new_config)
+        .await
+        .map_err(|e| format!("Failed to write config to database: {}", e))?;
+
+    tracing::info!("Settings saved to database");
     Ok(())
 }

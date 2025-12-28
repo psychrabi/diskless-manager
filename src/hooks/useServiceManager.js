@@ -15,19 +15,19 @@ export const useServiceManager = () => {
         serviceKey,
       });
 
-      let configText = "";
-      if (
-        configData &&
-        typeof configData === "object" &&
-        "text" in configData
-      ) {
-        configText = configData.text;
-      } else if (typeof configData === "object") {
-        configText = JSON.stringify(configData, null, 2);
-      } else {
-        configText = String(configData);
-      }
-      return { text: configText, path: configData.path };
+      // let configText = "";
+      // if (
+      //   configData &&
+      //   typeof configData === "object" &&
+      //   "text" in configData
+      // ) {
+      //   configText = configData.text;
+      // } else if (typeof configData === "object") {
+      //   configText = JSON.stringify(configData, null, 2);
+      // } else {
+      //   configText = String(configData);
+      // }
+      return { text: configData?.text, path: configData.path };
     } catch (err) {
       error(`Error loading configuration: \n${err.message} `);
     }

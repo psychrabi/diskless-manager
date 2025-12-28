@@ -303,7 +303,7 @@ pub fn delete_zfs_dataset(dataset: &str, recursive: bool) -> Result<String, Stri
         vec!["zfs", "destroy", dataset]
     };
     // convert to slice of &str
-    let args_ref: Vec<&str> = args.iter().copied().collect();
+    let args_ref: Vec<&str> = args.to_vec();
     run_command(&args_ref).map_err(|e| e.to_string())?;
 
     // Invalidate cache since we've modified datasets

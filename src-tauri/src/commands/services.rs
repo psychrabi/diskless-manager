@@ -1,5 +1,9 @@
+use crate::cmd::run_command_output;
+use crate::error::AppError;
 use crate::services::ServiceManager;
 use crate::state::AppState;
+use log::info;
+use serde_json::{json, Value};
 use tauri::State;
 
 // Convert the new service status to the format expected by the frontend
@@ -143,30 +147,47 @@ pub async fn restart_service(state: State<'_, AppState>, name: String) -> Result
 #[tauri::command]
 pub async fn get_service_config(
     state: State<'_, AppState>,
+    service_key: String,
+) -> Result<Value, String> {
+    info!("get_service_config: {}", service_key);
+
+    match service_key.as_str() {
+        "tftp-autoexec" => match run_command_output(["cat", "/srv/tftp/autoexec.ipxe"]) {
+            Ok(content) => {
+                info!("Read {}: {} bytes", service_key, content.len());
+                Ok(json!({ "text": content, "path": "/srv/tftp/autoexec.ipxe" }))
+            }
+            Err(e) => Err(AppError::Io(std::io::Error::other(format!(
+                "Failed to read {}: {}",
+                "/srv/tftp/autoexec.ipxe", e
+            )))
+            .to_string()),
+        },
+        _ => {
+            let settings = state.settings.read().await;
+            let service_manager = ServiceManager::new(settings.clone(), state.db_pool.clone());
+            let config = service_manager
+                .get_config(&service_key)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(json!({ "text": config }))
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn configure_service(
+    state: State<'_, AppState>,
     service_name: String,
-) -> Result<serde_json::Value, String> {
+) -> Result<String, String> {
     let settings = state.settings.read().await;
     let service_manager = ServiceManager::new(settings.clone(), state.db_pool.clone());
-    let config = service_manager
-        .get_config(&service_name)
+    service_manager
+        .generate_service_config(&service_name)
         .await
         .map_err(|e| e.to_string())?;
 
-    // Determine the config file path based on service name
-    let config_path = match service_name.as_str() {
-        "http" | "apache2" => "/etc/apache2/sites-available/diskless-server.conf",
-        "samba" | "smbd" => "/etc/samba/smb.conf",
-        "tftp" | "tftpd-hpa" => "/etc/default/tftpd-hpa",
-        "dhcp" | "isc-dhcp-server" => "/etc/dhcp/dhcpd.conf",
-        "nfs" | "nfs-kernel-server" => "/etc/exports",
-        "iscsi" | "rtslib-fb-targetctl" => "/etc/target/saveconfig.json",
-        _ => "/etc/default/config",
-    };
-
-    Ok(serde_json::json!({
-        "text": config,
-        "path": config_path
-    }))
+    Ok(format!("Service {} configured successfully", service_name))
 }
 
 #[tauri::command]

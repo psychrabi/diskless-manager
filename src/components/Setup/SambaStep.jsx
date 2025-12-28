@@ -3,8 +3,8 @@ import { useForm } from "react-hook-form";
 import { Button, Input } from "../ui";
 
 const sambaInitial = {
-  name: "game",
-  path: "/storage/diskless/game",
+  name: "shared",
+  path: "/srv/shared",
   read_only: false,
   guest_ok: true,
 };

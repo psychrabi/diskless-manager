@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 
 use crate::core::config::Settings;
-use crate::services::{get_service_pid, is_systemd_service_running, ServiceStatus};
+use crate::services::{
+    get_service_pid, is_systemd_service_running, write_with_sudo_tee, ServiceStatus,
+};
 use tokio::process::Command;
 
 pub struct TftpService {
@@ -18,44 +20,12 @@ impl TftpService {
             r#"TFTP_USERNAME="tftp"
 TFTP_DIRECTORY="{}"
 TFTP_ADDRESS="0.0.0.0:{}"
-TFTP_OPTIONS="--secure --verbose"
+TFTP_OPTIONS="{}"
 "#,
-            self.settings.tftp.root_dir.display(),
-            self.settings.tftp.port
+            self.settings.tftp.root_dir, self.settings.tftp.port, self.settings.tftp.options
         );
 
-        // Use pkexec to write to system configuration file
-        use tokio::process::Command;
-        let mut child = Command::new("pkexec")
-            .arg("tee")
-            .arg("/etc/default/tftpd-hpa")
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::null())
-            .spawn()
-            .map_err(|e| anyhow::anyhow!("Failed to spawn pkexec tee: {}", e))?;
-
-        if let Some(ref mut stdin) = child.stdin {
-            use tokio::io::AsyncWriteExt;
-            stdin
-                .write_all(tftp_default.as_bytes())
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to write config to stdin: {}", e))?;
-            stdin
-                .flush()
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to flush stdin: {}", e))?;
-        }
-
-        let status = child
-            .wait()
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to wait for pkexec tee: {}", e))?;
-
-        if !status.success() {
-            return Err(anyhow::anyhow!(
-                "Failed to write TFTP config file with pkexec tee"
-            ));
-        }
+        write_with_sudo_tee("/etc/default/tftpd-hpa", &tftp_default).await?;
 
         tracing::info!("TFTP configuration written to /etc/default/tftpd-hpa");
         Ok(())
@@ -106,10 +76,9 @@ TFTP_OPTIONS="--secure --verbose"
 TFTP_USERNAME="tftp"
 TFTP_DIRECTORY="{}"
 TFTP_ADDRESS="0.0.0.0:{}"
-TFTP_OPTIONS="--secure --verbose"
+TFTP_OPTIONS="{}"
 "#,
-                self.settings.tftp.root_dir.display(),
-                self.settings.tftp.port
+                self.settings.tftp.root_dir, self.settings.tftp.port, self.settings.tftp.options
             );
             Ok(tftp_default)
         }

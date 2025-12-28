@@ -32,10 +32,7 @@ pub async fn update_dhcp_config(
         .map_err(|e| format!("Failed to acquire lock: {}", e))?;
 
     // Read current config async (allow empty if file doesn't exist)
-    let mut content = match run_command_output(["cat", DHCP_CLIENTS_PATH]) {
-        Ok(output) => output,
-        Err(_) => String::new(),
-    };
+    let mut content = run_command_output(["cat", DHCP_CLIENTS_PATH]).unwrap_or_default();
 
     // Backup
     let backup_dir = "/srv/tftp/backups";

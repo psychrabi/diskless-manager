@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Settings {
     pub server: ServerConfig,
     pub dhcp: DhcpConfig,
@@ -9,7 +9,7 @@ pub struct Settings {
     pub iscsi: IscsiConfig,
     pub nfs: NfsConfig,
     #[serde(default)]
-    pub http: HTTPConfig,
+    pub http: HttpConfig,
     #[serde(default)]
     pub samba: SambaConfig,
     pub storage: StorageConfig,
@@ -37,40 +37,59 @@ impl Default for ServerConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DhcpConfig {
     pub enabled: bool,
-    pub range_start: String,
-    pub range_end: String,
+    pub subnet_ip: String,
+    pub start_ip: String,
+    pub end_ip: String,
     pub subnet_mask: String,
-    pub gateway: String,
-    pub dns_servers: Vec<String>,
-    pub lease_time: u32,
+    pub gateway_ip: String,
+    pub dns_server1: String,
+    pub dns_server2: String,
+    pub broadcast_ip: String,
+    pub next_server_ip: String,
+    pub boot_server_ip: String,
+    pub boot_script: String,
+    pub boot_file_legacy: String,
+    pub boot_file_uefi32: String,
+    pub boot_file_uefi64: String,
 }
 
 impl Default for DhcpConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            range_start: "192.168.1.100".to_string(),
-            range_end: "192.168.1.200".to_string(),
+            subnet_ip: "192.168.1.0".to_string(),
+            start_ip: "192.168.1.100".to_string(),
+            end_ip: "192.168.1.200".to_string(),
             subnet_mask: "255.255.255.0".to_string(),
-            gateway: "192.168.1.1".to_string(),
-            dns_servers: vec!["8.8.8.8".to_string(), "8.8.4.4".to_string()],
-            lease_time: 86400,
+            gateway_ip: "192.168.1.1".to_string(),
+            dns_server1: "1.1.1.1".to_string(),
+            dns_server2: "1.0.0.1".to_string(),
+            broadcast_ip: "192.168.1.255".to_string(),
+            next_server_ip: "192.168.1.1".to_string(),
+            boot_server_ip: "192.168.1.1".to_string(),
+            boot_script: "autoexec.ipxe".to_string(),
+            boot_file_legacy: "undionly.kpxe".to_string(),
+            boot_file_uefi32: "ipxe.efi".to_string(),
+            boot_file_uefi64: "ipxe.efi".to_string(),
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HTTPConfig {
+
+pub struct HttpConfig {
     pub enabled: bool,
-    pub root_dir: PathBuf,
+    pub root_dir: String,
+    pub server_ip: String,
     pub port: u16,
 }
 
-impl Default for HTTPConfig {
+impl Default for HttpConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            root_dir: PathBuf::from("/var/lib/tftpboot"),
+            root_dir: PathBuf::from("/srv/tftp").display().to_string(),
+            server_ip: "192.168.1.1".to_string(),
             port: 80,
         }
     }
@@ -79,16 +98,20 @@ impl Default for HTTPConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TftpConfig {
     pub enabled: bool,
-    pub root_dir: PathBuf,
+    pub root_dir: String,
+    pub server_ip: String,
     pub port: u16,
+    pub options: String,
 }
 
 impl Default for TftpConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            root_dir: PathBuf::from("/var/lib/tftpboot"),
+            root_dir: PathBuf::from("/srv/tftp").display().to_string(),
+            server_ip: "192.168.1.1".to_string(),
             port: 69,
+            options: "--secure --verbose".to_string(),
         }
     }
 }
@@ -143,7 +166,7 @@ impl Default for SambaConfig {
             enabled: true,
             workgroup: "WORKGROUP".to_string(),
             share_name: "diskless".to_string(),
-            share_path: PathBuf::from("/srv/samba/diskless"),
+            share_path: PathBuf::from("/srv/shared"),
             read_only: false,
             guest_ok: true,
         }
@@ -185,20 +208,5 @@ impl Settings {
         }
         std::fs::write(path, content)?;
         Ok(())
-    }
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            server: ServerConfig::default(),
-            dhcp: DhcpConfig::default(),
-            tftp: TftpConfig::default(),
-            iscsi: IscsiConfig::default(),
-            nfs: NfsConfig::default(),
-            http: HTTPConfig::default(),
-            samba: SambaConfig::default(),
-            storage: StorageConfig::default(),
-        }
     }
 }

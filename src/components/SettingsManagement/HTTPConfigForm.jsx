@@ -13,9 +13,9 @@ export default function HTTPConfigForm() {
 
   const { register, handleSubmit, reset } = useForm({
     defaultValues: {
-      http_root: "/srv/tftp",
-      http_server_ip: "*",
-      http_server_port: "80",
+      root_dir: "/srv/tftp",
+      server_ip: "*",
+      port: "80",
     },
   });
 
@@ -36,20 +36,20 @@ export default function HTTPConfigForm() {
       <form onSubmit={handleSubmit(onSubmit)}>
         <div className="space-y-4">
           <Input
-            id="http_root"
-            register={register("http_root")}
+            id="root_dir"
+            register={register("root_dir")}
             label="HTTP Root Directory"
             placeholder="/srv/http"
           />
           <Input
-            id="http_server_ip"
-            register={register("http_server_ip")}
+            id="server_ip"
+            register={register("server_ip")}
             label="HTTP Server IP"
             placeholder="*"
           />
           <Input
-            id="http_server_port"
-            register={register("http_server_port")}
+            id="port"
+            register={register("port")}
             label="HTTP Server Port"
             placeholder="80"
           />

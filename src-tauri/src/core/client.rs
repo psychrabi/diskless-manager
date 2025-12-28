@@ -164,10 +164,16 @@ impl ClientManager {
                 master: row.master,
                 enabled: row.enabled,
                 created_at: DateTime::parse_from_rfc3339(&row.created_at)
-                    .expect("Failed to parse created_at")
+                    .unwrap_or_else(|_| {
+                        // If parsing fails, use current time as fallback
+                        chrono::Utc::now().into()
+                    })
                     .into(),
                 updated_at: DateTime::parse_from_rfc3339(&row.updated_at)
-                    .expect("Failed to parse updated_at")
+                    .unwrap_or_else(|_| {
+                        // If parsing fails, use current time as fallback
+                        chrono::Utc::now().into()
+                    })
                     .into(),
                 snapshot: row.snapshot,
                 block_store: row.block_store,
@@ -212,10 +218,16 @@ impl ClientManager {
 
             enabled: row.enabled,
             created_at: DateTime::parse_from_rfc3339(&row.created_at)
-                .expect("Failed to parse created_at")
+                .unwrap_or_else(|_| {
+                    // If parsing fails, use current time as fallback
+                    chrono::Utc::now().into()
+                })
                 .into(),
             updated_at: DateTime::parse_from_rfc3339(&row.updated_at)
-                .expect("Failed to parse updated_at")
+                .unwrap_or_else(|_| {
+                    // If parsing fails, use current time as fallback
+                    chrono::Utc::now().into()
+                })
                 .into(),
             snapshot: row.snapshot,
             block_store: row.block_store,
@@ -258,8 +270,8 @@ impl ClientManager {
         .bind(&client.block_device)
         .bind(&client.status)
         .bind(&client.mode)
-        .bind(&client.keep_writeback)
-        .bind(&client.use_game_disk)
+        .bind(client.keep_writeback)
+        .bind(client.use_game_disk)
         .execute(&self.pool)
         .await?;
 
@@ -314,8 +326,8 @@ impl ClientManager {
         .bind(&client.block_device)
         .bind(&client.status)
         .bind(&client.mode)
-        .bind(&client.keep_writeback)
-        .bind(&client.use_game_disk)
+        .bind(client.keep_writeback)
+        .bind(client.use_game_disk)
         .bind(client.enabled)
         .bind(client.updated_at.to_rfc3339())
         .bind(&client.id)

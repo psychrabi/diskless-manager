@@ -319,7 +319,7 @@ pub fn get_ram_usage() -> Result<RamUsage, AppError> {
 /// Clear RAM cache (sync and drop caches)
 #[tauri::command]
 pub fn clear_ram_cache() -> Result<serde_json::Value, AppError> {
-    Command::new("pkexec")
+    Command::new("sudo")
         .arg("sh")
         .arg("-c")
         .arg("sync && echo 3 > /proc/sys/vm/drop_caches")
@@ -329,9 +329,19 @@ pub fn clear_ram_cache() -> Result<serde_json::Value, AppError> {
 }
 
 #[tauri::command]
-pub fn get_service_logs(unit: String, lines: Option<u32>) -> Result<String, AppError> {
+pub fn get_service_logs(service_name: String, lines: Option<u32>) -> Result<String, AppError> {
+    let service = match service_name.as_str() {
+        "http" => "apache2",
+        "samba" => "smbd",
+        "tftp" => "tftpd-hpa",
+        "dhcp" => "isc-dhcp-server",
+        "nfs" => "nfs-kernel-server",
+        "iscsi" => "rtslib-fb-targetctl",
+        _ => "/etc/default/config",
+    };
+
     let num = lines.unwrap_or(200).to_string();
-    let args_vec: Vec<_> = vec!["journalctl", "-u", &unit, "-n", &num, "--no-pager"];
+    let args_vec: Vec<_> = vec!["journalctl", "-u", &service, "-n", &num, "--no-pager"];
     let output = run_command_output_no_sudo(args_vec.iter())?;
     Ok(output)
 }

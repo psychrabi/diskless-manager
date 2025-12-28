@@ -30,8 +30,8 @@ const ServiceManagement = () => {
         const data = await fetchServiceConfig(serviceKey);
         setModalState((prev) => ({
           ...prev,
-          configContent: data.text,
-          path: data.path,
+          configContent: data?.text || "No service config found",
+          path: data?.path || "",
           loading: false,
         }));
       } catch (error) {
@@ -42,7 +42,7 @@ const ServiceManagement = () => {
         }));
       }
     },
-    [fetchServiceConfig],
+    [fetchServiceConfig]
   );
 
   const closeModal = useCallback(() => {
@@ -50,28 +50,31 @@ const ServiceManagement = () => {
   }, []);
 
   return (
-    <Card title="Service Management" icon={Server} className="bg-base-300" actions={
-      <>
-        <Button
-          icon={PlayCircle}
-          variant="success"
-
-          onClick={() => startAllServices()}
-          title="Start all services"
-        >
-          Start All
-        </Button>
-        <Button
-          icon={StopCircle}
-          variant="destructive"
-
-          onClick={() => stopAllServices()}
-          title="Stop all services"
-        >
-          Stop All
-        </Button>
-      </>
-    }>
+    <Card
+      title="Service Management"
+      icon={Server}
+      className="bg-base-300"
+      actions={
+        <>
+          <Button
+            icon={PlayCircle}
+            variant="success"
+            onClick={() => startAllServices()}
+            title="Start all services"
+          >
+            Start All
+          </Button>
+          <Button
+            icon={StopCircle}
+            variant="destructive"
+            onClick={() => stopAllServices()}
+            title="Stop all services"
+          >
+            Stop All
+          </Button>
+        </>
+      }
+    >
       <div className="min-h-[calc(100vh-13rem)] space-y-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           <ServicesList onViewConfig={handleViewConfig} />
