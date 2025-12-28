@@ -23,7 +23,7 @@ const CreateImageModal = ({
   const {
     register,
     handleSubmit,
-    formState: { errors },
+    formState: { errors, isSubmitting },
   } = useForm({
     resolver: zodResolver(imageSchema),
     defaultValues: {
@@ -111,13 +111,19 @@ const CreateImageModal = ({
           )}
         </fieldset>
         <div className="mt-6 flex justify-end space-x-3">
-          <Button type="submit" variant="primary" icon={Save}>
-            Create Image
+          <Button
+            type="submit"
+            variant="primary"
+            icon={Save}
+            disabled={isSubmitting}
+          >
+            {isSubmitting ? "Creating..." : "Create Image"}
           </Button>
           <Button
             type="button"
             variant="destructive"
             onClick={() => setOpenImageCreateModal(false)}
+            disabled={isSubmitting}
           >
             Cancel
           </Button>

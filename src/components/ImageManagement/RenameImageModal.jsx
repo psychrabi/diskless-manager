@@ -29,7 +29,7 @@ const RenameImageModal = ({
   const {
     register,
     handleSubmit,
-    formState: { errors },
+    formState: { errors, isSubmitting },
     reset,
   } = useForm({
     resolver: zodResolver(renameImageSchema),
@@ -112,10 +112,20 @@ const RenameImageModal = ({
         </div>
 
         <div className="mt-6 flex justify-end space-x-3">
-          <Button type="submit" variant="primary" icon={Save}>
-            Rename Image
+          <Button
+            type="submit"
+            variant="primary"
+            icon={Save}
+            disabled={isSubmitting}
+          >
+            {isSubmitting ? "Renaming..." : "Rename Image"}
           </Button>
-          <Button type="button" variant="destructive" onClick={handleClose}>
+          <Button
+            type="button"
+            variant="destructive"
+            onClick={handleClose}
+            disabled={isSubmitting}
+          >
             Cancel
           </Button>
         </div>

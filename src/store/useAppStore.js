@@ -383,6 +383,12 @@ export const useAppStore = create()(
     {
       name: "diskless", // name of the item in the storage (must be unique)
       storage: createJSONStorage(() => localStorage), // (optional) by default, 'localStorage' is used
+      partialize: (state) => ({
+        // Only persist user preferences, not dynamic server data
+        // This prevents stale data and reduces localStorage footprint
+        selectedSnapshot: state.selectedSnapshot,
+        // Add other UI preferences here as needed
+      }),
     }
   )
 );

@@ -73,22 +73,26 @@ export const useMasterManager = () => {
       cancelText: "Cancel",
       confirmVariant: "primary",
       size: "2xl",
-    }).then((ok) => {
-      if (!ok) return;
-      const token = localStorage.getItem("authToken") || "";
-      invoke("delete_snapshot", {
-        token,
-        masterName: image,
-        snapshotName: snapshot,
-      })
-        .then(async (response) => {
-          await fetchImages();
-          if (response.message) success(response.message);
+    })
+      .then((ok) => {
+        if (!ok) return;
+        const token = localStorage.getItem("authToken") || "";
+        invoke("delete_snapshot", {
+          token,
+          masterName: image,
+          snapshotName: snapshot,
         })
-        .catch((err) => {
-          error(err?.error || String(err));
-        });
-    });
+          .then(async (response) => {
+            await fetchImages();
+            if (response.message) success(response.message);
+          })
+          .catch((err) => {
+            error(err?.error || String(err));
+          });
+      })
+      .catch((err) => {
+        console.error("Confirmation dialog error:", err);
+      });
   };
 
   const handleRollbackSnapshot = async (snapshot, image) => {
@@ -100,22 +104,26 @@ export const useMasterManager = () => {
       cancelText: "Cancel",
       confirmVariant: "primary",
       size: "2xl",
-    }).then((ok) => {
-      if (!ok) return;
-      const token = localStorage.getItem("authToken") || "";
-      invoke("rollback_image_snapshot", {
-        token,
-        masterName: image,
-        snapshotName: snapshot,
-      })
-        .then(async (response) => {
-          await fetchImages();
-          if (response.message) success(response.message);
+    })
+      .then((ok) => {
+        if (!ok) return;
+        const token = localStorage.getItem("authToken") || "";
+        invoke("rollback_image_snapshot", {
+          token,
+          masterName: image,
+          snapshotName: snapshot,
         })
-        .catch((err) => {
-          error(err?.error || String(err));
-        });
-    });
+          .then(async (response) => {
+            await fetchImages();
+            if (response.message) success(response.message);
+          })
+          .catch((err) => {
+            error(err?.error || String(err));
+          });
+      })
+      .catch((err) => {
+        console.error("Confirmation dialog error:", err);
+      });
   };
 
   const setDefaultMaster = async (masterName) => {
@@ -140,21 +148,25 @@ export const useMasterManager = () => {
       cancelText: "Cancel",
       confirmVariant: "primary",
       size: "2xl",
-    }).then((ok) => {
-      if (!ok) return;
-      const token = localStorage.getItem("authToken") || "";
-      try {
-        const response = invoke("delete_image", {
-          token,
-          masterName: image,
-        });
-        fetchImages();
-        if (response.message) success(response.message);
-        if (response.error) error(response.error);
-      } catch (err) {
-        error(err?.error || "Unknown error");
-      }
-    });
+    })
+      .then(async (ok) => {
+        if (!ok) return;
+        const token = localStorage.getItem("authToken") || "";
+        try {
+          const response = await invoke("delete_image", {
+            token,
+            masterName: image,
+          });
+          await fetchImages();
+          if (response.message) success(response.message);
+          if (response.error) error(response.error);
+        } catch (err) {
+          error(err?.error || "Unknown error");
+        }
+      })
+      .catch((err) => {
+        console.error("Confirmation dialog error:", err);
+      });
   };
 
   const handleOpenDeleteMasterModal = useCallback((master) => {
