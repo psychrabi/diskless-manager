@@ -149,6 +149,12 @@ include "/etc/dhcp/clients.conf";
 
         tracing::info!("DHCP configuration written to {}", dhcp_path.display());
 
+        Command::new("sudo")
+            .args(["rm", "/var/lib/dhcp/dhcpd.leases"])
+            .status()
+            .await?;
+        tracing::info!("DHCP leases cleared");
+
         // Add static host entries for registered clients
         let client_manager = ClientManager::new(self.db_pool.clone());
         let clients = client_manager.list().await?;
@@ -207,7 +213,7 @@ host {name} {{
 
     pub async fn reload(&self) -> anyhow::Result<()> {
         Command::new("systemctl")
-            .args(["reload", "isc-dhcp-server"])
+            .args(["restart", "isc-dhcp-server"])
             .status()
             .await?;
         tracing::info!("DHCP service reloaded");

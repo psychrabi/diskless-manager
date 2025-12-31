@@ -3,40 +3,7 @@ import { Network } from "lucide-react";
 import { useForm } from "react-hook-form";
 import z from "zod";
 import { Button, Input } from "../ui";
-
-const dhcpSchema = z.object({
-  subnet_ip: z.ipv4(),
-  start_ip: z.ipv4(),
-  end_ip: z.ipv4(),
-  subnet_mask: z.ipv4(),
-  gateway_ip: z.ipv4(),
-  dns_server1: z.ipv4(),
-  dns_server2: z.ipv4(),
-  broadcast_ip: z.ipv4(),
-  next_server_ip: z.ipv4(),
-  boot_server_ip: z.ipv4(),
-  boot_script: z.string().default("autoexec.ipxe"),
-  boot_file_legacy: z.string().default("ipxe.kpxe"),
-  boot_file_uefi32: z.string().default("ipxe.efi"),
-  boot_file_uefi64: z.string().default("ipxe.efi"),
-});
-
-const dhcpInitial = {
-  subnet_ip: "192.168.1.0",
-  start_ip: "192.168.1.120",
-  end_ip: "192.168.1.130",
-  subnet_mask: "255.255.255.0",
-  gateway_ip: "192.168.1.1",
-  dns_server1: "1.1.1.1",
-  dns_server2: "1.0.0.1",
-  broadcast_ip: "192.168.1.255",
-  next_server_ip: "192.168.1.1",
-  boot_server_ip: "192.168.1.1",
-  boot_script: "autoexec.ipxe",
-  boot_file_legacy: "ipxe.kpxe",
-  boot_file_uefi32: "ipxe.efi",
-  boot_file_uefi64: "ipxe.efi",
-};
+import { dhcpSchema } from "@/schema";
 
 const DHCPStep = ({ onSubmit, isSubmitting, initialConfig }) => {
   const {
@@ -45,7 +12,7 @@ const DHCPStep = ({ onSubmit, isSubmitting, initialConfig }) => {
     formState: { errors },
   } = useForm({
     resolver: zodResolver(dhcpSchema),
-    defaultValues: initialConfig ?? dhcpInitial,
+    defaultValues: initialConfig || {},
   });
 
   return (
@@ -63,6 +30,16 @@ const DHCPStep = ({ onSubmit, isSubmitting, initialConfig }) => {
 
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         <div className="grid grid-cols-3 gap-4">
+          <label htmlFor="enabled" className="label col-span-3">
+            <input
+              id="enabled"
+              className="checkbox"
+              {...register("enabled")}
+              type="checkbox"
+              defaultChecked={true}
+            />
+            DHCP Server (Start at boot)
+          </label>
           <Input
             label="Start IP"
             register={register("start_ip")}
@@ -143,7 +120,7 @@ const DHCPStep = ({ onSubmit, isSubmitting, initialConfig }) => {
         <Button
           type="submit"
           variant="primary"
-          className="w-full"
+          className="w-full mt-4"
           loading={isSubmitting}
         >
           {isSubmitting ? "Configuring DHCP..." : "Save & Continue"}

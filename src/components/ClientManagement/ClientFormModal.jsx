@@ -6,26 +6,7 @@ import { useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
 import { useToastStore } from "@/store/useToastStore";
 import { Button, Input, Modal, Select } from "../ui";
-
-const clientSchema = z.object({
-  name: z.string().min(1, "Client name is required"),
-  mac: z
-    .string()
-    .regex(
-      /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/,
-      "Invalid MAC address format",
-    ),
-  ip: z
-    .string()
-    .regex(
-      /^([\d]{1,3}\.){3}\d{1,3}$/,
-      "Invalid IP address format. Use X.X.X.X",
-    ),
-  master: z.string().optional(),
-  snapshot: z.string().optional().nullable(),
-  keep_writeback: z.boolean().optional(),
-  use_game_disk: z.boolean().optional(),
-});
+import { clientSchema } from "@/schema";
 
 const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
   const { success, info } = useToastStore();
@@ -74,7 +55,7 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
     try {
       if (!client.id) {
         info(`Adding new client ${data.name}`);
-        await invoke("add_client", { token, req: data });
+        // await invoke("add_client", { token, req: data });
         success(`Client ${data.name} added successfully.`);
       } else {
         info(`Editing client ${data.name}`);
@@ -180,7 +161,7 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
               type="checkbox"
               className="checkbox checkbox-primary"
               {...register("keep_writeback")}
-              defaultChecked={client?.keep_writeback !== false}
+              defaultChecked={client?.keep_writeback}
             />
             <div className="flex flex-col">
               <span className="label-text font-medium">

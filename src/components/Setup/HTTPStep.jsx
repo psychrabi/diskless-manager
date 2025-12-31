@@ -1,12 +1,7 @@
+import { zodResolver } from "@hookform/resolvers/zod";
 import { Globe } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { Button, Input } from "../ui";
-
-const httpInitial = {
-  root_dir: "/srv/tftp",
-  server_ip: "*",
-  port: "80",
-};
 
 const HTTPStep = ({ onSubmit, isSubmitting, initialConfig }) => {
   const {
@@ -14,7 +9,8 @@ const HTTPStep = ({ onSubmit, isSubmitting, initialConfig }) => {
     handleSubmit,
     formState: { errors },
   } = useForm({
-    defaultValues: initialConfig || httpInitial,
+    defaultValues: initialConfig || {},
+    resolver: zodResolver(httpSchema),
   });
 
   return (

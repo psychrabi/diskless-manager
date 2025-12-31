@@ -1,48 +1,12 @@
 import { useSettings } from "@/hooks/useSettings";
+import { dhcpSchema } from "@/schema";
 import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Network } from "lucide-react";
 import { useEffect } from "react";
 import { useForm } from "react-hook-form";
-import z from "zod";
 import { Button, Card, Input } from "../ui";
-
-const dhcpSchema = z.object({
-  enabled: z.boolean(),
-  subnet_ip: z.ipv4(),
-  start_ip: z.ipv4(),
-  end_ip: z.ipv4(),
-  subnet_mask: z.ipv4(),
-  gateway_ip: z.ipv4(),
-  dns_server1: z.ipv4(),
-  dns_server2: z.ipv4(),
-  broadcast_ip: z.ipv4(),
-  next_server_ip: z.ipv4(),
-  boot_server_ip: z.ipv4(),
-  boot_script: z.string().optional(),
-  boot_file_legacy: z.string().optional(),
-  boot_file_uefi32: z.string().optional(),
-  boot_file_uefi64: z.string().optional(),
-});
-
-const dhcpInitial = {
-  enabled: true,
-  subnet_ip: "192.168.1.0",
-  start_ip: "192.168.1.120",
-  end_ip: "192.168.1.130",
-  subnet_mask: "255.255.255.0",
-  gateway_ip: "192.168.1.254",
-  dns_server1: "1.1.1.1",
-  dns_server2: "1.0.0.1",
-  broadcast_ip: "192.168.1.255",
-  next_server_ip: "192.168.1.250",
-  boot_server_ip: "192.168.1.250",
-  boot_script: "autoexec.ipxe",
-  boot_file_legacy: "ipxe.kpxe",
-  boot_file_uefi32: "ipxe.efi",
-  boot_file_uefi64: "ipxe.efi",
-};
 
 // ...
 
@@ -58,7 +22,7 @@ export default function DHCPConfigForm() {
     reset,
   } = useForm({
     resolver: zodResolver(dhcpSchema),
-    defaultValues: dhcpInitial,
+    defaultValues: config?.settings?.dhcp || {},
   });
 
   // Load saved config when config from store changes
@@ -69,7 +33,7 @@ export default function DHCPConfigForm() {
       reset(config.settings.dhcp);
       console.log(config);
     } else {
-      reset(dhcpInitial);
+      reset({});
     }
   }, [config, reset]);
 
@@ -88,15 +52,17 @@ export default function DHCPConfigForm() {
         </div>
       )}
       <form onSubmit={handleSubmit(onSubmit)}>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-          <input
-            label="Enabled"
-            id="enabled"
-            className="checkbox"
-            {...register("enabled")}
-            type="checkbox"
-            defaultChecked={dhcpInitial.enabled}
-          />
+        <div className="grid grid-cols-3 gap-4">
+          <label htmlFor="enabled" className="label col-span-3">
+            <input
+              id="enabled"
+              className="checkbox"
+              {...register("enabled")}
+              type="checkbox"
+              defaultChecked={config?.settings?.dhcp?.enabled}
+            />
+            DHCP Server (Start at boot)
+          </label>
           <Input
             label="DHCP Start IP"
             id="dhcpstart_ip"
@@ -196,7 +162,12 @@ export default function DHCPConfigForm() {
             error={errors.boot_file_uefi64?.message}
           />
         </div>
-        <Button variant="primary" type="submit" disabled={isSubmitting}>
+        <Button
+          variant="primary"
+          type="submit"
+          className="mt-4"
+          loading={isSubmitting}
+        >
           {isSubmitting ? "Saving..." : "Save DHCP Settings"}
         </Button>
       </form>

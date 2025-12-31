@@ -26,14 +26,7 @@ export const useSettings = () => {
         const updatedSettings = {
           ...currentSettings,
           dhcp: {
-            ...currentSettings.dhcp,
-            start_ip: config.start_ip,
-            end_ip: config.end_ip,
-            subnet_mask: config.subnet_mask,
-            gateway_ip: config.gateway_ip,
-            dns_server1: config.dns_server1,
-            dns_server2: config.dns_server2,
-            enabled: config.enabled,
+            ...config,
           },
         };
 
@@ -42,7 +35,7 @@ export const useSettings = () => {
 
         // Configure the DHCP service using the new settings
         await invoke("configure_service", { serviceName: "dhcp" });
-
+        await invoke("restart_service", { name: "dhcp" });
         success("DHCP configuration saved successfully", "success");
         return true;
       } catch (err) {
@@ -67,9 +60,7 @@ export const useSettings = () => {
         const updatedSettings = {
           ...currentSettings,
           tftp: {
-            ...currentSettings.tftp,
-            root_dir: tftpConfig.root_dir,
-            enabled: true, // Enable TFTP service
+            ...tftpConfig,
           },
         };
 
@@ -78,6 +69,7 @@ export const useSettings = () => {
 
         // Configure the TFTP service using the new settings
         await invoke("configure_service", { serviceName: "tftp" });
+        await invoke("restart_service", { name: "tftp" });
 
         success("TFTP configuration saved successfully", "success");
         return true;
@@ -102,9 +94,7 @@ export const useSettings = () => {
         const updatedSettings = {
           ...currentSettings,
           http: {
-            ...currentSettings.http,
-            root_dir: httpConfig.root_dir,
-            enabled: true, // Enable HTTP service
+            ...httpConfig,
           },
         };
 
@@ -113,20 +103,53 @@ export const useSettings = () => {
 
         // Configure the HTTP service using the new settings
         await invoke("configure_service", { serviceName: "http" });
+        await invoke("restart_service", { name: "http" });
 
         success("HTTP configuration saved successfully", "success");
         return true;
       } catch (err) {
-        error(
-          "Failed to configure HTTP server",
-          err.message || "An unknown error occurred"
-        );
+        error(err || "Failed to configure HTTP server");
         return false;
       } finally {
         setLoading(false);
       }
     },
     [error, success]
+  );
+
+  const updateSamba = useCallback(
+    async (sambaConfig) => {
+      console.log(sambaConfig);
+      setLoading(true);
+      try {
+        // First, get the current settings
+        const currentSettings = await invoke("get_settings");
+
+        // Update the Samba settings
+        const updatedSettings = {
+          ...currentSettings,
+          samba: {
+            ...sambaConfig,
+          },
+        };
+
+        // Save the updated settings
+        await invoke("save_settings", { settings: updatedSettings });
+
+        // Configure the Samba service using the new settings
+        await invoke("configure_service", { serviceName: "samba" });
+        await invoke("restart_service", { name: "samba" });
+
+        success("Samba configuration saved successfully", "success");
+        return true;
+      } catch (err) {
+        error(err);
+        return false;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [success, error]
   );
 
   const updatePassword = useCallback(
@@ -189,6 +212,7 @@ export const useSettings = () => {
     updateDhcp,
     updateTftp,
     updateHttp,
+    updateSamba,
     updatePassword,
     getLicenseInfo,
     activateLicense,

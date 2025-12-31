@@ -6,6 +6,7 @@ import BootProcessOverview from "./BootProcessOverview";
 import DHCPConfigForm from "./DHCPConfigForm";
 import HTTPConfigForm from "./HTTPConfigForm";
 import TFTPConfigForm from "./TFTPConfigForm";
+import SambaConfigForm from "./SambaConfigForm";
 
 const SettingsManagement = () => {
   const fetchConfig = useAppStore((state) => state.fetchConfig);
@@ -25,6 +26,7 @@ const SettingsManagement = () => {
 
           {/* TFTP Server Configuration */}
           <HTTPConfigForm />
+          <SambaConfigForm />
         </div>
         {/* Boot Process Overview Card */}
         <BootProcessOverview />

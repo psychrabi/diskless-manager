@@ -84,15 +84,12 @@ pub async fn save_service_config(
     validate_token(&token)?;
 
     let config_file_map = [
-        ("isc-dhcp-server", DHCP_CONFIG_PATH),
+        ("dhcp", DHCP_CONFIG_PATH),
         ("dhcp-clients", DHCP_CLIENTS_PATH),
         ("tftp-autoexec", TFTP_AUTOEXEC_PATH),
-        ("tftpd-hpa", "/etc/default/tftpd-hpa"),
-        (
-            "apache2",
-            "/etc/apache2/sites-available/diskless-server.conf",
-        ),
-        ("smbd", "/etc/samba/smb.conf"),
+        ("tftp", "/etc/default/tftpd-hpa"),
+        ("http", "/etc/apache2/sites-available/diskless-server.conf"),
+        ("samba", "/etc/samba/smb.conf"),
     ];
 
     let path = config_file_map
