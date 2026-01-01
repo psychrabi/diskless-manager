@@ -412,17 +412,17 @@ impl ImageManager {
         let image = self.get(id).await?;
 
         // Check if in use
-        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM clients WHERE image_id = ?")
-            .bind(&image.name)
-            .fetch_one(&self.pool)
-            .await?;
+        // let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM clients WHERE image_id = ?")
+        //     .bind(&image.name)
+        //     .fetch_one(&self.pool)
+        //     .await?;
 
-        if count.0 > 0 && !force {
-            return Err(anyhow::anyhow!(
-                "Image is in use by {} client(s). Use force=true to delete anyway.",
-                count.0
-            ));
-        }
+        // if count.0 > 0 && !force {
+        //     return Err(anyhow::anyhow!(
+        //         "Image is in use by {} client(s). Use force=true to delete anyway.",
+        //         count.0
+        //     ));
+        // }
 
         // Delete file
         if image.path.exists() {

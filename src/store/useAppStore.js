@@ -11,6 +11,7 @@ export const useAppStore = create()(
     (set, get) => ({
       clients: [],
       masters: [],
+      images: [],
       services: [],
       dependencies: [],
       services_status: {},
@@ -60,12 +61,23 @@ export const useAppStore = create()(
         }
       },
 
-      fetchImages: async () => {
+      fetchMasters: async () => {
         try {
           const token = localStorage.getItem("authToken") || "";
           const mastersRes = await invoke("get_images", { token });
 
           set({ masters: mastersRes || [] });
+        } catch (err) {
+          console.error("Failed to fetch images:", err);
+        }
+      },
+
+      fetchImages: async () => {
+        try {
+          const token = localStorage.getItem("authToken") || "";
+          const imagesRes = await invoke("list_images", { token });
+
+          set({ images: imagesRes || [] });
         } catch (err) {
           console.error("Failed to fetch images:", err);
         }

@@ -61,3 +61,16 @@ export const clientSchema = z.object({
   keep_writeback: z.boolean().optional(),
   use_game_disk: z.boolean().optional(),
 });
+
+export const imageSchema = z.object({
+  name: z.string().min(1, "Image name is required"),
+  os_type: z.enum(["linux", "windows"]).optional(),
+  size_gb: z.coerce.number().min(1, "Image Size is required"),
+  format: z.enum(["raw", "qcow2"]).optional(),
+  description: z.string().optional(),
+});
+
+export const cloneSchema = z.object({
+  image_id: z.string().min(1, "Image ID is required"),
+  name: z.string().min(1, "Image name is required"),
+});
