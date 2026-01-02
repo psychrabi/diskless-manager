@@ -3,9 +3,12 @@ import React from "react";
 import { useShallow } from "zustand/shallow";
 import { useAppStore } from "../../store/useAppStore";
 import { Button, Card } from "../ui";
+import { restartAllServices } from "@/api/commands";
+import { useConfirm } from "@/contexts/confirmDialog";
 
 export default function ServicesStatus() {
-  const { services, fetchServices } = useAppStore(
+  const confirm = useConfirm();
+  const { services } = useAppStore(
     useShallow((state) => ({
       services: state.services,
       fetchServices: state.fetchServices,
@@ -24,6 +27,16 @@ export default function ServicesStatus() {
     return icons[name] || Settings;
   }
 
+  async function restartService() {
+    await confirm({
+      title: "Restart All Services",
+      description: "Are you sure you want to restart all services?",
+      confirmButtonText: "Restart",
+      cancelButtonText: "Cancel",
+      onConfirm: () => restartAllServices(),
+    });
+  }
+
   return (
     <Card
       title="Services Status"
@@ -33,7 +46,7 @@ export default function ServicesStatus() {
           variant="ghost"
           size="icon"
           icon={RefreshCw}
-          onClick={() => fetchServices()}
+          onClick={() => restartService()}
           title="Refresh all services"
         />
       }
@@ -60,9 +73,8 @@ export default function ServicesStatus() {
                   </div>
                 </div>
                 <span
-                  className={`badge ${
-                    service.running ? "badge-success" : "badge-error"
-                  } badge-sm font-semibold`}
+                  className={`badge ${service.running ? "badge-success" : "badge-error"
+                    } badge-sm font-semibold`}
                 >
                   {service.running ? "Running" : "Stopped"}
                 </span>

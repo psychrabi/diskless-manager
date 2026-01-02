@@ -270,6 +270,7 @@ export const useAppStore = create()(
         const {
           fetchClients,
           fetchImages,
+          fetchMasters,
           fetchServices,
           fetchDependencies,
           fetchServerInfo,
@@ -283,6 +284,7 @@ export const useAppStore = create()(
           await Promise.allSettled([
             fetchClients(),
             fetchImages(),
+            fetchMasters(),
             fetchServices(),
             fetchDependencies(),
             fetchServerInfo(),

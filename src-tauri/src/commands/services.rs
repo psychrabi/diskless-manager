@@ -211,3 +211,14 @@ pub async fn stop_all_services(state: State<'_, AppState>) -> Result<String, Str
         .map_err(|e| e.to_string())?;
     Ok("All services stopped successfully".to_string())
 }
+
+#[tauri::command]
+pub async fn restart_all_services(state: State<'_, AppState>) -> Result<String, String> {
+    let settings = state.settings.read().await;
+    let service_manager = ServiceManager::new(settings.clone(), state.db_pool.clone());
+    service_manager
+        .restart_all()
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok("All services restarted successfully".to_string())
+}

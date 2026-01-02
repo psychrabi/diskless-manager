@@ -111,6 +111,16 @@ impl ServiceManager {
         Ok(())
     }
 
+    pub async fn restart_all(&self) -> anyhow::Result<()> {
+        self.http.reload().await?;
+        self.dhcp.reload().await?;
+        self.tftp.reload().await?;
+        self.iscsi.reload().await?;
+        self.nfs.reload().await?;
+        self.samba.reload().await?;
+        Ok(())
+    }
+
     pub async fn status_all(&self) -> anyhow::Result<HashMap<String, ServiceStatus>> {
         let mut statuses = HashMap::new();
         statuses.insert("dhcp".to_string(), self.dhcp.status().await?);

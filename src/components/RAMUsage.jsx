@@ -1,19 +1,9 @@
+import { clearRamCache } from "@/api/commands";
 import { useAppStore } from "@/store/useAppStore";
-import { useToastStore } from "@/store/useToastStore";
-import { invoke } from "@tauri-apps/api/core";
 import { RefreshCw } from "lucide-react";
 import { Button, Card } from "../components/ui";
 export const RAMUsage = () => {
   const { ramUsage, arcStat } = useAppStore();
-  const { success, error } = useToastStore();
-
-  const clearRamCache = async () => {
-    await invoke("clear_ram_cache")
-      .then((response) => {
-        if (response.message) success(response.message);
-      })
-      .catch((err) => error(err));
-  };
 
   return (
     <Card

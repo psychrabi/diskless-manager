@@ -102,6 +102,7 @@ pub fn run() {
             commands::services::restart_service,
             commands::services::start_all_services,
             commands::services::stop_all_services,
+            commands::services::restart_all_services,
             commands::services::configure_service,
             cmd::list_disks,
             cmd::get_ram_usage,

@@ -197,6 +197,10 @@ export async function checkDependencies() {
   return invoke("check_dependencies");
 }
 
+export async function clearRamCache() {
+  await invoke("clear_ram_cache");
+}
+
 // ============================================================================
 // Service Commands
 // ============================================================================
@@ -227,6 +231,10 @@ export async function startAllServices() {
 
 export async function stopAllServices() {
   return invoke("stop_all_services");
+}
+
+export async function restartAllServices() {
+  return invoke("restart_all_services");
 }
 
 // ============================================================================
