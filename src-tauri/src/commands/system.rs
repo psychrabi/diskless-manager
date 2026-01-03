@@ -256,6 +256,11 @@ pub async fn setup_privileged_access() -> Result<String, String> {
         "/usr/bin/tee",
         "/usr/bin/mkdir",
         "/usr/bin/sync",
+        "/usr/sbin/exportfs",
+        "/usr/sbin/a2ensite",
+        "/usr/sbin/a2enmod",
+        "/usr/bin/journalctl",
+        "/usr/bin/rm",
     ];
 
     let commands_str = commands.join(", ");

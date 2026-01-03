@@ -1,6 +1,7 @@
 use crate::core::config::Settings;
 use crate::services::{
-    get_service_pid, is_systemd_service_running, write_with_sudo_tee, ServiceStatus,
+    get_service_pid, is_systemd_service_running, run_sudo_command, write_with_sudo_tee,
+    ServiceStatus,
 };
 use std::path::PathBuf;
 use tokio::process::Command;
@@ -18,64 +19,22 @@ impl SambaService {
         // Create share directory if it doesn't exist using elevated privileges
         let share_path = &self.settings.samba.share_path;
         let share_path_str = share_path.to_string_lossy();
-        let mkdir_result = Command::new("pkexec")
-            .args(["mkdir", "-p", &share_path_str])
-            .status()
-            .await;
-
-        if let Err(e) = mkdir_result {
-            tracing::error!(
-                "Failed to execute pkexec for creating Samba share directory {}: {}",
-                share_path.display(),
-                e
-            );
-            return Err(anyhow::anyhow!(
-                "Failed to execute pkexec for creating Samba share directory {}: {}",
-                share_path.display(),
-                e
-            ));
-        }
-
-        let mkdir_status = mkdir_result.unwrap();
-        if !mkdir_status.success() {
-            tracing::error!(
-                "Failed to create Samba share directory {}: pkexec mkdir returned non-zero exit code",
-                share_path.display()
-            );
-            return Err(anyhow::anyhow!(
-                "Failed to create Samba share directory {}: pkexec mkdir returned non-zero exit code",
-                share_path.display()
-            ));
-        }
+        run_sudo_command(["mkdir", "-p", &share_path_str]).await?;
 
         // Generate and write Samba configuration
         self.generate_config().await?;
 
         // Start Samba services
-        Command::new("pkexec")
-            .args(["systemctl", "start", "smbd"])
-            .status()
-            .await?;
-
-        Command::new("pkexec")
-            .args(["systemctl", "start", "nmbd"])
-            .status()
-            .await?;
+        run_sudo_command(["systemctl", "start", "smbd"]).await?;
+        run_sudo_command(["systemctl", "start", "nmbd"]).await?;
 
         tracing::info!("Samba service started");
         Ok(())
     }
 
     pub async fn stop(&self) -> anyhow::Result<()> {
-        Command::new("pkexec")
-            .args(["systemctl", "stop", "smbd"])
-            .status()
-            .await?;
-
-        Command::new("pkexec")
-            .args(["systemctl", "stop", "nmbd"])
-            .status()
-            .await?;
+        run_sudo_command(["systemctl", "stop", "smbd"]).await?;
+        run_sudo_command(["systemctl", "stop", "nmbd"]).await?;
 
         tracing::info!("Samba service stopped");
         Ok(())
@@ -84,11 +43,7 @@ impl SambaService {
     pub async fn reload(&self) -> anyhow::Result<()> {
         self.generate_config().await?;
 
-        Command::new("pkexec")
-            .arg("systemctl")
-            .args(["restart", "smbd"])
-            .status()
-            .await?;
+        run_sudo_command(["systemctl", "restart", "smbd"]).await?;
 
         tracing::info!("Samba service reloaded");
         Ok(())

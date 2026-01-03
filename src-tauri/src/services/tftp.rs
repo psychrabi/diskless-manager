@@ -2,7 +2,8 @@ use std::path::PathBuf;
 
 use crate::core::config::Settings;
 use crate::services::{
-    get_service_pid, is_systemd_service_running, write_with_sudo_tee, ServiceStatus,
+    get_service_pid, is_systemd_service_running, run_sudo_command, write_with_sudo_tee,
+    ServiceStatus,
 };
 use tokio::process::Command;
 
@@ -36,30 +37,20 @@ TFTP_OPTIONS="{}"
         self.generate_config().await?;
 
         // Then start tftpd-hpa
-        Command::new("pkexec")
-            .args(["systemctl", "start", "tftpd-hpa"])
-            .status()
-            .await?;
+        run_sudo_command(["systemctl", "start", "tftpd-hpa"]).await?;
 
         tracing::info!("TFTP service started");
         Ok(())
     }
 
     pub async fn stop(&self) -> anyhow::Result<()> {
-        Command::new("pkexec")
-            .args(["systemctl", "stop", "tftpd-hpa"])
-            .status()
-            .await?;
+        run_sudo_command(["systemctl", "stop", "tftpd-hpa"]).await?;
         tracing::info!("TFTP service stopped");
         Ok(())
     }
 
     pub async fn reload(&self) -> anyhow::Result<()> {
-        Command::new("pkexec")
-            .arg("systemctl")
-            .args(["restart", "tftpd-hpa"])
-            .status()
-            .await?;
+        run_sudo_command(["systemctl", "restart", "tftpd-hpa"]).await?;
         tracing::info!("TFTP service reloaded");
         Ok(())
     }

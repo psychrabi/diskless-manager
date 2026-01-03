@@ -408,7 +408,7 @@ impl ImageManager {
         Ok(image)
     }
 
-    pub async fn delete(&self, id: &str, force: bool) -> anyhow::Result<()> {
+    pub async fn delete(&self, id: &str, _force: bool) -> anyhow::Result<()> {
         let image = self.get(id).await?;
 
         // Check if in use

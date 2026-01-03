@@ -11,6 +11,8 @@ import {
   Settings,
   StopCircle,
 } from "lucide-react";
+import { useState } from "react";
+import { useToastStore } from "@/store/useToastStore";
 import { Button, Card } from "../ui";
 
 export default function ServiceCard({
@@ -20,6 +22,9 @@ export default function ServiceCard({
   stopService,
   restartService,
 }) {
+  const { success, error: showError } = useToastStore();
+  const [loadingAction, setLoadingAction] = useState(null);
+
   function getServiceIcon(name) {
     const icons = {
       "isc-dhcp-server": Network,
@@ -47,6 +52,27 @@ export default function ServiceCard({
     };
     return descriptions[name] || "System service";
   }
+
+  const handleAction = async (action, fn) => {
+    setLoadingAction(action);
+    const labels = {
+      start: "started",
+      stop: "stopped",
+      restart: "restarted",
+    };
+    try {
+      await fn(service.name);
+      success(
+        `${service.display_name} ${labels[action] || action} successfully`
+      );
+    } catch (e) {
+      showError(
+        `Failed to ${action} ${service.display_name}: ${e.message || e}`
+      );
+    } finally {
+      setLoadingAction(null);
+    }
+  };
 
   return (
     <Card
@@ -88,7 +114,8 @@ export default function ServiceCard({
               icon={RefreshCcw}
               variant="warning"
               className="flex-1"
-              onClick={() => restartService(service.name)}
+              loading={loadingAction === "restart"}
+              onClick={() => handleAction("restart", restartService)}
             >
               Restart
             </Button>
@@ -96,7 +123,8 @@ export default function ServiceCard({
               icon={StopCircle}
               variant="destructive"
               className="flex-1"
-              onClick={() => stopService(service.name)}
+              loading={loadingAction === "stop"}
+              onClick={() => handleAction("stop", stopService)}
             >
               Stop
             </Button>
@@ -106,7 +134,8 @@ export default function ServiceCard({
             icon={Play}
             variant="success"
             className="flex-1"
-            onClick={() => startService(service.name)}
+            loading={loadingAction === "start"}
+            onClick={() => handleAction("start", startService)}
           >
             Start
           </Button>

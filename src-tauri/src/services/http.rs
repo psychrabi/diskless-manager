@@ -1,6 +1,7 @@
 use crate::core::config::Settings;
 use crate::services::{
-    get_service_pid, is_systemd_service_running, write_with_sudo_tee, ServiceStatus,
+    get_service_pid, is_systemd_service_running, run_sudo_command, write_with_sudo_tee,
+    ServiceStatus,
 };
 use std::path::PathBuf;
 use tokio::process::Command;
@@ -63,13 +64,10 @@ impl HttpService {
         tracing::info!("Apache2 configuration written to {}", config_path.display());
 
         // Enable the site
-        Command::new("a2ensite")
-            .arg("diskless-server")
-            .status()
-            .await?;
+        run_sudo_command(["a2ensite", "diskless-server"]).await?;
 
         // Enable required modules
-        Command::new("a2enmod").arg("headers").status().await?;
+        run_sudo_command(["a2enmod", "headers"]).await?;
 
         tracing::info!("Apache2 site enabled");
         Ok(())
@@ -80,20 +78,14 @@ impl HttpService {
         self.generate_config().await?;
 
         // Start Apache2
-        Command::new("pkexec")
-            .args(["systemctl", "start", "apache2"])
-            .status()
-            .await?;
+        run_sudo_command(["systemctl", "start", "apache2"]).await?;
 
         tracing::info!("Apache2 service started");
         Ok(())
     }
 
     pub async fn stop(&self) -> anyhow::Result<()> {
-        Command::new("pkexec")
-            .args(["systemctl", "stop", "apache2"])
-            .status()
-            .await?;
+        run_sudo_command(["systemctl", "stop", "apache2"]).await?;
 
         tracing::info!("Apache2 service stopped");
         Ok(())
@@ -104,10 +96,7 @@ impl HttpService {
         self.generate_config().await?;
 
         // Reload Apache2
-        Command::new("pkexec")
-            .args(["systemctl", "reload", "apache2"])
-            .status()
-            .await?;
+        run_sudo_command(["systemctl", "reload", "apache2"]).await?;
 
         tracing::info!("Apache2 service reloaded");
         Ok(())

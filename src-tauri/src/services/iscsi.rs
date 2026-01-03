@@ -1,6 +1,9 @@
 use crate::core::config::Settings;
 use crate::core::image::Image;
-use crate::services::{get_service_pid, is_systemd_service_running, ServiceStatus};
+use crate::error::AppError;
+use crate::services::{
+    get_service_pid, is_systemd_service_running, run_sudo_command, ServiceStatus,
+};
 use std::path::PathBuf;
 use tokio::process::Command;
 
@@ -95,7 +98,8 @@ impl IscsiService {
     }
 
     async fn run_targetcli(&self, command: &str) -> anyhow::Result<()> {
-        let output = Command::new("pkexec")
+        let output = Command::new("sudo")
+            .arg("-n")
             .arg("targetcli")
             .arg(command)
             .output()
@@ -119,19 +123,13 @@ impl IscsiService {
     }
 
     pub async fn start(&self) -> anyhow::Result<()> {
-        Command::new("pkexec")
-            .args(["systemctl", "start", "rtslib-fb-targetctl"])
-            .status()
-            .await?;
+        run_sudo_command(["systemctl", "start", "rtslib-fb-targetctl"]).await?;
         tracing::info!("iSCSI service started");
         Ok(())
     }
 
     pub async fn stop(&self) -> anyhow::Result<()> {
-        Command::new("pkexec")
-            .args(["systemctl", "stop", "rtslib-fb-targetctl"])
-            .status()
-            .await?;
+        run_sudo_command(["systemctl", "stop", "rtslib-fb-targetctl"]).await?;
         tracing::info!("iSCSI service stopped");
         Ok(())
     }
@@ -148,7 +146,8 @@ impl IscsiService {
 
     pub async fn get_config(&self) -> anyhow::Result<String> {
         // Use targetcli to get the current configuration
-        let output = tokio::process::Command::new("pkexec")
+        let output = tokio::process::Command::new("sudo")
+            .arg("-n")
             .arg("targetcli")
             .arg("ls")
             .output()

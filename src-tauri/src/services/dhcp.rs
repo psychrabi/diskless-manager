@@ -1,7 +1,8 @@
 use crate::core::client::ClientManager;
 use crate::core::config::Settings;
 use crate::services::{
-    get_service_pid, is_systemd_service_running, write_with_sudo_tee, ServiceStatus,
+    get_service_pid, is_systemd_service_running, run_sudo_command, write_with_sudo_tee,
+    ServiceStatus,
 };
 use sqlx::SqlitePool;
 use std::path::PathBuf;
@@ -149,10 +150,7 @@ include "/etc/dhcp/clients.conf";
 
         tracing::info!("DHCP configuration written to {}", dhcp_path.display());
 
-        Command::new("sudo")
-            .args(["rm", "/var/lib/dhcp/dhcpd.leases"])
-            .status()
-            .await?;
+        run_sudo_command(["rm", "/var/lib/dhcp/dhcpd.leases"]).await?;
         tracing::info!("DHCP leases cleared");
 
         // Add static host entries for registered clients
@@ -194,28 +192,19 @@ host {name} {{
     }
 
     pub async fn start(&self) -> anyhow::Result<()> {
-        Command::new("systemctl")
-            .args(["start", "isc-dhcp-server"])
-            .status()
-            .await?;
+        run_sudo_command(["systemctl", "start", "isc-dhcp-server"]).await?;
         tracing::info!("DHCP service started");
         Ok(())
     }
 
     pub async fn stop(&self) -> anyhow::Result<()> {
-        Command::new("systemctl")
-            .args(["stop", "isc-dhcp-server"])
-            .status()
-            .await?;
+        run_sudo_command(["systemctl", "stop", "isc-dhcp-server"]).await?;
         tracing::info!("DHCP service stopped");
         Ok(())
     }
 
     pub async fn reload(&self) -> anyhow::Result<()> {
-        Command::new("systemctl")
-            .args(["restart", "isc-dhcp-server"])
-            .status()
-            .await?;
+        run_sudo_command(["systemctl", "restart", "isc-dhcp-server"]).await?;
         tracing::info!("DHCP service reloaded");
         Ok(())
     }

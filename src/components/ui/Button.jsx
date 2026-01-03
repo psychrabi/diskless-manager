@@ -10,10 +10,11 @@ export const Button = forwardRef(
       className = "",
       icon: Icon,
       disabled = false,
+      loading = false,
       title = "",
       type = "button",
     },
-    ref,
+    ref
   ) => {
     const ariaLabel = !children && title ? title : undefined;
 
@@ -44,21 +45,26 @@ export const Button = forwardRef(
         ref={ref}
         type={type}
         onClick={onClick}
-        disabled={disabled}
+        disabled={disabled || loading}
         title={title}
         aria-label={ariaLabel}
-        aria-disabled={disabled}
+        aria-disabled={disabled || loading}
         className={[
           variantClasses[variant] || "btn",
           sizeClasses[size] || "",
+          loading ? "btn-disabled" : "",
           className,
         ].join(" ")}
       >
-        {Icon && <Icon className={`h-4 w-4 ${iconPosition}`} />}
+        {loading ? (
+          <span className="loading loading-spinner loading-xs mr-2"></span>
+        ) : (
+          Icon && <Icon className={`h-4 w-4 ${iconPosition}`} />
+        )}
         {children}
       </button>
     );
-  },
+  }
 );
 
 Button.displayName = "Button";

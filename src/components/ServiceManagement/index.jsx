@@ -7,7 +7,9 @@ import ServiceConfigModal from "./ServiceConfigModal";
 import ServicesList from "./ServicesList";
 
 const ServiceManagement = () => {
-  const { fetchServiceConfig, startAllServices, stopAllServices } = useServiceManager();
+  const { fetchServiceConfig, startAllServices, stopAllServices } =
+    useServiceManager();
+  const [globalLoading, setGlobalLoading] = useState(null);
   const [modalState, setModalState] = useState({
     isOpen: false,
     serviceKey: "",
@@ -16,6 +18,15 @@ const ServiceManagement = () => {
     loading: false,
     path: "",
   });
+
+  const handleGlobalAction = async (action, fn) => {
+    setGlobalLoading(action);
+    try {
+      await fn();
+    } finally {
+      setGlobalLoading(null);
+    }
+  };
 
   const handleViewConfig = useCallback(
     async (serviceKey, serviceName) => {
@@ -59,7 +70,8 @@ const ServiceManagement = () => {
           <Button
             icon={PlayCircle}
             variant="success"
-            onClick={() => startAllServices()}
+            loading={globalLoading === "start"}
+            onClick={() => handleGlobalAction("start", startAllServices)}
             title="Start all services"
           >
             Start All
@@ -67,7 +79,8 @@ const ServiceManagement = () => {
           <Button
             icon={StopCircle}
             variant="destructive"
-            onClick={() => stopAllServices()}
+            loading={globalLoading === "stop"}
+            onClick={() => handleGlobalAction("stop", stopAllServices)}
             title="Stop all services"
           >
             Stop All

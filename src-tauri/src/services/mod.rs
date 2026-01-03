@@ -249,6 +249,29 @@ pub async fn get_service_pid(service: &str) -> anyhow::Result<Option<u32>> {
     Ok(None)
 }
 
+// Helper function to run a command with sudo -n (async)
+pub async fn run_sudo_command<II>(args: II) -> Result<(), AppError>
+where
+    II: IntoIterator,
+    II::Item: AsRef<std::ffi::OsStr> + std::fmt::Debug,
+{
+    let args_vec: Vec<_> = args.into_iter().collect();
+    let status = Command::new("sudo")
+        .arg("-n")
+        .args(&args_vec)
+        .status()
+        .await
+        .map_err(|e| AppError::Command(format!("Failed to execute sudo command: {}", e)))?;
+
+    if !status.success() {
+        return Err(AppError::Command(format!(
+            "Command 'sudo -n {:?}' failed with status {}",
+            args_vec, status
+        )));
+    }
+    Ok(())
+}
+
 // Helper function to Write content to path using sudo tee (async)
 pub async fn write_with_sudo_tee(path: &str, content: &str) -> Result<(), AppError> {
     let mut child = Command::new("sudo")

@@ -318,12 +318,35 @@ pub fn get_ram_usage() -> Result<RamUsage, AppError> {
 
 /// Clear RAM cache (sync and drop caches)
 #[tauri::command]
-pub fn clear_ram_cache() -> Result<serde_json::Value, AppError> {
-    Command::new("pkexec")
-        .arg("sh")
-        .arg("-c")
-        .arg("sync && echo 3 > /proc/sys/vm/drop_caches")
-        .output()?;
+pub async fn clear_ram_cache() -> Result<serde_json::Value, AppError> {
+    // Run sync using sudo -n
+    run_command_async(["sync"]).await?;
+
+    // Drop caches by writing 3 to the drop_caches system file
+    // We use sudo tee for this to bypass redirection restrictions
+    let mut child = Command::new("sudo")
+        .args(["-n", "tee", "/proc/sys/vm/drop_caches"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()
+        .map_err(|e| AppError::Command(format!("Failed to drop caches: {}", e)))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        stdin
+            .write_all(b"3\n")
+            .map_err(|e| AppError::Io(std::io::Error::other(e.to_string())))?;
+    }
+
+    let status = child
+        .wait()
+        .map_err(|e| AppError::Command(format!("Failed to wait for drop_caches: {}", e)))?;
+
+    if !status.success() {
+        return Err(AppError::Command(
+            "Failed to clear RAM cache (sudo check failed)".to_string(),
+        ));
+    }
 
     Ok(serde_json::json!({ "message": "RAM cache cleared successfully" }))
 }
@@ -342,7 +365,7 @@ pub fn get_service_logs(service_name: String, lines: Option<u32>) -> Result<Stri
 
     let num = lines.unwrap_or(200).to_string();
     let args_vec: Vec<_> = vec!["journalctl", "-u", &service, "-n", &num, "--no-pager"];
-    let output = run_command_output_no_sudo(args_vec.iter())?;
+    let output = run_command_output(args_vec.iter())?;
     Ok(output)
 }
 

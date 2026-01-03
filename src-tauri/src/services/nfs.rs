@@ -1,5 +1,8 @@
 use crate::core::config::Settings;
-use crate::services::{get_service_pid, is_systemd_service_running, ServiceStatus};
+use crate::services::{
+    get_service_pid, is_systemd_service_running, run_sudo_command, write_with_sudo_tee,
+    ServiceStatus,
+};
 use std::path::PathBuf;
 use tokio::process::Command;
 
@@ -19,7 +22,7 @@ impl NfsService {
             self.settings.nfs.exports_dir.display()
         );
 
-        std::fs::write("/etc/exports", exports_content)?;
+        write_with_sudo_tee("/etc/exports", &exports_content).await?;
 
         tracing::info!("NFS exports written to /etc/exports");
         Ok(())
@@ -30,66 +33,30 @@ impl NfsService {
         let content = std::fs::read_to_string("/etc/exports").unwrap_or_default();
         let new_content = format!("{}{} {}\n", content, path, options);
 
-        // Use pkexec to write to system configuration file
-        use tokio::process::Command;
-        let mut child = Command::new("pkexec")
-            .arg("tee")
-            .arg("/etc/exports")
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::null())
-            .spawn()
-            .map_err(|e| anyhow::anyhow!("Failed to spawn pkexec tee: {}", e))?;
-
-        if let Some(ref mut stdin) = child.stdin {
-            use tokio::io::AsyncWriteExt;
-            stdin
-                .write_all(new_content.as_bytes())
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to write config to stdin: {}", e))?;
-            stdin
-                .flush()
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to flush stdin: {}", e))?;
-        }
-
-        let status = child
-            .wait()
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to wait for pkexec tee: {}", e))?;
-
-        if !status.success() {
-            return Err(anyhow::anyhow!(
-                "Failed to write NFS exports file with pkexec tee"
-            ));
-        }
+        // Use sudo tee to write to system configuration file
+        write_with_sudo_tee("/etc/exports", &new_content).await?;
 
         // Re-export
-        Command::new("exportfs").args(["-ra"]).status().await?;
+        run_sudo_command(["exportfs", "-ra"]).await?;
 
         tracing::info!("NFS export added: {}", path);
         Ok(())
     }
 
     pub async fn start(&self) -> anyhow::Result<()> {
-        Command::new("systemctl")
-            .args(["start", "nfs-kernel-server"])
-            .status()
-            .await?;
+        run_sudo_command(["systemctl", "start", "nfs-kernel-server"]).await?;
         tracing::info!("NFS service started");
         Ok(())
     }
 
     pub async fn stop(&self) -> anyhow::Result<()> {
-        Command::new("systemctl")
-            .args(["stop", "nfs-kernel-server"])
-            .status()
-            .await?;
+        run_sudo_command(["systemctl", "stop", "nfs-kernel-server"]).await?;
         tracing::info!("NFS service stopped");
         Ok(())
     }
 
     pub async fn reload(&self) -> anyhow::Result<()> {
-        Command::new("exportfs").args(["-ra"]).status().await?;
+        run_sudo_command(["exportfs", "-ra"]).await?;
         tracing::info!("NFS exports reloaded");
         Ok(())
     }
