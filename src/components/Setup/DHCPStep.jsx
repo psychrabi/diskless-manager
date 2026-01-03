@@ -1,9 +1,9 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Network } from "lucide-react";
 import { useForm } from "react-hook-form";
-import z from "zod";
-import { Button, Input } from "../ui";
+import { Button } from "../ui";
 import { dhcpSchema } from "@/schema";
+import DHCPForm from "../SettingsManagement/Forms/DHCPForm";
 
 const DHCPStep = ({ onSubmit, isSubmitting, initialConfig }) => {
   const {
@@ -29,93 +29,7 @@ const DHCPStep = ({ onSubmit, isSubmitting, initialConfig }) => {
       </div>
 
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-        <div className="grid grid-cols-3 gap-4">
-          <label htmlFor="enabled" className="label col-span-3">
-            <input
-              id="enabled"
-              className="checkbox"
-              {...register("enabled")}
-              type="checkbox"
-              defaultChecked={true}
-            />
-            DHCP Server (Start at boot)
-          </label>
-          <Input
-            label="Start IP"
-            register={register("start_ip")}
-            error={errors.start_ip?.message}
-            placeholder="192.168.1.100"
-          />
-          <Input
-            label="End IP"
-            register={register("end_ip")}
-            error={errors.end_ip?.message}
-            placeholder="192.168.1.200"
-          />
-          <Input
-            label="Gateway IP"
-            register={register("gateway_ip")}
-            error={errors.gateway_ip?.message}
-            placeholder="192.168.1.1"
-          />
-          <Input
-            label="Subnet IP"
-            register={register("subnet_ip")}
-            error={errors.subnet_ip?.message}
-            placeholder="192.168.1.0"
-          />
-          <Input
-            label="Subnet Mask"
-            register={register("subnet_mask")}
-            error={errors.subnet_mask?.message}
-            placeholder="255.255.255.0"
-          />
-          <Input
-            label="Broadcast IP"
-            register={register("broadcast_ip")}
-            error={errors.broadcast_ip?.message}
-            placeholder="192.168.1.255"
-          />
-          <Input
-            label="DNS Server 1"
-            register={register("dns_server1")}
-            error={errors.dns_server1?.message}
-            placeholder="1.1.1.1"
-          />
-          <Input
-            label="DNS Server 2"
-            register={register("dns_server2")}
-            error={errors.dns_server2?.message}
-            placeholder="8.8.8.8"
-          />
-          <Input
-            label="Next Server IP"
-            register={register("next_server_ip")}
-            error={errors.next_server_ip?.message}
-            placeholder="192.168.1.1"
-          />
-          <Input
-            label="Boot Server IP"
-            register={register("boot_server_ip")}
-            error={errors.boot_server_ip?.message}
-            placeholder="192.168.1.1"
-          />
-          <Input
-            label="Legacy Boot File"
-            register={register("boot_file_legacy")}
-            error={errors.boot_file_legacy?.message}
-          />
-          <Input
-            label="UEFI 64 Boot File"
-            register={register("boot_file_uefi64")}
-            error={errors.boot_file_uefi64?.message}
-          />
-          <Input
-            label="UEFI 32 Boot File"
-            register={register("boot_file_uefi32")}
-            error={errors.boot_file_uefi32?.message}
-          />
-        </div>
+        <DHCPForm register={register} errors={errors} config={initialConfig} />
 
         <Button
           type="submit"

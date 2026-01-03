@@ -2,107 +2,27 @@
 
 use crate::{
     cmd::{run_command, run_command_check, run_command_output, run_command_output_no_sudo},
+    error::AppError,
     types::{CreateDatasetRequest, DatasetInfo},
+    validation::{validate_pool_name, validate_size, validate_zfs_name},
 };
-use regex::Regex;
-use std::sync::{Arc, RwLock};
-
-// Cache for ZFS pool and dataset information to reduce system calls
-use once_cell::sync::Lazy;
-
-static DISK_CACHE: Lazy<Arc<RwLock<DiskCache>>> =
-    Lazy::new(|| Arc::new(RwLock::new(DiskCache::new())));
-
-#[derive(Debug, Clone)]
-struct DiskCache {
-    zpools: Vec<String>,
-    datasets: std::collections::HashMap<String, Vec<DatasetInfo>>, // zpool -> datasets
-    last_updated: std::time::SystemTime,
-    ttl: std::time::Duration,
-}
-
-impl DiskCache {
-    fn new() -> Self {
-        DiskCache {
-            zpools: Vec::new(),
-            datasets: std::collections::HashMap::new(),
-            last_updated: std::time::SystemTime::UNIX_EPOCH,
-            ttl: std::time::Duration::from_secs(30), // 30 second cache TTL
-        }
-    }
-
-    fn is_fresh(&self) -> bool {
-        self.last_updated
-            .elapsed()
-            .map(|elapsed| elapsed < self.ttl)
-            .unwrap_or(false)
-    }
-
-    fn needs_refresh(&self) -> bool {
-        !self.is_fresh()
-    }
-}
 
 #[tauri::command]
-pub fn list_zpools() -> Result<Vec<String>, String> {
-    // Try to get cached data first
-    let cache = DISK_CACHE.read().unwrap();
-
-    if !cache.needs_refresh() {
-        // Return cached data
-        return Ok(cache.zpools.clone());
-    }
-
-    // Drop read lock before acquiring write lock
-    drop(cache);
-
-    let mut cache = DISK_CACHE.write().unwrap();
-
-    // Double-check after acquiring write lock
-    if !cache.needs_refresh() {
-        // Another thread may have updated the cache while we were waiting
-        return Ok(cache.zpools.clone());
-    }
-
+pub fn list_zpools() -> Result<Vec<String>, AppError> {
     // Get fresh data
     let out = run_command_output_no_sudo(&["zpool", "list", "-H", "-o", "name"])
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| AppError::Command(e.to_string()))?;
     let pools: Vec<String> = out
         .lines()
         .filter(|l| !l.is_empty())
         .map(|s| s.to_string())
         .collect();
 
-    // Update cache
-    cache.zpools = pools.clone();
-    cache.last_updated = std::time::SystemTime::now();
-
     Ok(pools)
 }
 
 #[tauri::command]
-pub fn list_datasets(zpool: &str) -> Result<Vec<DatasetInfo>, String> {
-    // Try to get cached data first
-    let cache = DISK_CACHE.read().unwrap();
-
-    if !cache.needs_refresh() {
-        if let Some(cached_datasets) = cache.datasets.get(zpool) {
-            return Ok(cached_datasets.clone());
-        }
-    }
-
-    // Drop read lock before acquiring write lock
-    drop(cache);
-
-    let mut cache = DISK_CACHE.write().unwrap();
-
-    // Double-check after acquiring write lock
-    if !cache.needs_refresh() {
-        if let Some(cached_datasets) = cache.datasets.get(zpool) {
-            return Ok(cached_datasets.clone());
-        }
-    }
-
+pub fn list_datasets(zpool: &str) -> Result<Vec<DatasetInfo>, AppError> {
     // Get fresh data
     // Get all datasets with their properties in one command
     let out = run_command_output_no_sudo(&[
@@ -114,7 +34,7 @@ pub fn list_datasets(zpool: &str) -> Result<Vec<DatasetInfo>, String> {
         "-r",
         zpool,
     ])
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| AppError::Command(e.to_string()))?;
 
     let mut with_type: Vec<DatasetInfo> = Vec::new();
 
@@ -182,23 +102,21 @@ pub fn list_datasets(zpool: &str) -> Result<Vec<DatasetInfo>, String> {
         result.push(ds);
     }
 
-    // Update cache for this specific zpool
-    cache.datasets.insert(zpool.to_string(), result.clone());
-    cache.last_updated = std::time::SystemTime::now();
-
     Ok(result)
 }
 
 #[tauri::command]
-pub fn create_zfs_dataset(req: CreateDatasetRequest) -> Result<String, String> {
+pub fn create_zfs_dataset(req: CreateDatasetRequest) -> Result<String, AppError> {
+    // Validate inputs
+    validate_pool_name(&req.zpool)?;
+    validate_zfs_name(&req.name)?;
+
     // usage_type must be one of these
     let allowed = ["image", "writeback", "game"];
     if !allowed.contains(&req.usage_type.as_str()) {
-        return Err("usage_type must be one of: image, writeback, game".into());
-    }
-
-    if req.zpool.trim().is_empty() || req.name.trim().is_empty() {
-        return Err("zpool and name are required".into());
+        return Err(AppError::Validation(
+            "usage_type must be one of: image, writeback, game".into(),
+        ));
     }
 
     let dataset = format!("{}/{}-disk", req.zpool, req.name);
@@ -207,29 +125,30 @@ pub fn create_zfs_dataset(req: CreateDatasetRequest) -> Result<String, String> {
         // size is required for game (zvol)
         let size_trim = req.size.as_ref().map(|s| s.trim()).unwrap_or("");
         if size_trim.is_empty() {
-            return Err("size is required for game (zvol) disks, e.g. 20G".into());
+            return Err(AppError::Validation(
+                "size is required for game (zvol) disks, e.g. 20G".into(),
+            ));
         }
 
-        // Validate size format (e.g., 50G)
-        if !Regex::new(r"^\d+[KMGTP]$")
-            .map_err(|e| format!("regex error: {}", e))?
-            .is_match(&size_trim.to_uppercase())
-        {
-            return Err("Invalid size format (e.g., '50G')".into());
-        }
+        // Validate size format
+        validate_size(size_trim)?;
 
         // Ensure the games parent dataset exists: <zpool>/games
         let games_parent = format!("{}/games", req.zpool);
         if run_command_check(&["zfs", "list", "-H", &games_parent]) != 0 {
             // create the parent dataset if missing
-            run_command(&["zfs", "create", &games_parent]).map_err(|e| e.to_string())?;
+            run_command(&["zfs", "create", &games_parent])
+                .map_err(|e| AppError::Command(e.to_string()))?;
         }
 
         // Use given name for the zvol under <zpool>/games/<name>
         let zvol_name = format!("{}/{}", games_parent, req.name);
         let status_code = run_command_check(&["zfs", "list", "-H", &zvol_name]);
         if status_code == 0 {
-            return Err(format!("ZFS volume '{}' already exists.", zvol_name));
+            return Err(AppError::Validation(format!(
+                "ZFS volume '{}' already exists.",
+                zvol_name
+            )));
         }
 
         // Create the zvol
@@ -243,7 +162,7 @@ pub fn create_zfs_dataset(req: CreateDatasetRequest) -> Result<String, String> {
             "volblocksize=4K",
             &zvol_name,
         ])
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| AppError::Command(e.to_string()))?;
 
         // tag it with our custom property
         let _ = run_command(&[
@@ -253,17 +172,11 @@ pub fn create_zfs_dataset(req: CreateDatasetRequest) -> Result<String, String> {
             &zvol_name,
         ]);
 
-        // Invalidate cache since we've modified datasets
-        if let Ok(mut cache) = DISK_CACHE.try_write() {
-            cache.datasets.remove(&req.zpool);
-            cache.last_updated = std::time::SystemTime::UNIX_EPOCH; // Force refresh next time
-        }
-
         return Ok(format!("Created zvol {}", zvol_name));
     }
 
     // create dataset
-    run_command(&["zfs", "create", &dataset]).map_err(|e| e.to_string())?;
+    run_command(&["zfs", "create", &dataset]).map_err(|e| AppError::Command(e.to_string()))?;
     // tag it with our custom property
     run_command(&[
         "zfs",
@@ -271,17 +184,11 @@ pub fn create_zfs_dataset(req: CreateDatasetRequest) -> Result<String, String> {
         &format!("org.diskless:type={}", req.usage_type),
         &dataset,
     ])
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| AppError::Command(e.to_string()))?;
 
     // sensible default for image datasets
     if req.usage_type == "image" {
         let _ = run_command(&["zfs", "set", "compression=lz4", &dataset]);
-    }
-
-    // Invalidate cache since we've modified datasets
-    if let Ok(mut cache) = DISK_CACHE.try_write() {
-        cache.datasets.remove(&req.zpool);
-        cache.last_updated = std::time::SystemTime::UNIX_EPOCH; // Force refresh next time
     }
 
     Ok(format!("Created dataset {}", dataset))
@@ -289,13 +196,10 @@ pub fn create_zfs_dataset(req: CreateDatasetRequest) -> Result<String, String> {
 
 // New: delete dataset (recursive)
 #[tauri::command]
-pub fn delete_zfs_dataset(dataset: &str, recursive: bool) -> Result<String, String> {
+pub fn delete_zfs_dataset(dataset: &str, recursive: bool) -> Result<String, AppError> {
     if dataset.trim().is_empty() {
-        return Err("dataset is required".into());
+        return Err(AppError::Validation("dataset is required".into()));
     }
-
-    // Extract zpool name from dataset path (format: zpool/dataset)
-    let zpool = dataset.split('/').next().unwrap_or("").to_string();
 
     let args = if recursive {
         vec!["zfs", "destroy", "-r", dataset]
@@ -304,35 +208,22 @@ pub fn delete_zfs_dataset(dataset: &str, recursive: bool) -> Result<String, Stri
     };
     // convert to slice of &str
     let args_ref: Vec<&str> = args.to_vec();
-    run_command(&args_ref).map_err(|e| e.to_string())?;
-
-    // Invalidate cache since we've modified datasets
-    if let Ok(mut cache) = DISK_CACHE.try_write() {
-        cache.datasets.remove(&zpool);
-        cache.last_updated = std::time::SystemTime::UNIX_EPOCH; // Force refresh next time
-    }
+    run_command(&args_ref).map_err(|e| AppError::Command(e.to_string()))?;
 
     Ok(format!("Destroyed dataset {}", dataset))
 }
 
 // New: rename dataset (zfs rename old new)
 #[tauri::command]
-pub fn rename_zfs_dataset(old: &str, new: &str) -> Result<String, String> {
+pub fn rename_zfs_dataset(old: &str, new: &str) -> Result<String, AppError> {
     if old.trim().is_empty() || new.trim().is_empty() {
-        return Err("old and new dataset names are required".into());
+        return Err(AppError::Validation(
+            "old and new dataset names are required".into(),
+        ));
     }
-
-    // Extract zpool name from old dataset path (format: zpool/dataset)
-    let zpool = old.split('/').next().unwrap_or("").to_string();
 
     // zfs rename <old> <new>
-    run_command(&["zfs", "rename", old, new]).map_err(|e| e.to_string())?;
-
-    // Invalidate cache since we've modified datasets
-    if let Ok(mut cache) = DISK_CACHE.try_write() {
-        cache.datasets.remove(&zpool);
-        cache.last_updated = std::time::SystemTime::UNIX_EPOCH; // Force refresh next time
-    }
+    run_command(&["zfs", "rename", old, new]).map_err(|e| AppError::Command(e.to_string()))?;
 
     Ok(format!("Renamed {} -> {}", old, new))
 }

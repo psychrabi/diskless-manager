@@ -72,29 +72,37 @@ pub struct AddClientRequest {
 
 impl AddClientRequest {
     /// Validate the request
-    pub fn validate(&self) -> Result<(), String> {
-        if self.name.trim().is_empty() {
-            return Err("Client name cannot be empty".to_string());
+    pub fn validate(&self) -> Result<(), crate::error::AppError> {
+        // Name is optional (auto-generated if empty)
+        if !self.name.trim().is_empty() {
+            crate::validation::validate_client_id(&self.name)?;
         }
 
-        if self.mac.trim().is_empty() {
-            return Err("MAC address cannot be empty".to_string());
-        }
+        crate::validation::validate_mac_address(&self.mac)?;
+        crate::validation::validate_ip_address(&self.ip)?;
 
-        if self.ip.trim().is_empty() {
-            return Err("IP address cannot be empty".to_string());
-        }
+        Ok(())
+    }
+}
 
-        // Validate MAC format
-        if !is_valid_mac(&self.mac) {
-            return Err("Invalid MAC address format".to_string());
-        }
+/// Request to edit an existing client
+#[derive(Debug, Deserialize)]
+pub struct EditClientRequest {
+    pub name: String,
+    pub mac: String,
+    pub ip: String,
+    pub master: String,
+    pub snapshot: Option<String>,
+    pub keep_writeback: Option<bool>,
+    pub use_game_disk: Option<bool>,
+}
 
-        // Validate IP format
-        if !is_valid_ip(&self.ip) {
-            return Err("Invalid IP address format".to_string());
-        }
-
+impl EditClientRequest {
+    /// Validate the request
+    pub fn validate(&self) -> Result<(), crate::error::AppError> {
+        crate::validation::validate_client_id(&self.name)?;
+        crate::validation::validate_mac_address(&self.mac)?;
+        crate::validation::validate_ip_address(&self.ip)?;
         Ok(())
     }
 }
@@ -112,20 +120,4 @@ pub struct ClientOverview {
     pub total_clients: usize,
     pub active_clients: usize,
     pub offline_clients: usize,
-}
-
-/// Helper function to validate MAC address format
-fn is_valid_mac(mac: &str) -> bool {
-    let mac_regex = regex::Regex::new(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$").unwrap();
-    mac_regex.is_match(mac.trim())
-}
-
-/// Helper function to validate IP address format
-fn is_valid_ip(ip: &str) -> bool {
-    let ip_regex = regex::Regex
-        ::new(
-            r"^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
-        )
-        .unwrap();
-    ip_regex.is_match(ip.trim())
 }

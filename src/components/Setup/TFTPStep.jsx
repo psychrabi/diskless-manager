@@ -1,11 +1,16 @@
+import { zodResolver } from "@hookform/resolvers/zod";
 import { Network } from "lucide-react";
 import { useForm } from "react-hook-form";
-import { Button, Input } from "../ui";
+import { Button } from "../ui";
+import { tftpSchema } from "@/schema";
+import TFTPForm from "../SettingsManagement/Forms/TFTPForm";
 
 const tftpInitial = {
   root_dir: "/srv/tftp",
   server_ip: "0.0.0.0",
+  port: 69,
   options: "--secure",
+  enabled: true,
 };
 
 const TFTPStep = ({ onSubmit, isSubmitting, initialConfig }) => {
@@ -14,6 +19,7 @@ const TFTPStep = ({ onSubmit, isSubmitting, initialConfig }) => {
     handleSubmit,
     formState: { errors },
   } = useForm({
+    resolver: zodResolver(tftpSchema),
     defaultValues: initialConfig || tftpInitial,
   });
 
@@ -31,29 +37,16 @@ const TFTPStep = ({ onSubmit, isSubmitting, initialConfig }) => {
       </div>
 
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-        <Input
-          label="TFTP Root Directory"
-          register={register("root_dir")}
-          error={errors.root_dir}
-          placeholder="/srv/tftp"
-        />
-        <Input
-          label="TFTP Server IP"
-          register={register("server_ip")}
-          error={errors.server_ip}
-          placeholder="0.0.0.0"
-        />
-        <Input
-          label="TFTP Options"
-          register={register("options")}
-          error={errors.options}
-          placeholder="--secure"
+        <TFTPForm
+          register={register}
+          errors={errors}
+          config={initialConfig || tftpInitial}
         />
 
         <Button
           type="submit"
           variant="primary"
-          className="w-full"
+          className="w-full mt-4"
           loading={isSubmitting}
         >
           {isSubmitting ? "Configuring TFTP..." : "Save & Continue"}

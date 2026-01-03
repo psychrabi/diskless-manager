@@ -77,14 +77,14 @@ const DiskTable = ({ datasets, onRefresh }) => {
               <TableCell>
                 <div className="flex gap-2">
                   <Button
-                    variant="ghost"
+                    variant="info"
                     size="sm"
                     onClick={() => handleRenameDisk(dataset)}
                   >
                     Rename
                   </Button>
                   <Button
-                    variant="destructive"
+                    variant="ghost"
                     size="sm"
                     onClick={() => handleDeleteDisk(dataset)}
                   >

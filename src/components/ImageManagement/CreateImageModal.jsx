@@ -121,7 +121,7 @@ const CreateImageModal = ({
           </Button>
           <Button
             type="button"
-            variant="destructive"
+            variant="ghost"
             onClick={() => setOpenImageCreateModal(false)}
             disabled={isSubmitting}
           >

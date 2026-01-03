@@ -1,12 +1,17 @@
+import { zodResolver } from "@hookform/resolvers/zod";
 import { Share2 } from "lucide-react";
 import { useForm } from "react-hook-form";
-import { Button, Input } from "../ui";
+import { Button } from "../ui";
+import { sambaSchema } from "@/schema";
+import SambaForm from "../SettingsManagement/Forms/SambaForm";
 
 const sambaInitial = {
-  name: "shared",
-  path: "/srv/shared",
+  share_name: "shared",
+  share_path: "/srv/shared",
   read_only: false,
   guest_ok: true,
+  workgroup: "WORKGROUP",
+  enabled: true,
 };
 
 const SambaStep = ({ onSubmit, isSubmitting, initialConfig }) => {
@@ -15,6 +20,7 @@ const SambaStep = ({ onSubmit, isSubmitting, initialConfig }) => {
     handleSubmit,
     formState: { errors },
   } = useForm({
+    resolver: zodResolver(sambaSchema),
     defaultValues: initialConfig || sambaInitial,
   });
 
@@ -37,41 +43,16 @@ const SambaStep = ({ onSubmit, isSubmitting, initialConfig }) => {
       </div>
 
       <form onSubmit={handleSubmit(handleFormSubmit)} className="space-y-4">
-        <Input
-          label="Share Name"
-          register={register("name")}
-          error={errors.name}
-          placeholder="game"
+        <SambaForm
+          register={register}
+          errors={errors}
+          config={initialConfig || sambaInitial}
         />
-        <Input
-          label="Share Path"
-          register={register("path")}
-          error={errors.path}
-          placeholder="/srv/samba/share"
-        />
-        <div className="flex items-center space-x-6 pt-2">
-          <label className="flex items-center space-x-2 cursor-pointer">
-            <input
-              type="checkbox"
-              {...register("read_only")}
-              className="checkbox checkbox-primary checkbox-sm"
-            />
-            <span className="text-sm">Read Only</span>
-          </label>
-          <label className="flex items-center space-x-2 cursor-pointer">
-            <input
-              type="checkbox"
-              {...register("guest_ok")}
-              className="checkbox checkbox-primary checkbox-sm"
-            />
-            <span className="text-sm">Guest OK</span>
-          </label>
-        </div>
 
         <Button
           type="submit"
           variant="primary"
-          className="w-full"
+          className="w-full mt-4"
           loading={isSubmitting}
         >
           {isSubmitting ? "Configuring Samba..." : "Save & Continue"}

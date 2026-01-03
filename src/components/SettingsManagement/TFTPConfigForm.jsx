@@ -5,7 +5,8 @@ import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Network } from "lucide-react";
 import { useForm } from "react-hook-form";
-import { Button, Card, Input } from "../ui";
+import { Button, Card } from "../ui";
+import TFTPForm from "./Forms/TFTPForm";
 
 export default function TFTPConfigForm() {
   const { info } = useToastStore();
@@ -27,53 +28,14 @@ export default function TFTPConfigForm() {
   };
 
   return (
-    <Card title="TFTP Configuration" icon={Network} className="">
+    <Card title="TFTP Configuration" icon={Network}>
       <form onSubmit={handleSubmit(onSubmit)}>
-        <div className="grid grid-cols-2 gap-4">
-          <label htmlFor="enabled" className="label col-span-2">
-            <input
-              id="enabled"
-              className="checkbox"
-              {...register("enabled")}
-              type="checkbox"
-              defaultChecked={config?.settings?.tftp?.enabled}
-            />
-            TFTP Server (Start at boot)
-          </label>
+        <TFTPForm
+          register={register}
+          errors={errors}
+          config={config?.settings?.tftp}
+        />
 
-          <Input
-            id="root_dir"
-            register={register("root_dir")}
-            label="TFTP Root Directory"
-            className="w-full"
-            placeholder="/srv/tftp"
-            error={errors.root_dir?.message}
-          />
-          <Input
-            id="server_ip"
-            register={register("server_ip")}
-            label="TFTP Server IP"
-            className="w-full"
-            placeholder="0.0.0.0"
-            error={errors.server_ip?.message}
-          />
-          <Input
-            id="port"
-            register={register("port")}
-            label="TFTP Server Port"
-            className="w-full"
-            placeholder="69"
-            error={errors.port?.message}
-          />
-          <Input
-            id="options"
-            register={register("options")}
-            label="TFTP Options"
-            className="w-full"
-            placeholder="--secure"
-            error={errors.options?.message}
-          />
-        </div>
         <Button
           variant="primary"
           type="submit"

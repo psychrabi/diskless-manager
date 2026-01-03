@@ -3,11 +3,10 @@
 use chrono::Local;
 
 use log::info;
-use regex::Regex;
+
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::process::Command;
-use std::sync::{Arc, RwLock};
 use tracing::debug;
 
 use crate::cmd::{run_command, run_command_check, run_command_output_no_sudo};
@@ -17,57 +16,15 @@ use crate::{
     client::get_clients,
     config::{get_config, get_zpool_name, write_config},
     error::AppError,
-    middleware::validate_auth_token_for_command,
+    middleware::validate_auth,
     state::AppState,
     types::image::{ArcstatInfo, ZpoolInfo},
+    validation::{validate_size, validate_zfs_name},
 };
 use tauri::State;
 
 // Import the timed execution macro
 use crate::timed_execution;
-
-// Cache for ZFS datasets and snapshots to reduce system calls
-use once_cell::sync::Lazy;
-
-static ZFS_CACHE: Lazy<Arc<RwLock<ZfsCache>>> =
-    Lazy::new(|| Arc::new(RwLock::new(ZfsCache::new())));
-
-#[derive(Debug, Clone)]
-struct ZfsCache {
-    datasets: Vec<Snapshot>,
-    snapshots: Vec<Snapshot>,
-    last_updated: std::time::SystemTime,
-    ttl: std::time::Duration,
-}
-
-impl ZfsCache {
-    fn new() -> Self {
-        ZfsCache {
-            datasets: Vec::new(),
-            snapshots: Vec::new(),
-            last_updated: std::time::SystemTime::UNIX_EPOCH,
-            ttl: std::time::Duration::from_secs(30), // 30 second cache TTL
-        }
-    }
-
-    fn is_fresh(&self) -> bool {
-        self.last_updated
-            .elapsed()
-            .map(|elapsed| elapsed < self.ttl)
-            .unwrap_or(false)
-    }
-
-    fn needs_refresh(&self) -> bool {
-        !self.is_fresh()
-    }
-}
-
-// Helper to validate auth token, returning Err if invalid
-fn validate_auth(token: &str) -> Result<(), AppError> {
-    validate_auth_token_for_command(token)
-        .map(|_| ())
-        .map_err(|e| AppError::Auth(e.message))
-}
 
 // Check if a ZFS dataset/snapshot exists (returns 0 if exists)
 pub fn zfs_exists(dataset: &str) -> bool {
@@ -200,31 +157,6 @@ async fn check_dependent_clients(
     }
 }
 
-// Validate dataset name format
-fn validate_name(name: &str) -> Result<(), AppError> {
-    let re = Regex::new(r"^[\w-]+$").unwrap();
-    if !re.is_match(name) || name.contains(' ') || name.contains('/') {
-        Err(AppError::Validation(
-            "Invalid name format (alphanumeric, _, -; no spaces or /)".to_string(),
-        ))
-    } else {
-        Ok(())
-    }
-}
-
-// Validate size format (e.g., 50G)
-fn validate_size(size: &str) -> Result<(), AppError> {
-    let upper = size.to_uppercase();
-    let re = Regex::new(r"^\d+[KMGTP]$").unwrap();
-    if re.is_match(&upper) {
-        Ok(())
-    } else {
-        Err(AppError::Validation(
-            "Invalid size format (e.g., '50G')".to_string(),
-        ))
-    }
-}
-
 // Generic ZVOL creation (used by image and game disk)
 async fn create_zvol(
     pool: &sqlx::SqlitePool,
@@ -313,7 +245,7 @@ pub async fn create_image(
     request: CreateImageRequest,
 ) -> Result<Value, AppError> {
     validate_auth(&request.token)?;
-    validate_name(&request.name)?;
+    validate_zfs_name(&request.name)?;
     validate_size(&request.size)?;
 
     let zpool = get_zpool_name();
@@ -452,12 +384,6 @@ pub async fn create_image(
     )
     .await?;
 
-    // Invalidate cache so get_images returns fresh data
-    {
-        let mut cache = ZFS_CACHE.write().unwrap();
-        cache.last_updated = std::time::SystemTime::UNIX_EPOCH;
-    }
-
     Ok(json!({
         "message": format!("Master ZVOL '{}' created successfully.", full_name),
         "master": {
@@ -477,7 +403,7 @@ pub async fn create_game_disk(
     size: String,
 ) -> Result<Value, AppError> {
     validate_auth(&token)?;
-    validate_name(&name)?;
+    validate_zfs_name(&name)?;
     validate_size(&size)?;
 
     let zpool = get_zpool_name();
@@ -522,8 +448,8 @@ pub async fn get_images(
             .unwrap_or("")
             .to_string();
 
-        // Get datasets and snapshots using cache
-        let (all_datasets, all_snaps) = get_cached_zfs_data(&zpool)?;
+        // Get fresh datasets and snapshots
+        let (all_datasets, all_snaps) = get_fresh_zfs_data(&zpool)?;
 
         // Collect master_names: non -disk datasets + snapshots of -disk that end with -master
         let mut master_names = vec![];
@@ -635,26 +561,8 @@ pub async fn get_images(
     })
 }
 
-// Function to get ZFS data with caching
-fn get_cached_zfs_data(zpool: &str) -> Result<(Vec<Snapshot>, Vec<Snapshot>), AppError> {
-    let cache = ZFS_CACHE.read().unwrap();
-
-    if !cache.needs_refresh() {
-        // Return cached data
-        return Ok((cache.datasets.clone(), cache.snapshots.clone()));
-    }
-
-    // Drop read lock before acquiring write lock
-    drop(cache);
-
-    let mut cache = ZFS_CACHE.write().unwrap();
-
-    // Double-check after acquiring write lock
-    if !cache.needs_refresh() {
-        // Another thread may have updated the cache while we were waiting
-        return Ok((cache.datasets.clone(), cache.snapshots.clone()));
-    }
-
+// Function to get fresh ZFS data
+fn get_fresh_zfs_data(zpool: &str) -> Result<(Vec<Snapshot>, Vec<Snapshot>), AppError> {
     // List all datasets (fs/vol)
     let ds_out = run_command_output_no_sudo(&[
         "zfs",
@@ -685,12 +593,7 @@ fn get_cached_zfs_data(zpool: &str) -> Result<(Vec<Snapshot>, Vec<Snapshot>), Ap
     .map_err(|e| AppError::Command(format!("Failed to list snapshots: {}", e)))?;
     let all_snaps = parse_zfs_list(&snap_out);
 
-    // Update cache
-    cache.datasets = all_datasets;
-    cache.snapshots = all_snaps;
-    cache.last_updated = std::time::SystemTime::now();
-
-    Ok((cache.datasets.clone(), cache.snapshots.clone()))
+    Ok((all_datasets, all_snaps))
 }
 
 async fn common_delete(
@@ -797,12 +700,6 @@ pub async fn delete_image(
     eprintln!("=== delete_image START: {}", master_name); // Terminal log
     let result = common_delete(&state, token, &master_name, false).await;
 
-    // Invalidate cache after deletion so get_images returns fresh data
-    if result.is_ok() {
-        let mut cache = ZFS_CACHE.write().unwrap();
-        cache.last_updated = std::time::SystemTime::UNIX_EPOCH;
-    }
-
     eprintln!("=== delete_image END: {:?}", result); // Will show if it completes
     result
 }
@@ -814,32 +711,48 @@ pub async fn create_snapshot(
     state: State<'_, AppState>,
     token: String,
     snapshot_name: String,
-) -> Result<Value, String> {
+) -> Result<Value, AppError> {
     // Validate authentication token
-    crate::middleware::validate_auth_token_for_command(&token)
-        .map_err(|e| format!("Authentication failed: {}", e.message))?;
+    validate_auth(&token)?;
     let zpool_name = get_zpool_name();
+
+    // Basic format check
     if !snapshot_name.contains('@') || !snapshot_name.starts_with(&format!("{}/", zpool_name)) {
-        return Err(format!(
+        return Err(AppError::Validation(format!(
             "Invalid snapshot name. Expected {}/master@snapname",
             zpool_name
-        ));
+        )));
     }
+
+    // Validate the snapshot part after @
+    if let Some(snap_part) = snapshot_name.split('@').nth(1) {
+        crate::validation::validate_snapshot_name(snap_part)?;
+    }
+
     let master_name = snapshot_name.split('@').next().unwrap();
     let status_code = run_command_check(&["zfs", "list", "-H", master_name]);
     if status_code != 0 {
-        return Err(format!("Master '{}' not found.", master_name));
+        return Err(AppError::NotFound(format!(
+            "Master '{}' not found.",
+            master_name
+        )));
     }
     let output = Command::new("sudo")
         .args(["zfs", "snapshot", &snapshot_name])
         .output()
-        .map_err(|e| format!("Failed to run zfs snapshot: {}", e))?;
+        .map_err(|e| AppError::Command(format!("Failed to run zfs snapshot: {}", e)))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         if stderr.contains("dataset already exists") {
-            return Err(format!("Snapshot '{}' already exists.", snapshot_name));
+            return Err(AppError::Validation(format!(
+                "Snapshot '{}' already exists.",
+                snapshot_name
+            )));
         } else {
-            return Err(format!("Failed creating snapshot: {}", stderr));
+            return Err(AppError::Command(format!(
+                "Failed creating snapshot: {}",
+                stderr
+            )));
         }
     }
     let mut config = get_config();
@@ -858,14 +771,8 @@ pub async fn create_snapshot(
             }
             write_config(&state.db_pool, &config)
                 .await
-                .map_err(|e| format!("Failed to write config: {}", e))?;
+                .map_err(AppError::Config)?;
         }
-    }
-
-    // Invalidate cache so get_images returns fresh data
-    {
-        let mut cache = ZFS_CACHE.write().unwrap();
-        cache.last_updated = std::time::SystemTime::UNIX_EPOCH;
     }
 
     Ok(json!({
@@ -887,12 +794,6 @@ pub async fn delete_snapshot(
         ));
     }
     let result = common_delete(&state, token, &snapshot_name, true).await;
-
-    // Invalidate cache after deletion so get_images returns fresh data
-    if result.is_ok() {
-        let mut cache = ZFS_CACHE.write().unwrap();
-        cache.last_updated = std::time::SystemTime::UNIX_EPOCH;
-    }
 
     eprintln!("=== delete_snapshot END: {:?}", result);
     result
@@ -1036,12 +937,6 @@ pub async fn rollback_image_snapshot(
         }
     }
 
-    // Invalidate cache so get_images returns fresh data
-    {
-        let mut cache = ZFS_CACHE.write().unwrap();
-        cache.last_updated = std::time::SystemTime::UNIX_EPOCH;
-    }
-
     Ok(json!({
         "message": format!("Rolled back snapshot {} and re-created {} clones", snapshot_name, recreated.len()),
         "recreated_clones": recreated
@@ -1076,42 +971,6 @@ pub async fn get_zfs_arcstat() -> Result<ArcstatInfo, AppError> {
     Ok(ArcstatInfo { size, hit_percent })
 }
 
-static DEFAULT_IMAGE_CACHE: Lazy<Arc<RwLock<DefaultImageCache>>> =
-    Lazy::new(|| Arc::new(RwLock::new(DefaultImageCache::new())));
-
-#[derive(Debug, Clone)]
-struct DefaultImageCache {
-    overview: serde_json::Value,
-    last_updated: std::time::SystemTime,
-    ttl: std::time::Duration,
-}
-
-impl DefaultImageCache {
-    fn new() -> Self {
-        DefaultImageCache {
-            overview: serde_json::json!({
-                "name": null,
-                "creation_date": null,
-                "clones": null,
-                "message": "No default master image set"
-            }),
-            last_updated: std::time::SystemTime::UNIX_EPOCH,
-            ttl: std::time::Duration::from_secs(30), // 30 second cache TTL
-        }
-    }
-
-    fn is_fresh(&self) -> bool {
-        self.last_updated
-            .elapsed()
-            .map(|elapsed| elapsed < self.ttl)
-            .unwrap_or(false)
-    }
-
-    fn needs_refresh(&self) -> bool {
-        !self.is_fresh()
-    }
-}
-
 #[tauri::command]
 pub async fn get_default_image_overview(
     state: State<'_, AppState>,
@@ -1124,7 +983,7 @@ pub async fn get_default_image_overview(
         .map(|s| s.to_string())
         .unwrap_or_default();
 
-    // For empty dataset, return immediately without caching
+    // For empty dataset, return immediately
     if master_dataset.is_empty() {
         return Ok(json!({
             "name": null,
@@ -1132,14 +991,6 @@ pub async fn get_default_image_overview(
             "clones": null,
             "message": "No default master image set"
         }));
-    }
-
-    // Try to get cached data first
-    {
-        let cache = DEFAULT_IMAGE_CACHE.read().unwrap();
-        if !cache.needs_refresh() {
-            return Ok(cache.overview.clone());
-        }
     }
 
     // Check if the dataset exists
@@ -1158,13 +1009,6 @@ pub async fn get_default_image_overview(
             "clones": null,
             "message": format!("Default master image '{}' no longer exists and has been cleared from config", master_dataset)
         });
-
-        // Update cache
-        {
-            let mut cache = DEFAULT_IMAGE_CACHE.write().unwrap();
-            cache.overview = overview.clone();
-            cache.last_updated = std::time::SystemTime::now();
-        }
 
         return Ok(overview);
     }
@@ -1193,21 +1037,7 @@ pub async fn get_default_image_overview(
         "clones": lines[1]
     });
 
-    // Update cache
-    {
-        let mut cache = DEFAULT_IMAGE_CACHE.write().unwrap();
-        cache.overview = overview.clone();
-        cache.last_updated = std::time::SystemTime::now();
-    }
-
     Ok(overview)
-}
-
-// Function to invalidate the default image cache (to be called when operations change the default image)
-pub fn invalidate_default_image_cache() {
-    if let Ok(mut cache) = DEFAULT_IMAGE_CACHE.try_write() {
-        cache.last_updated = std::time::SystemTime::UNIX_EPOCH; // Force refresh next time
-    }
 }
 
 #[tauri::command]
@@ -1218,7 +1048,7 @@ pub async fn rename_image(
     new_name: String,
 ) -> Result<serde_json::Value, AppError> {
     validate_auth(&token)?;
-    validate_name(&new_name)?;
+    validate_zfs_name(&new_name)?;
 
     if !zfs_exists(&old_name) {
         return Err(AppError::NotFound(format!(
@@ -1281,13 +1111,85 @@ pub async fn rename_image(
         }
     }
 
-    // Invalidate cache so get_images returns fresh data
-    {
-        let mut cache = ZFS_CACHE.write().unwrap();
-        cache.last_updated = std::time::SystemTime::UNIX_EPOCH;
-    }
-
     Ok(json!({
         "message": format!("Master renamed from '{}' to '{}' successfully", old_name, new_master_zvol_name)
     }))
+}
+
+// Get latest snapshot for a master dataset
+pub fn get_latest_snapshot(master_name: &str) -> Result<String, AppError> {
+    debug!("Looking for snapshots of master: {}", master_name);
+
+    // Get all snapshots for the master image, sorted by creation time
+    // Try without -r flag first, then with it if needed
+    let stdout = match run_command_output_no_sudo([
+        "zfs",
+        "list",
+        "-H",
+        "-t",
+        "snapshot",
+        "-o",
+        "name,creation",
+        master_name,
+    ]) {
+        Ok(output) => output,
+        Err(e) => {
+            debug!("First attempt failed: {}", e);
+
+            // Try with -r flag as fallback
+            match run_command_output_no_sudo([
+                "zfs",
+                "list",
+                "-H",
+                "-t",
+                "snapshot",
+                "-o",
+                "name,creation",
+                "-r",
+                master_name,
+            ]) {
+                Ok(output) => output,
+                Err(e) => {
+                    return Err(AppError::Command(format!(
+                        "Failed to list snapshots for {}: {}",
+                        master_name, e
+                    )));
+                }
+            }
+        }
+    };
+
+    debug!("ZFS list output for {}: {}", master_name, stdout);
+
+    let snapshots: Vec<(String, u64)> = stdout
+        .lines()
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.split('\t').collect();
+            if parts.len() >= 2 {
+                let name = parts[0].to_string();
+                let creation = parts[1].parse::<u64>().ok()?;
+                debug!("Found snapshot: {} (creation: {})", name, creation);
+                Some((name, creation))
+            } else {
+                debug!("Skipping malformed line: {}", line);
+                None
+            }
+        })
+        .collect();
+
+    if snapshots.is_empty() {
+        return Err(AppError::NotFound(format!(
+            "No snapshots found for master {}",
+            master_name
+        )));
+    }
+
+    // Find the snapshot with the highest creation timestamp (latest)
+    let latest = snapshots
+        .into_iter()
+        .max_by_key(|(_, creation)| *creation)
+        .ok_or_else(|| AppError::NotFound("No valid snapshots found".to_string()))?;
+
+    debug!("Selected latest snapshot: {}", latest.0);
+    Ok(latest.0)
 }

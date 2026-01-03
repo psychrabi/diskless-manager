@@ -1,57 +1,26 @@
-use crate::cmd::{run_command, run_command_async, run_command_check, run_command_output_no_sudo};
-use crate::config::{get_config, get_zpool_name};
+use crate::cmd::{run_command, run_command_async, run_command_output_no_sudo};
+use crate::config::get_config;
 use crate::dhcp::{create_dhcp_entry, update_dhcp_config};
 use crate::error::AppError;
-use crate::iscsi::{cleanup_iscsi_target, setup_iscsi_target, setup_iscsi_target_with_game_disks};
+use crate::iscsi::{cleanup_iscsi_target, setup_iscsi_target};
 use crate::state::AppState;
-use crate::types::{AddClientRequest, Client, ControlRequest};
-use crate::zfs::{
-    get_master_os, get_writeback_or_default_dataset, zfs_clone, zfs_destroy, zfs_exists,
-};
-use sqlx::SqlitePool;
+use crate::timed_execution;
+use crate::types::{AddClientRequest, ControlRequest, EditClientRequest};
+use crate::zfs::{get_latest_snapshot, get_master_os, zfs_clone, zfs_destroy, zfs_exists}; // Check imports
+use chrono::Local;
+use std::process::Command;
 use tauri::State;
 use tracing::{debug, error, info, warn};
 
-use chrono::Local;
-
-use std::collections::HashMap;
-use std::process::{Command, Stdio};
-use std::thread;
-use std::time::Duration;
-
-// Import the timed execution macro
-use crate::timed_execution;
-
-trait WaitTimeout {
-    fn wait_timeout(&mut self, dur: Duration) -> std::io::Result<Option<std::process::ExitStatus>>;
-}
-impl WaitTimeout for std::process::Child {
-    fn wait_timeout(&mut self, dur: Duration) -> std::io::Result<Option<std::process::ExitStatus>> {
-        let start = std::time::Instant::now();
-        loop {
-            match self.try_wait()? {
-                Some(status) => {
-                    return Ok(Some(status));
-                }
-                None => {
-                    if start.elapsed() >= dur {
-                        return Ok(None);
-                    }
-                    thread::sleep(Duration::from_millis(100));
-                }
-            }
-        }
-    }
-}
-
-// Helper to validate auth token, returning Err if invalid
-fn validate_auth(token: &str) -> Result<(), AppError> {
-    crate::middleware::validate_auth_token_for_command(token)
-        .map(|_| ())
-        .map_err(|e| AppError::Auth(e.message))
-}
-
-// Removed unused stream imports
+// New imports
+use crate::core::provisioning::{
+    add_client_provisioning, check_duplicate_client, delete_client_config, get_client_by_id,
+    get_client_paths, get_client_paths_with_master, save_client_config,
+};
+use crate::middleware::validate_auth;
+use crate::utils::network::{get_client_status_realtime, ping_host};
+use crate::utils::remote::{launch_remote_desktop, launch_vnc_viewer};
+use crate::validation::validate_client_id;
 
 #[tauri::command]
 pub async fn get_clients(
@@ -108,216 +77,6 @@ pub async fn get_clients(
     })
 }
 
-// Synchronous client status function for backward compatibility
-fn get_client_status_realtime(ip: String) -> String {
-    // Consider ping reachability as Online
-    let online = if ip.is_empty() || ip == "N/A" {
-        false
-    } else {
-        match std::process::Command::new("ping")
-            .args(["-c", "1", "-W", "1", &ip])
-            .output()
-        {
-            Ok(out) => out.status.success(),
-            Err(_) => false,
-        }
-    };
-
-    if online {
-        "Online".to_string()
-    } else {
-        "Offline".to_string()
-    }
-}
-
-// Async ping function using spawn_blocking for better efficiency
-async fn ping_host(ip: String) -> String {
-    tokio::task::spawn_blocking(move || {
-        match std::process::Command::new("ping")
-            .args(["-c", "1", "-W", "2", &ip])
-            .output()
-        {
-            Ok(out) => {
-                if out.status.success() {
-                    "Online".to_string()
-                } else {
-                    "Offline".to_string()
-                }
-            }
-            Err(_) => "Offline".to_string(),
-        }
-    })
-    .await
-    .unwrap_or_else(|_| "Offline".to_string())
-}
-
-fn get_client_by_id(client_id: &str) -> Option<Client> {
-    // Borrow config to avoid moving the vector out of the global cache.
-    let config = get_config();
-    for c in &config.clients {
-        if c.id.eq_ignore_ascii_case(client_id) {
-            return Some(c.clone());
-        }
-    }
-    None
-}
-
-fn check_duplicate_client(name: &str, mac: &str, ip: &str) -> Option<String> {
-    let config = get_config();
-    for client in &config.clients {
-        let client_name = client.name.to_lowercase();
-        let client_ip = &client.ip;
-        let client_mac = client.mac.to_uppercase();
-        if name.to_lowercase() == client_name {
-            return Some(format!("A client with name '{}' already exists", name));
-        }
-        if ip == client_ip {
-            return Some(format!(
-                "IP address {} is already in use by client '{}'",
-                ip, client.name
-            ));
-        }
-        if mac.to_uppercase() == client_mac {
-            return Some(format!(
-                "MAC address {} is already in use by client '{}'",
-                mac, client.name
-            ));
-        }
-    }
-    None
-}
-
-pub fn get_client_paths(client_id: &str, client_mac: &str) -> HashMap<String, String> {
-    // Use get_client_paths_with_master to ensure we use writeback dataset if available
-    get_client_paths_with_master(client_id, client_mac, "") // Empty master since we only need paths
-}
-
-pub fn get_client_paths_with_master(
-    client_id: &str,
-    client_mac: &str,
-    _master: &str,
-) -> HashMap<String, String> {
-    // If a dataset with org.diskless:type=writeback exists, use it as the parent for client clones.
-    let clone_path = get_writeback_or_default_dataset(client_id);
-
-    let target_iqn = format!(
-        "iqn.2025-04.local.diskless:{}",
-        client_mac.to_lowercase().replace(':', "-")
-    );
-    let block_store = format!("block_{}", client_id.to_lowercase());
-    let mut map = HashMap::new();
-    map.insert("clone".to_string(), clone_path);
-    map.insert("target_iqn".to_string(), target_iqn);
-    map.insert("block_store".to_string(), block_store);
-    map
-}
-
-pub async fn save_client_config(pool: &SqlitePool, client_data: &Client) -> bool {
-    // Operate directly on the AppConfig struct to avoid multiple serde conversions.
-    let mut cfg = get_config();
-    let mut found = false;
-    // match case-insensitively
-    for c in cfg.clients.iter_mut() {
-        if c.id.eq_ignore_ascii_case(&client_data.id) {
-            *c = client_data.clone();
-            found = true;
-            break;
-        }
-    }
-    if !found {
-        cfg.clients.push(client_data.clone());
-    }
-
-    match crate::config::write_config(pool, &cfg).await {
-        Ok(_) => {
-            // update in-memory cache
-            crate::config::set_config(&cfg);
-            true
-        }
-        Err(e) => {
-            warn!("Error saving client config: {}", e);
-            false
-        }
-    }
-}
-
-fn get_latest_snapshot(master_name: &str) -> Result<String, AppError> {
-    debug!("Looking for snapshots of master: {}", master_name);
-
-    // Get all snapshots for the master image, sorted by creation time
-    // Try without -r flag first, then with it if needed
-    let stdout = match run_command_output_no_sudo([
-        "zfs",
-        "list",
-        "-H",
-        "-t",
-        "snapshot",
-        "-o",
-        "name,creation",
-        master_name,
-    ]) {
-        Ok(output) => output,
-        Err(e) => {
-            debug!("First attempt failed: {}", e);
-
-            // Try with -r flag as fallback
-            match run_command_output_no_sudo([
-                "zfs",
-                "list",
-                "-H",
-                "-t",
-                "snapshot",
-                "-o",
-                "name,creation",
-                "-r",
-                master_name,
-            ]) {
-                Ok(output) => output,
-                Err(e) => {
-                    return Err(AppError::Command(format!(
-                        "Failed to list snapshots for {}: {}",
-                        master_name, e
-                    )));
-                }
-            }
-        }
-    };
-
-    debug!("ZFS list output for {}: {}", master_name, stdout);
-
-    let snapshots: Vec<(String, u64)> = stdout
-        .lines()
-        .filter_map(|line| {
-            let parts: Vec<&str> = line.split('\t').collect();
-            if parts.len() >= 2 {
-                let name = parts[0].to_string();
-                let creation = parts[1].parse::<u64>().ok()?;
-                debug!("Found snapshot: {} (creation: {})", name, creation);
-                Some((name, creation))
-            } else {
-                debug!("Skipping malformed line: {}", line);
-                None
-            }
-        })
-        .collect();
-
-    if snapshots.is_empty() {
-        return Err(AppError::NotFound(format!(
-            "No snapshots found for master {}",
-            master_name
-        )));
-    }
-
-    // Find the snapshot with the highest creation timestamp (latest)
-    let latest = snapshots
-        .into_iter()
-        .max_by_key(|(_, creation)| *creation)
-        .ok_or_else(|| AppError::NotFound("No valid snapshots found".to_string()))?;
-
-    debug!("Selected latest snapshot: {}", latest.0);
-    Ok(latest.0)
-}
-
 #[tauri::command]
 pub async fn remote_client(
     token: String,
@@ -372,123 +131,24 @@ pub async fn remote_client(
     }
 }
 
-// Helper: Launch VNC viewer
-fn launch_vnc_viewer(client_ip: &str) -> Result<(), AppError> {
-    // Try generic vncviewer first, then specific ones if needed
-    let vnc_command = ["vncviewer", client_ip];
-
-    let mut child = Command::new(vnc_command[0])
-        .arg(vnc_command[1])
-        .spawn()
-        .map_err(|e| AppError::Command(format!("Failed to launch vncviewer: {}", e)))?;
-
-    // Wait briefly to check for immediate failures
-    let result = child.wait_timeout(Duration::from_secs(2)).unwrap_or(None);
-
-    if let Some(status) = result {
-        if !status.success() {
-            return Err(AppError::Command(
-                "VNC viewer exited with error".to_string(),
-            ));
-        }
-    }
-    Ok(())
-}
-
-// Helper: Launch xfreerdp with fallback
-fn launch_remote_desktop(client_ip: &str, username: &str) -> Result<(), AppError> {
-    let rdp_command = [
-        "xfreerdp3",
-        &format!("/v:{}", client_ip),
-        &format!("/u:{}", username),
-        "/p:1",
-        "/cert:ignore",
-        "/w:1920",
-        "/h:1080",
-        "/dynamic-resolution",
-        "/gdi:hw",
-        "/network:lan",
-        "/bpp:32",
-        "/sec:nla",
-        "/timeout:20000",
-    ];
-
-    let mut child = Command::new(rdp_command[0])
-        .args(&rdp_command[1..])
-        .spawn()
-        .map_err(|e| AppError::Command(format!("Failed to launch xfreerdp: {}", e)))?;
-
-    // Wait briefly to check for immediate failures
-    let result = child.wait_timeout(Duration::from_secs(5)).unwrap_or(None);
-
-    if let Some(status) = result {
-        if !status.success() {
-            // Try fallback
-            let fallback_command = [
-                "xfreerdp3",
-                &format!("/v:{}", client_ip),
-                &format!("/u:{}", username),
-                "/p:1",
-                "/cert:ignore",
-                "/w:1366",
-                "/h:768",
-                "/clipboard:off",
-                "/gdi:hw",
-                "/network:lan",
-                "/bpp:24",
-                "/sec:nla",
-                "/timeout:20000",
-            ];
-            let mut fallback_child = Command::new(fallback_command[0])
-                .args(&fallback_command[1..])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .map_err(|e| AppError::Command(format!("Fallback xfreerdp failed: {}", e)))?;
-
-            let fallback_result = fallback_child
-                .wait_timeout(Duration::from_secs(5))
-                .unwrap_or(None);
-
-            if let Some(fallback_status) = fallback_result {
-                if !fallback_status.success() {
-                    return Err(AppError::Command("Both RDP attempts failed".to_string()));
-                }
-            }
-        }
-    }
-    // If process didn't exit immediately, assume success
-    Ok(())
-}
-
-pub async fn delete_client_config(pool: &SqlitePool, client_id: &str) -> bool {
-    info!("Deleting client config: {}", client_id);
-    // Work with the typed AppConfig directly and perform case-insensitive remove.
-    let mut cfg = get_config();
-    let before = cfg.clients.len();
-    cfg.clients
-        .retain(|c| !c.id.eq_ignore_ascii_case(client_id));
-    if cfg.clients.len() == before {
-        // nothing removed
-        return true;
-    }
-    match crate::config::write_config(pool, &cfg).await {
-        Ok(_) => {
-            crate::config::set_config(&cfg);
-            true
-        }
-        Err(e) => {
-            warn!("Error writing config file: {}", e);
-            false
-        }
-    }
+#[tauri::command]
+pub async fn add_client(
+    state: State<'_, AppState>,
+    token: String,
+    req: AddClientRequest,
+) -> Result<serde_json::Value, AppError> {
+    // Validate authentication token
+    validate_auth(&token)?;
+    add_client_impl(state.inner(), req).await
 }
 
 pub async fn add_client_impl(
     state: &AppState,
     req: AddClientRequest,
 ) -> Result<serde_json::Value, AppError> {
-    // Validate inputs
+    // Validate inputs using the struct's own validate method
+    req.validate()?;
+
     let mac = req.mac.trim().to_uppercase();
     let ip = req.ip.trim().to_string();
 
@@ -530,19 +190,13 @@ pub async fn add_client_impl(
         .map(|s| s.trim().to_string())
         .unwrap_or_default();
 
-    if mac.is_empty() || ip.is_empty() {
-        return Err(AppError::Validation(
-            "Missing required fields: mac, ip".to_string(),
-        ));
-    }
-
     // Check for duplicates (implement as needed)
     if let Some(dup) = check_duplicate_client(&name, &mac, &ip) {
         return Err(AppError::Validation(dup));
     }
 
     // Pass keep_writeback and use_game_disk from req
-    add_client_logic(
+    add_client_provisioning(
         state,
         name,
         mac,
@@ -556,274 +210,27 @@ pub async fn add_client_impl(
 }
 
 #[tauri::command]
-pub async fn add_client(
-    state: State<'_, AppState>,
-    token: String,
-    req: AddClientRequest,
-) -> Result<serde_json::Value, AppError> {
-    // Validate authentication token
-    validate_auth(&token)?;
-    add_client_impl(state.inner(), req).await
-}
-
-async fn add_client_logic(
-    state: &AppState,
-    name: String,
-    mac: String,
-    ip: String,
-    master: String,
-    snapshot: String,
-    keep_writeback: Option<bool>,
-    use_game_disk: Option<bool>,
-) -> Result<serde_json::Value, AppError> {
-    // If no master image is selected, only save to config files
-    if master.is_empty() {
-        let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-        let client_data = Client {
-            id: name.clone(),
-            name: name.to_uppercase(),
-            mac: mac.clone(),
-            ip: ip.clone(),
-            master: master.clone(),
-            snapshot: if snapshot.is_empty() {
-                None
-            } else {
-                Some(snapshot.clone())
-            },
-            target_iqn: None,
-            block_device: None,
-            block_store: None,
-            writeback: None,
-            created_at: Some(now.clone()),
-            last_modified: Some(now.clone()),
-            status: None,
-            mode: None,
-            pxe_mode: Some("uefi".to_string()),
-            keep_writeback: keep_writeback.or(Some(true)), // Default to true for backward compatibility
-            use_game_disk,
-        };
-        if !save_client_config(&state.db_pool, &client_data).await {
-            return Err(AppError::Config(format!(
-                "Failed to save client configuration for {}",
-                name
-            )));
-        }
-        return Ok(
-            serde_json::json!({ "message": format!("Client {} added to configuration (no image selected)", name) }),
-        );
-    }
-
-    // Compute ZFS paths
-    let mut paths = get_client_paths_with_master(&name, &mac, &master);
-
-    // If a dataset with org.diskless:type=writeback exists, use it as the parent for client clones.
-    if let Ok(pool_list) =
-        run_command_output_no_sudo(&["zfs", "list", "-H", "-o", "name", "-r", &get_zpool_name()])
-    {
-        if let Some(parent) = pool_list.lines().filter(|l| !l.is_empty()).find_map(|ds| {
-            match run_command_output_no_sudo(&[
-                "zfs",
-                "get",
-                "-H",
-                "-o",
-                "value",
-                "org.diskless:type",
-                ds,
-            ]) {
-                Ok(v) if v.trim() == "writeback" => Some(ds.to_string()),
-                _ => None,
-            }
-        }) {
-            // Use found writeback dataset as parent for the clone path (preserve existing naming convention)
-            paths.insert(
-                "clone".to_string(),
-                format!("{}/{}-disk", parent, name.to_uppercase()),
-            );
-        } else {
-            // ensure default clone path exists in paths (fallback)
-            paths.insert(
-                "clone".to_string(),
-                format!("{}/{}-disk", get_zpool_name(), name.to_uppercase()),
-            );
-        }
-    }
-    warn!("Client paths: {:?}", paths);
-
-    // Transaction tracking
-    let mut rollback_clone: Option<String> = None;
-    let mut rollback_target: Option<(String, String)> = None;
-    let mut rollback_dhcp: bool = false;
-
-    // Helper closure for rollback
-    let perform_rollback = |r_clone: Option<String>,
-                            r_target: Option<(String, String)>,
-                            r_dhcp: bool,
-                            client_id: String| async move {
-        warn!("Rolling back provisioning for {}", client_id);
-
-        if r_dhcp {
-            // Remove DHCP entry
-            if let Err(e) = update_dhcp_config(&client_id, "", false).await {
-                error!("Rollback: Failed to remove DHCP entry: {}", e);
-            }
-        }
-
-        if let Some((iqn, store)) = r_target {
-            if let Err(e) = cleanup_iscsi_target(&iqn, &store) {
-                error!("Rollback: Failed to cleanup iSCSI target: {}", e);
-            }
-        }
-
-        if let Some(clone) = r_clone {
-            if let Err(e) = zfs_destroy(&clone) {
-                error!("Rollback: Failed to destroy ZFS clone: {}", e);
-            }
-        }
-    };
-
-    // Step 1: Create client image (ZFS clone or use master directly)
-    let mut used_master_directly = false;
-    let clone_result = if !snapshot.is_empty() {
-        // Use provided snapshot
-        run_command(&["zfs", "clone", &snapshot, &paths["clone"]])
-    } else {
-        // Check if base snapshot exists
-        let base_snapshot = format!("{}@base", master);
-        let result = run_command_check(&["zfs", "list", "-H", "-t", "snapshot", &base_snapshot]);
-        if result == 0 {
-            // Create new snapshot for this client
-            let snapshot_name = format!("{}@{}_base", master, name);
-            if let Err(e) = run_command(&["zfs", "snapshot", &snapshot_name]) {
-                return Err(AppError::Command(format!(
-                    "Failed to create base snapshot: {}",
-                    e
-                )));
-            }
-            run_command(&["zfs", "clone", &snapshot_name, &paths["clone"]])
-        } else {
-            // Use master volume directly
-            paths.insert("clone".to_string(), master.clone());
-            used_master_directly = true;
-            Ok(())
-        }
-    };
-
-    if let Err(e) = clone_result {
-        return Err(AppError::Command(format!(
-            "Failed to create ZFS clone: {}",
-            e
-        )));
-    }
-
-    if !used_master_directly {
-        rollback_clone = Some(paths["clone"].clone());
-    }
-
-    // Step 2: Set up iSCSI target
-    let block_device = format!("/dev/zvol/{}", &paths["clone"]);
-
-    let iscsi_result = if use_game_disk.unwrap_or(false) {
-        setup_iscsi_target_with_game_disks(
-            &paths["target_iqn"],
-            &paths["block_store"],
-            &block_device,
-        )
-    } else {
-        setup_iscsi_target(&paths["target_iqn"], &paths["block_store"], &block_device)
-    };
-
-    if let Err(e) = iscsi_result {
-        perform_rollback(rollback_clone, rollback_target, rollback_dhcp, name.clone()).await;
-        return Err(AppError::Command(format!(
-            "Failed to setup iSCSI target: {}",
-            e
-        )));
-    }
-    rollback_target = Some((paths["target_iqn"].clone(), paths["block_store"].clone()));
-
-    // Step 3: Create DHCP entry
-    let dhcp_entry = create_dhcp_entry(&name, &mac, &ip, &paths["target_iqn"]);
-    if let Err(e) = update_dhcp_config(&name, &dhcp_entry, true).await {
-        perform_rollback(rollback_clone, rollback_target, rollback_dhcp, name.clone()).await;
-        return Err(AppError::Config(format!(
-            "Failed to update DHCP config: {}",
-            e
-        )));
-    }
-    rollback_dhcp = true;
-
-    // Step 4: Save client configuration to JSON file
-    let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    let client_data = Client {
-        id: name.clone(),
-        name: name.to_uppercase(),
-        mac: mac.clone(),
-        ip: ip.clone(),
-        master: master.clone(),
-        snapshot: if used_master_directly {
-            None
-        } else {
-            Some(snapshot.clone())
-        },
-        target_iqn: Some(paths["target_iqn"].clone()),
-        block_device: Some(block_device.clone()),
-        block_store: Some(paths["block_store"].clone()),
-        writeback: if used_master_directly {
-            None
-        } else {
-            Some(paths["clone"].clone())
-        },
-        created_at: Some(now.clone()),
-        last_modified: Some(now.clone()),
-        status: None,
-        mode: if used_master_directly {
-            Some("super".to_string())
-        } else {
-            None
-        },
-        pxe_mode: Some("uefi".to_string()),
-        keep_writeback: keep_writeback.or(Some(true)), // Default to true for backward compatibility
-        use_game_disk,
-    };
-
-    if !save_client_config(&state.db_pool, &client_data).await {
-        perform_rollback(rollback_clone, rollback_target, rollback_dhcp, name.clone()).await;
-        return Err(AppError::Config(format!(
-            "Failed to save client configuration for {}",
-            name
-        )));
-    }
-
-    // Step 5: Restart DHCP service
-    // If this fails, we warn but don't rollback as the configuration is valid
-    if let Err(e) = run_command_async(&["systemctl", "restart", "isc-dhcp-server.service"]).await {
-        warn!(
-            "Failed to restart DHCP service after adding client {}: {}",
-            name, e
-        );
-    }
-    info!("Client {} added successfully", name);
-    Ok(serde_json::json!({ "message": format!("Client {} added successfully", name) }))
-}
-
-#[tauri::command]
 pub async fn edit_client(
     state: State<'_, AppState>,
     token: String,
     client_id: String,
-    data: serde_json::Value,
+    data: EditClientRequest,
 ) -> Result<serde_json::Value, AppError> {
     // Validate authentication token
     validate_auth(&token)?;
     // Validate client_id format
-    if !regex::Regex::new(r"^[\w-]+$").unwrap().is_match(&client_id) {
-        return Err(AppError::Validation("Invalid client ID".to_string()));
-    }
+    validate_client_id(&client_id)?;
+    // Validate input data
+    data.validate()?;
 
     // Get current client info
     let mut client_info = match get_client_by_id(&client_id) {
-        Some(info) => info,
+        Some(info) => {
+            info!("Client {} found", client_id);
+            info
+        }
         None => {
+            info!("Client {} not found", client_id);
             return Err(AppError::NotFound(format!(
                 "Client {} not found",
                 client_id
@@ -834,43 +241,13 @@ pub async fn edit_client(
     // Get current paths
     let current_paths = get_client_paths(&client_id, &client_info.mac);
 
-    // Extract new client details
-    let new_name = data
-        .get("name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    let new_mac = data
-        .get("mac")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim()
-        .to_uppercase();
-    let new_ip = data
-        .get("ip")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    let new_master = data
-        .get("master")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    let new_snapshot = data
-        .get("snapshot")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim()
-        .to_string();
-
-    if new_name.is_empty() || new_mac.is_empty() || new_ip.is_empty() {
-        return Err(AppError::Validation(
-            "Missing required fields: name, mac, ip".to_string(),
-        ));
-    }
+    let new_name = data.name.trim().to_string();
+    let new_mac = data.mac.trim().to_uppercase();
+    let new_ip = data.ip.trim().to_string();
+    let new_master = data.master.trim().to_string();
+    let new_snapshot = data.snapshot.as_deref().unwrap_or("").trim().to_string();
+    let new_keep_writeback = data.keep_writeback;
+    let new_use_game_disk = data.use_game_disk;
 
     // Detect changes
     let name_changed = new_name != client_info.name;
@@ -878,10 +255,11 @@ pub async fn edit_client(
     let ip_changed = new_ip != client_info.ip;
     let master_changed = new_master != client_info.master;
     let snapshot_changed = new_snapshot != client_info.snapshot.clone().unwrap_or_default();
+    let keep_wb_changed = new_keep_writeback != client_info.keep_writeback;
+    let use_game_changed = new_use_game_disk != client_info.use_game_disk;
 
     // If no master image is selected, only update config files
     if new_master.is_empty() {
-        // ... (rest of the logic)
         client_info.name = new_name.clone();
         client_info.mac = new_mac.clone();
         client_info.ip = new_ip.clone();
@@ -891,17 +269,24 @@ pub async fn edit_client(
         } else {
             Some(new_snapshot.clone())
         };
+        client_info.keep_writeback = new_keep_writeback;
+        client_info.use_game_disk = new_use_game_disk;
         client_info.last_modified = Some(Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
 
         save_client_config(&state.db_pool, &client_info).await;
         return Ok(serde_json::json!({"message": format!("Client {} updated", client_id)}));
     }
 
-    // Case 1: Only MAC or IP changed
-    if (mac_changed || ip_changed) && !(name_changed || master_changed || snapshot_changed) {
+    // Case 1: Minimal changes (MAC, IP, orientation settings) that don't require ZFS re-provisioning
+    if (mac_changed || ip_changed || keep_wb_changed || use_game_changed)
+        && !(name_changed || master_changed || snapshot_changed)
+    {
         client_info.mac = new_mac.clone();
         client_info.ip = new_ip.clone();
+        client_info.keep_writeback = new_keep_writeback;
+        client_info.use_game_disk = new_use_game_disk;
         client_info.last_modified = Some(Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
+
         let dhcp_entry =
             create_dhcp_entry(&new_name, &new_mac, &new_ip, &current_paths["target_iqn"]);
         update_dhcp_config(&client_id, &dhcp_entry, false)
@@ -914,21 +299,41 @@ pub async fn edit_client(
     }
 
     // For other cases, we'll re-provision
-    add_client_logic(
+
+    // Cleanup old resources first
+    info!(
+        "Cleaning up old resources for re-provisioning client {}",
+        client_id
+    );
+    if let (Some(ref iqn), Some(ref store)) = (
+        client_info.target_iqn.clone(),
+        client_info.block_store.clone(),
+    ) {
+        if let Err(e) = cleanup_iscsi_target(&iqn, &store) {
+            warn!("Failed to cleanup old iSCSI target: {}", e);
+        }
+    }
+    if let Some(ref wb) = client_info.writeback {
+        if let Err(e) = zfs_destroy(wb) {
+            warn!("Failed to destroy old ZFS clone {}: {}", wb, e);
+        }
+    }
+
+    crate::core::provisioning::add_client_provisioning(
         &state,
         new_name,
         new_mac,
         new_ip,
         new_master,
         new_snapshot,
-        client_info.keep_writeback,
-        client_info.use_game_disk,
+        new_keep_writeback,
+        new_use_game_disk,
     )
     .await?;
 
     // If name changed, delete old config
     if name_changed {
-        delete_client_config(&state.db_pool, &client_id).await;
+        crate::core::provisioning::delete_client_config(&state.db_pool, &client_id).await;
     }
 
     Ok(serde_json::json!({"message": format!("Successfully updated client {}", client_id)}))
@@ -1335,10 +740,7 @@ pub async fn reset_client(
     // Validate authentication token
     validate_auth(&token)?;
     // Validate client ID
-    let re = regex::Regex::new(r"^[\w-]+$").unwrap();
-    if !re.is_match(&client_id) {
-        return Err(AppError::Validation("Invalid client ID".to_string()));
-    }
+    validate_client_id(&client_id)?;
 
     // Fetch client info
     let mut client_info = match get_client_by_id(&client_id) {

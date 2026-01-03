@@ -1,7 +1,9 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Globe } from "lucide-react";
 import { useForm } from "react-hook-form";
-import { Button, Input } from "../ui";
+import { Button } from "../ui";
+import { httpSchema } from "@/schema";
+import HTTPForm from "../SettingsManagement/Forms/HTTPForm";
 
 const HTTPStep = ({ onSubmit, isSubmitting, initialConfig }) => {
   const {
@@ -27,31 +29,12 @@ const HTTPStep = ({ onSubmit, isSubmitting, initialConfig }) => {
       </div>
 
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-        <Input
-          label="HTTP Root Directory"
-          register={register("root_dir")}
-          error={errors.root_dir}
-          placeholder="/srv/http"
-        />
-        <div className="grid grid-cols-2 gap-4">
-          <Input
-            label="Server IP"
-            register={register("server_ip")}
-            error={errors.server_ip}
-            placeholder="*"
-          />
-          <Input
-            label="Server Port"
-            register={register("port")}
-            error={errors.port}
-            placeholder="80"
-          />
-        </div>
+        <HTTPForm register={register} errors={errors} config={initialConfig} />
 
         <Button
           type="submit"
           variant="primary"
-          className="w-full"
+          className="w-full mt-4"
           loading={isSubmitting}
         >
           {isSubmitting ? "Configuring HTTP..." : "Save & Continue"}

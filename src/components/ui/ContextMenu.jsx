@@ -6,9 +6,51 @@ import {
   RefreshCw,
   ScreenShare,
   Trash2,
+  ShieldAlert,
+  Settings,
 } from "lucide-react";
-import { useRef } from "react";
+import { useRef, useLayoutEffect, useState } from "react";
 import { useOnClickOutside } from "../../hooks/useOnClickOutside";
+
+const MenuItem = ({
+  icon: Icon,
+  label,
+  onClick,
+  variant = "default",
+  className = "",
+}) => {
+  const variants = {
+    default: "",
+    success: "hover:bg-success/20 transition-colors text-success",
+    warning: "hover:bg-warning/20 transition-colors text-warning",
+    error: "hover:bg-error/20 transition-colors text-error",
+    info: "hover:bg-info/20 transition-colors text-info",
+    secondary: "hover:bg-secondary/20 transition-colors text-secondary",
+    destructive:
+      "hover:bg-error text-error hover:text-white transition-all group",
+  };
+
+  return (
+    <li>
+      <a onClick={onClick} className={`${variants[variant]} ${className}`}>
+        <Icon
+          className={`w-4 h-4 ${
+            variant === "destructive"
+              ? "group-hover:scale-110 transition-transform"
+              : ""
+          }`}
+        />
+        <span>{label}</span>
+      </a>
+    </li>
+  );
+};
+
+const SectionHeader = ({ label }) => (
+  <div className="px-3 py-1 font-bold bg-base-300 uppercase tracking-widest">
+    {label}
+  </div>
+);
 
 export const ContextMenu = ({
   isOpen,
@@ -19,173 +61,147 @@ export const ContextMenu = ({
   actions,
 }) => {
   const menuRef = useRef(null);
+  const [coords, setCoords] = useState({ x: xPos, y: yPos });
   useOnClickOutside(menuRef, onClose);
+
+  useLayoutEffect(() => {
+    if (isOpen && menuRef.current) {
+      const { width, height } = menuRef.current.getBoundingClientRect();
+      setCoords({
+        x: Math.min(xPos, window.innerWidth - width - 10),
+        y: Math.min(yPos, window.innerHeight - height - 10),
+      });
+    }
+  }, [isOpen, xPos, yPos]);
 
   if (!isOpen || !targetClient) return null;
 
-  const menuStyle = {
-    top: `${yPos}px`,
-    left: `${xPos}px`,
+  const isOnline = targetClient?.status === "Online";
+  const isSuper = targetClient?.mode === "super";
+  const isPersistent =
+    targetClient?.snapshot && targetClient?.keep_writeback && !isSuper;
+  const isNonPersistent =
+    targetClient?.snapshot && !targetClient?.keep_writeback && !isSuper;
+
+  const handleAction = (cb) => {
+    cb(targetClient);
+    onClose();
   };
 
   return (
     <div
       ref={menuRef}
-      style={menuStyle}
-      className="fixed z-[60] bg-base-100 rounded-md shadow-lg min-w-[180px] animate-fade-in"
+      style={{ top: coords.y, left: coords.x }}
+      className="fixed z-[60] bg-base-100/80 backdrop-blur-md rounded-xl shadow-2xl min-w-[220px] border border-white/10 overflow-hidden animate-in fade-in zoom-in duration-150"
     >
-      <ul className="menu rounded-box w-52">
-        <li>
-          <a
-            onClick={() => {
-              actions.wake(targetClient);
-              onClose();
-            }}
-          >
-            <Play className="w-4 h-4" />
-            Power On
-          </a>
-        </li>
-        <li>
-          <a
-            onClick={() => {
-              actions.reboot(targetClient);
-              onClose();
-            }}
-          >
-            <RefreshCw className="w-4 h-4" />
-            Reboot
-          </a>
-        </li>
-        <li>
-          <a
-            onClick={() => {
-              actions.shutdown(targetClient);
-              onClose();
-            }}
-          >
-            <Power className="w-4 h-4" />
-            Shutdown
-          </a>
-        </li>
-        <li>
-          <a
-            onClick={() => {
-              actions.remote(targetClient);
-              onClose();
-            }}
-          >
-            <ScreenShare className="w-4 h-4" />
-            Remote Control
-          </a>
-        </li>
-        {/* Super Client items */}
-        {targetClient?.status === "Offline" ? (
+      <div className="p-4 bg-base-300 border-b border-white/5">
+        <p className="text-xs font-bold uppercase tracking-widest text-primary mb-2">
+          {targetClient.name}
+        </p>
+
+        <p className="text-[10px] opacity-40 font-mono truncate text-base-content">
+          {targetClient.ip} • {targetClient.mac}
+        </p>
+      </div>
+
+      <ul className="menu w-full p-0">
+        <SectionHeader label="Control" />
+        {!isOnline && (
+          <MenuItem
+            icon={Play}
+            label="Power On"
+            variant="success"
+            onClick={() => handleAction(actions.wake)}
+          />
+        )}
+        {isOnline && (
           <>
-            <div className="divider my-0"></div>
-            {targetClient?.mode === "super" ? (
+            <MenuItem
+              icon={RefreshCw}
+              label="Reboot"
+              variant="warning"
+              onClick={() => handleAction(actions.reboot)}
+            />
+            <MenuItem
+              icon={Power}
+              label="Shutdown"
+              variant="error"
+              onClick={() => handleAction(actions.shutdown)}
+            />
+            <MenuItem
+              icon={ScreenShare}
+              label="Remote Control"
+              variant="info"
+              onClick={() => handleAction(actions.remote)}
+            />
+          </>
+        )}
+
+        {/* Maintenance Group */}
+        {!isOnline && (
+          <>
+            <SectionHeader label="Maintenance" />
+            {isSuper ? (
               <>
-                <li>
-                  <a
-                    onClick={() => {
-                      actions.saveSuper(targetClient);
-                      onClose();
-                    }}
-                  >
-                    {/* using History icon for snapshot save; replace if you prefer a different icon */}
-                    <History className="w-4 h-4" />
-                    Save Super
-                  </a>
-                </li>
-                <li>
-                  <a
-                    onClick={() => {
-                      actions.disableSuper(targetClient);
-                      onClose();
-                    }}
-                  >
-                    <RefreshCw className="w-4 h-4" />
-                    Disable Super Client
-                  </a>
-                </li>
+                <MenuItem
+                  icon={History}
+                  label="Save Super Changes"
+                  variant="secondary"
+                  onClick={() => handleAction(actions.saveSuper)}
+                />
+                <MenuItem
+                  icon={ShieldAlert}
+                  label="Disable Super mode"
+                  variant="error"
+                  onClick={() => handleAction(actions.disableSuper)}
+                />
               </>
             ) : (
-              <li>
-                <a
-                  onClick={() => {
-                    actions.enableSuper(targetClient);
-                    onClose();
-                  }}
-                >
-                  {/* using RefreshCw icon for toggle; replace if you prefer a star/wand */}
-                  <RefreshCw className="w-4 h-4" />
-                  Enable Super Client
-                </a>
-              </li>
+              <MenuItem
+                icon={RefreshCw}
+                label="Enable Super mode"
+                variant="secondary"
+                onClick={() => handleAction(actions.enableSuper)}
+              />
             )}
           </>
-        ) : null}
-        <div className="divider my-0"></div>
-        <li>
-          <a
-            onClick={() => {
-              actions.edit(targetClient);
-              onClose();
-            }}
-          >
-            <Edit className="w-4 h-4" />
-            Edit Client
-          </a>
-        </li>
-        <li>
-          <a
-            onClick={() => {
-              actions.reset(targetClient);
-              onClose();
-            }}
-          >
-            <History className="w-4 h-4" />
-            Reset Writeback
-          </a>
-        </li>
-        {targetClient?.keep_writeback === false && (
-          <li>
-            <a
-              onClick={() => {
-                actions.resetToClean(targetClient);
-                onClose();
-              }}
-            >
-              <RefreshCw className="w-4 h-4" />
-              Reset to Clean
-            </a>
-          </li>
         )}
-        <li>
-          <a
-            onClick={() => {
-              actions.delete(targetClient);
-              onClose();
-            }}
-          >
-            <Trash2 className="w-4 h-4" />
-            Delete Client
-          </a>
-        </li>
+
+        <SectionHeader label="Management" />
+        {!isOnline && (
+          <>
+            <MenuItem
+              icon={Settings}
+              label="Edit Client"
+              onClick={() => handleAction(actions.edit)}
+            />
+
+            {isPersistent && (
+              <MenuItem
+                icon={History}
+                label="Reset Writeback"
+                variant="warning"
+                onClick={() => handleAction(actions.reset)}
+              />
+            )}
+            {isNonPersistent && (
+              <MenuItem
+                icon={RefreshCw}
+                label="Reset to Clean"
+                variant="warning"
+                onClick={() => handleAction(actions.resetToClean)}
+              />
+            )}
+
+            <MenuItem
+              icon={Trash2}
+              label="Delete Client"
+              variant="destructive"
+              onClick={() => handleAction(actions.delete)}
+            />
+          </>
+        )}
       </ul>
-      <style jsx="true">{`
-        @keyframes fade-in {
-          from {
-            opacity: 0;
-          }
-          to {
-            opacity: 1;
-          }
-        }
-        .animate-fade-in {
-          animation: fade-in 0.1s ease-out forwards;
-        }
-      `}</style>
     </div>
   );
 };

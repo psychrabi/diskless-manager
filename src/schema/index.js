@@ -44,29 +44,19 @@ export const sambaSchema = z.object({
 
 export const clientSchema = z.object({
   name: z.string().min(1, "Client name is required"),
-  mac: z
-    .string()
-    .regex(
-      /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/,
-      "Invalid MAC address format"
-    ),
-  ip: z
-    .string()
-    .regex(
-      /^([\d]{1,3}\.){3}\d{1,3}$/,
-      "Invalid IP address format. Use X.X.X.X"
-    ),
-  master: z.string().optional(),
+  mac: z.mac(),
+  ip: z.ipv4(),
+  master: z.string(),
   snapshot: z.string().optional().nullable(),
-  keep_writeback: z.boolean().optional(),
-  use_game_disk: z.boolean().optional(),
+  keep_writeback: z.boolean().default(false),
+  use_game_disk: z.boolean().default(false),
 });
 
 export const imageSchema = z.object({
   name: z.string().min(1, "Image name is required"),
-  os_type: z.enum(["linux", "windows"]).optional(),
+  os_type: z.enum(["linux", "windows"]).default("windows"),
   size_gb: z.coerce.number().min(1, "Image Size is required"),
-  format: z.enum(["raw", "qcow2"]).optional(),
+  format: z.enum(["raw", "qcow2"]).default("raw"),
   description: z.string().optional(),
 });
 

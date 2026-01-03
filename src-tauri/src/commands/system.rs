@@ -136,46 +136,20 @@ pub async fn initialize_server(state: State<'_, AppState>) -> Result<String, Str
     let settings = state.settings.read().await;
 
     // Create directories
-    std::fs::create_dir_all(&settings.tftp.root_dir).map_err(|e| {
-        format!(
-            "Failed to create {:?}: {}",
-            settings.tftp.root_dir,
-            e
-        )
-    })?;
-    std::fs::create_dir_all(&settings.iscsi.targets_dir).map_err(|e| {
-        format!(
-            "Failed to create {:?}: {}",
-            settings.iscsi.targets_dir,
-            e
-        )
-    })?;
-    std::fs::create_dir_all(&settings.nfs.exports_dir).map_err(|e| {
-        format!(
-            "Failed to create {:?}: {}",
-            settings.nfs.exports_dir,
-            e
-        )
-    })?;
-    std::fs::create_dir_all(&settings.samba.share_path).map_err(|e| {
-        format!(
-            "Failed to create {:?}: {}",
-            settings.samba.share_path,
-            e
-        )
-    })?;
-    std::fs::create_dir_all(&settings.storage.images_dir).map_err(|e| {
-        format!(
-            "Failed to create {:?}: {}",
-            settings.storage.images_dir,
-            e
-        )
-    })?;
+    std::fs::create_dir_all(&settings.tftp.root_dir)
+        .map_err(|e| format!("Failed to create {:?}: {}", settings.tftp.root_dir, e))?;
+    std::fs::create_dir_all(&settings.iscsi.targets_dir)
+        .map_err(|e| format!("Failed to create {:?}: {}", settings.iscsi.targets_dir, e))?;
+    std::fs::create_dir_all(&settings.nfs.exports_dir)
+        .map_err(|e| format!("Failed to create {:?}: {}", settings.nfs.exports_dir, e))?;
+    std::fs::create_dir_all(&settings.samba.share_path)
+        .map_err(|e| format!("Failed to create {:?}: {}", settings.samba.share_path, e))?;
+    std::fs::create_dir_all(&settings.storage.images_dir)
+        .map_err(|e| format!("Failed to create {:?}: {}", settings.storage.images_dir, e))?;
     std::fs::create_dir_all(&settings.storage.snapshots_dir).map_err(|e| {
         format!(
             "Failed to create {:?}: {}",
-            settings.storage.snapshots_dir,
-            e
+            settings.storage.snapshots_dir, e
         )
     })?;
 
@@ -260,4 +234,51 @@ pub async fn save_settings(state: State<'_, AppState>, settings: Settings) -> Re
 
     tracing::info!("Settings saved to database");
     Ok(())
+}
+#[tauri::command]
+pub async fn setup_privileged_access() -> Result<String, String> {
+    let user = std::env::var("USER").unwrap_or_else(|_| {
+        Command::new("id")
+            .args(["-un"])
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_else(|| "root".to_string())
+    });
+
+    // We list the exactly required commands with their paths found in the system
+    let commands = [
+        "/usr/bin/apt-get",
+        "/usr/bin/systemctl",
+        "/usr/sbin/zfs",
+        "/usr/sbin/zpool",
+        "/usr/bin/targetcli",
+        "/usr/bin/tee",
+        "/usr/bin/mkdir",
+        "/usr/bin/sync",
+    ];
+
+    let commands_str = commands.join(", ");
+    let sudoers_content = format!("{} ALL=(ALL) NOPASSWD: {}\n", user, commands_str);
+
+    // Use pkexec to create the sudoers file
+    let script = format!(
+        "echo '{}' > /etc/sudoers.d/diskless-manager && chmod 0440 /etc/sudoers.d/diskless-manager",
+        sudoers_content
+    );
+
+    let output = Command::new("pkexec")
+        .args(["sh", "-c", &script])
+        .output()
+        .map_err(|e| format!("Failed to spawn pkexec: {}", e))?;
+
+    if output.status.success() {
+        Ok("Privileged access configured successfully. Administrative tasks will no longer require password prompts.".to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!(
+            "Authorization failed or error occurred: {}",
+            stderr
+        ))
+    }
 }

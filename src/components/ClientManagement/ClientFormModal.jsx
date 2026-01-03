@@ -11,42 +11,26 @@ import { clientSchema } from "@/schema";
 const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
   const { success, info } = useToastStore();
 
-  const defaultValues = {
-    name: client?.name || "",
-    mac: client?.mac || "",
-    ip: client?.ip || "",
-    master: client?.master || "",
-    snapshot: client?.snapshot || null,
-    pxe_mode: client?.pxe_mode || "uefi",
-    keep_writeback: client?.keep_writeback !== false, // Default to true
-    use_game_disk: client?.use_game_disk || false,
-  };
-
   const {
     register,
     handleSubmit,
-    formState: { errors },
+    formState: { errors, isSubmitting, isDirty, isValid },
     setValue,
     control,
     reset,
+    watch,
   } = useForm({
+    mode: "onChange",
     resolver: zodResolver(clientSchema),
-    defaultValues,
+    defaultValues: client,
   });
+
+  const formValues = watch();
 
   // Reset form when client changes
   useEffect(() => {
     if (isOpen && client) {
-      reset({
-        name: client.name || "",
-        mac: client.mac || "",
-        ip: client.ip || "",
-        master: client.master || "",
-        snapshot: client.snapshot || null,
-        pxe_mode: client.pxe_mode || "uefi",
-        keep_writeback: client.keep_writeback !== false,
-        use_game_disk: client.use_game_disk || false,
-      });
+      reset(client || {});
     }
   }, [client, isOpen, reset]);
 
@@ -54,11 +38,9 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
     const token = localStorage.getItem("authToken") || "";
     try {
       if (!client.id) {
-        info(`Adding new client ${data.name}`);
-        // await invoke("add_client", { token, req: data });
+        await invoke("add_client", { token, req: data });
         success(`Client ${data.name} added successfully.`);
       } else {
-        info(`Editing client ${data.name}`);
         await invoke("edit_client", {
           token,
           clientId: client.id,
@@ -68,7 +50,6 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
             ip: data.ip,
             master: data.master,
             snapshot: data.snapshot || null,
-            pxe_mode: data.pxe_mode,
             keep_writeback: data.keep_writeback,
             use_game_disk: data.use_game_disk,
           },
@@ -89,17 +70,11 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
     name: "master",
   });
 
-  useEffect(() => {
-    if (!client?.id || selectedMaster !== client?.master) {
-      setValue("snapshot", "");
-    }
-  }, [client?.id, client?.master, selectedMaster, setValue]);
-
   return (
     <Modal
       isOpen={isOpen}
       onClose={() => setIsOpen(false)}
-      title={client?.id ? "Edit Client" : "Create Client"}
+      title={client?.id ? "Edit Client" : "Add Client"}
       size="xl"
     >
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
@@ -127,7 +102,16 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
         <Select
           label="Select Image"
           register={register("master")}
-          onChange={(e) => setValue("master", e.target.value)}
+          onChange={(e) => {
+            setValue("master", e.target.value, {
+              shouldValidate: true,
+              shouldDirty: true,
+            });
+            setValue("snapshot", "", {
+              shouldValidate: true,
+              shouldDirty: true,
+            });
+          }}
           error={errors.master?.message}
         >
           <option value="">Select image ...</option>
@@ -141,7 +125,12 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
           label="Select Snapshot"
           register={register("snapshot")}
           disabled={!selectedMaster}
-          onChange={(e) => setValue("snapshot", e.target.value)}
+          onChange={(e) =>
+            setValue("snapshot", e.target.value, {
+              shouldValidate: true,
+              shouldDirty: true,
+            })
+          }
           error={errors.snapshot?.message}
         >
           <option value="">Use master directly</option>
@@ -165,9 +154,9 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
             />
             <div className="flex flex-col">
               <span className="label-text font-medium">
-                Keep Changes (Persistent Mode)
+                Keep Writeback (Persistent Mode)
               </span>
-              <span className="label-text-alt text-base-content/60">
+              <span className="label-text-alt text-base-content/60 text-wrap text-xs">
                 If unchecked, client will reset to clean state on every boot
                 (non-persistent mode)
               </span>
@@ -186,7 +175,7 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
             />
             <div className="flex flex-col">
               <span className="label-text font-medium">Use Game Disk</span>
-              <span className="label-text-alt text-base-content/60">
+              <span className="label-text-alt text-base-content/60 text-wrap text-xs">
                 If checked, available game disks will be mounted via iSCSI
               </span>
             </div>
@@ -194,15 +183,20 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
         </div>
 
         <div className="mt-6 flex justify-end space-x-3">
-          <Button type="submit" variant="primary" icon={Save}>
-            {client?.id ? "Update Client" : "Create Client"}
-          </Button>
           <Button
             type="button"
-            variant="destructive"
+            variant="ghost"
             onClick={() => setIsOpen(false)}
           >
             Cancel
+          </Button>
+          <Button
+            type="submit"
+            variant="primary"
+            icon={Save}
+            disabled={isSubmitting || !isDirty || !isValid}
+          >
+            {isSubmitting ? "Saving..." : "Save"}
           </Button>
         </div>
       </form>

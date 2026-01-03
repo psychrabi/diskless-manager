@@ -12,3 +12,10 @@ pub fn authenticate(token: String) -> Result<Claims, AuthError> {
 pub fn validate_auth_token_for_command(token: &str) -> Result<Claims, AuthError> {
     validate_token(token)
 }
+
+/// Helper for Tauri commands that return AppError
+pub fn validate_auth(token: &str) -> Result<(), crate::error::AppError> {
+    validate_auth_token_for_command(token)
+        .map(|_| ())
+        .map_err(|e| crate::error::AppError::Auth(e.message))
+}

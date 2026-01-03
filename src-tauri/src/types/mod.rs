@@ -11,7 +11,7 @@ pub mod image;
 
 // Re-export commonly used types
 pub use auth::{AuthError, Claims, LoginRequest, LoginResponse, User, UserResponse};
-pub use client::{AddClientRequest, Client, ClientOverview, ControlRequest};
+pub use client::{AddClientRequest, Client, ClientOverview, ControlRequest, EditClientRequest};
 pub use config::AppConfig;
 pub use disk::{
     CreateDatasetRequest, CreateZpoolRequest, DatasetInfo, DatasetOperationResponse, Disk,

@@ -27,8 +27,11 @@ lazy_static::lazy_static! {
     // Snapshot name: alphanumeric, dash, underscore, dot
     static ref SNAPSHOT_NAME_RE: Regex = Regex::new(r"^[a-zA-Z0-9._-]+$").unwrap();
 
-    // Volume size: number followed by optional unit (K, M, G, T)
-    static ref SIZE_RE: Regex = Regex::new(r"^\d+[KMGT]?$").unwrap();
+    // ZFS name: alphanumeric, dash, underscore (no slash)
+    static ref ZFS_NAME_RE: Regex = Regex::new(r"^[a-zA-Z0-9_-]+$").unwrap();
+
+    // Volume size: number followed by optional unit (K, M, G, T, P)
+    static ref SIZE_RE: Regex = Regex::new(r"^\d+[KMGTP]?$").unwrap();
 }
 
 #[derive(Error, Debug)]
@@ -59,6 +62,9 @@ pub enum ValidationError {
 
     #[error("Invalid path: path traversal detected")]
     PathTraversal,
+
+    #[error("Invalid name: must contain only alphanumeric characters, dash, or underscore")]
+    InvalidName,
 
     #[error("Empty value not allowed")]
     EmptyValue,
@@ -211,6 +217,30 @@ pub fn validate_iqn(iqn: &str) -> Result<(), ValidationError> {
         Ok(())
     } else {
         Err(ValidationError::InvalidIqn)
+    }
+}
+
+/// Validates a ZFS name (non-hierarchical)
+///
+/// # Rules
+/// - Only alphanumeric, dash, or underscore
+///
+/// # Examples
+/// ```
+/// # use app_lib::validation::validate_zfs_name;
+/// assert!(validate_zfs_name("myimage").is_ok());
+/// assert!(validate_zfs_name("image-01").is_ok());
+/// assert!(validate_zfs_name("path/to/image").is_err());
+/// ```
+pub fn validate_zfs_name(name: &str) -> Result<(), ValidationError> {
+    if name.is_empty() {
+        return Err(ValidationError::EmptyValue);
+    }
+
+    if ZFS_NAME_RE.is_match(name) {
+        Ok(())
+    } else {
+        Err(ValidationError::InvalidName)
     }
 }
 

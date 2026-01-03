@@ -19,6 +19,7 @@ mod commands;
 mod core;
 mod services;
 pub mod state;
+pub mod utils;
 
 use log::info;
 
@@ -133,6 +134,7 @@ pub fn run() {
             commands::system::check_dependencies,
             commands::system::get_settings,
             commands::system::save_settings,
+            commands::system::setup_privileged_access,
             // Client commands
             commands::clients::list_clients,
             commands::clients::get_client,

@@ -5,7 +5,8 @@ import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Network } from "lucide-react";
 import { useForm } from "react-hook-form";
-import { Button, Card, Input } from "../ui";
+import { Button, Card } from "../ui";
+import HTTPForm from "./Forms/HTTPForm";
 
 export default function HTTPConfigForm() {
   const { info } = useToastStore();
@@ -27,41 +28,14 @@ export default function HTTPConfigForm() {
   };
 
   return (
-    <Card title="HTTP Configuration" icon={Network} className="">
+    <Card title="HTTP Configuration" icon={Network}>
       <form onSubmit={handleSubmit(onSubmit)}>
-        <div className="grid grid-cols-2 gap-4">
-          <label htmlFor="enabled" className="label col-span-2">
-            <input
-              id="enabled"
-              className="checkbox"
-              {...register("enabled")}
-              type="checkbox"
-              defaultChecked={config?.settings?.http?.enabled}
-            />
-            HTTP Server (Start at boot)
-          </label>
-          <Input
-            id="root_dir"
-            register={register("root_dir")}
-            label="HTTP Root Directory"
-            placeholder="/srv/http"
-            error={errors.root_dir?.message}
-          />
-          <Input
-            id="server_ip"
-            register={register("server_ip")}
-            label="HTTP Server IP"
-            placeholder="*"
-            error={errors.server_ip?.message}
-          />
-          <Input
-            id="port"
-            register={register("port")}
-            label="HTTP Server Port"
-            placeholder="80"
-            error={errors.port?.message}
-          />
-        </div>
+        <HTTPForm
+          register={register}
+          errors={errors}
+          config={config?.settings?.http}
+        />
+
         <Button
           variant="primary"
           type="submit"

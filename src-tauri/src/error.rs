@@ -25,6 +25,12 @@ pub enum AppError {
     Internal(String),
 }
 
+impl From<crate::validation::ValidationError> for AppError {
+    fn from(err: crate::validation::ValidationError) -> Self {
+        AppError::Validation(err.to_string())
+    }
+}
+
 // Implement Serialize manually or via a helper to support Tauri return types
 impl Serialize for AppError {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>

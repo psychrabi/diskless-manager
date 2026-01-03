@@ -62,7 +62,7 @@ const ImageCard = ({
           Rename
         </Button>
         <Button
-          variant="destructive"
+          variant="ghost"
           onClick={() => handleDeleteImage(master.name)}
           size="sm"
           icon={Trash2}

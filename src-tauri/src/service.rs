@@ -1,7 +1,7 @@
 use crate::config::{get_config, write_config};
 use crate::core::config::{DhcpConfig, HttpConfig, SambaConfig, TftpConfig};
 use crate::error::AppError;
-use crate::middleware::validate_auth_token_for_command;
+
 use crate::services::ServiceManager;
 use crate::state::AppState;
 use crate::{DHCP_CLIENTS_PATH, DHCP_CONFIG_PATH, TFTP_AUTOEXEC_PATH};
@@ -11,16 +11,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use tauri::State;
 
-// Common auth validator
-fn validate_token(token: &str) -> Result<(), AppError> {
-    match validate_auth_token_for_command(token) {
-        Ok(_) => Ok(()),
-        Err(e) => Err(AppError::Auth(format!(
-            "Authentication failed: {}",
-            e.message
-        ))),
-    }
-}
+use crate::middleware::validate_auth;
 
 // Helper: Write content to path using sudo tee (async)
 async fn write_with_sudo_tee(path: &str, content: &str) -> Result<(), AppError> {
@@ -61,7 +52,7 @@ async fn write_with_sudo_tee(path: &str, content: &str) -> Result<(), AppError> 
 
 #[tauri::command]
 pub async fn install_service(service: String, token: String) -> Result<(), AppError> {
-    validate_token(&token)?;
+    validate_auth(&token)?;
 
     match Command::new("sudo")
         .args(["apt-get", "install", "-y", &service])
@@ -81,7 +72,7 @@ pub async fn save_service_config(
     service_key: String,
     content: String,
 ) -> Result<(), AppError> {
-    validate_token(&token)?;
+    validate_auth(&token)?;
 
     let config_file_map = [
         ("dhcp", DHCP_CONFIG_PATH),
@@ -112,7 +103,7 @@ pub async fn configure_dhcp_server(
     token: String,
     config: DhcpConfig,
 ) -> Result<String, AppError> {
-    validate_token(&token)?;
+    validate_auth(&token)?;
 
     let dhcp_config = format!(
         r#"# Global Config
@@ -264,7 +255,7 @@ pub async fn configure_tftp_server(
     token: String,
     tftp_config: TftpConfig,
 ) -> Result<String, AppError> {
-    validate_token(&token)?;
+    validate_auth(&token)?;
 
     // Update the settings in the app state
     {
@@ -309,7 +300,7 @@ pub async fn configure_apache_server(
     token: String,
     http_config: HttpConfig,
 ) -> Result<String, AppError> {
-    validate_token(&token)?;
+    validate_auth(&token)?;
 
     // Update the settings in the app state
     {
@@ -355,7 +346,7 @@ pub async fn configure_samba_server(
     token: String,
     shares: Vec<SambaConfig>,
 ) -> Result<String, AppError> {
-    validate_token(&token)?;
+    validate_auth(&token)?;
 
     // Update the settings in the app state
     // Note: Samba shares are not directly stored in Settings as individual shares
@@ -404,7 +395,7 @@ pub async fn configure_nfs_server(
     token: String,
     exports_dir: String,
 ) -> Result<String, AppError> {
-    validate_token(&token)?;
+    validate_auth(&token)?;
 
     // Update the settings in the app state
     {

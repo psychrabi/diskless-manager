@@ -103,7 +103,7 @@ const DiskFormModal = ({ zpools, isOpen, setIsOpen, refresh }) => {
           </Button>
           <Button
             type="button"
-            variant="destructive"
+            variant="ghost"
             onClick={() => setIsOpen(false)}
           >
             Cancel

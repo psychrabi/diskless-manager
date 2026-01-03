@@ -7,7 +7,7 @@ export const useClientActions = (
   fetchData,
   closeContextMenu,
   setClient,
-  setIsModalOpen,
+  setIsModalOpen
 ) => {
   const { success, error: showError, info } = useToastStore();
   const confirm = useConfirm();
@@ -22,7 +22,7 @@ export const useClientActions = (
       invokeCmd,
       invokeArgs,
       successMsg,
-      cancelMsg,
+      cancelMsg
     ) => {
       if (!client) return;
 
@@ -53,7 +53,7 @@ export const useClientActions = (
         showError(
           `Client must be offline to ${
             action === "edit" ? "make changes" : action
-          }.`,
+          }.`
         );
         return;
       }
@@ -90,18 +90,11 @@ export const useClientActions = (
         if (closeContextMenu) closeContextMenu();
       } catch (error) {
         showError(
-          `Failed to execute ${action}: ${error.message || String(error)}`,
+          `Failed to execute ${action}: ${error.message || String(error)}`
         );
       }
     },
-    [
-      confirm,
-      showError,
-      closeContextMenu,
-      fetchData,
-      setClient,
-      setIsModalOpen,
-    ],
+    [confirm, showError, closeContextMenu, fetchData, setClient, setIsModalOpen]
   );
 
   // Wrapper functions to match original interface
@@ -118,7 +111,7 @@ export const useClientActions = (
         "control_client",
         { clientId: client.id, req: { action: "reboot" } },
         "Client Rebooted",
-        "Client reboot cancelled.",
+        "Client reboot cancelled."
       ),
 
     shutdown: (client) =>
@@ -131,7 +124,7 @@ export const useClientActions = (
         "control_client",
         { clientId: client.id, req: { action: "shutdown" } },
         "Client Shutdown",
-        "Client shutdown cancelled.",
+        "Client shutdown cancelled."
       ),
 
     wake: (client) =>
@@ -144,7 +137,7 @@ export const useClientActions = (
         "control_client",
         { clientId: client.id, req: { action: "wake" } },
         "Client Woken",
-        "Client wake up cancelled.",
+        "Client wake up cancelled."
       ),
 
     remote: (client) =>
@@ -157,7 +150,7 @@ export const useClientActions = (
         "remote_client",
         { clientId: client.id },
         "Client Remotely Connected",
-        "Client remote connection cancelled.",
+        "Client remote connection cancelled."
       ),
 
     reset: (client) =>
@@ -170,7 +163,7 @@ export const useClientActions = (
         "reset_client",
         { clientId: client.id },
         "Client Reset successfully",
-        "Client reset cancelled.",
+        "Client reset cancelled."
       ),
 
     resetToClean: async (client) => {
@@ -179,7 +172,7 @@ export const useClientActions = (
       // Check if client is in non-persistent mode
       if (client.keep_writeback !== false) {
         showError(
-          "Client is in persistent mode. Only non-persistent clients can be reset to clean state.",
+          "Client is in persistent mode. Only non-persistent clients can be reset to clean state."
         );
         return;
       }
@@ -193,7 +186,7 @@ export const useClientActions = (
         "reset_client_to_clean",
         { clientId: client.id },
         "Client Reset to Clean successfully",
-        "Reset to clean cancelled.",
+        "Reset to clean cancelled."
       );
     },
 
@@ -207,7 +200,7 @@ export const useClientActions = (
         "delete_client",
         { clientId: client.id },
         "Client Deleted successfully",
-        "Client deletion cancelled.",
+        "Client deletion cancelled."
       ),
 
     enableSuper: (client) =>
@@ -220,7 +213,7 @@ export const useClientActions = (
         "control_client",
         { clientId: client.id, req: { action: "super", make_super: true } },
         "Client Enabled Super successfully",
-        "Enable Super cancelled.",
+        "Enable Super cancelled."
       ),
 
     disableSuper: (client) => {
@@ -237,7 +230,7 @@ export const useClientActions = (
         "control_client",
         { clientId: client.id, req: { action: "super", make_super: false } },
         "Client Disabled Super successfully",
-        "Disable Super cancelled.",
+        "Disable Super cancelled."
       );
     },
 
@@ -252,34 +245,34 @@ export const useClientActions = (
         return;
       }
 
-      const ok = await confirm({
+      const defaultSuffix = `${client.name}-super-${Date.now()}`;
+      const suffix = await confirm({
         title: "Save Super Client",
-        description: `This will save the current state of ${client.name} to a snapshot.Continue ? `,
-        confirmText: "Save Super",
-        cancelText: "Cancel",
-        confirmVariant: "primary",
-        size: "2xl",
+        description: `This will save the current state of ${client.name} to a snapshot. Please enter a name for the new snapshot:`,
+        confirmText: "Save Snapshot",
+        confirmVariant: "success",
+        showInput: true,
+        inputLabel: "Snapshot Name Suffix",
+        inputPlaceholder: "e.g. updated-drivers",
+        defaultValue: defaultSuffix,
+        size: "lg",
       });
 
-      if (!ok) {
-        info("Save Super cancelled.");
-        return;
-      }
-
-      const suffix = window.prompt(
-        "Enter snapshot name (alphanumeric, _ or -):",
-        `${client.name} -super- ${Date.now()} `,
-      );
       if (!suffix) {
         info("Save Super cancelled.");
         return;
       }
-      if (!/^[-\w]+$/.test(suffix)) {
-        showError("Invalid snapshot name.");
+
+      if (typeof suffix === "string" && !/^[-\w\s]+$/.test(suffix)) {
+        showError(
+          "Invalid snapshot name suffix. Use alphanumeric characters, spaces, dashes or underscores."
+        );
         return;
       }
 
-      const snapshotName = `${client.master} @${suffix} `;
+      const snapshotName = `${client.master}@${suffix
+        .trim()
+        .replace(/\s+/g, "-")}`;
       const token = localStorage.getItem("authToken") || "";
 
       try {
@@ -291,9 +284,7 @@ export const useClientActions = (
         fetchData();
         closeContextMenu();
       } catch (error) {
-        showError(
-          `Failed to save super: ${error.message || String(error)}`,
-        );
+        showError(`Failed to save super: ${error.message || String(error)}`);
       }
     },
   };
