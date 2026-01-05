@@ -1,6 +1,63 @@
 import { invoke } from "@tauri-apps/api/core";
 
 // ============================================================================
+// API Client
+// ============================================================================
+
+let authToken = null;
+
+// Function to set the auth token after login
+export function setAuthToken(token) {
+  authToken = token;
+  // Store in localStorage for persistence
+  localStorage.setItem("authToken", token);
+}
+
+// Function to get the auth token
+function getAuthToken() {
+  if (!authToken) {
+    authToken = localStorage.getItem("authToken");
+  }
+  return authToken;
+}
+
+// Function to make API requests
+async function apiRequest(endpoint, options = {}) {
+  const url = `http://127.0.0.1:8080${endpoint}`;
+  const headers = {
+    "Content-Type": "application/json",
+    ...options.headers,
+  };
+
+  const token = getAuthToken();
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+    console.log(token);
+  }
+
+  const config = {
+    ...options,
+    headers,
+  };
+
+  const response = await fetch(url, config);
+
+  if (!response.ok) {
+    throw new Error(
+      `API request failed: ${response.status} ${response.statusText}`
+    );
+  }
+
+  // For endpoints that don't return JSON (like some delete operations)
+  const contentType = response.headers.get("content-type");
+  if (contentType && contentType.includes("application/json")) {
+    return response.json();
+  } else {
+    return response.text();
+  }
+}
+
+// ============================================================================
 // Types
 // ============================================================================
 
@@ -178,17 +235,41 @@ import { invoke } from "@tauri-apps/api/core";
 // }
 
 // ============================================================================
+// Authentication
+// ============================================================================
+
+export async function login(username, password) {
+  const response = await fetch("http://127.0.0.1:8080/api/auth/login", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ username, password }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Login failed: ${response.status} ${response.statusText}`);
+  }
+
+  const data = await response.json();
+  setAuthToken(data.token);
+  return data;
+}
+
+// ============================================================================
 // System Commands
 // ============================================================================
 
 export async function getSystemInfo() {
-  return invoke("get_system_info");
+  return apiRequest("/api/system/info");
 }
 
 export async function getServerStatus() {
-  return invoke("get_server_status");
+  return apiRequest("/api/system/status");
 }
 
+// Note: initializeServer and checkDependencies might still need to use invoke
+// if they're not available through the API yet
 export async function initializeServer() {
   return invoke("initialize_server");
 }
@@ -198,7 +279,8 @@ export async function checkDependencies() {
 }
 
 export async function clearRamCache() {
-  await invoke("clear_ram_cache");
+  // This command might not be available through the API yet
+  return invoke("clear_ram_cache");
 }
 
 // ============================================================================
@@ -206,25 +288,26 @@ export async function clearRamCache() {
 // ============================================================================
 
 export async function listServices() {
-  return invoke("list_services");
+  return apiRequest("/api/services");
 }
 
 export async function getServiceStatus(name) {
-  return invoke("get_service_status", { name });
+  return apiRequest(`/api/services/${name}/status`);
 }
 
 export async function startService(name) {
-  return invoke("start_service", { name });
+  return apiRequest(`/api/services/${name}/start`, { method: "POST" });
 }
 
 export async function stopService(name) {
-  return invoke("stop_service", { name });
+  return apiRequest(`/api/services/${name}/stop`, { method: "POST" });
 }
 
 export async function restartService(name) {
-  return invoke("restart_service", { name });
+  return apiRequest(`/api/services/${name}/restart`, { method: "POST" });
 }
 
+// Note: startAllServices, stopAllServices, restartAllServices might not be available through the API yet
 export async function startAllServices() {
   return invoke("start_all_services");
 }
@@ -242,27 +325,34 @@ export async function restartAllServices() {
 // ============================================================================
 
 export async function listClients() {
-  return invoke("list_clients");
+  return apiRequest("/api/clients");
 }
 
 export async function getClient(id) {
-  return invoke("get_client", { id });
+  return apiRequest(`/api/clients/${id}`);
 }
 
 export async function addClient(request) {
-  return invoke("add_client", { request });
+  return apiRequest("/api/clients", {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
 }
 
 export async function updateClient(id, request) {
-  return invoke("update_client", { id, request });
+  return apiRequest(`/api/clients/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(request),
+  });
 }
 
 export async function deleteClient(id) {
-  return invoke("delete_client", { id });
+  return apiRequest(`/api/clients/${id}`, { method: "DELETE" });
 }
 
 export async function getClientBootHistory(clientId, limit) {
-  return invoke("get_client_boot_history", { clientId, limit });
+  const params = limit ? `?limit=${limit}` : "";
+  return apiRequest(`/api/clients/${clientId}/boot-history${params}`);
 }
 
 // ============================================================================
@@ -270,23 +360,33 @@ export async function getClientBootHistory(clientId, limit) {
 // ============================================================================
 
 export async function listImages() {
-  return invoke("list_images");
+  return invoke("/api/images");
+}
+
+export async function listMasters() {
+  // return apiRequest("/api/masters");
+  return invoke("get_images");
 }
 
 export async function getImage(id) {
-  return invoke("get_image", { id });
+  return apiRequest(`/api/images/${id}`);
 }
 
 export async function createImage(request) {
-  return invoke("create_image_command", { request });
+  return apiRequest("/api/images", {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
 }
 
+// Note: importImage, deleteImage, cloneImage, createSnapshot, etc. might not be available through the API yet
 export async function importImage(request) {
   return invoke("import_image", { request });
 }
 
 export async function deleteImage(id, force) {
-  return invoke("delete_image_command", { id, force: force ?? false });
+  // API doesn't currently support force parameter
+  return apiRequest(`/api/images/${id}`, { method: "DELETE" });
 }
 
 export async function cloneImage(sourceId, newName) {

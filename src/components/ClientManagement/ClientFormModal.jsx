@@ -1,5 +1,4 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import { invoke } from "@tauri-apps/api/core";
 import { Save } from "lucide-react";
 import { useEffect } from "react";
 import { useForm, useWatch } from "react-hook-form";
@@ -7,6 +6,7 @@ import { z } from "zod";
 import { useToastStore } from "@/store/useToastStore";
 import { Button, Input, Modal, Select } from "../ui";
 import { clientSchema } from "@/schema";
+import * as api from "@/api/commands";
 
 const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
   const { success, info } = useToastStore();
@@ -35,33 +35,38 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
   }, [client, isOpen, reset]);
 
   const onSubmit = async (data) => {
-    const token = localStorage.getItem("authToken") || "";
     try {
-      if (!client.id) {
-        await invoke("add_client", { token, req: data });
+      if (!client?.id) {
+        // Create new client
+        await api.addClient({
+          name: data.name,
+          mac: data.mac,
+          ip: data.ip,
+          master: data.master,
+          snapshot: data.snapshot || null,
+          keep_writeback: data.keep_writeback,
+          use_game_disk: data.use_game_disk,
+        });
         success(`Client ${data.name} added successfully.`);
       } else {
-        await invoke("edit_client", {
-          token,
-          clientId: client.id,
-          data: {
-            name: data.name,
-            mac: data.mac,
-            ip: data.ip,
-            master: data.master,
-            snapshot: data.snapshot || null,
-            keep_writeback: data.keep_writeback,
-            use_game_disk: data.use_game_disk,
-          },
+        // Update existing client
+        await api.updateClient(client.id, {
+          name: data.name,
+          mac: data.mac,
+          ip: data.ip,
+          master: data.master,
+          snapshot: data.snapshot || null,
+          keep_writeback: data.keep_writeback,
+          use_game_disk: data.use_game_disk,
         });
         success(`Client ${data.name} updated successfully.`);
       }
       setIsOpen(false);
-      reset(defaultValues);
+      reset(); // Reset to clear form
       await refresh();
     } catch (e) {
-      // Let existing error handling via toasts/console from invoke callers surface
       console.error("Failed to submit client form", e);
+      // Handle error appropriately
     }
   };
 

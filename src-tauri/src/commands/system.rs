@@ -261,6 +261,8 @@ pub async fn setup_privileged_access() -> Result<String, String> {
         "/usr/sbin/a2enmod",
         "/usr/bin/journalctl",
         "/usr/bin/rm",
+        "/usr/bin/mv",
+        "/usr/bin/cp",
     ];
 
     let commands_str = commands.join(", ");

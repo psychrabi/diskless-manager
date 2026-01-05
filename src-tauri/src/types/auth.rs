@@ -20,6 +20,7 @@ pub struct Claims {
     pub username: String, // username
     pub role: String,     // user role
     pub exp: i64,         // expiration time
+    pub iat: usize,       // issued at time
 }
 
 /// Login request structure

@@ -35,7 +35,8 @@ enum Commands {
     },
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let cli = Cli::parse();
 
     if let Some(Commands::AutoAddClient {
@@ -49,31 +50,28 @@ fn main() {
     }) = cli.command
     {
         info!("Auto adding client: {}", name);
-        let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
-        rt.block_on(async {
-            let req = AddClientRequest {
-                name,
-                mac,
-                ip,
-                master: master.unwrap_or_default(),
-                snapshot,
-                keep_writeback: keep_writeback.or(Some(true)),
-                use_game_disk,
-            };
+        let req = AddClientRequest {
+            name,
+            mac,
+            ip,
+            master: master.unwrap_or_default(),
+            snapshot,
+            keep_writeback: keep_writeback.or(Some(true)),
+            use_game_disk,
+        };
 
-            let state = AppState::new()
-                .await
-                .expect("Failed to initialize AppState");
-            match client::add_client_impl(&state, req).await {
-                Ok(v) => info!("Success auto adding: {}", v),
-                Err(e) => {
-                    eprintln!("Error: {}", e);
-                    std::process::exit(1);
-                }
+        let state = AppState::new()
+            .await
+            .expect("Failed to initialize AppState");
+        match client::add_client_impl(&state, req).await {
+            Ok(v) => info!("Success auto adding: {}", v),
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
             }
-        });
+        }
         return;
     }
 
-    app_lib::run();
+    app_lib::run().await;
 }

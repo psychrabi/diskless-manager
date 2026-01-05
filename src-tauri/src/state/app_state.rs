@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+#[derive(Clone)]
 pub struct AppState {
     pub settings: Arc<RwLock<Settings>>,
     pub db_pool: SqlitePool,

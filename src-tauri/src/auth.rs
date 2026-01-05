@@ -91,6 +91,7 @@ pub fn authenticate_user(username: &str, password: &str) -> Result<LoginResponse
         username: user.username.clone(),
         role: user.role.clone(),
         exp: expiration,
+        iat: Utc::now().timestamp() as usize,
     };
 
     let token =

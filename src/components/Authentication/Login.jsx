@@ -2,10 +2,10 @@ import { Button, Card, Input } from "@/components/ui";
 import { useAuth } from "@/contexts/auth";
 import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { invoke } from "@tauri-apps/api/core";
 import { useForm } from "react-hook-form";
 import { useNavigate } from "react-router-dom";
 import { z } from "zod";
+import * as api from "@/api/commands";
 
 // Define validation schema
 const loginSchema = z.object({
@@ -33,12 +33,11 @@ const Login = () => {
 
   const onSubmit = async (data) => {
     try {
-      const response = await invoke("login", {
-        request: { username: data.username, password: data.password },
-      });
+      const response = await api.login(data.username, data.password);
 
       // Set auth context immediately so ProtectedRoute sees it
-      setAuth(response.user, response.token);
+      // For now, we'll simulate a user object since the API returns just the token
+      setAuth({ username: data.username }, response.token);
       success("Login Successful", "You have successfully logged in");
       navigate("/");
     } catch (e) {

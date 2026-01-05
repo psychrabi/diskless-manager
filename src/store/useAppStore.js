@@ -1,7 +1,7 @@
-import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { shallow } from "zustand/shallow";
+import * as api from "../api/commands";
 
 // Export shallow comparison helper for consumers
 export { shallow };
@@ -20,11 +20,6 @@ export const useAppStore = create()(
       ramUsage: null,
       arcStat: null,
       appConfig: null, // Renamed from config to avoid conflict with service config string
-      //  serviceConfig removed
-      // Actually, I should check if SettingsManagement uses serviceConfig?
-      // ServiceConfigModal logic was moved out.
-      // SettingsManagement logic does NOT use serviceConfig from store.
-      // Wait, I should verify before deleting.
       datasets: [],
       setDatasets: (datasets) => set({ datasets }),
       error: null,
@@ -36,7 +31,6 @@ export const useAppStore = create()(
       setMasters: (masters) => set({ masters }),
       setServices: (services) => set({ services }),
       setDependencies: (dependencies) => set({ dependencies }),
-      // setServiceConfig: removed
       setAppConfig: (appConfig) => set({ appConfig }), // Added for global config
       setError: (error) => set({ error }),
       setLoading: (loading) => set({ loading }),
@@ -52,10 +46,8 @@ export const useAppStore = create()(
 
       fetchClients: async () => {
         try {
-          const token = localStorage.getItem("authToken") || "";
-          const clientsRes = await invoke("get_clients", { token });
-          const clientsData = clientsRes ? Object.values(clientsRes) : [];
-          set({ clients: clientsData });
+          const clientsData = await api.listClients();
+          set({ clients: clientsData || [] });
         } catch (err) {
           console.error("Failed to fetch clients:", err);
         }
@@ -63,8 +55,7 @@ export const useAppStore = create()(
 
       fetchMasters: async () => {
         try {
-          const token = localStorage.getItem("authToken") || "";
-          const mastersRes = await invoke("get_images", { token });
+          const mastersRes = await api.listImages();
 
           set({ masters: mastersRes || [] });
         } catch (err) {
@@ -74,8 +65,7 @@ export const useAppStore = create()(
 
       fetchImages: async () => {
         try {
-          const token = localStorage.getItem("authToken") || "";
-          const imagesRes = await invoke("list_images", { token });
+          const imagesRes = await api.listImages();
 
           set({ images: imagesRes || [] });
         } catch (err) {
@@ -89,6 +79,9 @@ export const useAppStore = create()(
           return;
         }
         try {
+          // Note: This functionality may not be available through the API yet
+          // For now, we'll keep using invoke for ZFS operations
+          const { invoke } = await import("@tauri-apps/api/core");
           const datasetsRes = await invoke("list_datasets", { zpool });
           set({ datasets: datasetsRes || [] });
         } catch (err) {
@@ -98,6 +91,9 @@ export const useAppStore = create()(
 
       createDataset: async (data) => {
         try {
+          // Note: This functionality may not be available through the API yet
+          // For now, we'll keep using invoke for ZFS operations
+          const { invoke } = await import("@tauri-apps/api/core");
           await invoke("create_zfs_dataset", {
             req: {
               zpool: data.zpool,
@@ -121,10 +117,11 @@ export const useAppStore = create()(
       },
 
       deleteDataset: async (name) => {
-        const token = localStorage.getItem("authToken") || "";
         try {
+          // Note: This functionality may not be available through the API yet
+          // For now, we'll keep using invoke for ZFS operations
+          const { invoke } = await import("@tauri-apps/api/core");
           const response = await invoke("delete_zfs_dataset", {
-            token,
             dataset: name,
             recursive: true,
           });
@@ -145,7 +142,7 @@ export const useAppStore = create()(
 
       fetchServices: async () => {
         try {
-          const servicesRes = await invoke("list_services");
+          const servicesRes = await api.listServices();
           const servicesData = Array.isArray(servicesRes)
             ? servicesRes
             : servicesRes
@@ -159,7 +156,7 @@ export const useAppStore = create()(
 
       startService: async (name) => {
         try {
-          await invoke("start_service", { name });
+          await api.startService(name);
           set({
             services: get().services.map((service) =>
               service.name === name
@@ -175,7 +172,7 @@ export const useAppStore = create()(
 
       stopService: async (name) => {
         try {
-          await invoke("stop_service", { name });
+          await api.stopService(name);
           set({
             services: get().services.map((service) =>
               service.name === name
@@ -191,7 +188,7 @@ export const useAppStore = create()(
 
       restartService: async (name) => {
         try {
-          await invoke("restart_service", { name });
+          await api.restartService(name);
           set({
             services: get().services.map((service) =>
               service.name === name
@@ -207,7 +204,7 @@ export const useAppStore = create()(
 
       fetchServerInfo: async () => {
         try {
-          const serverInfoRes = await invoke("get_system_info");
+          const serverInfoRes = await api.getSystemInfo();
           set({ serverInfo: serverInfoRes });
         } catch (err) {
           console.error("Failed to fetch server info:", err);
@@ -216,6 +213,8 @@ export const useAppStore = create()(
 
       fetchDependencies: async () => {
         try {
+          // Note: This functionality may not be available through the API yet
+          const { invoke } = await import("@tauri-apps/api/core");
           const dependenciesRes = await invoke("check_dependencies");
           set({ dependencies: dependenciesRes });
         } catch (err) {
@@ -225,6 +224,8 @@ export const useAppStore = create()(
 
       fetchLicenseInfo: async () => {
         try {
+          // Note: This functionality may not be available through the API yet
+          const { invoke } = await import("@tauri-apps/api/core");
           const licenseRes = await invoke("get_license_info");
           set({ licenseInfo: licenseRes });
         } catch (err) {
@@ -234,6 +235,8 @@ export const useAppStore = create()(
 
       fetchDisks: async () => {
         try {
+          // Note: This functionality may not be available through the API yet
+          const { invoke } = await import("@tauri-apps/api/core");
           const [zpoolStatsRes, zpoolsRes] = await Promise.all([
             invoke("get_zpool_list"),
             invoke("list_zpools"),
@@ -248,6 +251,8 @@ export const useAppStore = create()(
       },
       fetchRamUsage: async () => {
         try {
+          // Note: This functionality may not be available through the API yet
+          const { invoke } = await import("@tauri-apps/api/core");
           const ramUsageRes = await invoke("get_ram_usage");
           set({ ramUsage: ramUsageRes });
         } catch (err) {
@@ -257,6 +262,8 @@ export const useAppStore = create()(
 
       fetchArcStat: async () => {
         try {
+          // Note: This functionality may not be available through the API yet
+          const { invoke } = await import("@tauri-apps/api/core");
           const arcStatRes = await invoke("get_zfs_arcstat");
           set({ arcStat: arcStatRes });
         } catch (err) {
@@ -307,10 +314,7 @@ export const useAppStore = create()(
         if (_pollIntervalId) return; // already running
         const id = setInterval(async () => {
           try {
-            // Get token from localStorage
-            const token = localStorage.getItem("authToken") || "";
-            const clientsRes = await invoke("get_clients", { token });
-            const newClients = clientsRes ? Object.values(clientsRes) : [];
+            const newClients = await api.listClients();
 
             // Only update if data has changed to prevent unnecessary re-renders
             const { clients: currentClients } = get();
@@ -380,6 +384,8 @@ export const useAppStore = create()(
       fetchConfig: async () => {
         set({ checkingConfig: true, loading: true });
         try {
+          // Note: This functionality may not be available through the API yet
+          const { invoke } = await import("@tauri-apps/api/core");
           const cfg = await invoke("read_config");
           set({ appConfig: cfg });
         } catch (err) {

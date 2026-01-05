@@ -1,5 +1,4 @@
 import { useToastStore } from "@/store/useToastStore";
-import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useState } from "react";
 import { AuthContext } from "./auth";
 
@@ -20,6 +19,9 @@ export const AuthProvider = ({ children }) => {
   const validateToken = useCallback(
     async (authToken) => {
       try {
+        // For now, we'll keep using invoke for token validation since it's not available through the API
+        // In a future iteration, we could implement token validation through the API
+        const { invoke } = await import("@tauri-apps/api/core");
         await invoke("validate_auth_token", { token: authToken });
         // Token is valid, do nothing
       } catch (err) {

@@ -21,6 +21,8 @@ mod services;
 pub mod state;
 pub mod utils;
 
+pub mod api;
+
 use log::info;
 
 use tauri::Manager;
@@ -33,7 +35,26 @@ const DHCP_CLIENTS_PATH: &str = "/etc/dhcp/clients.conf";
 pub const TFTP_AUTOEXEC_PATH: &str = "/srv/tftp/autoexec.ipxe";
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
+pub async fn run() {
+    // Initialize application state
+    let state = AppState::new()
+        .await
+        .expect("Failed to initialize AppState");
+
+    // Start Axum API server in a separate task
+    let api_state = state.clone();
+    tokio::spawn(async move {
+        let addr = "127.0.0.1:8080"
+            .parse()
+            .expect("Invalid API server address");
+        let api_server = crate::api::server::ApiServer::new(api_state, addr);
+
+        if let Err(e) = api_server.start().await {
+            tracing::error!("API server error: {}", e);
+        }
+    });
+
+    // Start Tauri application
     tauri::Builder::default()
         .plugin(
             tauri_plugin_log::Builder::default()
@@ -161,20 +182,7 @@ pub fn run() {
             info!("Application startup");
             // config.json creation and migration is now handled inside AppState::new() during initialization.
 
-            tauri::async_runtime::block_on(async {
-                match AppState::new().await {
-                    Ok(state) => {
-                        app.manage(state);
-                        tracing::info!("Application state initialized");
-                        Ok::<(), Box<dyn std::error::Error>>(())
-                    }
-                    Err(e) => {
-                        let error_msg = format!("Failed to initialize state: {}", e);
-                        tracing::error!("{}", error_msg);
-                        Err(error_msg.into())
-                    }
-                }
-            })?;
+            app.manage(state);
 
             // Setup system tray
             #[cfg(desktop)]
