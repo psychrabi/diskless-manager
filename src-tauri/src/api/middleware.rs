@@ -5,6 +5,7 @@ use axum::{
     response::Response,
 };
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
+use log::info;
 use serde::{Deserialize, Serialize};
 use tower_http::cors::CorsLayer;
 
@@ -24,11 +25,11 @@ pub async fn logger(
     let method = request.method().clone();
     let uri = request.uri().clone();
 
-    tracing::info!("{} {}", method, uri);
+    info!("{} {}", method, uri);
 
     let response = next.run(request).await;
 
-    tracing::info!("Response status: {}", response.status());
+    info!("Response status: {}", response.status());
 
     Ok(response)
 }

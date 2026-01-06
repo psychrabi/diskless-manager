@@ -3,6 +3,7 @@ use crate::services::{
     get_service_pid, is_systemd_service_running, run_sudo_command, write_with_sudo_tee,
     ServiceStatus,
 };
+use log::info;
 use std::path::PathBuf;
 use tokio::process::Command;
 
@@ -62,7 +63,7 @@ impl HttpService {
         )
         .await?;
 
-        tracing::info!("Apache2 configuration written to {}", config_path.display());
+        info!("Apache2 configuration written to {}", config_path.display());
 
         // Enable the site
         run_sudo_command(["a2ensite", "diskless-server"]).await?;
@@ -70,7 +71,7 @@ impl HttpService {
         // Enable required modules
         run_sudo_command(["a2enmod", "headers"]).await?;
 
-        tracing::info!("Apache2 site enabled");
+        info!("Apache2 site enabled");
         Ok(())
     }
 
@@ -81,14 +82,14 @@ impl HttpService {
         // Start Apache2
         run_sudo_command(["systemctl", "start", "apache2"]).await?;
 
-        tracing::info!("Apache2 service started");
+        info!("Apache2 service started");
         Ok(())
     }
 
     pub async fn stop(&self) -> anyhow::Result<()> {
         run_sudo_command(["systemctl", "stop", "apache2"]).await?;
 
-        tracing::info!("Apache2 service stopped");
+        info!("Apache2 service stopped");
         Ok(())
     }
 
@@ -99,7 +100,7 @@ impl HttpService {
         // Reload Apache2
         run_sudo_command(["systemctl", "reload", "apache2"]).await?;
 
-        tracing::info!("Apache2 service reloaded");
+        info!("Apache2 service reloaded");
         Ok(())
     }
 

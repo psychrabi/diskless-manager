@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use log::info;
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqlitePool;
 use std::path::PathBuf;
@@ -328,7 +329,7 @@ impl ImageManager {
         .execute(&self.pool)
         .await?;
 
-        tracing::info!("Image '{}' created ({} GB)", req.name, req.size_gb);
+        info!("Image '{}' created ({} GB)", req.name, req.size_gb);
         Ok(image)
     }
 
@@ -404,7 +405,7 @@ impl ImageManager {
         .execute(&self.pool)
         .await?;
 
-        tracing::info!("Image '{}' imported from {}", req.name, req.source_path);
+        info!("Image '{}' imported from {}", req.name, req.source_path);
         Ok(image)
     }
 
@@ -435,7 +436,7 @@ impl ImageManager {
             .execute(&self.pool)
             .await?;
 
-        tracing::info!("Image '{}' deleted", image.name);
+        info!("Image '{}' deleted", image.name);
         Ok(())
     }
 
@@ -497,7 +498,7 @@ impl ImageManager {
         .execute(&self.pool)
         .await?;
 
-        tracing::info!("Image '{}' cloned to '{}'", source.name, new_name);
+        info!("Image '{}' cloned to '{}'", source.name, new_name);
         Ok(image)
     }
 
@@ -567,10 +568,9 @@ impl ImageManager {
         .execute(&self.pool)
         .await?;
 
-        tracing::info!(
+        info!(
             "Snapshot '{}' created from '{}'",
-            snapshot_name,
-            source.name
+            snapshot_name, source.name
         );
         Ok(image)
     }
@@ -638,7 +638,7 @@ impl ImageManager {
             .execute(&self.pool)
             .await?;
 
-        tracing::info!("Image '{}' resized to {} GB", image.name, new_size_gb);
+        info!("Image '{}' resized to {} GB", image.name, new_size_gb);
         Ok(image)
     }
 

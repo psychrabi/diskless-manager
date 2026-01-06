@@ -63,7 +63,7 @@ impl ImageService {
         // 5. Save configuration
         self.save_config().await?;
 
-        tracing::info!("iSCSI target created: {}", target_iqn);
+        info!("iSCSI target created: {}", target_iqn);
         Ok(())
     }
 
@@ -90,7 +90,7 @@ impl ImageService {
         // 3. Save configuration
         self.save_config().await?;
 
-        tracing::info!("iSCSI target removed: {}", target_iqn);
+        info!("iSCSI target removed: {}", target_iqn);
         Ok(())
     }
 
@@ -123,7 +123,7 @@ impl ImageService {
             .args(["systemctl", "start", "rtslib-fb-targetctl"])
             .status()
             .await?;
-        tracing::info!("iSCSI service started");
+        info!("iSCSI service started");
         Ok(())
     }
 
@@ -132,7 +132,7 @@ impl ImageService {
             .args(["systemctl", "stop", "rtslib-fb-targetctl"])
             .status()
             .await?;
-        tracing::info!("iSCSI service stopped");
+        info!("iSCSI service stopped");
         Ok(())
     }
 
@@ -142,7 +142,7 @@ impl ImageService {
         // For LIO, 'restoreconfig' might be the equivalent, but usually 'target' service handles it.
         // Let's just save config to be sure.
         self.save_config().await?;
-        tracing::info!("iSCSI configuration saved");
+        info!("iSCSI configuration saved");
         Ok(())
     }
 

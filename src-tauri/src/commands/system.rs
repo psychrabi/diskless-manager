@@ -2,6 +2,7 @@ use crate::core::config::Settings;
 use crate::core::service::ServiceManager;
 use crate::state::AppState;
 use crate::utils::network::InterfaceInfo;
+use log::info;
 use serde::Serialize;
 use std::process::Command;
 use tauri::State;
@@ -265,7 +266,7 @@ pub async fn save_settings(state: State<'_, AppState>, settings: Settings) -> Re
         // but it's good to log it. Actually, better to inform user if both fail.
     }
 
-    tracing::info!("Settings saved to database and TOML");
+    info!("Settings saved to database and TOML");
     Ok(())
 }
 #[tauri::command]

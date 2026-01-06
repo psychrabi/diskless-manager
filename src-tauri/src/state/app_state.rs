@@ -1,4 +1,5 @@
 use crate::core::config::Settings;
+use log::info;
 use sqlx::sqlite::SqlitePool;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -38,12 +39,12 @@ impl AppState {
             crate::config::set_config(&config);
             // Sync settings from DB to the current settings struct if available
             if let Ok(db_settings) = serde_json::from_value::<Settings>(config.settings) {
-                tracing::info!("Merged settings from database");
+                info!("Merged settings from database");
                 settings = db_settings;
             }
         }
 
-        tracing::info!("Database initialized at {}", db_path.display());
+        info!("Database initialized at {}", db_path.display());
 
         Ok(Self {
             settings: Arc::new(RwLock::new(settings)),

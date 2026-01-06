@@ -4,6 +4,7 @@ use crate::services::{
     get_service_pid, is_systemd_service_running, run_sudo_command, write_with_sudo_tee,
     ServiceStatus,
 };
+use log::info;
 use sqlx::SqlitePool;
 use std::path::PathBuf;
 use tokio::process::Command;
@@ -159,64 +160,26 @@ INTERFACESv6=""
         );
         write_with_sudo_tee("/etc/default/isc-dhcp-server", &default_config).await?;
 
-        tracing::info!("DHCP configuration and /etc/default/isc-dhcp-server written");
+        info!("DHCP configuration and /etc/default/isc-dhcp-server written");
 
-        run_sudo_command(["rm", "/var/lib/dhcp/dhcpd.leases"]).await?;
-        tracing::info!("DHCP leases cleared");
-
-        // Add static host entries for registered clients
-        let client_manager = ClientManager::new(self.db_pool.clone());
-        let clients = client_manager.list().await?;
-
-        let mut client_config = String::new();
-
-        for client in clients {
-            if !client.ip.is_empty() && client.ip != "N/A" {
-                client_config.push_str(&format!(
-                    r#"
-host {name} {{
-    hardware ethernet {mac};
-    fixed-address {ip};
-    option host-name "{name}";
-}}
-"#,
-                    name = client.name,
-                    mac = client.mac,
-                    ip = client.ip,
-                ));
-            }
-        }
-
-        // Write configuration to default DHCP config path
-        let config_path = PathBuf::from("/etc/dhcp/clients.conf");
-        if let Some(parent) = config_path.parent() {
-            // Create parent directory with proper permissions using std::fs
-            // The actual file writing will use sudo
-            std::fs::create_dir_all(parent)
-                .map_err(|e| anyhow::anyhow!("Failed to create directory: {}", e))?;
-        }
-
-        write_with_sudo_tee("/etc/dhcp/clients.conf", &client_config).await?;
-
-        tracing::info!("Client configuration written to {}", config_path.display());
         Ok(())
     }
 
     pub async fn start(&self) -> anyhow::Result<()> {
         run_sudo_command(["systemctl", "start", "isc-dhcp-server"]).await?;
-        tracing::info!("DHCP service started");
+        info!("DHCP service started");
         Ok(())
     }
 
     pub async fn stop(&self) -> anyhow::Result<()> {
         run_sudo_command(["systemctl", "stop", "isc-dhcp-server"]).await?;
-        tracing::info!("DHCP service stopped");
+        info!("DHCP service stopped");
         Ok(())
     }
 
     pub async fn reload(&self) -> anyhow::Result<()> {
         run_sudo_command(["systemctl", "restart", "isc-dhcp-server"]).await?;
-        tracing::info!("DHCP service reloaded");
+        info!("DHCP service reloaded");
         Ok(())
     }
 
@@ -360,6 +323,48 @@ include "/etc/dhcp/clients.conf";
                 "DHCP server is not running".to_string()
             },
         })
+    }
+
+    pub async fn generate_client_configs(&self) -> anyhow::Result<()> {
+        run_sudo_command(["rm", "/var/lib/dhcp/dhcpd.leases"]).await?;
+        info!("DHCP leases cleared");
+
+        // Add static host entries for registered clients
+        let client_manager = ClientManager::new(self.db_pool.clone());
+        let clients = client_manager.list().await?;
+
+        let mut client_config = String::new();
+
+        for client in clients {
+            if !client.ip.is_empty() && client.ip != "N/A" {
+                client_config.push_str(&format!(
+                    r#"
+host {name} {{
+    hardware ethernet {mac};
+    fixed-address {ip};
+    option host-name "{name}";
+}}
+"#,
+                    name = client.name,
+                    mac = client.mac,
+                    ip = client.ip,
+                ));
+            }
+        }
+
+        // Write configuration to default DHCP config path
+        let config_path = PathBuf::from("/etc/dhcp/clients.conf");
+        if let Some(parent) = config_path.parent() {
+            // Create parent directory with proper permissions using std::fs
+            // The actual file writing will use sudo
+            std::fs::create_dir_all(parent)
+                .map_err(|e| anyhow::anyhow!("Failed to create directory: {}", e))?;
+        }
+
+        write_with_sudo_tee("/etc/dhcp/clients.conf", &client_config).await?;
+
+        info!("Client configuration written to {}", config_path.display());
+        Ok(())
     }
 }
 

@@ -1,5 +1,4 @@
-use tracing::info;
-use tracing::warn;
+use log::{info, warn};
 
 use crate::cmd::{run_command, run_command_output, run_command_output_no_sudo};
 use crate::error::AppError;

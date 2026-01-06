@@ -5,6 +5,7 @@ use crate::services::{
     get_service_pid, is_systemd_service_running, run_sudo_command, write_with_sudo_tee,
     ServiceStatus,
 };
+use log::info;
 use tokio::process::Command;
 
 pub struct TftpService {
@@ -31,7 +32,7 @@ TFTP_OPTIONS="{}"
 
         write_with_sudo_tee("/etc/default/tftpd-hpa", &tftp_default).await?;
 
-        tracing::info!("TFTP configuration written to /etc/default/tftpd-hpa");
+        info!("TFTP configuration written to /etc/default/tftpd-hpa");
         Ok(())
     }
 
@@ -42,19 +43,19 @@ TFTP_OPTIONS="{}"
         // Then start tftpd-hpa
         run_sudo_command(["systemctl", "start", "tftpd-hpa"]).await?;
 
-        tracing::info!("TFTP service started");
+        info!("TFTP service started");
         Ok(())
     }
 
     pub async fn stop(&self) -> anyhow::Result<()> {
         run_sudo_command(["systemctl", "stop", "tftpd-hpa"]).await?;
-        tracing::info!("TFTP service stopped");
+        info!("TFTP service stopped");
         Ok(())
     }
 
     pub async fn reload(&self) -> anyhow::Result<()> {
         run_sudo_command(["systemctl", "restart", "tftpd-hpa"]).await?;
-        tracing::info!("TFTP service reloaded");
+        info!("TFTP service reloaded");
         Ok(())
     }
 

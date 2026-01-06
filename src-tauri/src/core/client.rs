@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use log::info;
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqlitePool;
 use uuid::Uuid;
@@ -35,6 +36,9 @@ pub struct CreateClientRequest {
     pub snapshot: Option<String>,
     pub keep_writeback: Option<bool>,
     pub use_game_disk: Option<bool>,
+    pub block_store: Option<String>,
+    pub block_device: Option<String>,
+    pub target_iqn: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,6 +50,9 @@ pub struct UpdateClientRequest {
     pub keep_writeback: Option<bool>,
     pub use_game_disk: Option<bool>,
     pub enabled: Option<bool>,
+    pub block_store: Option<String>,
+    pub block_device: Option<String>,
+    pub target_iqn: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,11 +80,11 @@ impl Client {
             created_at: Utc::now(),
             updated_at: Utc::now(),
             snapshot: req.snapshot,
-            block_store: None,
-            target_iqn: None,
+            block_store: req.block_store,
+            target_iqn: req.target_iqn,
             writeback: None,
             last_modified: Some(Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()),
-            block_device: None,
+            block_device: req.block_device,
             status: None,
             mode: None,
             pxe_mode: Some("uefi".to_string()),
@@ -275,7 +282,7 @@ impl ClientManager {
         .execute(&self.pool)
         .await?;
 
-        tracing::info!("Client '{}' created with MAC {}", client.name, client.mac);
+        info!("Client '{}' created with MAC {}", client.name, client.mac);
         Ok(client)
     }
 
@@ -293,6 +300,12 @@ impl ClientManager {
         }
         if let Some(snapshot) = req.snapshot {
             client.snapshot = Some(snapshot);
+        }
+        if let Some(block_store) = req.block_store {
+            client.block_store = Some(block_store);
+        }
+        if let Some(target_iqn) = req.target_iqn {
+            client.target_iqn = Some(target_iqn);
         }
         if let Some(keep_writeback) = req.keep_writeback {
             client.keep_writeback = Some(keep_writeback);
@@ -334,7 +347,7 @@ impl ClientManager {
         .execute(&self.pool)
         .await?;
 
-        tracing::info!("Client '{}' updated", client.name);
+        info!("Client '{}' updated", client.name);
         Ok(client)
     }
 
@@ -346,7 +359,7 @@ impl ClientManager {
             .execute(&self.pool)
             .await?;
 
-        tracing::info!("Client '{}' deleted", client.name);
+        info!("Client '{}' deleted", client.name);
         Ok(())
     }
 

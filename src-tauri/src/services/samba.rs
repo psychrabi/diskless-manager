@@ -3,6 +3,7 @@ use crate::services::{
     get_service_pid, is_systemd_service_running, run_sudo_command, write_with_sudo_tee,
     ServiceStatus,
 };
+use log::info;
 use std::path::PathBuf;
 use tokio::process::Command;
 
@@ -28,7 +29,7 @@ impl SambaService {
         run_sudo_command(["systemctl", "start", "smbd"]).await?;
         run_sudo_command(["systemctl", "start", "nmbd"]).await?;
 
-        tracing::info!("Samba service started");
+        info!("Samba service started");
         Ok(())
     }
 
@@ -36,7 +37,7 @@ impl SambaService {
         run_sudo_command(["systemctl", "stop", "smbd"]).await?;
         run_sudo_command(["systemctl", "stop", "nmbd"]).await?;
 
-        tracing::info!("Samba service stopped");
+        info!("Samba service stopped");
         Ok(())
     }
 
@@ -45,7 +46,7 @@ impl SambaService {
 
         run_sudo_command(["systemctl", "restart", "smbd"]).await?;
 
-        tracing::info!("Samba service reloaded");
+        info!("Samba service reloaded");
         Ok(())
     }
 
@@ -166,7 +167,7 @@ impl SambaService {
 
         write_with_sudo_tee("/etc/samba/smb.conf", &smb_conf).await?;
 
-        tracing::info!("Samba configuration written to /etc/samba/smb.conf");
+        info!("Samba configuration written to /etc/samba/smb.conf");
         Ok(())
     }
 }

@@ -1,3 +1,4 @@
+use log::info;
 use serde::{Deserialize, Serialize};
 use std::process::Command;
 
@@ -95,7 +96,7 @@ impl ServiceManager {
             return Err(anyhow::anyhow!("Failed to start {}: {}", name, stderr));
         }
 
-        tracing::info!("Service '{}' started", name);
+        info!("Service '{}' started", name);
         Ok(())
     }
 
@@ -111,7 +112,7 @@ impl ServiceManager {
             return Err(anyhow::anyhow!("Failed to stop {}: {}", name, stderr));
         }
 
-        tracing::info!("Service '{}' stopped", name);
+        info!("Service '{}' stopped", name);
         Ok(())
     }
 
@@ -127,7 +128,7 @@ impl ServiceManager {
             return Err(anyhow::anyhow!("Failed to restart {}: {}", name, stderr));
         }
 
-        tracing::info!("Service '{}' restarted", name);
+        info!("Service '{}' restarted", name);
         Ok(())
     }
 

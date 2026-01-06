@@ -3,6 +3,8 @@ use crate::services::{
     get_service_pid, is_systemd_service_running, run_sudo_command, write_with_sudo_tee,
     ServiceStatus,
 };
+use log::info;
+
 use std::path::PathBuf;
 use tokio::process::Command;
 
@@ -24,7 +26,7 @@ impl NfsService {
 
         write_with_sudo_tee("/etc/exports", &exports_content).await?;
 
-        tracing::info!("NFS exports written to /etc/exports");
+        info!("NFS exports written to /etc/exports");
         Ok(())
     }
 
@@ -39,25 +41,25 @@ impl NfsService {
         // Re-export
         run_sudo_command(["exportfs", "-ra"]).await?;
 
-        tracing::info!("NFS export added: {}", path);
+        info!("NFS export added: {}", path);
         Ok(())
     }
 
     pub async fn start(&self) -> anyhow::Result<()> {
         run_sudo_command(["systemctl", "start", "nfs-kernel-server"]).await?;
-        tracing::info!("NFS service started");
+        info!("NFS service started");
         Ok(())
     }
 
     pub async fn stop(&self) -> anyhow::Result<()> {
         run_sudo_command(["systemctl", "stop", "nfs-kernel-server"]).await?;
-        tracing::info!("NFS service stopped");
+        info!("NFS service stopped");
         Ok(())
     }
 
     pub async fn reload(&self) -> anyhow::Result<()> {
         run_sudo_command(["exportfs", "-ra"]).await?;
-        tracing::info!("NFS exports reloaded");
+        info!("NFS exports reloaded");
         Ok(())
     }
 

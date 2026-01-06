@@ -5,7 +5,7 @@ use app_lib::client;
 use app_lib::state::AppState;
 use app_lib::types::AddClientRequest;
 use clap::{Parser, Subcommand};
-use tracing::info;
+use log::info;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
