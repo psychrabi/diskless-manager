@@ -23,7 +23,7 @@ const menuItems = [
   { id: "clients", to: "/clients", label: "Clients", icon: Laptop2 },
   { id: "disks", to: "/disks", label: "Disks", icon: HardDrive },
   { id: "images", to: "/images", label: "Images", icon: FilesIcon },
-  { id: "zfs", to: "/zfs", label: "ZFS Vols", icon: FilesIcon },
+  // { id: "zfs", to: "/zfs", label: "ZFS Vols", icon: FilesIcon },
   { id: "setup", to: "/setup", label: "Setup", icon: SquareLibrary },
   { id: "services", to: "/services", label: "Services", icon: Settings },
   { id: "settings", to: "/settings", label: "System Settings", icon: Settings },

@@ -1,3 +1,4 @@
+import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useState } from "react";
@@ -5,6 +6,7 @@ import { useCallback, useState } from "react";
 export const useSettings = () => {
   const [loading, setLoading] = useState(false);
   const { error, success } = useToastStore();
+  const fetchConfig = useAppStore((state) => state.fetchConfig);
 
   const readConfig = useCallback(async () => {
     try {
@@ -36,11 +38,15 @@ export const useSettings = () => {
         // Configure the DHCP service using the new settings
         await invoke("configure_service", { serviceName: "dhcp" });
         await invoke("restart_service", { name: "dhcp" });
-        success("DHCP configuration saved successfully", "success");
+        await fetchConfig();
+        success("DHCP Settings", "DHCP configuration saved successfully");
         return true;
       } catch (err) {
         console.log(err);
-        error("Failed to configure DHCP server: " + (err.message ?? err));
+        error(
+          "DHCP Settings",
+          "Failed to configure DHCP server: " + (err.message ?? err)
+        );
         return false;
       } finally {
         setLoading(false);
@@ -70,17 +76,18 @@ export const useSettings = () => {
         // Configure the TFTP service using the new settings
         await invoke("configure_service", { serviceName: "tftp" });
         await invoke("restart_service", { name: "tftp" });
+        await fetchConfig();
 
-        success("TFTP configuration saved successfully", "success");
+        success("TFTP Settings", "TFTP configuration saved successfully");
         return true;
       } catch (err) {
-        error(err);
+        error("TFTP Settings", err.message || String(err));
         return false;
       } finally {
         setLoading(false);
       }
     },
-    [success, error]
+    [success, error, fetchConfig]
   );
 
   const updateHttp = useCallback(
@@ -104,17 +111,58 @@ export const useSettings = () => {
         // Configure the HTTP service using the new settings
         await invoke("configure_service", { serviceName: "http" });
         await invoke("restart_service", { name: "http" });
+        await fetchConfig();
 
-        success("HTTP configuration saved successfully", "success");
+        success("HTTP Settings", "HTTP configuration saved successfully");
         return true;
       } catch (err) {
-        error(err || "Failed to configure HTTP server");
+        error(
+          "HTTP Settings",
+          err.message || err || "Failed to configure HTTP server"
+        );
         return false;
       } finally {
         setLoading(false);
       }
     },
-    [error, success]
+    [error, success, fetchConfig]
+  );
+  const updateIscsi = useCallback(
+    async (iscsiConfig) => {
+      setLoading(true);
+      try {
+        // First, get the current settings
+        const currentSettings = await invoke("get_settings");
+
+        // Update the ISCSI settings
+        const updatedSettings = {
+          ...currentSettings,
+          iscsi: {
+            ...iscsiConfig,
+          },
+        };
+
+        // Save the updated settings
+        await invoke("save_settings", { settings: updatedSettings });
+
+        // Configure the ISCSI service using the new settings
+        await invoke("configure_service", { serviceName: "iscsi" });
+        await invoke("restart_service", { name: "iscsi" });
+        await fetchConfig();
+
+        success("ISCSI Settings", "ISCSI configuration saved successfully");
+        return true;
+      } catch (err) {
+        error(
+          "ISCSI Settings",
+          err.message || err || "Failed to configure ISCSI server"
+        );
+        return false;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [error, success, fetchConfig]
   );
 
   const updateSamba = useCallback(
@@ -139,18 +187,82 @@ export const useSettings = () => {
         // Configure the Samba service using the new settings
         await invoke("configure_service", { serviceName: "samba" });
         await invoke("restart_service", { name: "samba" });
+        await fetchConfig();
 
-        success("Samba configuration saved successfully", "success");
+        success("Samba Settings", "Samba configuration saved successfully");
         return true;
       } catch (err) {
-        error(err);
+        error("Samba Settings", err.message || String(err));
         return false;
       } finally {
         setLoading(false);
       }
     },
-    [success, error]
+    [success, error, fetchConfig]
   );
+  const updateServer = useCallback(
+    async (serverConfig) => {
+      setLoading(true);
+      try {
+        const currentSettings = await invoke("get_settings");
+        const updatedSettings = {
+          ...currentSettings,
+          server: {
+            ...serverConfig,
+          },
+        };
+        await invoke("save_settings", { settings: updatedSettings });
+        await fetchConfig();
+        success("Server Settings", "Server configuration saved successfully");
+        return true;
+      } catch (err) {
+        error("Server Settings", err.message || String(err));
+        return false;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [success, error, fetchConfig]
+  );
+
+  const fetchInterfaces = useCallback(async () => {
+    try {
+      return await invoke("get_network_interfaces");
+    } catch (err) {
+      error("Network Interfaces", "Failed to fetch network interfaces");
+      return [];
+    }
+  }, [error]);
+
+  const getInterfaceIp = useCallback(async (iface) => {
+    try {
+      return await invoke("get_interface_ip", { interface: iface });
+    } catch (err) {
+      console.error("Failed to fetch interface IP:", err);
+      return null;
+    }
+  }, []);
+  const detectNetwork = useCallback(async () => {
+    try {
+      return await invoke("detect_server_network");
+    } catch (err) {
+      error("Network Detection", "Failed to auto-detect network settings");
+      return null;
+    }
+  }, [error]);
+  const applyNetworkSettings = useCallback(async () => {
+    setLoading(true);
+    try {
+      const response = await invoke("apply_network_settings");
+      success("Network Applied", response);
+      return true;
+    } catch (err) {
+      error("Network Apply Failed", err.message || String(err));
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  }, [success, error]);
 
   const updatePassword = useCallback(
     async (oldPassword, newPassword) => {
@@ -162,13 +274,10 @@ export const useSettings = () => {
           oldPassword,
           newPassword,
         });
-        if (response) success(response);
+        if (response) success("Admin Password", response.message || response);
         return true;
       } catch (err) {
-        error(
-          "Failed to update admin password",
-          err.message || "An unknown error occurred"
-        );
+        error("Admin Password", err.message || "An unknown error occurred");
         return false;
       } finally {
         setLoading(false);
@@ -181,7 +290,7 @@ export const useSettings = () => {
     try {
       return await invoke("get_license_info");
     } catch (err) {
-      error("Failed to load license info", err?.message || String(err));
+      error("License Info", err?.message || String(err));
       return null;
     }
   }, [error]);
@@ -212,7 +321,13 @@ export const useSettings = () => {
     updateDhcp,
     updateTftp,
     updateHttp,
+    updateIscsi,
     updateSamba,
+    updateServer,
+    fetchInterfaces,
+    getInterfaceIp,
+    detectNetwork,
+    applyNetworkSettings,
     updatePassword,
     getLicenseInfo,
     activateLicense,

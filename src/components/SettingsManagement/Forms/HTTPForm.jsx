@@ -13,13 +13,8 @@ const HTTPForm = ({ register, errors, config }) => {
         />
         <span className="ml-2">HTTP Server (Start at boot)</span>
       </label>
-      <Input
-        label="HTTP Root Directory"
-        register={register("root_dir")}
-        error={errors.root_dir?.message}
-        placeholder="/srv/http"
-      />
-      <div className="grid grid-cols-2 gap-4">
+
+      <div className="grid grid-cols-2 gap-4 col-span-2">
         <Input
           label="Server IP"
           register={register("server_ip")}
@@ -33,6 +28,13 @@ const HTTPForm = ({ register, errors, config }) => {
           placeholder="80"
         />
       </div>
+      <Input
+        className="col-span-2"
+        label="HTTP Root Directory"
+        register={register("root_dir")}
+        error={errors.root_dir?.message}
+        placeholder="/srv/http"
+      />
     </div>
   );
 };
