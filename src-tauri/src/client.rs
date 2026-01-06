@@ -13,6 +13,7 @@ use tauri::State;
 use tracing::{debug, error, info, warn};
 
 // New imports
+use crate::core::client::ClientManager;
 use crate::core::provisioning::{
     add_client_provisioning, check_duplicate_client, delete_client_config, get_client_by_id,
     get_client_paths, get_client_paths_with_master, save_client_config,
@@ -77,15 +78,50 @@ pub async fn get_clients(
     })
 }
 
+async fn try_get_client(state: &AppState, id: &str) -> Option<crate::types::Client> {
+    // 1. Try legacy config.json
+    if let Some(c) = get_client_by_id(id) {
+        return Some(c);
+    }
+
+    // 2. Try SQLite database
+    let manager = ClientManager::new(state.db_pool.clone());
+    if let Ok(c) = manager.get(id).await {
+        return Some(crate::types::Client {
+            id: c.id,
+            name: c.name,
+            mac: c.mac,
+            ip: c.ip,
+            master: c.master,
+            snapshot: c.snapshot,
+            block_store: c.block_store,
+            target_iqn: c.target_iqn,
+            writeback: c.writeback,
+            created_at: Some(c.created_at.to_rfc3339()),
+            last_modified: c.last_modified,
+            block_device: c.block_device,
+            status: c.status,
+            mode: c.mode,
+            pxe_mode: c.pxe_mode,
+            keep_writeback: c.keep_writeback,
+            use_game_disk: c.use_game_disk,
+        });
+    }
+
+    None
+}
+
 #[tauri::command]
 pub async fn remote_client(
+    state: State<'_, AppState>,
     token: String,
     client_id: String,
 ) -> Result<serde_json::Value, AppError> {
     // Validate authentication token
     validate_auth(&token)?;
     info!("Remote client: {}", client_id);
-    let client = get_client_by_id(&client_id)
+    let client = try_get_client(&state, &client_id)
+        .await
         .ok_or_else(|| AppError::NotFound("Client not found".to_string()))?;
 
     let client_ip = client.ip.clone();
@@ -224,7 +260,7 @@ pub async fn edit_client(
     data.validate()?;
 
     // Get current client info
-    let mut client_info = match get_client_by_id(&client_id) {
+    let mut client_info = match try_get_client(&state, &client_id).await {
         Some(info) => {
             info!("Client {} found", client_id);
             info
@@ -349,7 +385,8 @@ pub async fn delete_client(
     validate_auth(&token)?;
 
     // Get client info to clean up resources
-    let client = get_client_by_id(&client_id)
+    let client = try_get_client(&state, &client_id)
+        .await
         .ok_or_else(|| AppError::NotFound(format!("Client {} not found", client_id)))?;
 
     // Clean up iSCSI target
@@ -384,9 +421,7 @@ pub async fn delete_client(
     .execute(&state.db_pool)
     .await;
 
-    let db_rows_affected = db_result.as_ref().map(|r| r.rows_affected()).unwrap_or(0);
-
-    if !deleted_from_config || db_rows_affected == 0 {
+    if !deleted_from_config {
         return Err(AppError::Config(format!(
             "Failed to delete client {} from configuration",
             client_id
@@ -405,7 +440,8 @@ pub async fn control_client(
 ) -> Result<serde_json::Value, AppError> {
     // Validate authentication token
     validate_auth(&token)?;
-    let client = get_client_by_id(&client_id)
+    let client = try_get_client(&state, &client_id)
+        .await
         .ok_or_else(|| AppError::NotFound(format!("Client {} not found", client_id)))?;
 
     // Clone the client early to avoid borrow checker issues
@@ -743,7 +779,7 @@ pub async fn reset_client(
     validate_client_id(&client_id)?;
 
     // Fetch client info
-    let mut client_info = match get_client_by_id(&client_id) {
+    let mut client_info = match try_get_client(&state, &client_id).await {
         Some(info) => info,
         None => {
             return Err(AppError::NotFound(format!(
@@ -840,6 +876,7 @@ pub async fn reset_client(
 /// Reset a non-persistent client to clean state by recreating writeback from snapshot
 #[tauri::command]
 pub async fn reset_client_to_clean(
+    state: State<'_, AppState>,
     token: String,
     client_id: String,
 ) -> Result<serde_json::Value, AppError> {
@@ -847,8 +884,8 @@ pub async fn reset_client_to_clean(
 
     info!("Resetting client {} to clean state", client_id);
 
-    // Get client info
-    let client_info = get_client_by_id(&client_id)
+    let client_info = try_get_client(&state, &client_id)
+        .await
         .ok_or_else(|| AppError::NotFound(format!("Client {} not found", client_id)))?;
 
     // Check if client is in non-persistent mode

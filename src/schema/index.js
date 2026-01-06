@@ -1,4 +1,4 @@
-import z from "zod";
+import { z } from "zod";
 
 export const dhcpSchema = z.object({
   enabled: z.boolean(),
@@ -21,7 +21,7 @@ export const dhcpSchema = z.object({
 export const tftpSchema = z.object({
   enabled: z.boolean(),
   root_dir: z.string().min(1, "TFTP Root directory is required"),
-  server_ip: z.string().min(1, "TFTP Server IP is required"),
+  server_ip: z.ipv4(),
   port: z.coerce.number().min(1, "TFTP Port is required"),
   options: z.string().min(1, "TFTP Options are required"),
 });
@@ -29,7 +29,7 @@ export const tftpSchema = z.object({
 export const httpSchema = z.object({
   enabled: z.boolean(),
   root_dir: z.string().min(1, "HTTP Root directory is required"),
-  server_ip: z.string().min(1, "HTTP Server IP is required"),
+  server_ip: z.ipv4(),
   port: z.coerce.number().min(1, "HTTP Port is required"),
 });
 
@@ -46,10 +46,11 @@ export const clientSchema = z.object({
   name: z.string().min(1, "Client name is required"),
   mac: z.mac(),
   ip: z.ipv4(),
-  master: z.string(),
+  master: z.string().min(1, "Image selection is required"),
   snapshot: z.string().optional().nullable(),
   keep_writeback: z.boolean().default(false),
   use_game_disk: z.boolean().default(false),
+  enabled: z.boolean().default(true),
 });
 
 export const imageSchema = z.object({

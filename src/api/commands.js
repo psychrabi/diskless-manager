@@ -32,7 +32,6 @@ async function apiRequest(endpoint, options = {}) {
   const token = getAuthToken();
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
-    console.log(token);
   }
 
   const config = {
@@ -256,6 +255,24 @@ export async function login(username, password) {
   return data;
 }
 
+export async function logout() {
+  const response = await fetch("http://127.0.0.1:8080/api/auth/logout", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ username, password }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Login failed: ${response.status} ${response.statusText}`);
+  }
+
+  const data = await response.json();
+  setAuthToken(data.token);
+  return data;
+}
+
 // ============================================================================
 // System Commands
 // ============================================================================
@@ -347,7 +364,9 @@ export async function updateClient(id, request) {
 }
 
 export async function deleteClient(id) {
-  return apiRequest(`/api/clients/${id}`, { method: "DELETE" });
+  return apiRequest(`/api/clients/${id}`, {
+    method: "DELETE",
+  });
 }
 
 export async function getClientBootHistory(clientId, limit) {
@@ -360,12 +379,14 @@ export async function getClientBootHistory(clientId, limit) {
 // ============================================================================
 
 export async function listImages() {
-  return invoke("/api/images");
+  const token = getAuthToken();
+  return invoke("list_images");
 }
 
 export async function listMasters() {
   // return apiRequest("/api/masters");
-  return invoke("get_images");
+  const token = getAuthToken();
+  return invoke("get_images", { token });
 }
 
 export async function getImage(id) {

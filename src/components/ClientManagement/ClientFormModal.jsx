@@ -9,7 +9,7 @@ import { clientSchema } from "@/schema";
 import * as api from "@/api/commands";
 
 const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
-  const { success, info } = useToastStore();
+  const { success, error } = useToastStore();
 
   const {
     register,
@@ -25,7 +25,7 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
     defaultValues: client,
   });
 
-  const formValues = watch();
+  // const formValues = watch();
 
   // Reset form when client changes
   useEffect(() => {
@@ -47,7 +47,7 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
           keep_writeback: data.keep_writeback,
           use_game_disk: data.use_game_disk,
         });
-        success(`Client ${data.name} added successfully.`);
+        success("Client Management", `Client ${data.name} added successfully.`);
       } else {
         // Update existing client
         await api.updateClient(client.id, {
@@ -59,14 +59,16 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
           keep_writeback: data.keep_writeback,
           use_game_disk: data.use_game_disk,
         });
-        success(`Client ${data.name} updated successfully.`);
+        success(
+          "Client Management",
+          `Client ${data.name} updated successfully.`
+        );
       }
       setIsOpen(false);
       reset(); // Reset to clear form
       await refresh();
     } catch (e) {
-      console.error("Failed to submit client form", e);
-      // Handle error appropriately
+      error("Client Management", e);
     }
   };
 
@@ -107,11 +109,7 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
         <Select
           label="Select Image"
           register={register("master")}
-          onChange={(e) => {
-            setValue("master", e.target.value, {
-              shouldValidate: true,
-              shouldDirty: true,
-            });
+          onChange={() => {
             setValue("snapshot", "", {
               shouldValidate: true,
               shouldDirty: true,
@@ -130,12 +128,6 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
           label="Select Snapshot"
           register={register("snapshot")}
           disabled={!selectedMaster}
-          onChange={(e) =>
-            setValue("snapshot", e.target.value, {
-              shouldValidate: true,
-              shouldDirty: true,
-            })
-          }
           error={errors.snapshot?.message}
         >
           <option value="">Use master directly</option>
@@ -155,7 +147,6 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
               type="checkbox"
               className="checkbox checkbox-primary"
               {...register("keep_writeback")}
-              defaultChecked={client?.keep_writeback}
             />
             <div className="flex flex-col">
               <span className="label-text font-medium">
@@ -176,7 +167,6 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
               type="checkbox"
               className="checkbox checkbox-primary"
               {...register("use_game_disk")}
-              defaultChecked={client?.use_game_disk}
             />
             <div className="flex flex-col">
               <span className="label-text font-medium">Use Game Disk</span>

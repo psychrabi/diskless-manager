@@ -251,7 +251,7 @@ impl ClientManager {
             INSERT INTO clients (id, name, mac, ip, master, enabled, created_at, updated_at,
                                 snapshot, block_store, target_iqn, writeback, last_modified,
                                 block_device, status, mode, keep_writeback, use_game_disk)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&client.id)

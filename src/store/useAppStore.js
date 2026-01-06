@@ -55,11 +55,11 @@ export const useAppStore = create()(
 
       fetchMasters: async () => {
         try {
-          const mastersRes = await api.listImages();
+          const mastersRes = await api.listMasters();
 
           set({ masters: mastersRes || [] });
         } catch (err) {
-          console.error("Failed to fetch images:", err);
+          console.error("Failed to fetch masters:", err);
         }
       },
 
