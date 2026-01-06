@@ -13,6 +13,7 @@ use std::process::Stdio;
 pub use tftp::TftpService;
 use tokio::io::AsyncWriteExt;
 
+use crate::core::client::Client;
 use crate::core::config::Settings;
 use crate::core::image::Image;
 use crate::error::AppError;
@@ -183,14 +184,6 @@ impl ServiceManager {
     pub async fn regenerate_dhcp_config(&self) -> anyhow::Result<()> {
         self.dhcp.generate_config().await?;
         self.dhcp.reload().await
-    }
-
-    pub async fn create_iscsi_target(&self, image: &Image) -> anyhow::Result<()> {
-        self.iscsi.create_target(image).await
-    }
-
-    pub async fn remove_iscsi_target(&self, name: &str) -> anyhow::Result<()> {
-        self.iscsi.remove_target(name).await
     }
 
     pub async fn get_config(&self, service: &str) -> anyhow::Result<String> {

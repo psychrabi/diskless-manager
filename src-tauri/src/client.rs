@@ -8,9 +8,9 @@ use crate::timed_execution;
 use crate::types::{AddClientRequest, ControlRequest, EditClientRequest};
 use crate::zfs::{get_latest_snapshot, get_master_os, zfs_clone, zfs_destroy, zfs_exists}; // Check imports
 use chrono::Local;
+use log::{debug, error, info, warn};
 use std::process::Command;
 use tauri::State;
-use tracing::{debug, error, info, warn};
 
 // New imports
 use crate::core::client::ClientManager;

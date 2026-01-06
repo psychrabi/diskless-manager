@@ -1,19 +1,17 @@
-use crate::core::client::Client;
 use crate::core::config::Settings;
 use crate::core::image::Image;
 use crate::error::AppError;
 use crate::services::{
     get_service_pid, is_systemd_service_running, run_sudo_command, ServiceStatus,
 };
-use log::info;
 use std::path::PathBuf;
 use tokio::process::Command;
 
-pub struct IscsiService {
+pub struct FileIOService {
     settings: Settings,
 }
 
-impl IscsiService {
+impl FileIOService {
     pub fn new(settings: Settings) -> Self {
         Self { settings }
     }
@@ -24,52 +22,18 @@ impl IscsiService {
         self.save_config().await
     }
 
-    pub async fn create_target(&self, client: &Client) -> anyhow::Result<()> {
-        let block_device = client.block_device.as_deref().ok_or_else(|| {
-            anyhow::anyhow!(
-                "Client {} does not have a block device configured",
-                client.name
-            )
-        })?;
-        let block_store = client.block_store.as_deref().ok_or_else(|| {
-            anyhow::anyhow!(
-                "Client {} does not have a block store configured",
-                client.name
-            )
-        })?;
-        let target_iqn = client.target_iqn.as_deref().ok_or_else(|| {
-            anyhow::anyhow!(
-                "Client {} does not have a target IQN configured",
-                client.name
-            )
-        })?;
-        info!("Creating iSCSI target for client: {}", &client.name);
+    pub async fn create_target(&self, image: &Image) -> anyhow::Result<()> {
+        let backstore_name = &image.name;
+        let target_iqn = format!("{}:{}", self.settings.iscsi.target_prefix, image.name);
+        let image_path = image.path.to_string_lossy();
 
-        // Check if backstore already exists and remove it if it does
-        // targetcli /backstores/block delete name={name}
-        let _ = self
-            .run_targetcli(&format!("/backstores/block delete name={}", block_device))
-            .await
-            .inspect_err(|e| {
-                tracing::debug!("Backstore {} may not have existed: {}", block_device, e);
-            });
-
-        // 1. Create Backstore (Block)
-        // targetcli /backstores/block create name={name} dev={path}
+        // 1. Create Backstore (FileIO)
+        // targetcli /backstores/fileio create name={name} file_or_dev={path}
         self.run_targetcli(&format!(
-            "/backstores/block create name={} dev={} ",
-            block_device, block_store
+            "/backstores/fileio create name={} file_or_dev={}",
+            backstore_name, image_path
         ))
         .await?;
-
-        // Check if target already exists and remove it if it does
-        // targetcli /iscsi delete wwn={iqn}
-        let _ = self
-            .run_targetcli(&format!("/iscsi delete wwn={}", target_iqn))
-            .await
-            .inspect_err(|e| {
-                tracing::debug!("Target {} may not have existed: {}", target_iqn, e);
-            });
 
         // 2. Create iSCSI Target
         // targetcli /iscsi create wwn={iqn}
@@ -77,10 +41,10 @@ impl IscsiService {
             .await?;
 
         // 3. Create LUN
-        // targetcli /iscsi/{iqn}/tpg1/luns create storage_object=/backstores/block/{name}
+        // targetcli /iscsi/{iqn}/tpg1/luns create storage_object=/backstores/fileio/{name}
         self.run_targetcli(&format!(
-            "/iscsi/{}/tpg1/luns create storage_object=/backstores/block/{}",
-            target_iqn, block_device
+            "/iscsi/{}/tpg1/luns create storage_object=/backstores/fileio/{}",
+            target_iqn, backstore_name
         ))
         .await?;
 
@@ -92,23 +56,9 @@ impl IscsiService {
         ))
         .await?;
 
-        // targetcli /iscsi/{iqn}/tpg1 set attribute cache_dynamic_acls=1
-        self.run_targetcli(&format!(
-            "/iscsi/{}/tpg1 set attribute cache_dynamic_acls=1",
-            target_iqn
-        ))
-        .await?;
-
         // targetcli /iscsi/{iqn}/tpg1 set attribute demo_mode_write_protect=0
         self.run_targetcli(&format!(
             "/iscsi/{}/tpg1 set attribute demo_mode_write_protect=0",
-            target_iqn
-        ))
-        .await?;
-
-        // targetcli /iscsi/{iqn}/tpg1 set attribute authentication=0
-        self.run_targetcli(&format!(
-            "/iscsi/{}/tpg1 set attribute authentication=0",
             target_iqn
         ))
         .await?;
@@ -121,72 +71,26 @@ impl IscsiService {
     }
 
     pub async fn remove_target(&self, name: &str) -> anyhow::Result<()> {
-        // Construct the backstore name using the same pattern as in client creation
-        let backstore_name = format!("block_{}", name.to_lowercase());
+        let backstore_name = name;
+        let target_iqn = format!("{}:{}", self.settings.iscsi.target_prefix, name);
 
-        // Try client format first: {prefix}:client.{name}
-        let client_target_iqn = format!(
-            "{}:client.{}",
-            self.settings.iscsi.target_prefix,
-            name.to_lowercase()
-        );
-        let client_result = self
-            .run_targetcli(&format!("/iscsi delete wwn={}", client_target_iqn))
-            .await;
-
-        // If client format fails, try direct format: {prefix}:{name}
-        if client_result.is_err() {
-            let direct_target_iqn = format!(
-                "{}:{}",
-                self.settings.iscsi.target_prefix,
-                name.to_lowercase()
-            );
-            let _ = self
-                .run_targetcli(&format!("/iscsi delete wwn={}", direct_target_iqn))
-                .await;
-        }
-
-        // 2. Delete Backstore
-        // targetcli /backstores/block delete name={name}
-        let _ = self
-            .run_targetcli(&format!("/backstores/block delete name={}", backstore_name))
-            .await
-            .inspect_err(|e| {
-                tracing::debug!(
-                    "Failed to remove backstore (this is OK if backstore doesn't exist): {}",
-                    e
-                )
-            });
-
-        // 3. Save configuration
-        self.save_config().await?;
-
-        info!("iSCSI target removed for: {}", name);
-        Ok(())
-    }
-
-    pub async fn remove_target_by_iqn(
-        &self,
-        target_iqn: &str,
-        block_device: &Option<String>,
-    ) -> anyhow::Result<()> {
-        // Remove the specific target by its full IQN
+        // 1. Delete iSCSI Target (recursively deletes TPGs, LUNs, ACLs)
+        // targetcli /iscsi delete wwn={iqn}
+        // Ignore error if target doesn't exist
         let _ = self
             .run_targetcli(&format!("/iscsi delete wwn={}", target_iqn))
-            .await
-            .inspect_err(|e| tracing::debug!("Target {} may not have existed: {}", target_iqn, e));
+            .await;
 
-        // Remove the associated backstore if block_device is provided
-        if let Some(device) = block_device {
-            let _ = self
-                .run_targetcli(&format!("/backstores/block delete name={}", device))
-                .await
-                .inspect_err(|e| {
-                    tracing::debug!("Backstore {} may not have existed: {}", device, e)
-                });
-        }
+        // 2. Delete Backstore
+        // targetcli /backstores/fileio delete name={name}
+        let _ = self
+            .run_targetcli(&format!(
+                "/backstores/fileio delete name={}",
+                backstore_name
+            ))
+            .await;
 
-        // Save configuration
+        // 3. Save configuration
         self.save_config().await?;
 
         info!("iSCSI target removed: {}", target_iqn);

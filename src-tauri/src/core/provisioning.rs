@@ -7,9 +7,9 @@ use crate::state::AppState;
 use crate::types::Client;
 use crate::zfs::{get_writeback_or_default_dataset, zfs_destroy};
 use chrono::Local;
+use log::{error, info, warn};
 use sqlx::SqlitePool;
 use std::collections::HashMap;
-use tracing::{error, info, warn};
 
 pub fn get_client_by_id(client_id: &str) -> Option<Client> {
     let config = get_config();
