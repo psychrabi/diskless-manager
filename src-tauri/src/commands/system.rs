@@ -1,6 +1,7 @@
 use crate::core::config::Settings;
 use crate::core::service::ServiceManager;
 use crate::state::AppState;
+use crate::utils::network::InterfaceInfo;
 use serde::Serialize;
 use std::process::Command;
 use tauri::State;
@@ -30,6 +31,18 @@ pub struct DependencyStatus {
     pub name: String,
     pub installed: bool,
     pub version: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NetworkDetection {
+    pub interfaces: Vec<InterfaceInfo>,
+    pub primary_interface: Option<String>,
+    pub primary_ip: Option<String>,
+    pub primary_mask: Option<String>,
+    pub gateway: Option<String>,
+    pub dns: Vec<String>,
+    pub hostname: String,
+    pub domain: String,
 }
 
 #[tauri::command]
@@ -222,17 +235,37 @@ pub async fn save_settings(state: State<'_, AppState>, settings: Settings) -> Re
     let mut current = state.settings.write().await;
     *current = settings.clone();
 
-    // Update the settings in the database
+    // Update the settings in the database (merging with existing fields to avoid losing zpool_name etc)
     let current_config = crate::config::get_config();
     let mut new_config = current_config;
-    new_config.settings = serde_json::to_value(&*current)
+
+    let new_settings_value = serde_json::to_value(&*current)
         .map_err(|e| format!("Failed to serialize settings: {}", e))?;
+
+    if let (Some(obj), Some(new_obj)) = (
+        new_config.settings.as_object_mut(),
+        new_settings_value.as_object(),
+    ) {
+        for (k, v) in new_obj {
+            obj.insert(k.clone(), v.clone());
+        }
+    } else {
+        new_config.settings = new_settings_value;
+    }
 
     crate::config::write_config(&state.db_pool, &new_config)
         .await
         .map_err(|e| format!("Failed to write config to database: {}", e))?;
 
-    tracing::info!("Settings saved to database");
+    // Also persist to config.toml for redundancy and manual editing support
+    let toml_path = state.config_path.with_extension("toml");
+    if let Err(e) = current.save(&toml_path) {
+        tracing::error!("Failed to save settings to {}: {}", toml_path.display(), e);
+        // We don't necessarily want to return error here if DB save succeeded,
+        // but it's good to log it. Actually, better to inform user if both fail.
+    }
+
+    tracing::info!("Settings saved to database and TOML");
     Ok(())
 }
 #[tauri::command]
@@ -263,6 +296,7 @@ pub async fn setup_privileged_access() -> Result<String, String> {
         "/usr/bin/rm",
         "/usr/bin/mv",
         "/usr/bin/cp",
+        "/usr/sbin/netplan",
     ];
 
     let commands_str = commands.join(", ");
@@ -288,4 +322,185 @@ pub async fn setup_privileged_access() -> Result<String, String> {
             stderr
         ))
     }
+}
+#[tauri::command]
+pub async fn get_network_interfaces() -> Result<Vec<String>, String> {
+    Ok(crate::utils::network::list_interfaces())
+}
+
+#[tauri::command]
+pub async fn get_interface_ip(interface: String) -> Result<Option<String>, String> {
+    Ok(crate::utils::network::get_interface_ip(&interface))
+}
+
+#[tauri::command]
+pub async fn detect_server_network() -> Result<NetworkDetection, String> {
+    let interfaces_names = crate::utils::network::list_interfaces();
+    let mut interfaces = Vec::new();
+    let mut primary_interface = None;
+    let mut primary_ip = None;
+    let mut primary_mask = None;
+
+    for name in interfaces_names {
+        let ip = crate::utils::network::get_interface_ip(&name);
+        let mask = crate::utils::network::get_interface_mask(&name);
+
+        if primary_interface.is_none() && ip.is_some() {
+            primary_interface = Some(name.clone());
+            primary_ip = ip.clone();
+            primary_mask = mask.clone();
+        }
+        interfaces.push(InterfaceInfo {
+            name: name.clone(),
+            ip,
+            mask,
+        });
+    }
+
+    let hostname = hostname::get()
+        .map(|h| h.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
+
+    let domain = crate::utils::network::get_domain();
+    let gateway = crate::utils::network::get_gateway();
+    let dns = crate::utils::network::get_dns();
+
+    Ok(NetworkDetection {
+        interfaces,
+        primary_interface,
+        primary_ip,
+        primary_mask,
+        gateway,
+        dns,
+        hostname,
+        domain,
+    })
+}
+
+#[tauri::command]
+pub async fn apply_network_settings(state: State<'_, AppState>) -> Result<String, String> {
+    let mut settings = state.settings.read().await.clone();
+    let server = &settings.server;
+
+    if server.interface.is_empty() {
+        return Err("No interface selected".to_string());
+    }
+
+    let interface = &server.interface[0];
+    let ip = &server.ip_address;
+    let mask = &server.netmask;
+    let gateway = &server.gateway;
+    let dns = &server.dns;
+
+    // Convert dotted mask to prefix
+    let prefix = mask_to_prefix(mask).unwrap_or(24);
+
+    let dns_str = if dns.is_empty() {
+        "8.8.8.8, 8.8.4.4".to_string()
+    } else {
+        dns.join(", ")
+    };
+
+    let netplan_content = format!(
+        r#"network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    {}:
+      dhcp4: no
+      addresses:
+        - {}/{}
+      gateway4: {}
+      nameservers:
+        addresses: [{}]
+"#,
+        interface, ip, prefix, gateway, dns_str
+    );
+
+    let path = "/etc/netplan/99-diskless-manager.yaml";
+    crate::services::write_with_sudo_tee(path, &netplan_content)
+        .await
+        .map_err(|e| format!("Failed to write netplan config: {}", e))?;
+
+    // Apply netplan
+    crate::services::run_sudo_command(["netplan", "apply"])
+        .await
+        .map_err(|e| format!("Failed to apply netplan: {}", e))?;
+
+    // Update related service configurations with the new static IP
+    settings.tftp.server_ip = ip.clone();
+    settings.http.server_ip = ip.clone();
+
+    // Update DHCP settings
+    settings.dhcp.next_server_ip = ip.clone();
+    settings.dhcp.boot_server_ip = ip.clone();
+    settings.dhcp.subnet_mask = mask.clone();
+    settings.dhcp.gateway_ip = gateway.clone();
+
+    // Calculate subnet and broadcast based on IP and Mask
+    if let Ok(subnet) = crate::utils::network::calculate_network(ip, mask) {
+        settings.dhcp.subnet_ip = subnet;
+    }
+    if let Ok(broadcast) = crate::utils::network::calculate_broadcast(ip, mask) {
+        settings.dhcp.broadcast_ip = broadcast;
+    }
+
+    // Persist the updated settings
+    {
+        // 1. Update in-memory state
+        let mut write_lock = state.settings.write().await;
+        *write_lock = settings.clone();
+
+        // 2. Save to TOML
+        write_lock
+            .save(&state.config_path)
+            .map_err(|e| format!("Failed to save settings to file: {}", e))?;
+
+        // 3. Save to Database to ensure consistency on restart
+        let current_config = crate::config::get_config();
+        let mut new_config = current_config;
+
+        let new_settings_value = serde_json::to_value(&settings)
+            .map_err(|e| format!("Failed to serialize settings: {}", e))?;
+
+        if let (Some(obj), Some(new_obj)) = (
+            new_config.settings.as_object_mut(),
+            new_settings_value.as_object(),
+        ) {
+            for (k, v) in new_obj {
+                obj.insert(k.clone(), v.clone());
+            }
+        } else {
+            new_config.settings = new_settings_value;
+        }
+
+        crate::config::write_config(&state.db_pool, &new_config)
+            .await
+            .map_err(|e| format!("Failed to write config to database: {}", e))?;
+    }
+
+    // Regenerate and reload all services
+    let service_manager = crate::services::ServiceManager::new(settings, state.db_pool.clone());
+    service_manager
+        .generate_all_configs()
+        .await
+        .map_err(|e| format!("Failed to regenerate service configs: {}", e))?;
+    service_manager
+        .restart_all()
+        .await
+        .map_err(|e| format!("Failed to restart services: {}", e))?;
+
+    Ok("Network settings applied and services updated successfully.".to_string())
+}
+
+fn mask_to_prefix(mask: &str) -> Option<u32> {
+    let parts: Vec<u32> = mask.split('.').filter_map(|s| s.parse().ok()).collect();
+    if parts.len() != 4 {
+        return None;
+    }
+    let mut full_mask = 0u32;
+    for part in parts {
+        full_mask = (full_mask << 8) | part;
+    }
+    Some(full_mask.count_ones())
 }

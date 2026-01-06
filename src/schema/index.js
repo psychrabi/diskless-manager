@@ -1,17 +1,25 @@
 import { z } from "zod";
 
+// Helper for IP address validation
+const ipSchema = z.ipv4();
+
+// Helper for MAC address validation
+const macSchema = z
+  .string()
+  .regex(/^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/, "Invalid MAC address");
+
 export const dhcpSchema = z.object({
   enabled: z.boolean(),
-  subnet_ip: z.ipv4(),
-  start_ip: z.ipv4(),
-  end_ip: z.ipv4(),
-  subnet_mask: z.ipv4(),
-  gateway_ip: z.ipv4(),
-  dns_server1: z.ipv4(),
-  dns_server2: z.ipv4(),
-  broadcast_ip: z.ipv4(),
-  next_server_ip: z.ipv4(),
-  boot_server_ip: z.ipv4(),
+  subnet_ip: ipSchema,
+  start_ip: ipSchema,
+  end_ip: ipSchema,
+  subnet_mask: ipSchema,
+  gateway_ip: ipSchema,
+  dns_server1: ipSchema,
+  dns_server2: ipSchema,
+  broadcast_ip: ipSchema,
+  next_server_ip: ipSchema,
+  boot_server_ip: ipSchema,
   boot_script: z.string(),
   boot_file_legacy: z.string(),
   boot_file_uefi32: z.string(),
@@ -21,7 +29,7 @@ export const dhcpSchema = z.object({
 export const tftpSchema = z.object({
   enabled: z.boolean(),
   root_dir: z.string().min(1, "TFTP Root directory is required"),
-  server_ip: z.ipv4(),
+  server_ip: ipSchema,
   port: z.coerce.number().min(1, "TFTP Port is required"),
   options: z.string().min(1, "TFTP Options are required"),
 });
@@ -29,8 +37,15 @@ export const tftpSchema = z.object({
 export const httpSchema = z.object({
   enabled: z.boolean(),
   root_dir: z.string().min(1, "HTTP Root directory is required"),
-  server_ip: z.ipv4(),
+  server_ip: ipSchema,
   port: z.coerce.number().min(1, "HTTP Port is required"),
+});
+
+export const iscsiSchema = z.object({
+  enabled: z.boolean(),
+  target_prefix: z.string().min(1, "Target prefix is required"),
+  portal_port: z.coerce.number().min(1, "Portal port is required"),
+  targets_dir: z.string().min(1, "Targets directory is required"),
 });
 
 export const sambaSchema = z.object({
@@ -42,10 +57,27 @@ export const sambaSchema = z.object({
   workgroup: z.string().min(1, "Workgroup is required"),
 });
 
+export const serverSchema = z.object({
+  interface: z.array(z.string()).min(1, "Select at least one interface"),
+  ip_address: ipSchema,
+  netmask: ipSchema,
+  gateway: ipSchema,
+  dns: z.string().refine(
+    (val) =>
+      val
+        .split(",")
+        .map((s) => s.trim())
+        .every((ip) => z.ipv4().safeParse(ip).success),
+    "Must be a comma-separated list of valid IPv4 addresses"
+  ),
+  hostname: z.string().min(1, "Hostname is required"),
+  domain: z.string().min(1, "Domain is required"),
+});
+
 export const clientSchema = z.object({
   name: z.string().min(1, "Client name is required"),
-  mac: z.mac(),
-  ip: z.ipv4(),
+  mac: macSchema,
+  ip: ipSchema,
   master: z.string().min(1, "Image selection is required"),
   snapshot: z.string().optional().nullable(),
   keep_writeback: z.boolean().default(false),

@@ -61,12 +61,12 @@ export const router = createHashRouter([
         path: "/disks",
         element: <DisksManagement />,
       },
+      // {
+      //   path: "/images",
+      //   element: <Images />,
+      // },
       {
         path: "/images",
-        element: <Images />,
-      },
-      {
-        path: "/zfs",
         element: <ImageManagement />,
       },
       {

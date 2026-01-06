@@ -156,6 +156,10 @@ pub async fn run() {
             commands::system::get_settings,
             commands::system::save_settings,
             commands::system::setup_privileged_access,
+            commands::system::get_network_interfaces,
+            commands::system::get_interface_ip,
+            commands::system::detect_server_network,
+            commands::system::apply_network_settings,
             // Client commands
             commands::clients::list_clients,
             commands::clients::get_client,

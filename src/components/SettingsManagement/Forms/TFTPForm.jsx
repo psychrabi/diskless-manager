@@ -13,29 +13,31 @@ const TFTPForm = ({ register, errors, config }) => {
         />
         <span className="ml-2">TFTP Server (Start at boot)</span>
       </label>
+      <div className="grid grid-cols-3 gap-4 col-span-2">
+        <Input
+          label="TFTP Server IP"
+          register={register("server_ip")}
+          error={errors.server_ip?.message}
+          placeholder="0.0.0.0"
+        />
+        <Input
+          label="TFTP Server Port"
+          register={register("port")}
+          error={errors.port?.message}
+          placeholder="69"
+        />
+        <Input
+          label="TFTP Options"
+          register={register("options")}
+          error={errors.options?.message}
+          placeholder="--secure"
+        />
+      </div>
       <Input
         label="TFTP Root Directory"
         register={register("root_dir")}
         error={errors.root_dir?.message}
         placeholder="/srv/tftp"
-      />
-      <Input
-        label="TFTP Server IP"
-        register={register("server_ip")}
-        error={errors.server_ip?.message}
-        placeholder="0.0.0.0"
-      />
-      <Input
-        label="TFTP Server Port"
-        register={register("port")}
-        error={errors.port?.message}
-        placeholder="69"
-      />
-      <Input
-        label="TFTP Options"
-        register={register("options")}
-        error={errors.options?.message}
-        placeholder="--secure"
       />
     </div>
   );

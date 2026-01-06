@@ -22,7 +22,7 @@ impl AppState {
 
         let config_path = config_dir.join("config.json");
 
-        let settings = Settings::load(&config_path.with_extension("toml"))?;
+        let mut settings = Settings::load(&config_path.with_extension("toml"))?;
 
         // Initialize database in the same directory
         let db_path = config_dir.join("diskless.db");
@@ -36,6 +36,11 @@ impl AppState {
         // Load config from database and populate the cache
         if let Ok(config) = crate::config::read_config_db(&pool).await {
             crate::config::set_config(&config);
+            // Sync settings from DB to the current settings struct if available
+            if let Ok(db_settings) = serde_json::from_value::<Settings>(config.settings) {
+                tracing::info!("Merged settings from database");
+                settings = db_settings;
+            }
         }
 
         tracing::info!("Database initialized at {}", db_path.display());

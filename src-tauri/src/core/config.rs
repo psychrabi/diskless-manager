@@ -3,31 +3,82 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Settings {
+    #[serde(default)]
     pub server: ServerConfig,
+    #[serde(default)]
     pub dhcp: DhcpConfig,
+    #[serde(default)]
     pub tftp: TftpConfig,
+    #[serde(default)]
     pub iscsi: IscsiConfig,
+    #[serde(default)]
     pub nfs: NfsConfig,
     #[serde(default)]
     pub http: HttpConfig,
     #[serde(default)]
     pub samba: SambaConfig,
+    #[serde(default)]
     pub storage: StorageConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
-    pub interface: String,
+    #[serde(deserialize_with = "deserialize_interface")]
+    pub interface: Vec<String>,
     pub ip_address: String,
+    #[serde(default)]
+    pub netmask: String,
+    #[serde(default)]
+    pub gateway: String,
+    #[serde(default)]
+    pub dns: Vec<String>,
     pub hostname: String,
     pub domain: String,
+}
+
+fn deserialize_interface<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct InterfaceVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for InterfaceVisitor {
+        type Value = Vec<String>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a string or a sequence of strings")
+        }
+
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(vec![v.to_string()])
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: serde::de::SeqAccess<'de>,
+        {
+            let mut values = Vec::new();
+            while let Some(value) = seq.next_element()? {
+                values.push(value);
+            }
+            Ok(values)
+        }
+    }
+
+    deserializer.deserialize_any(InterfaceVisitor)
 }
 
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            interface: "eth0".to_string(),
+            interface: vec!["eth0".to_string()],
             ip_address: "192.168.1.1".to_string(),
+            netmask: "255.255.255.0".to_string(),
+            gateway: "192.168.1.1".to_string(),
+            dns: vec!["8.8.8.8".to_string(), "1.1.1.1".to_string()],
             hostname: "pxeserver".to_string(),
             domain: "local".to_string(),
         }

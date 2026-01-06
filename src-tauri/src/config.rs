@@ -5,7 +5,7 @@ extern crate dirs;
 use crate::state::AppState;
 use crate::types::AppConfig;
 use log::info;
-use serde_json::json;
+use serde_json::{json, Value};
 use tauri::State;
 
 static CONFIG_CACHE: OnceCell<RwLock<AppConfig>> = OnceCell::new();
@@ -43,12 +43,17 @@ pub async fn write_config(pool: &sqlx::SqlitePool, config: &AppConfig) -> Result
         .await
         .map_err(|e| e.to_string())?;
 
-    sqlx::query("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)")
-        .bind("settings_legacy")
-        .bind(serde_json::to_string(&config.settings).map_err(|e| e.to_string())?)
-        .execute(pool)
-        .await
-        .map_err(|e| e.to_string())?;
+    // 2. Persist each setting under its own key in the app_config table
+    if let Some(obj) = config.settings.as_object() {
+        for (k, v) in obj {
+            sqlx::query("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)")
+                .bind(k)
+                .bind(serde_json::to_string(v).map_err(|e| e.to_string())?)
+                .execute(pool)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+    }
 
     // 2. Persist clients (this is harder as we need to sync)
     // For simplicity in this first pass, we'll clear and re-insert or use UPSERT
@@ -97,38 +102,40 @@ pub async fn read_config_db(pool: &sqlx::SqlitePool) -> Result<AppConfig, String
 
     let mut config = AppConfig::default();
 
-    // Get masters from DB
-    let masters_row: Option<(String,)> =
-        sqlx::query_as("SELECT value FROM app_config WHERE key = 'masters'")
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| e.to_string())?;
+    // Fetch all configuration keys from app_config
+    let rows: Vec<(String, String)> = sqlx::query_as("SELECT key, value FROM app_config")
+        .fetch_all(pool)
+        .await
+        .map_err(|e| e.to_string())?;
 
-    if let Some((masters_json,)) = masters_row {
-        config.masters = serde_json::from_str(&masters_json).unwrap_or_default();
+    let mut settings_map = serde_json::Map::new();
+
+    for (key, value) in rows {
+        match key.as_str() {
+            "masters" => {
+                config.masters = serde_json::from_str(&value).unwrap_or(json!({}));
+            }
+            "services" => {
+                config.services = serde_json::from_str(&value).unwrap_or(json!({}));
+            }
+            "settings_legacy" => {
+                // Merge legacy settings if they exist and haven't been overridden by individual keys
+                if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&value) {
+                    for (k, v) in map {
+                        settings_map.entry(k).or_insert(v);
+                    }
+                }
+            }
+            _ => {
+                // Treat every other key as an individual setting
+                if let Ok(v) = serde_json::from_str::<Value>(&value) {
+                    settings_map.insert(key, v);
+                }
+            }
+        }
     }
 
-    // Get services from DB
-    let services_row: Option<(String,)> =
-        sqlx::query_as("SELECT value FROM app_config WHERE key = 'services'")
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| e.to_string())?;
-
-    if let Some((services_json,)) = services_row {
-        config.services = serde_json::from_str(&services_json).unwrap_or_default();
-    }
-
-    // Get settings from DB
-    let settings_row: Option<(String,)> =
-        sqlx::query_as("SELECT value FROM app_config WHERE key = 'settings_legacy'")
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| e.to_string())?;
-
-    if let Some((settings_json,)) = settings_row {
-        config.settings = serde_json::from_str(&settings_json).unwrap_or_default();
-    }
+    config.settings = Value::Object(settings_map);
 
     #[derive(sqlx::FromRow)]
     struct ClientRow {
@@ -200,16 +207,8 @@ pub async fn save_config(state: State<'_, AppState>, pool_name: String) -> Resul
     settings.insert("zfsPool".to_string(), json!(pool_name));
     cfg.settings = json!(settings);
 
-    // Write to DB
-    sqlx::query("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)")
-        .bind("settings_legacy")
-        .bind(serde_json::to_string(&cfg.settings).map_err(|e| e.to_string())?)
-        .execute(&state.db_pool)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    // Update cache
-    set_config(&cfg);
+    // Write to DB and update cache using the unified write_config
+    write_config(&state.db_pool, &cfg).await?;
     Ok(())
 }
 
