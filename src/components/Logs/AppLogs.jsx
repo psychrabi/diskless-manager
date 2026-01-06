@@ -31,7 +31,7 @@ export default function AppLogs({ tokenProp }) {
     setLoading(true);
     try {
       await invoke("clear_logs", { token });
-      success("Application logs have been cleared successfully.");
+      success("Logs", "Application logs have been cleared successfully.");
       await load();
     } catch (e) {
       error(`Failed to clear logs ${e?.message ?? String(e)}`);

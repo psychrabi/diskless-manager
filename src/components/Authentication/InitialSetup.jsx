@@ -8,24 +8,29 @@ import { useNavigate } from "react-router-dom";
 import { z } from "zod";
 
 // Define validation schema for initial admin setup
-const initialSetupSchema = z.object({
-  username: z
-    .string()
-    .min(3, "Username must be at least 3 characters")
-    .max(50, "Username must be less than 50 characters")
-    .regex(/^[a-zA-Z0-9_-]+$/, "Username can only contain alphanumeric characters, underscores, and hyphens"),
-  password: z
-    .string()
-    .min(8, "Password must be at least 8 characters")
-    .regex(
-      /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/,
-      "Password must contain at least one uppercase letter, one lowercase letter, and one number"
-    ),
-  confirmPassword: z.string().min(1, "Please confirm your password"),
-}).refine((data) => data.password === data.confirmPassword, {
-  message: "Passwords don't match",
-  path: ["confirmPassword"],
-});
+const initialSetupSchema = z
+  .object({
+    username: z
+      .string()
+      .min(3, "Username must be at least 3 characters")
+      .max(50, "Username must be less than 50 characters")
+      .regex(
+        /^[a-zA-Z0-9_-]+$/,
+        "Username can only contain alphanumeric characters, underscores, and hyphens"
+      ),
+    password: z
+      .string()
+      .min(8, "Password must be at least 8 characters")
+      .regex(
+        /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/,
+        "Password must contain at least one uppercase letter, one lowercase letter, and one number"
+      ),
+    confirmPassword: z.string().min(1, "Please confirm your password"),
+  })
+  .refine((data) => data.password === data.confirmPassword, {
+    message: "Passwords don't match",
+    path: ["confirmPassword"],
+  });
 
 const InitialSetup = () => {
   const navigate = useNavigate();
@@ -58,16 +63,22 @@ const InitialSetup = () => {
       const loginResponse = await invoke("login", {
         request: {
           username: data.username,
-          password: data.password
+          password: data.password,
         },
       });
 
       // Set auth context immediately so ProtectedRoute sees it
       setAuth(loginResponse.user, loginResponse.token);
-      success("Admin user created and logged in successfully");
+      success(
+        "User Account Created",
+        "Admin user created and logged in successfully"
+      );
       navigate("/");
     } catch (e) {
-      error(e.message || "An unknown error occurred");
+      error(
+        "User Account Creation Failed",
+        e.message || "An unknown error occurred"
+      );
       reset({ password: "", confirmPassword: "" }); // Clear password fields on error
     }
   };

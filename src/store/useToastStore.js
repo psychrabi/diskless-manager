@@ -2,24 +2,54 @@ import { create } from "zustand";
 
 export const useToastStore = create((set, get) => ({
   toasts: [],
-  show: (type, message, duration = 5000) => {
+  show: (type, title, description, duration = 5000) => {
+    let actualDescription = description;
+    let actualDuration = duration;
+
+    // Handle case where show("type", "message", duration) is called
+    if (typeof description === "number") {
+      actualDuration = description;
+      actualDescription = undefined;
+    }
+
+    // Convert Error objects or other objects to strings to prevent React rendering issues
+    if (actualDescription && typeof actualDescription === "object") {
+      actualDescription =
+        actualDescription.message || String(actualDescription);
+    }
+
+    // Ensure duration is a number
+    if (typeof actualDuration !== "number") {
+      actualDuration = 5000;
+    }
+
     const id = crypto.randomUUID();
-    const toast = { id, type, message, duration };
+    const toast = {
+      id,
+      type,
+      title,
+      description: actualDescription,
+      duration: actualDuration,
+    };
 
     set((state) => ({ toasts: [...state.toasts, toast] }));
 
-    if (duration > 0) {
+    if (actualDuration > 0) {
       setTimeout(() => {
         get().dismiss(id);
-      }, duration);
+      }, actualDuration);
     }
 
     return id;
   },
-  success: (message, duration) => get().show("success", message, duration),
-  error: (message, duration) => get().show("error", message, duration),
-  warning: (message, duration) => get().show("warning", message, duration),
-  info: (message, duration) => get().show("info", message, duration),
+  success: (title, description, duration) =>
+    get().show("success", title, description, duration),
+  error: (title, description, duration) =>
+    get().show("error", title, description, duration),
+  warning: (title, description, duration) =>
+    get().show("warning", title, description, duration),
+  info: (title, description, duration) =>
+    get().show("info", title, description, duration),
   dismiss: (id) =>
     set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) })),
   clear: () => set({ toasts: [] }),

@@ -88,11 +88,14 @@ export default function Images() {
       }
 
       await importImage(request);
-      success(`Image "${importForm.name}" imported successfully`);
+      success(
+        "Image Management",
+        `Image "${importForm.name}" imported successfully`
+      );
       setShowImportModal(false);
       await fetchImages();
     } catch (e) {
-      error(`Failed to import image: ${e}`);
+      error("Image Management", `Failed to import image: ${e}`);
     } finally {
       setSubmitting(false);
     }
@@ -107,10 +110,10 @@ export default function Images() {
 
     try {
       await createSnapshot(image.id, snapshotName);
-      success(`Snapshot "${snapshotName}" created`);
+      success("Image Management", `Snapshot "${snapshotName}" created`);
       await fetchImages();
     } catch (e) {
-      error(`Failed to create snapshot: ${e}`);
+      error("Image Management", `Failed to create snapshot: ${e}`);
     }
   }
 
@@ -126,7 +129,7 @@ export default function Images() {
       .then(async (ok) => {
         if (!ok) return;
         await deleteImage(image.id);
-        success(`Image "${image.name}" deleted`);
+        success("Image Management", `Image "${image.name}" deleted`);
         await fetchImages();
       })
       .catch((err) => {

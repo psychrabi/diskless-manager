@@ -2,6 +2,7 @@ import { useConfirm } from "@/contexts/confirmDialog";
 import { useToastStore } from "@/store/useToastStore";
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback } from "react";
+import * as api from "../api/commands";
 
 export const useClientActions = (
   fetchData,
@@ -31,7 +32,7 @@ export const useClientActions = (
         ["reboot", "shutdown", "remote"].includes(action) &&
         client.status !== "Online"
       ) {
-        showError(`Client must be online to ${action}.`);
+        showError("Client Management", `Client must be online to ${action}.`);
         return;
       }
       if (
@@ -51,6 +52,7 @@ export const useClientActions = (
         // Others: "Client must be offline to..."
         // So generally, offline required for these.
         showError(
+          "Client Management",
           `Client must be offline to ${
             action === "edit" ? "make changes" : action
           }.`
@@ -85,11 +87,13 @@ export const useClientActions = (
       const token = localStorage.getItem("authToken") || "";
       try {
         const response = await invoke(invokeCmd, { token, ...invokeArgs });
-        if (response && response.message) success(response.message);
+        if (response && response.message)
+          success("Client Management", response.message);
         if (fetchData) fetchData();
         if (closeContextMenu) closeContextMenu();
       } catch (error) {
         showError(
+          "Client Management",
           `Failed to execute ${action}: ${error.message || String(error)}`
         );
       }
@@ -172,6 +176,7 @@ export const useClientActions = (
       // Check if client is in non-persistent mode
       if (client.keep_writeback !== false) {
         showError(
+          "Client Management",
           "Client is in persistent mode. Only non-persistent clients can be reset to clean state."
         );
         return;
@@ -190,18 +195,36 @@ export const useClientActions = (
       );
     },
 
-    delete: (client) =>
-      handleAction(
-        client,
-        "delete",
-        "Delete Client",
-        `Are you sure you want to delete client "${client.name}" ? This will destroy their ZFS clone and remove configurations.`,
-        "Delete Client",
-        "delete_client",
-        { clientId: client.id },
-        "Client Deleted successfully",
-        "Client deletion cancelled."
-      ),
+    delete: async (client) => {
+      if (!client) return;
+
+      const ok = await confirm({
+        title: "Delete Client",
+        description: `Are you sure you want to delete client "${client.name}"? This will destroy their ZFS clone and remove configurations.`,
+        confirmText: "Delete Client",
+        cancelText: "Cancel",
+        confirmVariant: "primary",
+        size: "2xl",
+      });
+
+      if (!ok) {
+        info("Client deletion cancelled.");
+        closeContextMenu();
+        return;
+      }
+
+      try {
+        await api.deleteClient(client.id);
+        success("Client Management", "Client Deleted successfully");
+        if (fetchData) fetchData();
+        if (closeContextMenu) closeContextMenu();
+      } catch (e) {
+        showError(
+          "Client Management",
+          `Failed to execute delete: ${e.message || String(e)}`
+        );
+      }
+    },
 
     enableSuper: (client) =>
       handleAction(
@@ -218,7 +241,7 @@ export const useClientActions = (
 
     disableSuper: (client) => {
       if (client.mode !== "super") {
-        showError("Client is not in Super mode.");
+        showError("Client Management", "Client is not in Super mode.");
         return;
       }
       handleAction(
@@ -237,11 +260,11 @@ export const useClientActions = (
     saveSuper: async (client) => {
       if (!client) return;
       if (client.mode !== "super") {
-        showError("Client is not in Super mode.");
+        showError("Client Management", "Client is not in Super mode.");
         return;
       }
       if (client.status !== "Offline") {
-        showError("Client must be offline to save Super.");
+        showError("Client Management", "Client must be offline to save Super.");
         return;
       }
 
@@ -265,6 +288,7 @@ export const useClientActions = (
 
       if (typeof suffix === "string" && !/^[-\w\s]+$/.test(suffix)) {
         showError(
+          "Client Management",
           "Invalid snapshot name suffix. Use alphanumeric characters, spaces, dashes or underscores."
         );
         return;
@@ -280,11 +304,14 @@ export const useClientActions = (
           token,
           snapshotName,
         });
-        if (response.message) success(response.message);
+        if (response.message) success("Client Management", response.message);
         fetchData();
         closeContextMenu();
       } catch (error) {
-        showError(`Failed to save super: ${error.message || String(error)}`);
+        showError(
+          "Client Management",
+          `Failed to save super: ${error.message || String(error)}`
+        );
       }
     },
   };

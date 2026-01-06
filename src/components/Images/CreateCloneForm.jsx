@@ -18,7 +18,7 @@ export default function CreateCloneForm({ show, onClose, selectedImage }) {
   async function handleClone(data) {
     try {
       await cloneImage(selectedImage.id, data.name);
-      success(`Image cloned as "${data.name}"`);
+      success("Image Management", `Image cloned as "${data.name}"`);
       onClose(false);
     } catch (e) {
       error(`Failed to clone image: ${e}`);

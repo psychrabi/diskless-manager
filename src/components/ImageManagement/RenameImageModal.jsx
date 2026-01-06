@@ -57,7 +57,7 @@ const RenameImageModal = ({
       newName: data.newName,
     })
       .then(async (response) => {
-        if (response.message) success(response.message);
+        if (response.message) success("Image Management", response.message);
         await fetchImages();
         reset();
       })

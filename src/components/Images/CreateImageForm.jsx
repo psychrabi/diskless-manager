@@ -19,10 +19,10 @@ export default function CreateImageForm({ show, onClose }) {
   async function handleCreate(data) {
     try {
       await createImage(data);
-      success(`Image "${data.name}" created successfully`);
+      success("Image Management", `Image "${data.name}" created successfully`);
       onClose(false);
     } catch (e) {
-      error(`Failed to create image: ${e}`);
+      error("Image Management", `Failed to create image: ${e}`);
     }
   }
   return (

@@ -36,8 +36,7 @@ const Login = () => {
       const response = await api.login(data.username, data.password);
 
       // Set auth context immediately so ProtectedRoute sees it
-      // For now, we'll simulate a user object since the API returns just the token
-      setAuth({ username: data.username }, response.token);
+      setAuth(response.user, response.token);
       success("Login Successful", "You have successfully logged in");
       navigate("/");
     } catch (e) {

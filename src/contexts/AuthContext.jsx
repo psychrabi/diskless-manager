@@ -6,7 +6,7 @@ export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [token, setToken] = useState(null);
   const [loading, setLoading] = useState(true);
-  const { error } = useToastStore();
+  const { error, success } = useToastStore();
 
   // Define logout and validateToken BEFORE useEffect to avoid TDZ / uninitialized variable errors
   const logout = useCallback(() => {
@@ -14,6 +14,7 @@ export const AuthProvider = ({ children }) => {
     setToken(null);
     localStorage.removeItem("authToken");
     localStorage.removeItem("user");
+    success("Logout Successful");
   }, []);
 
   const validateToken = useCallback(
@@ -25,13 +26,11 @@ export const AuthProvider = ({ children }) => {
         await invoke("validate_auth_token", { token: authToken });
         // Token is valid, do nothing
       } catch (err) {
-        error(
-          err.message || "Your session has expired. Please log in again.",
-        );
+        error(err.message || "Your session has expired. Please log in again.");
         logout();
       }
     },
-    [logout, error],
+    [logout, error]
   );
 
   useEffect(() => {

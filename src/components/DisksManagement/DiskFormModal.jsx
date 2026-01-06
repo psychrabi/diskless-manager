@@ -33,11 +33,11 @@ const DiskFormModal = ({ zpools, isOpen, setIsOpen, refresh }) => {
   const onSubmit = async (data) => {
     const result = await createDataset(data);
     if (result.success) {
-      success(result.message);
+      success("Disk Management", result.message);
       refresh();
       setIsOpen(false);
     } else {
-      error(result.error);
+      error("Disk Management", result.error);
     }
   };
 

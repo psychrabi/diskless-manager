@@ -42,7 +42,7 @@ const CreateSnapshotModal = ({
       .then(async (response) => {
         setOpenSnapshotCreateModal(false);
         await fetchImages();
-        if (response.message) success(response.message);
+        if (response.message) success("Image Management", response.message);
       })
       .catch((err) => {
         error(

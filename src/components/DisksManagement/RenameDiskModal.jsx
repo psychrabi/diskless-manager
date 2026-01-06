@@ -12,7 +12,7 @@ const renameDiskSchema = z.object({
     .min(1, "New name is required")
     .regex(
       /^[\w-]+$/,
-      "Name can only contain alphanumeric characters, underscores, and hyphens",
+      "Name can only contain alphanumeric characters, underscores, and hyphens"
     ),
 });
 
@@ -53,14 +53,13 @@ const RenameDiskModal = ({
       new: data.newName,
     })
       .then((response) => {
-        if (response.message) success(response.message);
+        if (response.message) success("Disk Management", response.message);
         reset();
       })
       .catch((err) => {
         error(
-          `Failed to rename disk: ${
-            err.message || "An unknown error occurred"
-          }`,
+          "Disk Management",
+          `Failed to rename disk: ${err.message || "An unknown error occurred"}`
         );
       })
       .finally(() => {
@@ -71,7 +70,6 @@ const RenameDiskModal = ({
   const handleClose = () => {
     setOpenRenameModal(false);
     reset();
-    info("Disk rename cancelled");
   };
 
   // Extract display name from the full ZFS path (e.g., "tank/images/ubuntu" -> "ubuntu")
