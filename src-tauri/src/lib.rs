@@ -75,7 +75,7 @@ pub async fn run() {
         .plugin(tauri_plugin_dialog::init())
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                window.hide().unwrap();
+                window.hide().expect("Failed to hide window");
                 api.prevent_close();
             }
         })
@@ -202,7 +202,11 @@ pub async fn run() {
                 let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
 
                 let _tray = TrayIconBuilder::new()
-                    .icon(app.default_window_icon().unwrap().clone())
+                    .icon(
+                        app.default_window_icon()
+                            .expect("Failed to get default window icon")
+                            .clone(),
+                    )
                     .menu(&menu)
                     .show_menu_on_left_click(false)
                     .on_menu_event(move |app, event| match event.id.as_ref() {

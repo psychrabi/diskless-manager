@@ -1,12 +1,7 @@
-use axum::{
-    extract::State,
-    http::StatusCode,
-    Json,
-};
-use serde::{Deserialize, Serialize};
+use axum::{extract::State, http::StatusCode, Json};
 
-use crate::state::AppState;
 use crate::core::service::ServiceManager;
+use crate::state::AppState;
 
 pub async fn get_system_info(
     State(_state): State<AppState>,
@@ -28,17 +23,19 @@ pub async fn get_server_status(
 
     let clients_count: (i64,) = match sqlx::query_as("SELECT COUNT(*) FROM clients")
         .fetch_one(&state.db_pool)
-        .await {
-            Ok(count) => count,
-            Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
-        };
+        .await
+    {
+        Ok(count) => count,
+        Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
+    };
 
     let images_count: (i64,) = match sqlx::query_as("SELECT COUNT(*) FROM images")
         .fetch_one(&state.db_pool)
-        .await {
-            Ok(count) => count,
-            Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
-        };
+        .await
+    {
+        Ok(count) => count,
+        Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
+    };
 
     let status = crate::commands::system::ServerStatus {
         initialized: true,

@@ -13,9 +13,7 @@ use std::process::Stdio;
 pub use tftp::TftpService;
 use tokio::io::AsyncWriteExt;
 
-use crate::core::client::Client;
 use crate::core::config::Settings;
-use crate::core::image::Image;
 use crate::error::AppError;
 use sqlx::SqlitePool;
 use std::collections::HashMap;

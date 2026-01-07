@@ -6,7 +6,6 @@ use crate::services::{
     ServiceStatus,
 };
 use log::info;
-use tokio::process::Command;
 
 pub struct TftpService {
     settings: Settings,

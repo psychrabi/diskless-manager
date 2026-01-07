@@ -59,7 +59,7 @@ pub async fn update_dhcp_config(
         content = host_block_re.replace_all(&content, "").to_string();
 
         // Normalize whitespace
-        let blank_re = Regex::new(r"\n\s*\n{2,}").unwrap();
+        let blank_re = Regex::new(r"\n\s*\n{2,}").expect("Failed to compile blank line regex");
         content = blank_re.replace_all(&content, "\n\n").to_string();
     }
 

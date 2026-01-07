@@ -7,7 +7,6 @@ use crate::services::{
 use log::info;
 use sqlx::SqlitePool;
 use std::path::PathBuf;
-use tokio::process::Command;
 
 pub struct DhcpService {
     settings: Settings,

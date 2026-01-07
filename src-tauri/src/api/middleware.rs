@@ -38,13 +38,20 @@ pub fn cors_layer() -> CorsLayer {
     use std::time::Duration;
     use tower_http::cors::AllowOrigin;
 
+    let origins = [
+        "http://localhost:5173", // Vite default port
+        "http://127.0.0.1:5173", // Alternative localhost
+        "http://localhost:3000", // Common React port
+        "http://127.0.0.1:3000", // Alternative
+    ];
+
+    let parsed_origins: Vec<_> = origins
+        .iter()
+        .map(|origin| origin.parse().expect("Failed to parse CORS origin"))
+        .collect();
+
     CorsLayer::new()
-        .allow_origin(AllowOrigin::list([
-            "http://localhost:5173".parse().unwrap(), // Vite default port
-            "http://127.0.0.1:5173".parse().unwrap(), // Alternative localhost
-            "http://localhost:3000".parse().unwrap(), // Common React port
-            "http://127.0.0.1:3000".parse().unwrap(), // Alternative
-        ]))
+        .allow_origin(AllowOrigin::list(parsed_origins))
         .allow_methods([
             Method::GET,
             Method::POST,
@@ -83,7 +90,14 @@ pub async fn require_auth(
         None => return Err(StatusCode::UNAUTHORIZED),
     };
 
-    let secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "default_secret_key".to_string());
+    let secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| {
+        eprintln!("WARNING: JWT_SECRET environment variable not set!");
+        eprintln!("Using fallback secret for development only.");
+        eprintln!(
+            "For production, set JWT_SECRET environment variable with a secure random string."
+        );
+        "default_secret_key".to_string()
+    });
 
     let token_data = decode::<Claims>(
         token,

@@ -215,7 +215,8 @@ pub async fn save_master_config(pool: &sqlx::SqlitePool, master_data: &MasterDat
     if !config.masters.is_object() {
         config.masters = json!({});
     }
-    config.masters[&master_data.name] = serde_json::to_value(master_data).unwrap();
+    config.masters[&master_data.name] =
+        serde_json::to_value(master_data).expect("Failed to serialize master data");
     match crate::config::write_config(pool, &config).await {
         Ok(_) => true,
         Err(e) => {
@@ -729,7 +730,10 @@ pub async fn create_snapshot(
         crate::validation::validate_snapshot_name(snap_part)?;
     }
 
-    let master_name = snapshot_name.split('@').next().unwrap();
+    let master_name = snapshot_name
+        .split('@')
+        .next()
+        .expect("Invalid snapshot name format: missing '@'");
     let status_code = run_command_check(&["zfs", "list", "-H", master_name]);
     if status_code != 0 {
         return Err(AppError::NotFound(format!(

@@ -110,7 +110,7 @@ fn normalize_mac(mac: &str) -> anyhow::Result<String> {
     let formatted = cleaned
         .as_bytes()
         .chunks(2)
-        .map(|chunk| std::str::from_utf8(chunk).unwrap())
+        .map(|chunk| std::str::from_utf8(chunk).expect("Invalid UTF-8 in MAC address"))
         .collect::<Vec<_>>()
         .join(":");
 

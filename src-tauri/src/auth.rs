@@ -31,7 +31,7 @@ lazy_static::lazy_static! {
     static ref USERS: HashMap<String, User> = {
         let mut m = HashMap::new();
         // Default admin user (password: admin123)
-        let password_hash = hash("admin123", DEFAULT_COST).unwrap();
+        let password_hash = hash("admin123", DEFAULT_COST).expect("Failed to hash default admin password");
         m.insert(
             "admin".to_string(),
             User {
@@ -83,7 +83,9 @@ pub fn authenticate_user(username: &str, password: &str) -> Result<LoginResponse
     // Generate JWT token
     let expiration = Utc::now()
         .checked_add_signed(Duration::hours(24))
-        .expect("Failed to calculate expiration time")
+        .ok_or_else(|| AuthError {
+            message: "Failed to calculate expiration time".to_string(),
+        })?
         .timestamp();
 
     let claims = Claims {

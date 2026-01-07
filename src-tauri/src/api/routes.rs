@@ -1,5 +1,5 @@
 use axum::{
-    routing::{delete, get, post, put},
+    routing::{get, post},
     Router,
 };
 
@@ -15,9 +15,7 @@ use crate::api::handlers::{
 };
 use crate::api::middleware::{cors_layer, require_auth};
 use tower::limit::ConcurrencyLimitLayer;
-use tower::ServiceBuilder;
 use tower_http::trace::TraceLayer;
-use tracing::Level;
 
 pub fn create_app(state: crate::state::AppState) -> Router {
     Router::new()

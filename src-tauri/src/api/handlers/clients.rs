@@ -4,7 +4,7 @@ use axum::{
     Json,
 };
 use log::info;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::core::client::{
     BootLogEntry, Client, ClientManager, CreateClientRequest, UpdateClientRequest,
@@ -47,7 +47,11 @@ pub async fn create_client(
             // Client with snapshot: use clone-based block store
             let clone_dataset = crate::zfs::get_writeback_or_default_dataset(&request.name);
             let block_store_path = format!("/dev/zvol/{}", clone_dataset);
-            let target_iqn = format!("{}:client.{}", settings.iscsi.target_prefix, request.name.to_lowercase());
+            let target_iqn = format!(
+                "{}:client.{}",
+                settings.iscsi.target_prefix,
+                request.name.to_lowercase()
+            );
 
             request.block_store = Some(block_store_path);
             request.block_device = Some(format!("block_{}", request.name.to_lowercase()));
@@ -56,7 +60,11 @@ pub async fn create_client(
     } else {
         // Client without snapshot: use master image directly
         let block_store_path = format!("/dev/zvol/{}", request.master);
-        let target_iqn = format!("{}:client.{}", settings.iscsi.target_prefix, request.name.to_lowercase());
+        let target_iqn = format!(
+            "{}:client.{}",
+            settings.iscsi.target_prefix,
+            request.name.to_lowercase()
+        );
 
         request.block_store = Some(block_store_path);
         request.block_device = Some(format!("block_{}", request.name.to_lowercase()));
@@ -66,9 +74,12 @@ pub async fn create_client(
     info!(
         "Generated iSCSI details for client '{}': block_store={}, block_device={}, target_iqn={}",
         request.name,
-        request.block_store.clone().unwrap(),
-        request.block_device.clone().unwrap(),
-        request.target_iqn.clone().unwrap()
+        request.block_store.clone().ok_or(StatusCode::BAD_REQUEST)?,
+        request
+            .block_device
+            .clone()
+            .ok_or(StatusCode::BAD_REQUEST)?,
+        request.target_iqn.clone().ok_or(StatusCode::BAD_REQUEST)?
     );
 
     let manager = ClientManager::new(state.db_pool.clone());
@@ -127,7 +138,11 @@ pub async fn update_client(
             // Client with snapshot: use clone-based block store
             let clone_dataset = crate::zfs::get_writeback_or_default_dataset(client_name);
             let block_store_path = format!("/dev/zvol/{}", clone_dataset);
-            let target_iqn = format!("{}:client.{}", settings.iscsi.target_prefix, client_name.to_lowercase());
+            let target_iqn = format!(
+                "{}:client.{}",
+                settings.iscsi.target_prefix,
+                client_name.to_lowercase()
+            );
 
             request.block_store = Some(block_store_path);
             request.block_device = Some(format!("block_{}", client_name.to_lowercase()));
@@ -136,15 +151,19 @@ pub async fn update_client(
             info!(
                 "Generated iSCSI details for client '{}' with snapshot: block_store={}, block_device={}, target_iqn={}",
                 client_name,
-                request.block_store.as_ref().unwrap(),
-                request.block_device.as_ref().unwrap(),
-                request.target_iqn.as_ref().unwrap()
+                request.block_store.as_ref().ok_or(StatusCode::BAD_REQUEST)?,
+                request.block_device.as_ref().ok_or(StatusCode::BAD_REQUEST)?,
+                request.target_iqn.as_ref().ok_or(StatusCode::BAD_REQUEST)?
             );
         } else {
             // Empty snapshot means remove snapshot and use master
             let master = request.master.as_deref().unwrap_or(&existing_client.master);
             let block_store_path = format!("/dev/zvol/{}", master);
-            let target_iqn = format!("{}:client.{}", settings.iscsi.target_prefix, client_name.to_lowercase());
+            let target_iqn = format!(
+                "{}:client.{}",
+                settings.iscsi.target_prefix,
+                client_name.to_lowercase()
+            );
 
             request.block_store = Some(block_store_path);
             request.block_device = Some(format!("block_{}", client_name.to_lowercase()));
@@ -153,16 +172,20 @@ pub async fn update_client(
             info!(
                 "Generated iSCSI details for client '{}' using master: block_store={}, block_device={}, target_iqn={}",
                 client_name,
-                request.block_store.as_ref().unwrap(),
-                request.block_device.as_ref().unwrap(),
-                request.target_iqn.as_ref().unwrap()
+                request.block_store.as_ref().ok_or(StatusCode::BAD_REQUEST)?,
+                request.block_device.as_ref().ok_or(StatusCode::BAD_REQUEST)?,
+                request.target_iqn.as_ref().ok_or(StatusCode::BAD_REQUEST)?
             );
         }
     } else if request.master.is_some() {
         // Master changed but no snapshot specified - use new master
-        let master = request.master.as_ref().unwrap();
+        let master = request.master.as_ref().ok_or(StatusCode::BAD_REQUEST)?;
         let block_store_path = format!("/dev/zvol/{}", master);
-        let target_iqn = format!("{}:client.{}", settings.iscsi.target_prefix, client_name.to_lowercase());
+        let target_iqn = format!(
+            "{}:client.{}",
+            settings.iscsi.target_prefix,
+            client_name.to_lowercase()
+        );
 
         request.block_store = Some(block_store_path);
         request.block_device = Some(format!("block_{}", client_name.to_lowercase()));
@@ -171,9 +194,9 @@ pub async fn update_client(
         info!(
             "Generated iSCSI details for client '{}' with new master: block_store={}, block_device={}, target_iqn={}",
             client_name,
-            request.block_store.as_ref().unwrap(),
-            request.block_device.as_ref().unwrap(),
-            request.target_iqn.as_ref().unwrap()
+            request.block_store.as_ref().ok_or(StatusCode::BAD_REQUEST)?,
+            request.block_device.as_ref().ok_or(StatusCode::BAD_REQUEST)?,
+            request.target_iqn.as_ref().ok_or(StatusCode::BAD_REQUEST)?
         );
     }
 
@@ -245,9 +268,16 @@ pub async fn delete_client(
     let settings = state.settings.read().await;
     if let Some(ref target_iqn) = client.target_iqn {
         let iscsi_service = crate::services::IscsiService::new(settings.clone());
-        let _ = iscsi_service.remove_target_by_iqn(target_iqn, &client.block_device).await.inspect_err(|e| {
-            tracing::warn!("Failed to remove iSCSI target for client '{}': {}", client.name, e);
-        });
+        let _ = iscsi_service
+            .remove_target_by_iqn(target_iqn, &client.block_device)
+            .await
+            .inspect_err(|e| {
+                tracing::warn!(
+                    "Failed to remove iSCSI target for client '{}': {}",
+                    client.name,
+                    e
+                );
+            });
     }
 
     // Delete the client from the database

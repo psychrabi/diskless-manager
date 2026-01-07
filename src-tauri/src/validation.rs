@@ -10,28 +10,15 @@ use thiserror::Error;
 
 lazy_static::lazy_static! {
     // Client ID: alphanumeric, dash, underscore (1-32 chars)
-    static ref CLIENT_ID_RE: Regex = Regex::new(r"^[a-zA-Z0-9_-]{1,32}$").unwrap();
-
+    static ref CLIENT_ID_RE: Regex = Regex::new(r"^[a-zA-Z0-9_-]{1,32}$").expect("Failed to compile CLIENT_ID regex");
     // MAC Address: standard format with colons or dashes
-    static ref MAC_RE: Regex = Regex::new(r"^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$").unwrap();
-
-    // Dataset name: alphanumeric, slash, dash, underscore
-    static ref DATASET_NAME_RE: Regex = Regex::new(r"^[a-zA-Z0-9/_-]+$").unwrap();
-
-    // ZFS pool name: alphanumeric, dash, underscore, dot
-    static ref POOL_NAME_RE: Regex = Regex::new(r"^[a-zA-Z0-9_.-]+$").unwrap();
-
-    // IQN (iSCSI Qualified Name): follows RFC 3720
-    static ref IQN_RE: Regex = Regex::new(r"^iqn\.\d{4}-\d{2}\.[a-z0-9.-]+:[a-zA-Z0-9._-]+$").unwrap();
-
-    // Snapshot name: alphanumeric, dash, underscore, dot
-    static ref SNAPSHOT_NAME_RE: Regex = Regex::new(r"^[a-zA-Z0-9._-]+$").unwrap();
-
-    // ZFS name: alphanumeric, dash, underscore (no slash)
-    static ref ZFS_NAME_RE: Regex = Regex::new(r"^[a-zA-Z0-9_-]+$").unwrap();
-
-    // Volume size: number followed by optional unit (K, M, G, T, P)
-    static ref SIZE_RE: Regex = Regex::new(r"^\d+[KMGTP]?$").unwrap();
+    static ref MAC_RE: Regex = Regex::new(r"^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$").expect("Failed to compile MAC regex");
+    static ref DATASET_NAME_RE: Regex = Regex::new(r"^[a-zA-Z0-9/_-]+$").expect("Failed to compile DATASET_NAME regex");
+    static ref POOL_NAME_RE: Regex = Regex::new(r"^[a-zA-Z0-9_.-]+$").expect("Failed to compile POOL_NAME regex");
+    static ref IQN_RE: Regex = Regex::new(r"^iqn\.\d{4}-\d{2}\.[a-z0-9.-]+:[a-zA-Z0-9._-]+$").expect("Failed to compile IQN regex");
+    static ref SNAPSHOT_NAME_RE: Regex = Regex::new(r"^[a-zA-Z0-9._-]+$").expect("Failed to compile SNAPSHOT_NAME regex");
+    static ref ZFS_NAME_RE: Regex = Regex::new(r"^[a-zA-Z0-9_-]+$").expect("Failed to compile ZFS_NAME regex");
+    static ref SIZE_RE: Regex = Regex::new(r"^\d+[KMGTP]?$").expect("Failed to compile SIZE regex");
 }
 
 #[derive(Error, Debug)]

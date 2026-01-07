@@ -223,7 +223,8 @@ pub fn get_server_ip() -> String {
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let re = regex::Regex::new(r"src\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})").unwrap();
+    let re = regex::Regex::new(r"src\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})")
+        .expect("Failed to compile IP regex");
     if let Some(caps) = re.captures(&stdout) {
         let ip = &caps[1];
         if ip.starts_with("192.168.")
@@ -370,7 +371,8 @@ pub fn get_service_logs(service_name: String, lines: Option<u32>) -> Result<Stri
 }
 
 pub fn log_file_path() -> PathBuf {
-    let mut base = dirs::config_dir().unwrap_or_else(|| dirs::home_dir().expect("No home dir"));
+    let mut base = dirs::config_dir()
+        .unwrap_or_else(|| dirs::home_dir().expect("No home dir or config dir available"));
     base.push("com.diskless.local");
     let _ = std::fs::create_dir_all(&base);
     base.push("diskless-manager.log");

@@ -56,8 +56,12 @@ pub async fn get_clients(
                         let sem = semaphore.clone();
                         let ip = client.ip.clone();
                         let future = tokio::spawn(async move {
-                            let _permit = sem.acquire().await.unwrap();
-                            ping_host(ip).await
+                            if let Ok(_permit) = sem.acquire().await {
+                                ping_host(ip).await
+                            } else {
+                                // If semaphore acquisition fails, return offline status
+                                "Offline".to_string()
+                            }
                         });
                         futures.push((i, future));
                     }
@@ -345,7 +349,7 @@ pub async fn edit_client(
         client_info.target_iqn.clone(),
         client_info.block_store.clone(),
     ) {
-        if let Err(e) = cleanup_iscsi_target(&iqn, &store) {
+        if let Err(e) = cleanup_iscsi_target(iqn, store) {
             warn!("Failed to cleanup old iSCSI target: {}", e);
         }
     }
@@ -409,7 +413,7 @@ pub async fn delete_client(
     let deleted_from_config = delete_client_config(&state.db_pool, &client_id).await;
 
     // Also attempt to delete from SQL clients table (best-effort)
-    let db_result = sqlx::query(
+    let _db_result = sqlx::query(
         r#"
         DELETE FROM clients
         WHERE id = ?1 OR name = ?2 OR mac = ?3

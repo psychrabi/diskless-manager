@@ -3,7 +3,6 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use serde::{Deserialize, Serialize};
 
 use crate::core::image::{CreateImageRequest, ImageManager};
 use crate::state::AppState;

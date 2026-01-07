@@ -5,7 +5,6 @@ use crate::services::{
 };
 use log::info;
 use std::path::PathBuf;
-use tokio::process::Command;
 
 pub struct SambaService {
     settings: Settings,

@@ -1,6 +1,5 @@
 use axum::{http::StatusCode, Json};
 use log::info;
-use serde::{Deserialize, Serialize};
 
 use crate::{
     auth::authenticate_user,

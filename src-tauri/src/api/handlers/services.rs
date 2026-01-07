@@ -3,10 +3,9 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use serde::{Deserialize, Serialize};
 
-use crate::state::AppState;
 use crate::services::ServiceManager;
+use crate::state::AppState;
 
 pub async fn list_services(
     State(state): State<AppState>,

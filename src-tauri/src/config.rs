@@ -16,12 +16,17 @@ pub fn get_config() -> AppConfig {
         // and cached when the application starts up via read_config_db
         RwLock::new(AppConfig::default())
     });
-    cache.read().unwrap().clone()
+    cache
+        .read()
+        .expect("Failed to acquire read lock on config cache")
+        .clone()
 }
 
 pub fn set_config(config: &AppConfig) {
     let cache = CONFIG_CACHE.get_or_init(|| RwLock::new(config.clone()));
-    let mut w = cache.write().unwrap();
+    let mut w = cache
+        .write()
+        .expect("Failed to acquire write lock on config cache");
     *w = config.clone();
 }
 
@@ -202,7 +207,10 @@ pub async fn read_config_db(pool: &sqlx::SqlitePool) -> Result<AppConfig, String
 pub async fn save_config(state: State<'_, AppState>, pool_name: String) -> Result<(), String> {
     let mut cfg = get_config();
     // Ensure settings is an object
-    let mut settings = cfg.settings.as_object().cloned().unwrap_or_default();
+    let mut settings = cfg.settings.as_object().cloned().unwrap_or_else(|| {
+        // Create an empty object if settings is not an object
+        serde_json::Map::new()
+    });
     settings.insert("zpool_name".to_string(), json!(pool_name.clone()));
     settings.insert("zfsPool".to_string(), json!(pool_name));
     cfg.settings = json!(settings);

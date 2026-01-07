@@ -1,7 +1,5 @@
 use crate::core::client::Client;
 use crate::core::config::Settings;
-use crate::core::image::Image;
-use crate::error::AppError;
 use crate::services::{
     get_service_pid, is_systemd_service_running, run_sudo_command, ServiceStatus,
 };
