@@ -44,6 +44,7 @@ pub struct CreateClientRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateClientRequest {
     pub name: Option<String>,
+    pub mac: Option<String>,
     pub ip: Option<String>,
     pub master: Option<String>,
     pub snapshot: Option<String>,
@@ -53,6 +54,8 @@ pub struct UpdateClientRequest {
     pub block_store: Option<String>,
     pub block_device: Option<String>,
     pub target_iqn: Option<String>,
+    pub action: Option<String>,
+    pub make_super: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -292,6 +295,9 @@ impl ClientManager {
         if let Some(name) = req.name {
             client.name = name;
         }
+        if let Some(mac) = req.mac {
+            client.mac = mac;
+        }
         if let Some(ip) = req.ip {
             client.ip = ip;
         }
@@ -317,13 +323,14 @@ impl ClientManager {
         sqlx::query(
             r#"
             UPDATE clients
-            SET name = ?, ip = ?, master = ?, snapshot = ?, block_store = ?, target_iqn = ?,
+            SET name = ?, mac = ?, ip = ?, master = ?, snapshot = ?, block_store = ?, target_iqn = ?,
                 writeback = ?, last_modified = ?, block_device = ?, status = ?, mode = ?,
                 keep_writeback = ?, use_game_disk = ?, enabled = ?, updated_at = ?
             WHERE id = ?
             "#,
         )
         .bind(&client.name)
+        .bind(&client.mac)
         .bind(&client.ip)
         .bind(&client.master)
         .bind(&client.snapshot)

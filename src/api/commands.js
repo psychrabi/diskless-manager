@@ -40,9 +40,20 @@ async function apiRequest(endpoint, options = {}) {
   const response = await fetch(url, config);
 
   if (!response.ok) {
-    throw new Error(
-      `API request failed: ${response.status} ${response.statusText}`
-    );
+    // Try to extract error message from response body
+    let errorMessage = `API request failed: ${response.status} ${response.statusText}`;
+    try {
+      const contentType = response.headers.get("content-type");
+      if (contentType && contentType.includes("application/json")) {
+        const errorData = await response.json();
+        if (errorData.error) {
+          errorMessage = errorData.error;
+        }
+      }
+    } catch (e) {
+      // If we can't parse the error response, use the default message
+    }
+    throw new Error(errorMessage);
   }
 
   // For endpoints that don't return JSON (like some delete operations)
