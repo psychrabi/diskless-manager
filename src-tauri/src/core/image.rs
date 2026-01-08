@@ -1,3 +1,7 @@
+use crate::cmd::{run_command, run_command_output_no_sudo};
+use crate::config::get_zpool_name;
+use crate::validation::validate_zfs_name;
+use crate::zfs::{get_snapshots_for_dataset, zfs_clone, zfs_destroy, zfs_exists};
 use chrono::{DateTime, Utc};
 use log::info;
 use serde::{Deserialize, Serialize};
@@ -41,6 +45,7 @@ pub enum ImageFormat {
     Qcow2,
     Vmdk,
     Vdi,
+    None,
 }
 
 impl std::fmt::Display for ImageFormat {
@@ -50,6 +55,7 @@ impl std::fmt::Display for ImageFormat {
             ImageFormat::Qcow2 => write!(f, "qcow2"),
             ImageFormat::Vmdk => write!(f, "vmdk"),
             ImageFormat::Vdi => write!(f, "vdi"),
+            ImageFormat::None => write!(f, "none"),
         }
     }
 }
@@ -63,6 +69,7 @@ impl std::str::FromStr for ImageFormat {
             "qcow2" => Ok(ImageFormat::Qcow2),
             "vmdk" => Ok(ImageFormat::Vmdk),
             "vdi" => Ok(ImageFormat::Vdi),
+            "none" => Ok(ImageFormat::None),
             _ => Err(anyhow::anyhow!("Invalid image format: {}", s)),
         }
     }
@@ -75,6 +82,7 @@ impl ImageFormat {
             ImageFormat::Qcow2 => "qcow2",
             ImageFormat::Vmdk => "vmdk",
             ImageFormat::Vdi => "vdi",
+            ImageFormat::None => "none",
         }
     }
 }
@@ -110,6 +118,14 @@ pub struct ImportImageRequest {
     pub source_path: String,
     pub os_type: String,
     pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateImageRequest {
+    pub name: Option<String>,
+    pub os_type: Option<String>,
+    pub description: Option<String>,
+    pub status: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -268,38 +284,123 @@ impl ImageManager {
 
     pub async fn create(&self, req: CreateImageRequest) -> anyhow::Result<Image> {
         let os_type: OsType = req.os_type.parse()?;
-        let format: ImageFormat = req.format.unwrap_or_else(|| "raw".to_string()).parse()?;
 
-        // Ensure images directory exists
-        std::fs::create_dir_all(&self.images_dir)?;
+        // Validate ZFS name
+        validate_zfs_name(&req.name)?;
 
-        let path = self
-            .images_dir
-            .join(format!("{}.{}", req.name, format.extension()));
+        let zpool = get_zpool_name();
+        let mut parent_dataset = format!("{}/image-disk", zpool);
 
-        // Create the image using qemu-img
-        let output = Command::new("qemu-img")
-            .args([
-                "create",
-                "-f",
-                &format.to_string(),
-                &path.to_string_lossy(),
-                &format!("{}G", req.size_gb),
-            ])
-            .output()?;
+        // Find the appropriate parent dataset for images
+        if let Ok(get_out) = run_command_output_no_sudo(&[
+            "zfs",
+            "get",
+            "-H",
+            "-o",
+            "name,value",
+            "-r",
+            "org.diskless:type",
+            &zpool,
+        ]) {
+            let mut image_datasets = vec![];
+            for line in get_out.lines() {
+                let parts: Vec<&str> = line.split('\t').collect();
+                if parts.len() == 2 {
+                    let dataset = parts[0].trim().to_string();
+                    let val = parts[1].trim().to_string();
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow::anyhow!("Failed to create image: {}", stderr));
+                    if val == "image" {
+                        let dataset_parts: Vec<&str> = dataset.split('/').collect();
+                        if dataset_parts.len() == 2 {
+                            // Direct child of zpool
+                            image_datasets.push(dataset);
+                        }
+                    }
+                }
+            }
+
+            // If we found image datasets, use the most recently created one
+            if !image_datasets.is_empty() {
+                // Get creation times for all image datasets
+                if let Ok(creation_out) = run_command_output_no_sudo(
+                    &["zfs", "get", "-H", "-o", "name,value", "creation"]
+                        .iter()
+                        .chain(
+                            &image_datasets
+                                .iter()
+                                .map(|s| s.as_str())
+                                .collect::<Vec<_>>(),
+                        )
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                ) {
+                    let mut datasets_with_time: Vec<(String, String)> = vec![];
+                    for line in creation_out.lines() {
+                        let parts: Vec<&str> = line.split('\t').collect();
+                        if parts.len() == 2 {
+                            datasets_with_time
+                                .push((parts[0].trim().to_string(), parts[1].trim().to_string()));
+                        }
+                    }
+
+                    // Sort by creation time (newest first)
+                    datasets_with_time.sort_by(|a, b| b.1.cmp(&a.1));
+
+                    // Use the most recently created image dataset
+                    if let Some((newest_dataset, _)) = datasets_with_time.first() {
+                        parent_dataset = newest_dataset.clone();
+                    }
+                }
+            } else {
+                // No image datasets found - create the default one
+                run_command(&[
+                    "zfs",
+                    "create",
+                    "-o",
+                    "org.diskless:type=image",
+                    &parent_dataset,
+                ])?;
+            }
         }
 
+        let full_name = format!("{}/{}", parent_dataset, req.name);
+
+        // Check if ZFS dataset already exists
+        if zfs_exists(&full_name) {
+            return Err(anyhow::anyhow!(
+                "ZFS dataset '{}' already exists.",
+                full_name
+            ));
+        }
+
+        // Create the ZFS volume
+        run_command(&[
+            "zfs",
+            "create",
+            "-s",
+            "-V",
+            &format!("{}G", req.size_gb),
+            "-o",
+            "volblocksize=128K",
+            &full_name,
+        ])?;
+
+        // Set the OS type property on the ZFS volume
+        run_command(&[
+            "zfs",
+            "set",
+            &format!("org.diskless:os={}", req.os_type),
+            &full_name,
+        ])?;
+
+        // Create the image record with the ZFS path
         let image = Image {
             id: Uuid::new_v4().to_string(),
-            name: req.name.clone(),
+            name: full_name.clone(),
             os_type,
             size_gb: req.size_gb,
-            path,
-            format,
+            path: PathBuf::from(format!("/dev/zvol/{}", full_name)), // Standard path for ZFS volumes
+            format: ImageFormat::None,
             status: "ready".to_string(),
             description: req.description,
             parent_id: None,
@@ -329,7 +430,140 @@ impl ImageManager {
         .execute(&self.pool)
         .await?;
 
-        info!("Image '{}' created ({} GB)", req.name, req.size_gb);
+        info!(
+            "Image '{}' created as ZFS volume ({} GB)",
+            req.name, req.size_gb
+        );
+        Ok(image)
+    }
+
+    pub async fn update(&self, id: &str, req: UpdateImageRequest) -> anyhow::Result<Image> {
+        info!(
+            "Attempting to update image with id '{}', request: {:?}",
+            id, req
+        );
+        let mut image = self.get(id).await?;
+        info!(
+            "Current image data: name='{}', os_type='{}', status='{}', description='{:?}'",
+            image.name, image.os_type, image.status, image.description
+        );
+
+        // Track if name was updated
+        let mut name_was_updated = false;
+
+        // Update fields if provided in the request
+        if let Some(new_name) = req.name {
+            name_was_updated = true;
+            info!(
+                "Updating image name from '{}' to '{}'",
+                image.name, new_name
+            );
+            // Validate ZFS name if changing
+            validate_zfs_name(&new_name)?;
+
+            // Extract the parent dataset from the current image name
+            let current_parts: Vec<&str> = image.name.split('/').collect();
+            let parent_dataset = if current_parts.len() > 1 {
+                current_parts[..current_parts.len() - 1].join("/")
+            } else {
+                // If no parent, use the zpool's image-disk as default
+                let zpool = get_zpool_name();
+                format!("{}/image-disk", zpool)
+            };
+
+            let new_full_name = format!("{}/{}", parent_dataset, new_name);
+            info!("Calculated new full name: '{}'", new_full_name);
+
+            // Check if the new name already exists as a ZFS dataset
+            if zfs_exists(&new_full_name) {
+                info!(
+                    "ZFS dataset '{}' already exists, aborting name update",
+                    new_full_name
+                );
+                return Err(anyhow::anyhow!(
+                    "ZFS dataset '{}' already exists.",
+                    new_full_name
+                ));
+            }
+
+            // Rename the ZFS dataset if it exists
+            if zfs_exists(&image.name) {
+                info!(
+                    "Renaming ZFS dataset from '{}' to '{}'",
+                    image.name, new_full_name
+                );
+                run_command(&["zfs", "rename", &image.name, &new_full_name])?;
+                info!("ZFS rename completed successfully");
+            } else {
+                info!(
+                    "ZFS dataset '{}' does not exist, skipping ZFS rename",
+                    image.name
+                );
+            }
+
+            // Update the image name to the new full name
+            image.name = new_full_name;
+            info!("Updated image name to: {}", image.name);
+        }
+
+        if let Some(os_type) = req.os_type {
+            info!("Updating OS type from '{}' to '{}'", image.os_type, os_type);
+            image.os_type = os_type.parse()?;
+
+            // Update the OS type property on the ZFS volume if it exists
+            if zfs_exists(&image.name) {
+                info!("Updating OS type property on ZFS volume '{}'", image.name);
+                run_command(&[
+                    "zfs",
+                    "set",
+                    &format!("org.diskless:os={}", image.os_type),
+                    &image.name,
+                ])?;
+                info!("OS type property updated successfully");
+            }
+        }
+
+        if let Some(description) = req.description {
+            info!(
+                "Updating description from '{:?}' to '{:?}'",
+                image.description,
+                Some(description.clone())
+            );
+            image.description = Some(description);
+        }
+
+        if let Some(status) = req.status {
+            info!("Updating status from '{}' to '{}'", image.status, status);
+            image.status = status;
+        }
+
+        // Update the timestamp
+        image.updated_at = Utc::now();
+
+        // If the name has changed, update the path as well
+        if name_was_updated {
+            image.path = PathBuf::from(format!("/dev/zvol/{}", image.name));
+        }
+
+        // Update the database record
+        sqlx::query(
+            r#"
+            UPDATE images 
+            SET name = ?, os_type = ?, status = ?, description = ?, path = ?, updated_at = ?
+            WHERE id = ?
+            "#,
+        )
+        .bind(&image.name)
+        .bind(image.os_type.to_string())
+        .bind(&image.status)
+        .bind(&image.description)
+        .bind(image.path.to_string_lossy().to_string())
+        .bind(image.updated_at.to_rfc3339())
+        .bind(&image.id)
+        .execute(&self.pool)
+        .await?;
+
+        info!("Image '{}' updated successfully", image.name);
         Ok(image)
     }
 
@@ -344,37 +578,150 @@ impl ImageManager {
             ));
         }
 
-        std::fs::create_dir_all(&self.images_dir)?;
+        let zpool = get_zpool_name();
+        let mut parent_dataset = format!("{}/image-disk", zpool);
 
-        let dest = self.images_dir.join(format!("{}.img", req.name));
+        // Find the appropriate parent dataset for images
+        if let Ok(get_out) = run_command_output_no_sudo(&[
+            "zfs",
+            "get",
+            "-H",
+            "-o",
+            "name,value",
+            "-r",
+            "org.diskless:type",
+            &zpool,
+        ]) {
+            let mut image_datasets = vec![];
+            for line in get_out.lines() {
+                let parts: Vec<&str> = line.split('\t').collect();
+                if parts.len() == 2 {
+                    let dataset = parts[0].trim().to_string();
+                    let val = parts[1].trim().to_string();
 
-        // Convert to raw format for iSCSI compatibility
+                    if val == "image" {
+                        let dataset_parts: Vec<&str> = dataset.split('/').collect();
+                        if dataset_parts.len() == 2 {
+                            // Direct child of zpool
+                            image_datasets.push(dataset);
+                        }
+                    }
+                }
+            }
+
+            // If we found image datasets, use the most recently created one
+            if !image_datasets.is_empty() {
+                // Get creation times for all image datasets
+                if let Ok(creation_out) = run_command_output_no_sudo(
+                    &["zfs", "get", "-H", "-o", "name,value", "creation"]
+                        .iter()
+                        .chain(
+                            &image_datasets
+                                .iter()
+                                .map(|s| s.as_str())
+                                .collect::<Vec<_>>(),
+                        )
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                ) {
+                    let mut datasets_with_time: Vec<(String, String)> = vec![];
+                    for line in creation_out.lines() {
+                        let parts: Vec<&str> = line.split('\t').collect();
+                        if parts.len() == 2 {
+                            datasets_with_time
+                                .push((parts[0].trim().to_string(), parts[1].trim().to_string()));
+                        }
+                    }
+
+                    // Sort by creation time (newest first)
+                    datasets_with_time.sort_by(|a, b| b.1.cmp(&a.1));
+
+                    // Use the most recently created image dataset
+                    if let Some((newest_dataset, _)) = datasets_with_time.first() {
+                        parent_dataset = newest_dataset.clone();
+                    }
+                }
+            } else {
+                // No image datasets found - create the default one
+                run_command(&[
+                    "zfs",
+                    "create",
+                    "-o",
+                    "org.diskless:type=image",
+                    &parent_dataset,
+                ])?;
+            }
+        }
+
+        let full_name = format!("{}/{}", parent_dataset, req.name);
+
+        // Check if ZFS dataset already exists
+        if zfs_exists(&full_name) {
+            return Err(anyhow::anyhow!(
+                "ZFS dataset '{}' already exists.",
+                full_name
+            ));
+        }
+
+        // First get the size of the source image
         let output = Command::new("qemu-img")
+            .args(["info", "--output=json", &source.to_string_lossy()])
+            .output()?;
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!("Failed to get source image info"));
+        }
+
+        let info: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        let virtual_size = info["virtual-size"].as_u64().unwrap_or(0);
+        let size_gb = (virtual_size / (1024 * 1024 * 1024)).max(1);
+
+        // Create the ZFS volume
+        run_command(&[
+            "zfs",
+            "create",
+            "-s",
+            "-V",
+            &format!("{}G", size_gb),
+            "-o",
+            "volblocksize=128K",
+            &full_name,
+        ])?;
+
+        // Use dd to copy the image file to the ZFS volume
+        let output = Command::new("dd")
             .args([
-                "convert",
-                "-p",
-                "-O",
-                "raw",
-                &source.to_string_lossy(),
-                &dest.to_string_lossy(),
+                &format!("if={}", source.to_string_lossy()),
+                &format!("of=/dev/zvol/{}", full_name),
+                "bs=1M",
+                "conv=fdatasync",
             ])
             .output()?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow::anyhow!("Failed to import image: {}", stderr));
+            // Clean up the ZFS volume if import fails
+            let _ = zfs_destroy(&full_name);
+            return Err(anyhow::anyhow!(
+                "Failed to import image to ZFS volume: {}",
+                stderr
+            ));
         }
 
-        // Get size
-        let metadata = std::fs::metadata(&dest)?;
-        let size_gb = metadata.len() / (1024 * 1024 * 1024);
+        // Set the OS type property on the ZFS volume
+        run_command(&[
+            "zfs",
+            "set",
+            &format!("org.diskless:os={}", req.os_type),
+            &full_name,
+        ])?;
 
         let image = Image {
             id: Uuid::new_v4().to_string(),
             name: req.name.clone(),
             os_type,
-            size_gb: size_gb.max(1),
-            path: dest,
+            size_gb,
+            path: PathBuf::from(format!("/dev/zvol/{}", full_name)),
             format: ImageFormat::Raw,
             status: "ready".to_string(),
             description: req.description,
@@ -411,7 +758,7 @@ impl ImageManager {
 
     pub async fn delete(&self, id: &str, _force: bool) -> anyhow::Result<()> {
         let image = self.get(id).await?;
-
+        info!("Deleting image '{:?}'", image);
         // Check if in use
         // let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM clients WHERE image_id = ?")
         //     .bind(&image.name)
@@ -425,9 +772,10 @@ impl ImageManager {
         //     ));
         // }
 
-        // Delete file
-        if image.path.exists() {
-            std::fs::remove_file(&image.path)?;
+        // Delete ZFS dataset
+        if zfs_exists(&image.name) {
+            // Use the image name as the ZFS dataset name
+            zfs_destroy(&image.name)?;
         }
 
         // Delete from database
@@ -443,31 +791,35 @@ impl ImageManager {
     pub async fn clone_image(&self, source_id: &str, new_name: &str) -> anyhow::Result<Image> {
         let source = self.get(source_id).await?;
 
-        let dest_path = self
-            .images_dir
-            .join(format!("{}.{}", new_name, source.format.extension()));
+        // Extract the parent dataset from the source image name
+        let source_parts: Vec<&str> = source.name.split('/').collect();
+        let parent_dataset = if source_parts.len() > 1 {
+            source_parts[..source_parts.len() - 1].join("/")
+        } else {
+            // If the source doesn't have a parent, use the default images dataset
+            let zpool = get_zpool_name();
+            format!("{}/image-disk", zpool)
+        };
 
-        // Copy with sparse support
-        let output = Command::new("cp")
-            .args([
-                "--sparse=auto",
-                "--reflink=auto",
-                &source.path.to_string_lossy(),
-                &dest_path.to_string_lossy(),
-            ])
-            .output()?;
+        let new_full_name = format!("{}/{}", parent_dataset, new_name);
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow::anyhow!("Failed to clone image: {}", stderr));
+        // Check if ZFS dataset already exists
+        if zfs_exists(&new_full_name) {
+            return Err(anyhow::anyhow!(
+                "ZFS dataset '{}' already exists.",
+                new_full_name
+            ));
         }
+
+        // Perform ZFS clone operation
+        zfs_clone(&source.name, &new_full_name)?; // Clone the ZFS dataset
 
         let image = Image {
             id: Uuid::new_v4().to_string(),
             name: new_name.to_string(),
             os_type: source.os_type,
             size_gb: source.size_gb,
-            path: dest_path,
+            path: PathBuf::from(format!("/dev/zvol/{}", new_full_name)),
             format: source.format,
             status: "ready".to_string(),
             description: Some(format!("Clone of {}", source.name)),
@@ -509,36 +861,40 @@ impl ImageManager {
     ) -> anyhow::Result<Image> {
         let source = self.get(source_id).await?;
 
-        std::fs::create_dir_all(&self.snapshots_dir)?;
+        // Create the snapshot name in ZFS format
+        let snapshot_full_name = format!("{}@{}", source.name, snapshot_name);
 
-        let snapshot_path = self.snapshots_dir.join(format!("{}.qcow2", snapshot_name));
-
-        // Create COW snapshot using qcow2
-        let output = Command::new("qemu-img")
-            .args([
-                "create",
-                "-f",
-                "qcow2",
-                "-b",
-                &source.path.to_string_lossy(),
-                "-F",
-                &source.format.to_string(),
-                &snapshot_path.to_string_lossy(),
-            ])
-            .output()?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow::anyhow!("Failed to create snapshot: {}", stderr));
+        // Check if ZFS snapshot already exists
+        if zfs_exists(&snapshot_full_name) {
+            return Err(anyhow::anyhow!(
+                "ZFS snapshot '{}' already exists.",
+                snapshot_full_name
+            ));
         }
+
+        // Create ZFS snapshot
+        run_command(&["zfs", "snapshot", &snapshot_full_name])?;
+
+        // Get the source dataset size for the snapshot
+        let output = run_command_output_no_sudo(&[
+            "zfs",
+            "get",
+            "-H",
+            "-o",
+            "value",
+            "volsize",
+            &source.name,
+        ])?;
+        let size_str = output.trim();
+        let size_gb = size_str.parse::<u64>().unwrap_or(source.size_gb);
 
         let image = Image {
             id: Uuid::new_v4().to_string(),
             name: snapshot_name.to_string(),
             os_type: source.os_type,
-            size_gb: source.size_gb,
-            path: snapshot_path,
-            format: ImageFormat::Qcow2,
+            size_gb,
+            path: PathBuf::from(format!("/dev/zvol/{}", snapshot_full_name)),
+            format: ImageFormat::Raw, // Snapshots use raw format
             status: "ready".to_string(),
             description: Some(format!("Snapshot of {}", source.name)),
             parent_id: Some(source.id),
@@ -570,7 +926,7 @@ impl ImageManager {
 
         info!(
             "Snapshot '{}' created from '{}'",
-            snapshot_name, source.name
+            snapshot_full_name, source.name
         );
         Ok(image)
     }
@@ -578,29 +934,41 @@ impl ImageManager {
     pub async fn get_info(&self, id: &str) -> anyhow::Result<ImageInfo> {
         let image = self.get(id).await?;
 
-        let output = Command::new("qemu-img")
-            .args(["info", "--output=json", &image.path.to_string_lossy()])
-            .output()?;
+        // Get ZFS properties for the volume
+        let output = run_command_output_no_sudo(&[
+            "zfs",
+            "get",
+            "-H",
+            "-o",
+            "value",
+            "volsize,used,compression",
+            &image.name,
+        ])?;
 
-        if !output.status.success() {
-            return Err(anyhow::anyhow!("Failed to get image info"));
-        }
+        let mut lines = output.lines();
+        let volsize = lines.next().unwrap_or("0").trim();
+        let used = lines.next().unwrap_or("0").trim();
 
-        let info: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        // Convert volsize from human-readable to bytes if needed
+        let virtual_size = Self::parse_size_to_bytes(volsize)?;
+        let actual_size = Self::parse_size_to_bytes(used)?;
+
+        // For ZFS volumes, the format is typically raw
+        let format = "raw".to_string();
+
+        // Get snapshots for this dataset
+        let snapshots = get_snapshots_for_dataset(&image.name)
+            .unwrap_or_default()
+            .iter()
+            .map(|snap| snap.name.clone())
+            .collect();
 
         Ok(ImageInfo {
-            virtual_size: info["virtual-size"].as_u64().unwrap_or(0),
-            actual_size: info["actual-size"].as_u64().unwrap_or(0),
-            format: info["format"].as_str().unwrap_or("unknown").to_string(),
-            backing_file: info["backing-filename"].as_str().map(String::from),
-            snapshots: info["snapshots"]
-                .as_array()
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|s| s["name"].as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default(),
+            virtual_size,
+            actual_size,
+            format,
+            backing_file: None, // ZFS volumes don't have backing files like qcow2
+            snapshots,
         })
     }
 
@@ -615,18 +983,13 @@ impl ImageManager {
             ));
         }
 
-        let output = Command::new("qemu-img")
-            .args([
-                "resize",
-                &image.path.to_string_lossy(),
-                &format!("{}G", new_size_gb),
-            ])
-            .output()?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow::anyhow!("Failed to resize image: {}", stderr));
-        }
+        // Resize ZFS volume
+        run_command(&[
+            "zfs",
+            "set",
+            &format!("volsize={}G", new_size_gb),
+            &image.name,
+        ])?;
 
         image.size_gb = new_size_gb;
         image.updated_at = Utc::now();
@@ -645,14 +1008,166 @@ impl ImageManager {
     pub async fn verify(&self, id: &str) -> anyhow::Result<bool> {
         let image = self.get(id).await?;
 
-        if !image.path.exists() {
-            return Ok(false);
+        // Check if ZFS dataset exists
+        Ok(zfs_exists(&image.name))
+    }
+
+    pub async fn rename(&self, id: &str, new_name: &str) -> anyhow::Result<Image> {
+        info!(
+            "Attempting to rename image with id '{}' to new name '{}'",
+            id, new_name
+        );
+        let mut image = self.get(id).await?;
+
+        info!("Current image name: '{}'", image.name);
+
+        // Validate the new name
+        validate_zfs_name(new_name)?;
+
+        // Extract the parent dataset from the current image name
+        // If the image.name doesn't contain '/', we need to find the actual ZFS dataset
+        let current_parts: Vec<&str> = image.name.split('/').collect();
+        let (parent_dataset, actual_zfs_name) = if current_parts.len() > 1 {
+            // Full path provided, extract parent and use as actual ZFS name
+            (
+                current_parts[..current_parts.len() - 1].join("/"),
+                image.name.clone(),
+            )
+        } else {
+            // Simple name provided, need to find the actual ZFS dataset path
+            let zpool = get_zpool_name();
+
+            // Look for the actual ZFS dataset that matches this image name
+            let mut found_actual_zfs_name = String::new();
+            if let Ok(list_output) =
+                run_command_output_no_sudo(&["zfs", "list", "-H", "-o", "name"])
+            {
+                for line in list_output.lines() {
+                    let full_dataset_name = line.trim();
+                    if full_dataset_name.ends_with(&format!("/{}", image.name)) {
+                        // Found the full ZFS path
+                        let parts: Vec<&str> = full_dataset_name.rsplitn(2, '/').collect();
+                        if parts.len() == 2 {
+                            let _actual_name = parts[0]; // actual name
+                            let _parent = parts[1]; // parent
+                            found_actual_zfs_name = full_dataset_name.to_string();
+                            break; // Found it, exit loop
+                        }
+                    }
+                }
+            }
+
+            // If we found the actual ZFS name, use it; otherwise, construct default path
+            if !found_actual_zfs_name.is_empty() {
+                let parts: Vec<&str> = found_actual_zfs_name.rsplitn(2, '/').collect();
+                if parts.len() == 2 {
+                    (parts[1].to_string(), found_actual_zfs_name) // (parent, actual_zfs_name)
+                } else {
+                    (
+                        format!("{}/image-disk", zpool),
+                        format!("{}/image-disk/{}", zpool, image.name),
+                    )
+                }
+            } else {
+                (
+                    format!("{}/image-disk", zpool),
+                    format!("{}/image-disk/{}", zpool, image.name),
+                )
+            }
+        };
+
+        info!("Parent dataset determined to be: '{}'", parent_dataset);
+
+        let new_full_name = format!("{}/{}", parent_dataset, new_name);
+        info!("New full name will be: '{}'", new_full_name);
+
+        // Check if the new name already exists as a ZFS dataset
+        if zfs_exists(&new_full_name) {
+            info!(
+                "ZFS dataset '{}' already exists, aborting rename",
+                new_full_name
+            );
+            return Err(anyhow::anyhow!(
+                "ZFS dataset '{}' already exists.",
+                new_full_name
+            ));
         }
 
-        let output = Command::new("qemu-img")
-            .args(["check", &image.path.to_string_lossy()])
-            .output()?;
+        info!(
+            "Checking if actual ZFS dataset '{}' exists",
+            actual_zfs_name
+        );
+        // Rename the ZFS dataset if it exists
+        if zfs_exists(&actual_zfs_name) {
+            info!(
+                "ZFS dataset '{}' exists, proceeding with rename to '{}'",
+                actual_zfs_name, new_full_name
+            );
+            run_command(&["zfs", "rename", &actual_zfs_name, &new_full_name])?;
+            info!("ZFS rename completed successfully");
+        } else {
+            info!(
+                "ZFS dataset '{}' does not exist, skipping ZFS rename",
+                actual_zfs_name
+            );
+        }
 
-        Ok(output.status.success())
+        // Update the image record
+        let old_name = image.name.clone();
+        let _old_path = image.path.clone();
+        image.name = new_full_name;
+        // Update the path to match the new name (ZFS volumes follow /dev/zvol/{name} pattern)
+        image.path = PathBuf::from(format!("/dev/zvol/{}", image.name));
+        image.updated_at = Utc::now();
+
+        // Update the database record
+        sqlx::query(
+            r#"
+            UPDATE images 
+            SET name = ?, path = ?, updated_at = ?
+            WHERE id = ?
+            "#,
+        )
+        .bind(&image.name)
+        .bind(image.path.to_string_lossy().to_string())
+        .bind(image.updated_at.to_rfc3339())
+        .bind(&image.id)
+        .execute(&self.pool)
+        .await?;
+
+        info!("Image renamed from '{}' to '{}'", old_name, image.name);
+        Ok(image)
+    }
+
+    // Helper function to parse ZFS size strings to bytes
+    fn parse_size_to_bytes(size_str: &str) -> anyhow::Result<u64> {
+        let size_str = size_str.trim();
+        if size_str.is_empty() || size_str == "-" {
+            return Ok(0);
+        }
+
+        // Handle common ZFS size suffixes
+        let (num_str, multiplier) = if size_str.ends_with('K') {
+            (&size_str[..size_str.len() - 1], 1024u64)
+        } else if size_str.ends_with('M') {
+            (&size_str[..size_str.len() - 1], 1024u64 * 1024)
+        } else if size_str.ends_with('G') {
+            (&size_str[..size_str.len() - 1], 1024u64 * 1024 * 1024)
+        } else if size_str.ends_with('T') {
+            (
+                &size_str[..size_str.len() - 1],
+                1024u64 * 1024 * 1024 * 1024,
+            )
+        } else if size_str.ends_with('P') {
+            (
+                &size_str[..size_str.len() - 1],
+                1024u64 * 1024 * 1024 * 1024 * 1024,
+            )
+        } else {
+            (size_str, 1u64) // Assume bytes if no suffix
+        };
+
+        let num = num_str.parse::<f64>()?;
+        Ok((num * multiplier as f64) as u64)
     }
 }

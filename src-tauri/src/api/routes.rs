@@ -1,5 +1,5 @@
 use axum::{
-    routing::{get, post},
+    routing::{get, post, put},
     Router,
 };
 
@@ -9,7 +9,10 @@ use crate::api::handlers::{
         create_client, delete_client, get_client, get_client_boot_history, list_clients,
         update_client,
     },
-    images::{create_image, delete_image, get_image, list_images, list_masters},
+    images::{
+        create_image, delete_image, get_image, list_images, list_masters, rename_image,
+        update_image,
+    },
     services::{get_service_status, list_services, restart_service, start_service, stop_service},
     system::{get_server_status, get_system_info},
 };
@@ -34,7 +37,11 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         // Image routes (auth required)
         .route("/api/images", get(list_images).post(create_image))
         .route("/api/masters", get(list_masters))
-        .route("/api/images/{id}", get(get_image).delete(delete_image))
+        .route(
+            "/api/images/{id}",
+            get(get_image).put(update_image).delete(delete_image),
+        )
+        .route("/api/images/{id}/rename", put(rename_image))
         // Service routes (auth required)
         .route("/api/services", get(list_services))
         .route("/api/services/{name}/status", get(get_service_status))

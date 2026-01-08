@@ -89,7 +89,7 @@ export const imageSchema = z.object({
   name: z.string().min(1, "Image name is required"),
   os_type: z.enum(["linux", "windows"]).default("windows"),
   size_gb: z.coerce.number().min(1, "Image Size is required"),
-  format: z.enum(["raw", "qcow2"]).default("raw"),
+  format: z.enum(["raw", "qcow2"]).optional().default("raw"),
   description: z.string().optional(),
 });
 

@@ -389,6 +389,13 @@ export async function getImage(id) {
   return apiRequest(`/api/images/${id}`);
 }
 
+export async function renameImage(id, newName) {
+  return apiRequest(`/api/images/${id}/rename`, {
+    method: "PUT",
+    body: JSON.stringify({ new_name: newName }),
+  });
+}
+
 export async function createImage(request) {
   return apiRequest("/api/images", {
     method: "POST",

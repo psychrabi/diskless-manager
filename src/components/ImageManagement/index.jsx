@@ -9,7 +9,6 @@ import { ImagesList } from "./ImagesList";
 const ImageManagement = () => {
   // Use a more specific selector to ensure re-renders
   const masters = useAppStore((state) => state.masters);
-  const fetchDatasets = useAppStore((state) => state.fetchDatasets);
   const datasets = useAppStore((state) => state.datasets);
   const zpools = useAppStore((state) => state.zpools);
   const [openImageCreateModal, setOpenImageCreateModal] = useState(false);
@@ -34,12 +33,6 @@ const ImageManagement = () => {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zpools]);
-
-  useEffect(() => {
-    if (selectedPool) {
-      fetchDatasets(selectedPool);
-    }
-  }, [selectedPool, fetchDatasets]);
 
   return (
     <Card

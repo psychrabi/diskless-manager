@@ -1,11 +1,11 @@
 import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { invoke } from "@tauri-apps/api/core";
 import { Save } from "lucide-react";
 import { useForm } from "react-hook-form";
 import z from "zod";
 import { Button, Modal } from "../ui";
+import * as api from "@/api/commands";
 
 const snapshotSchema = z.object({
   name: z.string().min(1, "Snapshot name is required"),
@@ -16,41 +16,31 @@ const CreateSnapshotModal = ({
   setOpenSnapshotCreateModal,
   selectedImage,
 }) => {
-  const fetchImages = useAppStore((state) => state.fetchImages);
-  const { success, info, error } = useToastStore();
+  const fetchMasters = useAppStore((state) => state.fetchMasters);
+  const { success, error } = useToastStore();
   const {
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
+    reset
   } = useForm({
     resolver: zodResolver(snapshotSchema),
-    defaultValues: {
-      name: "",
-      size: "50G",
-    },
   });
 
   const onSubmit = async (data) => {
-    const fullSnapshotName = `${selectedImage}@${data.name}`;
-    // Get token from localStorage
-    const token = localStorage.getItem("authToken") || "";
-    await invoke("create_snapshot", {
-      token,
-      masterName: selectedImage,
-      snapshotName: fullSnapshotName,
-    })
-      .then(async (response) => {
-        setOpenSnapshotCreateModal(false);
-        await fetchImages();
-        if (response.message) success("Image Management", response.message);
-      })
-      .catch((err) => {
-        error(
-          `Failed to create snapshot: ${
-            err.message || "An unknown error occurred"
-          }`
-        );
-      });
+    if (!selectedImage) return;
+    try {
+      await api.createSnapshot(selectedImage.id, data.newName)
+      success("Image Management", `Snapshot created successfully`);
+      await fetchMasters();
+      reset();
+      setOpenSnapshotCreateModal(false);
+    } catch (err) {
+      error(
+        `Failed to create snapshot: ${err || "An unknown error occurred"
+        }`
+      );
+    }
   };
 
   return (

@@ -1,9 +1,9 @@
-import { invoke } from "@tauri-apps/api/core";
-import { useCallback, useState } from "react";
-
+import * as api from "@/api/commands";
 import { useConfirm } from "@/contexts/confirmDialog";
 import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
+import { invoke } from "@tauri-apps/api/core";
+import { useCallback, useState } from "react";
 import { formatBytes, formatDate } from "../utils/helpers";
 
 export const useMasterManager = () => {
@@ -20,30 +20,13 @@ export const useMasterManager = () => {
   const [isDeleteMasterModalOpen, setIsDeleteMasterModalOpen] = useState(false);
   const { success, error } = useToastStore();
   const confirm = useConfirm();
-  const fetchImages = useAppStore((state) => state.fetchImages);
+  const fetchMasters = useAppStore((state) => state.fetchMasters);
 
   // --- Master/Snapshot Actions ---
   const handleOpenCreateMasterModal = () => {
     setNewMasterName("");
     setNewMasterSize("50G"); // Reset to default
     setIsCreateMasterModalOpen(true);
-  };
-
-  const handleCreateMasterSubmit = async (event) => {
-    event.preventDefault();
-    setIsCreateMasterModalOpen(false); // Close modal
-    // Get token from localStorage
-    const token = localStorage.getItem("authToken") || "";
-    await invoke("create_image", {
-      request: { token, name: newMasterName, size: newMasterSize },
-    })
-      .then(async (response) => {
-        if (response.message) success(response.message);
-        await fetchImages();
-      })
-      .catch((err) => {
-        error(err?.message || String(err));
-      });
   };
 
   const handleCreateSnapshot = async (snapshotName) => {
@@ -55,7 +38,7 @@ export const useMasterManager = () => {
       snapshotName,
     })
       .then(async (response) => {
-        await fetchImages();
+        await fetchMasters();
         if (response.message) success(response.message);
       })
       .catch((err) => {
@@ -83,7 +66,7 @@ export const useMasterManager = () => {
           snapshotName: snapshot,
         })
           .then(async (response) => {
-            await fetchImages();
+            await fetchMasters();
             if (response.message) success(response.message);
           })
           .catch((err) => {
@@ -114,7 +97,7 @@ export const useMasterManager = () => {
           snapshotName: snapshot,
         })
           .then(async (response) => {
-            await fetchImages();
+            await fetchMasters();
             if (response.message) success(response.message);
           })
           .catch((err) => {
@@ -131,7 +114,7 @@ export const useMasterManager = () => {
     const token = localStorage.getItem("authToken") || "";
     invoke("set_default_image", { token, masterName })
       .then(async (response) => {
-        await fetchImages();
+        await fetchMasters();
         if (response.message) success(response.message);
       })
       .catch((err) => {
@@ -143,7 +126,8 @@ export const useMasterManager = () => {
     if (!image) return;
     confirm({
       title: "Delete Image",
-      description: `Are you sure you want to delete image "${image}"? This action cannot be undone and might affect clones.`,
+      description: `Are you sure you want to delete image "${image.name}"? 
+      This action cannot be undone and might affect clones.`,
       confirmText: "Delete Image",
       cancelText: "Cancel",
       confirmVariant: "primary",
@@ -151,15 +135,11 @@ export const useMasterManager = () => {
     })
       .then(async (ok) => {
         if (!ok) return;
-        const token = localStorage.getItem("authToken") || "";
+
         try {
-          const response = await invoke("delete_image", {
-            token,
-            masterName: image,
-          });
-          await fetchImages();
-          if (response.message) success(response.message);
-          if (response.error) error(response.error);
+          await api.deleteImage(image.id);
+          success("Image Management", "Image deleted successfully");
+          await fetchMasters();
         } catch (err) {
           error(err?.error || "Unknown error");
         }
@@ -200,7 +180,6 @@ export const useMasterManager = () => {
     handleCreateSnapshot,
     handleDeleteSnapshot,
     handleOpenCreateSnapshotModal,
-    handleCreateMasterSubmit,
     handleOpenCreateMasterModal,
     newMasterName,
     newMasterSize,

@@ -1,7 +1,7 @@
+import * as api from "@/api/commands";
 import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { invoke } from "@tauri-apps/api/core";
 import { Save } from "lucide-react";
 import { useForm } from "react-hook-form";
 import z from "zod";
@@ -21,10 +21,10 @@ const RenameImageModal = ({
   openRenameModal,
   setOpenRenameModal,
   selectedImage,
-  refresh,
+
 }) => {
-  const fetchImages = useAppStore((state) => state.fetchImages);
-  const { success, info, error } = useToastStore();
+  const fetchMasters = useAppStore((state) => state.fetchMasters);
+  const { success, error } = useToastStore();
 
   const {
     register,
@@ -37,37 +37,28 @@ const RenameImageModal = ({
       newName: "",
     },
   });
-
+  // const token = localStorage.getItem("authToken") || "";
+  // await invoke("rename_image", {
+  //   token,
+  //   oldName: selectedImage,
+  //   newName: data.newName,
+  // })
   const onSubmit = async (data) => {
     if (!selectedImage) return;
-
+    console.log(data)
     // Extract the base name from the full ZFS path (e.g., "diskless/win11-master" -> "win11")
-    const baseName =
-      selectedImage.split("/").pop()?.replace("-master", "") || "";
-
-    info(`Renaming image from ${baseName} to ${data.newName}`);
-
-    setOpenRenameModal(false);
-
-    // Get token from localStorage
-    const token = localStorage.getItem("authToken") || "";
-    await invoke("rename_image", {
-      token,
-      oldName: selectedImage,
-      newName: data.newName,
-    })
-      .then(async (response) => {
-        if (response.message) success("Image Management", response.message);
-        await fetchImages();
-        reset();
-      })
-      .catch((error) => {
-        error(
-          `Failed to rename image: ${
-            error.message || "An unknown error occurred"
-          }`
-        );
-      });
+    try {
+      await api.renameImage(selectedImage.id, data.newName)
+      success("Image Management", `Image renamed to ${data.newName}`);
+      await fetchMasters();
+      reset();
+      setOpenRenameModal(false);
+    } catch (err) {
+      error(
+        `Failed to rename image: ${err || "An unknown error occurred"
+        }`
+      );
+    }
   };
 
   const handleClose = () => {
@@ -75,10 +66,6 @@ const RenameImageModal = ({
     reset();
   };
 
-  // Extract the base name from the full ZFS path for display
-  const displayName = selectedImage
-    ? selectedImage.split("/").pop()?.replace("-master", "") || selectedImage
-    : "";
 
   return (
     <Modal
@@ -90,7 +77,7 @@ const RenameImageModal = ({
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         <div className="space-y-2">
           <p className="text-sm text-gray-600 dark:text-gray-400">
-            Rename master image "{displayName}" to a new name.
+            Rename master image "{selectedImage.name}" to a new name.
           </p>
           <fieldset className={`fieldset`}>
             <legend htmlFor="newName" className="fieldset-legend">

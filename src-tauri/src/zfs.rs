@@ -1197,3 +1197,44 @@ pub fn get_latest_snapshot(master_name: &str) -> Result<String, AppError> {
     debug!("Selected latest snapshot: {}", latest.0);
     Ok(latest.0)
 }
+
+// Get all snapshots for a dataset
+pub fn get_snapshots_for_dataset(dataset: &str) -> Result<Vec<Snapshot>, AppError> {
+    debug!("Getting snapshots for dataset: {}", dataset);
+
+    let output = match run_command_output_no_sudo([
+        "zfs",
+        "list",
+        "-H",
+        "-t",
+        "snapshot",
+        "-o",
+        "name,creation,used",
+        "-r",
+        dataset,
+    ]) {
+        Ok(output) => output,
+        Err(_) => {
+            // If the above fails, try listing snapshots of the dataset specifically
+            run_command_output_no_sudo([
+                "zfs",
+                "list",
+                "-H",
+                "-t",
+                "snapshot",
+                "-o",
+                "name,creation,used",
+                dataset,
+            ])?
+        }
+    };
+
+    let snapshots = parse_zfs_list(&output);
+    debug!(
+        "Found {} snapshots for dataset {}",
+        snapshots.len(),
+        dataset
+    );
+
+    Ok(snapshots)
+}

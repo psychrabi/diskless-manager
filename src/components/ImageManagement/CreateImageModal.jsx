@@ -1,58 +1,47 @@
 import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { invoke } from "@tauri-apps/api/core";
 import { Save } from "lucide-react";
 import { useForm } from "react-hook-form";
-import z from "zod";
 import { Button, Modal } from "../ui";
+import * as api from "@/api/commands";
+import { imageSchema } from "@/schema";
 
-const imageSchema = z.object({
-  name: z.string().min(1, "Image name is required"),
-  size: z.string().min(1, "Image Size is required"),
-  os: z.string().optional(),
-});
+
 
 const CreateImageModal = ({
   openImageCreateModal,
   setOpenImageCreateModal,
 }) => {
-  const fetchImages = useAppStore((state) => state.fetchImages);
-  const { success, info, error } = useToastStore();
+  const fetchMasters = useAppStore((state) => state.fetchMasters);
+  const { success, error } = useToastStore();
 
   const {
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
+    reset
   } = useForm({
     resolver: zodResolver(imageSchema),
     defaultValues: {
       name: "",
-      size: "50G",
-      os: "windows",
+      size_gb: 50,
+      os_type: "windows",
     },
   });
 
   const onSubmit = async (data) => {
-    info(`Adding new ZFS image ${data.name}`);
-
-    setOpenImageCreateModal(false);
-
     // Get token from localStorage
-    const token = localStorage.getItem("authToken") || "";
     try {
-      const response = await invoke("create_image", {
-        request: { token, name: data.name, size: data.size, os: data.os },
-      });
-      if (response.message) success("Image Management", response.message);
-
-      // Small delay to ensure backend completes, then refresh
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      await fetchImages(); // Refresh images
+      await api.createImage(data);
+      success("Image Management", `Image ${data.name} created successfully`);
+      await fetchMasters(); // Refresh images
+      reset();
+      setOpenImageCreateModal(false);
     } catch (err) {
       error(
         "Image Management",
-        `Failed to create image: ${err.message || "An unknown error occurred"}`
+        `Failed to create image: ${err || "An unknown error occurred"}`
       );
     }
   };
@@ -82,32 +71,33 @@ const CreateImageModal = ({
         </fieldset>
 
         <fieldset className={`fieldset`}>
-          <legend htmlFor="os" className="fieldset-legend">
+          <legend htmlFor="os_type" className="fieldset-legend">
             Operating System
           </legend>
-          <select {...register("os")} id="os" className="select w-full">
+          <select {...register("os_type")} id="os_type" className="select w-full">
             <option value="windows">Windows</option>
             <option value="linux">Linux</option>
           </select>
-          {errors.os && (
-            <div className="text-red-500 text-xs">{errors.os.message}</div>
+          {errors.os_type && (
+            <div className="text-red-500 text-xs">{errors.os_type.message}</div>
           )}
         </fieldset>
 
         <fieldset className={`fieldset`}>
           <legend htmlFor="size" className="fieldset-legend">
-            Image Size
+            Image Size (in GB)
           </legend>
           <input
-            {...register("size")}
-            type="text"
-            id="size"
-            placeholder="e.g., 50G, 1T"
+            {...register("size_gb")}
+            type="number"
+            id="size_gb"
+            placeholder="e.g., 50, 100, 1000"
             className="input w-full"
-            title="Enter size (e.g., 50G, 100G, 1T)"
+            title="Enter size (e.g., 50, 100, 1000)"
+            min="1"
           />
-          {errors.size && (
-            <div className="text-red-500 text-xs">{errors.size.message}</div>
+          {errors.size_gb && (
+            <div className="text-red-500 text-xs">{errors.size_gb.message}</div>
           )}
         </fieldset>
         <div className="mt-6 flex justify-end space-x-3">
