@@ -1,6 +1,6 @@
+import * as api from "@/api/commands";
 import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
-import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useState } from "react";
 
 export const useSettings = () => {
@@ -10,7 +10,7 @@ export const useSettings = () => {
 
   const readConfig = useCallback(async () => {
     try {
-      return await invoke("read_config");
+      return await api.readConfig();
     } catch (error) {
       console.error("Failed to load config:", error);
       return null;
@@ -22,7 +22,7 @@ export const useSettings = () => {
       setLoading(true);
       try {
         // First, get the current settings
-        const currentSettings = await invoke("get_settings");
+        const currentSettings = await api.getSettings();
 
         // Update the DHCP settings
         const updatedSettings = {
@@ -33,11 +33,11 @@ export const useSettings = () => {
         };
 
         // Save the updated settings
-        await invoke("save_settings", { settings: updatedSettings });
+        await api.saveSettings(updatedSettings);
 
         // Configure the DHCP service using the new settings
-        await invoke("configure_service", { serviceName: "dhcp" });
-        await invoke("restart_service", { name: "dhcp" });
+        await api.configureService("dhcp");
+        await api.restartService("dhcp");
         await fetchConfig();
         success("DHCP Settings", "DHCP configuration saved successfully");
         return true;
@@ -52,7 +52,7 @@ export const useSettings = () => {
         setLoading(false);
       }
     },
-    [success, error]
+    [success, error, fetchConfig]
   );
 
   const updateTftp = useCallback(
@@ -60,7 +60,7 @@ export const useSettings = () => {
       setLoading(true);
       try {
         // First, get the current settings
-        const currentSettings = await invoke("get_settings");
+        const currentSettings = await api.getSettings();
 
         // Update the TFTP settings
         const updatedSettings = {
@@ -71,11 +71,11 @@ export const useSettings = () => {
         };
 
         // Save the updated settings
-        await invoke("save_settings", { settings: updatedSettings });
+        await api.saveSettings(updatedSettings);
 
         // Configure the TFTP service using the new settings
-        await invoke("configure_service", { serviceName: "tftp" });
-        await invoke("restart_service", { name: "tftp" });
+        await api.configureService("tftp");
+        await api.restartService("tftp");
         await fetchConfig();
 
         success("TFTP Settings", "TFTP configuration saved successfully");
@@ -95,7 +95,7 @@ export const useSettings = () => {
       setLoading(true);
       try {
         // First, get the current settings
-        const currentSettings = await invoke("get_settings");
+        const currentSettings = await api.getSettings();
 
         // Update the HTTP settings
         const updatedSettings = {
@@ -106,11 +106,11 @@ export const useSettings = () => {
         };
 
         // Save the updated settings
-        await invoke("save_settings", { settings: updatedSettings });
+        await api.saveSettings(updatedSettings);
 
         // Configure the HTTP service using the new settings
-        await invoke("configure_service", { serviceName: "http" });
-        await invoke("restart_service", { name: "http" });
+        await api.configureService("http");
+        await api.restartService("http");
         await fetchConfig();
 
         success("HTTP Settings", "HTTP configuration saved successfully");
@@ -132,7 +132,7 @@ export const useSettings = () => {
       setLoading(true);
       try {
         // First, get the current settings
-        const currentSettings = await invoke("get_settings");
+        const currentSettings = await api.getSettings();
 
         // Update the ISCSI settings
         const updatedSettings = {
@@ -143,11 +143,11 @@ export const useSettings = () => {
         };
 
         // Save the updated settings
-        await invoke("save_settings", { settings: updatedSettings });
+        await api.saveSettings(updatedSettings);
 
         // Configure the ISCSI service using the new settings
-        await invoke("configure_service", { serviceName: "iscsi" });
-        await invoke("restart_service", { name: "iscsi" });
+        await api.configureService("iscsi");
+        await api.restartService("iscsi");
         await fetchConfig();
 
         success("ISCSI Settings", "ISCSI configuration saved successfully");
@@ -171,7 +171,7 @@ export const useSettings = () => {
       setLoading(true);
       try {
         // First, get the current settings
-        const currentSettings = await invoke("get_settings");
+        const currentSettings = await api.getSettings();
 
         // Update the Samba settings
         const updatedSettings = {
@@ -182,11 +182,11 @@ export const useSettings = () => {
         };
 
         // Save the updated settings
-        await invoke("save_settings", { settings: updatedSettings });
+        await api.saveSettings(updatedSettings);
 
         // Configure the Samba service using the new settings
-        await invoke("configure_service", { serviceName: "samba" });
-        await invoke("restart_service", { name: "samba" });
+        await api.configureService("samba");
+        await api.restartService("samba");
         await fetchConfig();
 
         success("Samba Settings", "Samba configuration saved successfully");
@@ -204,14 +204,14 @@ export const useSettings = () => {
     async (serverConfig) => {
       setLoading(true);
       try {
-        const currentSettings = await invoke("get_settings");
+        const currentSettings = await api.getSettings();
         const updatedSettings = {
           ...currentSettings,
           server: {
             ...serverConfig,
           },
         };
-        await invoke("save_settings", { settings: updatedSettings });
+        await api.saveSettings(updatedSettings);
         await fetchConfig();
         success("Server Settings", "Server configuration saved successfully");
         return true;
@@ -227,7 +227,7 @@ export const useSettings = () => {
 
   const fetchInterfaces = useCallback(async () => {
     try {
-      return await invoke("get_network_interfaces");
+      return await api.getNetworkInterfaces();
     } catch (err) {
       error("Network Interfaces", "Failed to fetch network interfaces");
       return [];
@@ -236,7 +236,7 @@ export const useSettings = () => {
 
   const getInterfaceIp = useCallback(async (iface) => {
     try {
-      return await invoke("get_interface_ip", { interface: iface });
+      return await api.getInterfaceIp(iface);
     } catch (err) {
       console.error("Failed to fetch interface IP:", err);
       return null;
@@ -244,7 +244,7 @@ export const useSettings = () => {
   }, []);
   const detectNetwork = useCallback(async () => {
     try {
-      return await invoke("detect_server_network");
+      return await api.detectServerNetwork();
     } catch (err) {
       error("Network Detection", "Failed to auto-detect network settings");
       return null;
@@ -253,7 +253,7 @@ export const useSettings = () => {
   const applyNetworkSettings = useCallback(async () => {
     setLoading(true);
     try {
-      const response = await invoke("apply_network_settings");
+      const response = await api.applyNetworkSettings({});
       success("Network Applied", response);
       return true;
     } catch (err) {
@@ -267,13 +267,8 @@ export const useSettings = () => {
   const updatePassword = useCallback(
     async (oldPassword, newPassword) => {
       setLoading(true);
-      const token = localStorage.getItem("authToken") || "";
       try {
-        const response = await invoke("update_admin_password", {
-          token,
-          oldPassword,
-          newPassword,
-        });
+        const response = await api.updateAdminPassword(newPassword);
         if (response) success("Admin Password", response.message || response);
         return true;
       } catch (err) {
@@ -288,7 +283,7 @@ export const useSettings = () => {
 
   const getLicenseInfo = useCallback(async () => {
     try {
-      return await invoke("get_license_info");
+      return await api.getLicenseInfo();
     } catch (err) {
       error("License Info", err?.message || String(err));
       return null;
@@ -299,7 +294,7 @@ export const useSettings = () => {
     async (key) => {
       setLoading(true);
       try {
-        const resp = await invoke("activate_license", { key });
+        const resp = await api.activateLicense(key);
         success(
           "License Activated",
           resp?.message || "License activated successfully"

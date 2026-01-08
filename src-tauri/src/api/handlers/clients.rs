@@ -312,7 +312,7 @@ pub async fn delete_client(
                 e
             );
         });
-    if let Some(snapshot) = client.snapshot {
+    if let Some(_snapshot) = client.snapshot {
         let block_store = client.block_store.as_ref().unwrap();
         if block_store.starts_with("/dev/zvol/") {
             // Extract the dataset name from the block_store path

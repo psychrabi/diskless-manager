@@ -1,5 +1,11 @@
 pub mod auth;
 pub mod clients;
+pub mod config;
+pub mod dashboard;
+pub mod disks;
 pub mod images;
+pub mod license;
+pub mod logs;
 pub mod services;
 pub mod system;
+pub mod zfs;

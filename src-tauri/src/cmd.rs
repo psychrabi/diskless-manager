@@ -384,6 +384,37 @@ pub fn read_logs() -> String {
     fs::read_to_string(log_file_path()).unwrap_or_default()
 }
 
+/// Read logs for a specific systemd unit
+pub fn read_service_logs(unit: &str, lines: u32) -> Result<String, AppError> {
+
+       let service = match unit {
+        "http" => "apache2",
+        "samba" => "smbd",
+        "tftp" => "tftpd-hpa",
+        "dhcp" => "isc-dhcp-server",
+        "nfs" => "nfs-kernel-server",
+        "iscsi" => "rtslib-fb-targetctl",
+        _ => "/etc/default/config",
+    };
+    let output = std::process::Command::new("journalctl")
+        .arg("-u")
+        .arg(service)
+        .arg("-n")
+        .arg(lines.to_string())
+        .arg("--no-pager")
+        .output()
+        .map_err(AppError::Io)?;
+
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        Err(AppError::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "Failed to read service logs",
+        )))
+    }
+}
+
 /// Clear the log file (best-effort)
 pub fn clear_logs() -> Result<(), AppError> {
     let path = log_file_path();

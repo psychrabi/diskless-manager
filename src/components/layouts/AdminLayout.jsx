@@ -2,7 +2,7 @@ import ErrorBoundary from "@/components/ErrorBoundary";
 import { Activity, Error, Loading } from "@/components/ui";
 import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
-import { invoke } from "@tauri-apps/api/core";
+import { checkDependencies, checkZfsPoolExists } from "@/api/commands";
 import { lazy, useEffect, useRef, useState } from "react";
 import {
   Outlet,
@@ -52,10 +52,10 @@ const AdminLayout = () => {
     let cancelled = false;
     (async () => {
       try {
-        const res = await invoke("check_dependencies");
+        const res = await checkDependencies();
         const list = Array.isArray(res) ? res : res ? Object.values(res) : [];
         const allServicesInstalled = list.every((svc) => svc?.installed);
-        const poolExists = await invoke("zfs_pool_exists");
+        const poolExists = await checkZfsPoolExists();
 
         if (!cancelled && (!allServicesInstalled || !poolExists)) {
           navigate("/setup");

@@ -2,7 +2,6 @@ import * as api from "@/api/commands";
 import { useConfirm } from "@/contexts/confirmDialog";
 import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
-import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useState } from "react";
 import { formatBytes, formatDate } from "../utils/helpers";
 
@@ -30,13 +29,7 @@ export const useMasterManager = () => {
   };
 
   const handleCreateSnapshot = async (snapshotName) => {
-    // Get token from localStorage
-    const token = localStorage.getItem("authToken") || "";
-    await invoke("create_snapshot", {
-      token,
-      masterName: selectedMaster,
-      snapshotName,
-    })
+    await api.createSnapshot(selectedMaster, snapshotName)
       .then(async (response) => {
         await fetchMasters();
         if (response.message) success(response.message);
@@ -59,12 +52,7 @@ export const useMasterManager = () => {
     })
       .then((ok) => {
         if (!ok) return;
-        const token = localStorage.getItem("authToken") || "";
-        invoke("delete_snapshot", {
-          token,
-          masterName: image,
-          snapshotName: snapshot,
-        })
+        api.deleteSnapshot(image, snapshot)
           .then(async (response) => {
             await fetchMasters();
             if (response.message) success(response.message);
@@ -90,12 +78,7 @@ export const useMasterManager = () => {
     })
       .then((ok) => {
         if (!ok) return;
-        const token = localStorage.getItem("authToken") || "";
-        invoke("rollback_image_snapshot", {
-          token,
-          masterName: image,
-          snapshotName: snapshot,
-        })
+        api.rollbackImageSnapshot(image, snapshot)
           .then(async (response) => {
             await fetchMasters();
             if (response.message) success(response.message);
@@ -110,9 +93,7 @@ export const useMasterManager = () => {
   };
 
   const setDefaultMaster = async (masterName) => {
-    // Get token from localStorage
-    const token = localStorage.getItem("authToken") || "";
-    invoke("set_default_image", { token, masterName })
+    api.setDefaultImage(masterName)
       .then(async (response) => {
         await fetchMasters();
         if (response.message) success(response.message);

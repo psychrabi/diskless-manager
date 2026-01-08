@@ -1,5 +1,3 @@
-import { invoke } from "@tauri-apps/api/core";
-
 // ============================================================================
 // API Client
 // ============================================================================
@@ -247,7 +245,8 @@ export async function login(username, password) {
   });
 
   if (!response.ok) {
-    throw new Error(`Login failed: ${response.status} ${response.statusText}`);
+    const errorMsg = `Login failed: ${response.status} ${response.statusText}`;
+    throw new Error(errorMsg);
   }
 
   const data = await response.json();
@@ -269,7 +268,7 @@ export async function logout() {
 
   // Clear the auth token
   setAuthToken(null);
-  return response.json();
+  return response.json().catch(() => ({}));
 }
 
 // ============================================================================
@@ -284,19 +283,40 @@ export async function getServerStatus() {
   return apiRequest("/api/system/status");
 }
 
-// Note: initializeServer and checkDependencies might still need to use invoke
-// if they're not available through the API yet
 export async function initializeServer() {
-  return invoke("initialize_server");
+  return apiRequest("/api/system/initialize", { method: "POST" });
 }
 
 export async function checkDependencies() {
-  return invoke("check_dependencies");
+  return apiRequest("/api/system/dependencies");
 }
 
 export async function clearRamCache() {
-  // This command might not be available through the API yet
-  return invoke("clear_ram_cache");
+  return apiRequest("/api/system/cache/clear", { method: "POST" });
+}
+
+
+
+
+
+
+
+export async function getSystemSettings() {
+  return apiRequest("/api/system/settings");
+}
+
+export async function saveSystemSettings(settings) {
+  return apiRequest("/api/system/settings", {
+    method: "PUT",
+    body: JSON.stringify(settings),
+  });
+}
+
+export async function setupPrivilegedAccess(config) {
+  return apiRequest("/api/system/privileged-access", {
+    method: "POST",
+    body: JSON.stringify(config),
+  });
 }
 
 // ============================================================================
@@ -320,20 +340,30 @@ export async function stopService(name) {
 }
 
 export async function restartService(name) {
-  return apiRequest(`/api/services/${name}/restart`, { method: "POST" });
+  return apiRequest(`/api/services/${encodeURIComponent(name)}/restart`, {
+    method: "POST",
+  });
 }
 
-// Note: startAllServices, stopAllServices, restartAllServices might not be available through the API yet
 export async function startAllServices() {
-  return invoke("start_all_services");
+  return apiRequest("/api/services/all/start", { method: "POST" });
 }
 
 export async function stopAllServices() {
-  return invoke("stop_all_services");
+  return apiRequest("/api/services/all/stop", { method: "POST" });
 }
 
 export async function restartAllServices() {
-  return invoke("restart_all_services");
+  return apiRequest("/api/services/all/restart", { method: "POST" });
+}
+
+
+
+export async function configureServiceConfig(name, config) {
+  return apiRequest(`/api/services/${name}/configure`, {
+    method: "POST",
+    body: JSON.stringify(config),
+  });
 }
 
 // ============================================================================
@@ -378,7 +408,7 @@ export async function getClientBootHistory(clientId, limit) {
 // ============================================================================
 
 export async function listImages() {
-  return invoke("list_images");
+  return apiRequest("/api/images");
 }
 
 export async function listMasters() {
@@ -403,34 +433,44 @@ export async function createImage(request) {
   });
 }
 
-// Note: importImage, deleteImage, cloneImage, createSnapshot, etc. might not be available through the API yet
 export async function importImage(request) {
-  return invoke("import_image", { request });
+  return apiRequest("/api/images/import", {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
 }
 
 export async function deleteImage(id) {
-  // API doesn't currently support force parameter
   return apiRequest(`/api/images/${id}`, { method: "DELETE" });
 }
 
 export async function cloneImage(sourceId, newName) {
-  return invoke("clone_image", { sourceId, newName });
+  return apiRequest(`/api/images/${sourceId}/clone`, {
+    method: "POST",
+    body: JSON.stringify({ new_name: newName }),
+  });
 }
 
 export async function createSnapshot(sourceId, snapshotName) {
-  return invoke("create_snapshot_command", { sourceId, snapshotName });
+  return apiRequest(`/api/images/${sourceId}/snapshots`, {
+    method: "POST",
+    body: JSON.stringify({ snapshot_name: snapshotName }),
+  });
 }
 
 export async function getImageInfo(id) {
-  return invoke("get_image_info", { id });
+  return apiRequest(`/api/images/${id}/info`);
 }
 
 export async function resizeImage(id, newSizeGb) {
-  return invoke("resize_image", { id, newSizeGb });
+  return apiRequest(`/api/images/${id}/resize`, {
+    method: "POST",
+    body: JSON.stringify({ new_size_gb: newSizeGb }),
+  });
 }
 
 export async function verifyImage(id) {
-  return invoke("verify_image", { id });
+  return apiRequest(`/api/images/${id}/verify`, { method: "POST" });
 }
 
 // ============================================================================
@@ -438,11 +478,85 @@ export async function verifyImage(id) {
 // ============================================================================
 
 export async function listVersions(baseName) {
-  return invoke("list_versions", { baseName });
+  return apiRequest(`/api/images/${baseName}/versions`);
 }
 
 export async function getVersionHistory(baseName) {
-  return invoke("get_version_history", { baseName });
+  return apiRequest(`/api/images/${baseName}/version-history`);
+}
+
+// ============================================================================
+// Disk Commands
+// ============================================================================
+
+export async function listDisks() {
+  return apiRequest("/api/disks");
+}
+
+export async function renameDisk(diskName, newName) {
+  return apiRequest(`/api/disks/${diskName}/rename`, {
+    method: "PUT",
+    body: JSON.stringify({ new_name: newName }),
+  });
+}
+
+export async function createZfsPool(poolConfig) {
+  return apiRequest("/api/disks/pool", {
+    method: "POST",
+    body: JSON.stringify(poolConfig),
+  });
+}
+
+export async function checkZfsPoolExists() {
+  return apiRequest("/api/disks/pool/exists");
+}
+
+// ============================================================================
+// Authentication Commands
+// ============================================================================
+
+export async function validateAuthToken() {
+  const token = getAuthToken();
+  return apiRequest("/api/auth/validate", {
+    method: "POST",
+    body: JSON.stringify({ token }),
+  });
+}
+
+export async function updateAdminPassword(newPassword) {
+  return apiRequest("/api/auth/admin/password", {
+    method: "PUT",
+    body: JSON.stringify({ new_password: newPassword }),
+  });
+}
+
+export async function checkAdminExists() {
+  return apiRequest("/api/auth/admin/exists");
+}
+
+// ============================================================================
+// Logs Commands
+// ============================================================================
+
+export async function getLogs(unit = null, lines = 50) {
+  const params = new URLSearchParams();
+  if (unit) {
+    params.append("unit", unit);
+  }
+  params.append("lines", lines);
+  return apiRequest(`/api/logs?${params.toString()}`);
+}
+
+export async function clearLogs() {
+  return apiRequest("/api/logs", { method: "DELETE" });
+}
+
+// ============================================================================
+// License Commands
+// ============================================================================
+
+export async function getLicenseInfo() {
+  return apiRequest("/api/license/info");
 }
 
 // ============================================================================
@@ -450,9 +564,171 @@ export async function getVersionHistory(baseName) {
 // ============================================================================
 
 export async function getSettings() {
-  return invoke("get_settings");
+  return apiRequest("/api/system/settings");
 }
 
 export async function saveSettings(settings) {
-  return invoke("save_settings", { settings });
+  return apiRequest("/api/system/settings", {
+    method: "PUT",
+    body: JSON.stringify(settings),
+  });
+}
+
+// ============================================================================
+// Dashboard Commands
+// ============================================================================
+
+export async function getDefaultImageOverview() {
+  return apiRequest("/api/dashboard/default-image");
+}
+
+export async function getClientOverview() {
+  return apiRequest("/api/dashboard/clients");
+}
+
+// ============================================================================
+// Service Installation Commands
+// ============================================================================
+
+export async function installService(service) {
+  return apiRequest("/api/services/install", {
+    method: "POST",
+    body: JSON.stringify({ service }),
+  });
+}
+
+export async function configureSambaServer(shares) {
+  return apiRequest("/api/services/samba/configure", {
+    method: "POST",
+    body: JSON.stringify({ shares }),
+  });
+}
+
+// ============================================================================
+// ZFS Commands
+// ============================================================================
+
+export async function listDatasets(zpool) {
+  return apiRequest(`/api/zfs/datasets?zpool=${zpool}`);
+}
+
+export async function createZfsDataset(req) {
+  return apiRequest("/api/zfs/datasets", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+export async function deleteZfsDataset(dataset, recursive = true) {
+  return apiRequest(`/api/zfs/datasets/${dataset}`, {
+    method: "DELETE",
+    body: JSON.stringify({ recursive }),
+  });
+}
+
+export async function getZpoolList() {
+  return apiRequest("/api/zfs/pools/stats");
+}
+
+export async function listZpools() {
+  return apiRequest("/api/zfs/pools");
+}
+
+// ============================================================================
+// System Monitoring Commands
+// ============================================================================
+
+export async function getRamUsage() {
+  return apiRequest("/api/system/ram-usage");
+}
+
+export async function getZfsArcstat() {
+  return apiRequest("/api/system/zfs-arcstat");
+}
+
+// ============================================================================
+// Configuration Commands
+// ============================================================================
+
+export async function readConfig() {
+  return apiRequest("/api/config");
+}
+
+// ============================================================================
+// Network Commands
+// ============================================================================
+
+export async function getNetworkInterfaces() {
+  return apiRequest("/api/system/network/interfaces");
+}
+
+export async function getInterfaceIp(interfaceName) {
+  return apiRequest(`/api/system/network/interfaces/${encodeURIComponent(interfaceName)}/ip`);
+}
+
+export async function detectServerNetwork() {
+  return apiRequest("/api/system/network/detect", { method: "POST" });
+}
+
+export async function applyNetworkSettings(settings) {
+  return apiRequest("/api/system/network/apply", {
+    method: "POST",
+    body: JSON.stringify(settings),
+  });
+}
+
+// ============================================================================
+// Service Configuration Commands
+// ============================================================================
+
+export async function getServiceConfig(serviceName) {
+  return apiRequest(`/api/services/${encodeURIComponent(serviceName)}/config`);
+}
+
+export async function saveServiceConfig(serviceName, config) {
+  return apiRequest(`/api/services/${encodeURIComponent(serviceName)}/configure`, {
+    method: "POST",
+    body: JSON.stringify(config),
+  });
+}
+
+export async function configureService(serviceName) {
+  return apiRequest(`/api/services/${encodeURIComponent(serviceName)}/configure`, {
+    method: "POST",
+  });
+}
+
+
+
+// ============================================================================
+// Snapshot Commands
+// ============================================================================
+
+export async function deleteSnapshot(masterName, snapshotName) {
+  return apiRequest(`/api/images/${encodeURIComponent(masterName)}/snapshots/${encodeURIComponent(snapshotName)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function rollbackImageSnapshot(masterName, snapshotName) {
+  return apiRequest(`/api/images/${encodeURIComponent(masterName)}/snapshots/${encodeURIComponent(snapshotName)}/rollback`, {
+    method: "POST",
+  });
+}
+
+export async function setDefaultImage(masterName) {
+  return apiRequest(`/api/images/${encodeURIComponent(masterName)}/set-default`, {
+    method: "POST",
+  });
+}
+
+// ============================================================================
+// License Commands (Additional)
+// ============================================================================
+
+export async function activateLicense(key) {
+  return apiRequest("/api/license/activate", {
+    method: "POST",
+    body: JSON.stringify({ key }),
+  });
 }

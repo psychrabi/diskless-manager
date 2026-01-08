@@ -1,6 +1,6 @@
 import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
-import { invoke } from "@tauri-apps/api/core";
+import { checkDependencies, checkZfsPoolExists, getLicenseInfo } from "@/api/commands";
 import { useEffect, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { Loading } from "../ui";
@@ -18,12 +18,12 @@ const PublicLayout = () => {
     let cancelled = false;
     (async () => {
       try {
-        const res = await invoke("check_dependencies");
+        const res = await checkDependencies();
         const list = Array.isArray(res) ? res : res ? Object.values(res) : [];
         if (!cancelled) {
           setDependencies(list);
           const allServicesInstalled = list.every((svc) => svc?.installed);
-          const poolExists = await invoke("zfs_pool_exists");
+          const poolExists = await checkZfsPoolExists();
 
           // Only redirect to setup if services are not installed OR pool missing
           // AND we are not already on setup page
@@ -47,7 +47,7 @@ const PublicLayout = () => {
       }
 
       try {
-        await invoke("get_license_info");
+        await getLicenseInfo();
       } catch (err) {
         error(
           `License Check Failed : ${

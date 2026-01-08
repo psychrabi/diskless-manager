@@ -2,7 +2,7 @@ import { Button, Card, Input } from "@/components/ui";
 import { useAuth } from "@/contexts/auth";
 import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { invoke } from "@tauri-apps/api/core";
+import { updateAdminPassword, login } from "@/api/commands";
 import { useForm } from "react-hook-form";
 import { useNavigate } from "react-router-dom";
 import { z } from "zod";
@@ -53,19 +53,11 @@ const InitialSetup = () => {
 
   const onSubmit = async (data) => {
     try {
-      // Call the initialize_admin_user command
-      await invoke("update_admin_password", {
-        username: data.username,
-        password: data.password,
-      });
+      // Call the update_admin_password API endpoint
+      await updateAdminPassword(data.password);
 
       // Now attempt to log in with the newly created admin credentials
-      const loginResponse = await invoke("login", {
-        request: {
-          username: data.username,
-          password: data.password,
-        },
-      });
+      const loginResponse = await login(data.username, data.password);
 
       // Set auth context immediately so ProtectedRoute sees it
       setAuth(loginResponse.user, loginResponse.token);
@@ -75,9 +67,10 @@ const InitialSetup = () => {
       );
       navigate("/");
     } catch (e) {
+      const errorMessage = e instanceof Error ? e.message : "An unknown error occurred";
       error(
         "User Account Creation Failed",
-        e.message || "An unknown error occurred"
+        errorMessage
       );
       reset({ password: "", confirmPassword: "" }); // Clear password fields on error
     }

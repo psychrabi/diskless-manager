@@ -28,7 +28,7 @@ lazy_static::lazy_static! {
 
 // In a real application, this would be stored in a database
 lazy_static::lazy_static! {
-    static ref USERS: HashMap<String, User> = {
+    pub static ref USERS: HashMap<String, User> = {
         let mut m = HashMap::new();
         // Default admin user (password: admin123)
         let password_hash = hash("admin123", DEFAULT_COST).expect("Failed to hash default admin password");

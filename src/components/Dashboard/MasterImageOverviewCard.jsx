@@ -1,5 +1,5 @@
 import { useToastStore } from "@/store/useToastStore";
-import { invoke } from "@tauri-apps/api/core";
+import { getDefaultImageOverview } from "@/api/commands";
 import { HardDrive, RefreshCw } from "lucide-react"; // Add Refresh icon
 import { useEffect, useState } from "react";
 import { Button, Card } from "../ui"; // Assume Button component
@@ -14,7 +14,7 @@ const MasterImageOverviewCard = () => {
     setError("");
     setLoading(true);
     try {
-      const data = await invoke("get_default_image_overview");
+      const data = await getDefaultImageOverview();
       setOverview(data);
     } catch (err) {
       console.error(err);

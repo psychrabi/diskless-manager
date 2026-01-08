@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import * as api from "@/api/commands";
 import { useAppStore } from "../store/useAppStore";
 import { useToastStore } from "../store/useToastStore";
 
@@ -9,39 +9,18 @@ export const useServiceManager = () => {
 
   const fetchServiceConfig = async (serviceKey) => {
     try {
-      const token = localStorage.getItem("authToken") || "";
-      const configData = await invoke("get_service_config", {
-        token,
-        serviceKey,
-      });
+      const configData = await api.getServiceConfig(serviceKey);
 
-      // let configText = "";
-      // if (
-      //   configData &&
-      //   typeof configData === "object" &&
-      //   "text" in configData
-      // ) {
-      //   configText = configData.text;
-      // } else if (typeof configData === "object") {
-      //   configText = JSON.stringify(configData, null, 2);
-      // } else {
-      //   configText = String(configData);
-      // }
-      return { text: configData?.text, path: configData.path };
+      return { text: configData?.text || "", path: configData?.path || "" };
     } catch (err) {
       error(`Error loading configuration: \n${err.message} `);
+      return { text: "", path: "" };
     }
   };
 
   const handleConfigSave = async (serviceKey, content) => {
     try {
-      // Get token from localStorage
-      const token = localStorage.getItem("authToken") || "";
-      await invoke("save_service_config", {
-        token,
-        serviceKey: serviceKey,
-        content: content,
-      });
+      await api.saveServiceConfig(serviceKey, { content });
       success("Configuration saved successfully");
       fetchServices();
     } catch (err) {
@@ -51,8 +30,7 @@ export const useServiceManager = () => {
 
   const startAllServices = async () => {
     try {
-      const token = localStorage.getItem("authToken") || "";
-      await invoke("start_all_services", { token });
+      await api.startAllServices();
       success("All services started successfully");
       fetchServices();
     } catch (err) {
@@ -62,8 +40,7 @@ export const useServiceManager = () => {
 
   const stopAllServices = async () => {
     try {
-      const token = localStorage.getItem("authToken") || "";
-      await invoke("stop_all_services", { token });
+      await api.stopAllServices();
       success("All services stopped successfully");
       fetchServices();
     } catch (err) {

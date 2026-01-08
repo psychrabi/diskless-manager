@@ -79,10 +79,7 @@ export const useAppStore = create()(
           return;
         }
         try {
-          // Note: This functionality may not be available through the API yet
-          // For now, we'll keep using invoke for ZFS operations
-          const { invoke } = await import("@tauri-apps/api/core");
-          const datasetsRes = await invoke("list_datasets", { zpool });
+          const datasetsRes = await api.listDatasets(zpool);
           set({ datasets: datasetsRes || [] });
         } catch (err) {
           console.error("Failed to fetch datasets:", err);
@@ -91,16 +88,11 @@ export const useAppStore = create()(
 
       createDataset: async (data) => {
         try {
-          // Note: This functionality may not be available through the API yet
-          // For now, we'll keep using invoke for ZFS operations
-          const { invoke } = await import("@tauri-apps/api/core");
-          await invoke("create_zfs_dataset", {
-            req: {
-              zpool: data.zpool,
-              name: data.name,
-              usage_type: data.usage_type,
-              size: data.size ?? "",
-            },
+          await api.createZfsDataset({
+            zpool: data.zpool,
+            name: data.name,
+            usage_type: data.usage_type,
+            size: data.size ?? "",
           });
           return {
             success: true,
@@ -118,13 +110,7 @@ export const useAppStore = create()(
 
       deleteDataset: async (name) => {
         try {
-          // Note: This functionality may not be available through the API yet
-          // For now, we'll keep using invoke for ZFS operations
-          const { invoke } = await import("@tauri-apps/api/core");
-          const response = await invoke("delete_zfs_dataset", {
-            dataset: name,
-            recursive: true,
-          });
+          const response = await api.deleteZfsDataset(name, true);
           return {
             success: true,
             message:
@@ -213,9 +199,7 @@ export const useAppStore = create()(
 
       fetchDependencies: async () => {
         try {
-          // Note: This functionality may not be available through the API yet
-          const { invoke } = await import("@tauri-apps/api/core");
-          const dependenciesRes = await invoke("check_dependencies");
+          const dependenciesRes = await api.checkDependencies();
           set({ dependencies: dependenciesRes });
         } catch (err) {
           console.error("Failed to fetch dependencies:", err);
@@ -224,9 +208,7 @@ export const useAppStore = create()(
 
       fetchLicenseInfo: async () => {
         try {
-          // Note: This functionality may not be available through the API yet
-          const { invoke } = await import("@tauri-apps/api/core");
-          const licenseRes = await invoke("get_license_info");
+          const licenseRes = await api.getLicenseInfo();
           set({ licenseInfo: licenseRes });
         } catch (err) {
           console.error("Failed to fetch license info:", err);
@@ -235,11 +217,9 @@ export const useAppStore = create()(
 
       fetchDisks: async () => {
         try {
-          // Note: This functionality may not be available through the API yet
-          const { invoke } = await import("@tauri-apps/api/core");
           const [zpoolStatsRes, zpoolsRes] = await Promise.all([
-            invoke("get_zpool_list"),
-            invoke("list_zpools"),
+            api.getZpoolList(),
+            api.listZpools(),
           ]);
           set({
             zpoolStats: Array.isArray(zpoolStatsRes) ? zpoolStatsRes[0] : null,
@@ -251,9 +231,7 @@ export const useAppStore = create()(
       },
       fetchRamUsage: async () => {
         try {
-          // Note: This functionality may not be available through the API yet
-          const { invoke } = await import("@tauri-apps/api/core");
-          const ramUsageRes = await invoke("get_ram_usage");
+          const ramUsageRes = await api.getRamUsage();
           set({ ramUsage: ramUsageRes });
         } catch (err) {
           console.error("Failed to fetch ram usage:", err);
@@ -262,9 +240,7 @@ export const useAppStore = create()(
 
       fetchArcStat: async () => {
         try {
-          // Note: This functionality may not be available through the API yet
-          const { invoke } = await import("@tauri-apps/api/core");
-          const arcStatRes = await invoke("get_zfs_arcstat");
+          const arcStatRes = await api.getZfsArcstat();
           set({ arcStat: arcStatRes });
         } catch (err) {
           console.error("Failed to fetch arc stat:", err);
@@ -384,9 +360,7 @@ export const useAppStore = create()(
       fetchConfig: async () => {
         set({ checkingConfig: true, loading: true });
         try {
-          // Note: This functionality may not be available through the API yet
-          const { invoke } = await import("@tauri-apps/api/core");
-          const cfg = await invoke("read_config");
+          const cfg = await api.readConfig();
           set({ appConfig: cfg });
         } catch (err) {
           set({

@@ -1,5 +1,6 @@
 import { useToastStore } from "@/store/useToastStore";
 import { useCallback, useEffect, useState } from "react";
+import { validateAuthToken } from "@/api/commands";
 import { AuthContext } from "./auth";
 
 export const AuthProvider = ({ children }) => {
@@ -20,10 +21,8 @@ export const AuthProvider = ({ children }) => {
   const validateToken = useCallback(
     async (authToken) => {
       try {
-        // For now, we'll keep using invoke for token validation since it's not available through the API
-        // In a future iteration, we could implement token validation through the API
-        const { invoke } = await import("@tauri-apps/api/core");
-        await invoke("validate_auth_token", { token: authToken });
+        // Validate the token through the API
+        await validateAuthToken();
         // Token is valid, do nothing
       } catch (err) {
         error(err.message || "Your session has expired. Please log in again.");

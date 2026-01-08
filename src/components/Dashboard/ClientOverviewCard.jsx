@@ -1,5 +1,5 @@
 import { useToastStore } from "@/store/useToastStore";
-import { invoke } from "@tauri-apps/api/core";
+import { getClientOverview } from "@/api/commands";
 import { Users } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Card } from "../ui";
@@ -12,7 +12,7 @@ const ClientOverviewCard = () => {
   useEffect(() => {
     const fetchClientOverview = async () => {
       try {
-        const data = await invoke("get_client_overview");
+        const data = await getClientOverview();
         setOverview(data);
       } catch (err) {
         error(

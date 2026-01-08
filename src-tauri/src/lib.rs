@@ -34,8 +34,37 @@ const DHCP_CONFIG_PATH: &str = "/etc/dhcp/dhcpd.conf";
 const DHCP_CLIENTS_PATH: &str = "/etc/dhcp/clients.conf";
 pub const TFTP_AUTOEXEC_PATH: &str = "/srv/tftp/autoexec.ipxe";
 
+fn setup_logging() -> Result<(), Box<dyn std::error::Error>> {
+    // Get the log file path
+    let mut log_dir = dirs::config_dir()
+        .unwrap_or_else(|| dirs::home_dir().expect("No home dir or config dir available"));
+    log_dir.push("com.diskless.local");
+    let _ = std::fs::create_dir_all(&log_dir);
+
+    // Create file appender
+    let file_appender = tracing_appender::rolling::never(&log_dir, "diskless-manager.log");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+
+    // Set up tracing subscriber with both file and stdout
+    use tracing_subscriber::fmt::format::FmtSpan;
+    tracing_subscriber::fmt()
+        .with_writer(non_blocking)
+        .with_span_events(FmtSpan::CLOSE)
+        .with_level(true)
+        .with_target(true)
+        .with_thread_ids(true)
+        .init();
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub async fn run() {
+    // Initialize logging first
+    if let Err(e) = setup_logging() {
+        eprintln!("Failed to setup logging: {}", e);
+    }
+
     // Initialize application state
     let state = AppState::new()
         .await
@@ -56,18 +85,6 @@ pub async fn run() {
 
     // Start Tauri application
     tauri::Builder::default()
-        .plugin(
-            tauri_plugin_log::Builder::default()
-                .targets([
-                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
-                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
-                        file_name: Some("diskless-manager".into()),
-                    }),
-                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Webview),
-                ])
-                .level(log::LevelFilter::Info)
-                .build(),
-        )
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_notification::init())

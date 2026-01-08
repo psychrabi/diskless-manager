@@ -43,6 +43,8 @@ thiserror = "2.0.17"
 toml = "0.8"
 fs2 = "0.4"
 tracing = { version = "0.1", features = ["log"] }
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "ansi"] }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1.0.100"
 sqlx = { version = "0.8.6", features = ["runtime-tokio", "postgres", "sqlite"] }

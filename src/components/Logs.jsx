@@ -8,7 +8,16 @@ import { Activity, Button, Card, Select } from "./ui";
 const Logs = () => {
   const [logUnit, setLogUnit] = useState("app_log");
   const services = useAppStore((state) => state.services);
+  const fetchServices = useAppStore((state) => state.fetchServices);
   const { logs, fetchLogs } = useLogs();
+
+  useEffect(() => {
+    console.log("Services in Logs component:", services);
+    // Fetch services if not already loaded
+    if (!services || services.length === 0) {
+      fetchServices();
+    }
+  }, []);
 
   useEffect(() => {
     if (logUnit) {
@@ -24,11 +33,15 @@ const Logs = () => {
         onChange={(e) => setLogUnit(e.target.value)}
       >
         <option value="app_log">Show App logs</option>
-        {Object.entries(services || {}).map(([key, svc]) => (
-          <option key={key} value={svc.service}>
-            {svc.name || svc.service}
-          </option>
-        ))}
+        {Array.isArray(services) && services.length > 0 ? (
+          services.map((svc) => (
+            <option key={svc.name} value={svc.name}>
+              {svc.display_name || svc.name}
+            </option>
+          ))
+        ) : (
+          <option disabled>No services available</option>
+        )}
       </Select>
       <Button
         variant="ghost"

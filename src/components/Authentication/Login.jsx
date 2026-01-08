@@ -40,7 +40,8 @@ const Login = () => {
       success("Login Successful", "You have successfully logged in");
       navigate("/");
     } catch (e) {
-      error("Login Failed", e.message || "An unknown error occurred");
+      const errorMessage = e instanceof Error ? e.message : "An unknown error occurred";
+      error("Login Failed", errorMessage);
       reset({ password: "" }); // Clear password field on error
     }
   };

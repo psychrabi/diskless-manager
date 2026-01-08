@@ -74,8 +74,12 @@ pub async fn require_auth(
         return Ok(next.run(request).await);
     }
 
-    // Skip auth for login endpoint
-    if request.uri().path() == "/api/auth/login" {
+    let path = request.uri().path();
+
+    // Skip auth for login and admin setup endpoints
+    if path == "/api/auth/login" 
+        || path == "/api/auth/validate"
+        || path == "/api/auth/admin/exists" {
         return Ok(next.run(request).await);
     }
 

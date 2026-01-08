@@ -37,12 +37,7 @@ const RenameImageModal = ({
       newName: "",
     },
   });
-  // const token = localStorage.getItem("authToken") || "";
-  // await invoke("rename_image", {
-  //   token,
-  //   oldName: selectedImage,
-  //   newName: data.newName,
-  // })
+
   const onSubmit = async (data) => {
     if (!selectedImage) return;
     console.log(data)

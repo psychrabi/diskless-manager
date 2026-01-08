@@ -1,6 +1,5 @@
 import { useConfirm } from "@/contexts/confirmDialog";
 import { useToastStore } from "@/store/useToastStore";
-import { invoke } from "@tauri-apps/api/core";
 import { useCallback } from "react";
 import * as api from "../api/commands";
 
@@ -20,8 +19,7 @@ export const useClientActions = (
       confirmTitle,
       confirmDesc,
       confirmText,
-      invokeCmd,
-      invokeArgs,
+      apiCall,
       successMsg,
       cancelMsg
     ) => {
@@ -47,10 +45,6 @@ export const useClientActions = (
         ].includes(action) &&
         client.status === "Online"
       ) {
-        // Edit is special case in original code: "Client must be offine to make changes."
-        // Wake is special case: "Client must be offline to wake"
-        // Others: "Client must be offline to..."
-        // So generally, offline required for these.
         showError(
           "Client Management",
           `Client must be offline to ${
@@ -84,9 +78,8 @@ export const useClientActions = (
       }
 
       // Execution
-      const token = localStorage.getItem("authToken") || "";
       try {
-        const response = await invoke(invokeCmd, { token, ...invokeArgs });
+        const response = await apiCall();
         if (response && response.message)
           success("Client Management", response.message);
         if (fetchData) fetchData();
@@ -98,7 +91,7 @@ export const useClientActions = (
         );
       }
     },
-    [confirm, showError, closeContextMenu, fetchData, setClient, setIsModalOpen]
+    [confirm, showError, closeContextMenu, fetchData, setClient, setIsModalOpen, success, info]
   );
 
   // Wrapper functions to match original interface
@@ -112,8 +105,7 @@ export const useClientActions = (
         "Reboot Client",
         `Are you sure you want to reboot client "${client.name}" ? `,
         "Reboot Client",
-        "control_client",
-        { clientId: client.id, req: { action: "reboot" } },
+        () => api.updateClient(client.id, { action: "reboot" }),
         "Client Rebooted",
         "Client reboot cancelled."
       ),
@@ -125,8 +117,7 @@ export const useClientActions = (
         "Shutdown Client",
         `Are you sure you want to shutdown client "${client.name}" ? `,
         "Shutdown Client",
-        "control_client",
-        { clientId: client.id, req: { action: "shutdown" } },
+        () => api.updateClient(client.id, { action: "shutdown" }),
         "Client Shutdown",
         "Client shutdown cancelled."
       ),
@@ -138,8 +129,7 @@ export const useClientActions = (
         "Wake Client",
         `Are you sure you want to wake client "${client.name}" ? `,
         "Wake Client",
-        "control_client",
-        { clientId: client.id, req: { action: "wake" } },
+        () => api.updateClient(client.id, { action: "wake" }),
         "Client Woken",
         "Client wake up cancelled."
       ),
@@ -151,8 +141,7 @@ export const useClientActions = (
         "Remote Client",
         `Are you sure you want to remote client "${client.name}" ? `,
         "Remote Client",
-        "remote_client",
-        { clientId: client.id },
+        () => api.updateClient(client.id, { action: "remote" }),
         "Client Remotely Connected",
         "Client remote connection cancelled."
       ),
@@ -164,8 +153,7 @@ export const useClientActions = (
         "Reset client writeback",
         `Are you sure you want to reset client "${client.name}" ? This will destroy their ZFS clone and remove configurations.`,
         "Reset Client",
-        "reset_client",
-        { clientId: client.id },
+        () => api.updateClient(client.id, { action: "reset" }),
         "Client Reset successfully",
         "Client reset cancelled."
       ),
@@ -188,8 +176,7 @@ export const useClientActions = (
         "Reset to Clean State",
         `This will delete the writeback for "${client.name}" and recreate it from the snapshot.All changes will be lost.Continue ? `,
         "Reset to Clean",
-        "reset_client_to_clean",
-        { clientId: client.id },
+        () => api.updateClient(client.id, { action: "reset_clean" }),
         "Client Reset to Clean successfully",
         "Reset to clean cancelled."
       );
@@ -233,8 +220,7 @@ export const useClientActions = (
         "Enable Super Client",
         `Client "${client.name}" will boot directly from master image.This skips clone / writeback.Continue ? `,
         "Enable Super",
-        "control_client",
-        { clientId: client.id, req: { action: "super", make_super: true } },
+        () => api.updateClient(client.id, { action: "super", make_super: true }),
         "Client Enabled Super successfully",
         "Enable Super cancelled."
       ),
@@ -250,8 +236,7 @@ export const useClientActions = (
         "Disable Super Client",
         `This will point ${client.name} back to its writeback clone.Continue ? `,
         "Disable Super",
-        "control_client",
-        { clientId: client.id, req: { action: "super", make_super: false } },
+        () => api.updateClient(client.id, { action: "super", make_super: false }),
         "Client Disabled Super successfully",
         "Disable Super cancelled."
       );
@@ -297,13 +282,9 @@ export const useClientActions = (
       const snapshotName = `${client.master}@${suffix
         .trim()
         .replace(/\s+/g, "-")}`;
-      const token = localStorage.getItem("authToken") || "";
 
       try {
-        const response = await invoke("create_snapshot", {
-          token,
-          snapshotName,
-        });
+        const response = await api.createSnapshot(client.master, snapshotName);
         if (response.message) success("Client Management", response.message);
         fetchData();
         closeContextMenu();

@@ -1,6 +1,6 @@
 import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { invoke } from "@tauri-apps/api/core";
+import { renameDisk } from "@/api/commands";
 import { Save } from "lucide-react";
 import { useForm } from "react-hook-form";
 import z from "zod";
@@ -45,26 +45,22 @@ const RenameDiskModal = ({
     info(`Renaming disk from ${baseName} to ${data.newName}`);
     setOpenRenameModal(false);
 
-    // Get token from localStorage
-    const token = localStorage.getItem("authToken") || "";
-    await invoke("rename_zfs_dataset", {
-      token,
-      old: selectedDisk.name,
-      new: data.newName,
-    })
-      .then((response) => {
-        if (response.message) success("Disk Management", response.message);
-        reset();
-      })
-      .catch((err) => {
-        error(
-          "Disk Management",
-          `Failed to rename disk: ${err.message || "An unknown error occurred"}`
-        );
-      })
-      .finally(() => {
-        refresh && refresh();
-      });
+    try {
+      const response = await renameDisk(selectedDisk.name, data.newName);
+      if (response.message) {
+        success("Disk Management", response.message);
+      } else {
+        success("Disk Management", `Successfully renamed disk to ${data.newName}`);
+      }
+      reset();
+    } catch (err) {
+      error(
+        "Disk Management",
+        `Failed to rename disk: ${err.message || "An unknown error occurred"}`
+      );
+    } finally {
+      refresh && refresh();
+    }
   };
 
   const handleClose = () => {

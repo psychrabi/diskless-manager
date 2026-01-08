@@ -1,6 +1,6 @@
 import { ShieldCheck, ShieldAlert } from "lucide-react";
 import { useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { setupPrivilegedAccess } from "@/api/commands";
 import { useToastStore } from "@/store/useToastStore";
 import { Button, Card } from "../ui";
 
@@ -12,8 +12,9 @@ export default function PrivilegeManagementForm() {
     setLoading(true);
     try {
       info("Requesting administrative authorization...");
-      const message = await invoke("setup_privileged_access");
-      success(message);
+      const response = await setupPrivilegedAccess({});
+      console.log(response);
+      success("Authorization",response.message);
     } catch (e) {
       error(e.toString());
     } finally {

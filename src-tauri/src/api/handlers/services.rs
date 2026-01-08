@@ -10,6 +10,7 @@ use crate::state::AppState;
 pub async fn list_services(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<crate::core::service::ServiceInfo>>, StatusCode> {
+    log::info!("list_services endpoint called");
     let settings = state.settings.read().await;
     let service_manager = ServiceManager::new(settings.clone(), state.db_pool.clone());
 
@@ -49,7 +50,8 @@ pub async fn list_services(
 
                 services.push(service_info);
             }
-            Err(_) => {
+            Err(e) => {
+                log::warn!("Failed to get status for service {}: {:?}", name, e);
                 // If service status fails, add with default values
                 let is_enabled = match name {
                     "dhcp" => service_manager.settings.dhcp.enabled,
@@ -74,6 +76,7 @@ pub async fn list_services(
         }
     }
 
+    log::info!("Returning {} services", services.len());
     Ok(Json(services))
 }
 
@@ -145,4 +148,86 @@ pub async fn restart_service(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let response = format!("Service {} restarted", name);
     Ok(Json(response))
+}
+
+pub async fn start_all_services(
+    State(state): State<AppState>,
+) -> Result<Json<String>, StatusCode> {
+    let settings = state.settings.read().await;
+    let service_manager = ServiceManager::new(settings.clone(), state.db_pool.clone());
+    service_manager
+        .start_all()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json("All services started successfully".to_string()))
+}
+
+pub async fn stop_all_services(
+    State(state): State<AppState>,
+) -> Result<Json<String>, StatusCode> {
+    let settings = state.settings.read().await;
+    let service_manager = ServiceManager::new(settings.clone(), state.db_pool.clone());
+    service_manager
+        .stop_all()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json("All services stopped successfully".to_string()))
+}
+
+pub async fn restart_all_services(
+    State(state): State<AppState>,
+) -> Result<Json<String>, StatusCode> {
+    let settings = state.settings.read().await;
+    let service_manager = ServiceManager::new(settings.clone(), state.db_pool.clone());
+    service_manager
+        .restart_all()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json("All services restarted successfully".to_string()))
+}
+
+pub async fn get_service_config(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    use serde_json::json;
+    use std::fs;
+
+    let settings = state.settings.read().await;
+    let service_manager = ServiceManager::new(settings.clone(), state.db_pool.clone());
+
+    // Special handling for TFTP autoexec file
+    if name == "tftp-autoexec" {
+        match fs::read_to_string("/srv/tftp/autoexec.ipxe") {
+            Ok(content) => {
+                return Ok(Json(json!({ "text": content, "path": "/srv/tftp/autoexec.ipxe" })));
+            }
+            Err(_) => {
+                // File doesn't exist yet, return empty content
+                return Ok(Json(json!({ "text": "", "path": "/srv/tftp/autoexec.ipxe" })));
+            }
+        }
+    }
+
+    // Get config for regular services
+    match service_manager.get_config(&name).await {
+        Ok(config) => Ok(Json(json!({ "text": config }))),
+        Err(_) => {
+            // Return empty config if service config doesn't exist
+            Ok(Json(json!({ "text": "" })))
+        }
+    }
+}
+
+pub async fn configure_service(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<String>, StatusCode> {
+    let settings = state.settings.read().await;
+    let service_manager = ServiceManager::new(settings.clone(), state.db_pool.clone());
+    service_manager
+        .generate_service_config(&name)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(format!("Service {} configured successfully", name)))
 }

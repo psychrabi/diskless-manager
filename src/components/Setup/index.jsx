@@ -1,7 +1,13 @@
 import { useServiceManager } from "@/hooks/useServiceManager";
 import { useSettings } from "@/hooks/useSettings";
 import { useToastStore } from "@/store/useToastStore";
-import { invoke } from "@tauri-apps/api/core";
+import {
+  listDisks,
+  checkZfsPoolExists,
+  createZfsPool,
+  installService,
+  configureSambaServer,
+} from "@/api/commands";
 import {
   CheckCircle,
   ChevronRight,
@@ -32,10 +38,14 @@ const Setup = () => {
   const [installing, setInstalling] = useState("");
   const [activeStep, setActiveStep] = useState(1);
   const [checking, setChecking] = useState(false);
-  const { poolName, appConfig, fetchConfig } = useAppStore();
+  const [bootScriptContent, setBootScriptContent] = useState(null);
+  const { appConfig, fetchConfig } = useAppStore();
   const { error, success, info } = useToastStore();
   const { updateDhcp, updateTftp, updateHttp } = useSettings();
-  const { handleConfigSave } = useServiceManager();
+  const { handleConfigSave, fetchServiceConfig } = useServiceManager();
+  
+  // Extract pool name from config
+  const poolName = appConfig?.settings?.zpool_name || appConfig?.settings?.zfsPool || "zroot";
 
   const { dependencies, fetchDependencies } = useAppStore(
     useShallow((state) => ({
@@ -47,14 +57,25 @@ const Setup = () => {
   const checkAll = useCallback(async () => {
     setChecking(true);
     try {
-      const d = await invoke("list_disks");
+      const d = await listDisks();
       setDisks(d);
 
-      const exists = await invoke("zfs_pool_exists");
+      const exists = await checkZfsPoolExists();
       setPoolExists(exists);
 
       await fetchDependencies();
       await fetchConfig();
+      
+      // Check if boot script exists - call directly without adding to dependencies
+      try {
+        const bootConfig = await fetchServiceConfig("tftp-autoexec");
+        if (bootConfig?.text) {
+          setBootScriptContent(bootConfig.text);
+        }
+      } catch (e) {
+        // Boot script fetch failed, that's ok
+        console.warn("Failed to fetch boot script:", e);
+      }
     } catch (e) {
       console.warn("Initial check failed:", e);
     } finally {
@@ -64,33 +85,52 @@ const Setup = () => {
 
   useEffect(() => {
     checkAll();
-  }, [poolName, checkAll]);
+  }, [checkAll]);
 
   const allServicesInstalled =
     dependencies.length > 0 && !dependencies.some((svc) => !svc.installed);
+
+  // Determine the first incomplete step
+  useEffect(() => {
+    if (allServicesInstalled && poolExists && appConfig?.settings?.dhcp && appConfig?.settings?.tftp && appConfig?.settings?.http && appConfig?.settings?.samba && bootScriptContent) {
+      // All steps complete, show finished
+      setActiveStep(8);
+    } else if (allServicesInstalled && poolExists && appConfig?.settings?.dhcp && appConfig?.settings?.tftp && appConfig?.settings?.http && appConfig?.settings?.samba) {
+      // Boot script not saved
+      setActiveStep(7);
+    } else if (allServicesInstalled && poolExists && appConfig?.settings?.dhcp && appConfig?.settings?.tftp && appConfig?.settings?.http) {
+      // Samba not configured
+      setActiveStep(6);
+    } else if (allServicesInstalled && poolExists && appConfig?.settings?.dhcp && appConfig?.settings?.tftp) {
+      // HTTP not configured
+      setActiveStep(5);
+    } else if (allServicesInstalled && poolExists && appConfig?.settings?.dhcp) {
+      // TFTP not configured
+      setActiveStep(4);
+    } else if (allServicesInstalled && poolExists) {
+      // DHCP not configured
+      setActiveStep(3);
+    } else if (allServicesInstalled) {
+      // Storage not configured
+      setActiveStep(2);
+    } else {
+      // Dependencies not installed
+      setActiveStep(1);
+    }
+  }, [allServicesInstalled, poolExists, appConfig?.settings?.dhcp, appConfig?.settings?.tftp, appConfig?.settings?.http, appConfig?.settings?.samba, bootScriptContent]);
 
   // Auto-progress logic - only advance if we are on the current step
   const prevInstalled = useRef(allServicesInstalled);
   const prevPool = useRef(poolExists);
 
-  useEffect(() => {
-    if (allServicesInstalled && !prevInstalled.current && activeStep === 1) {
-      setActiveStep(2);
-    }
-    if (poolExists && !prevPool.current && activeStep === 2) {
-      setActiveStep(3);
-    }
-    prevInstalled.current = allServicesInstalled;
-    prevPool.current = poolExists;
-  }, [allServicesInstalled, poolExists, activeStep]);
-
   const handleCreatePool = async (data) => {
     try {
-      await invoke("create_zfs_pool", {
-        req: { name: data.name, disk: data.disk },
+      await createZfsPool({
+        name: data.name,
+        disk: data.disk,
       });
       success("ZFS Setup", `ZFS pool ${data.name} created successfully.`);
-      const exists = await invoke("zfs_pool_exists");
+      const exists = await checkZfsPoolExists();
       setPoolExists(exists);
     } catch (e) {
       error("Setup Wizard", `Failed to create ZFS pool: ${e}`);
@@ -100,10 +140,7 @@ const Setup = () => {
   const handleInstallService = async (service) => {
     setInstalling(service);
     try {
-      await invoke("install_service", {
-        service,
-        token: localStorage.getItem("authToken") || "",
-      });
+      await installService(service);
       success("Services", `Package ${service} installed successfully.`);
       await fetchDependencies();
     } catch (e) {
@@ -133,8 +170,7 @@ const Setup = () => {
 
   const handleSambaSubmit = async (shares) => {
     try {
-      const token = localStorage.getItem("authToken") || "";
-      await invoke("configure_samba_server", { token, shares });
+      await configureSambaServer(shares);
       success("Setup - Samba", "Samba configuration saved successfully");
       setActiveStep(7);
     } catch (e) {
@@ -146,6 +182,7 @@ const Setup = () => {
     info(`Updating Boot Script`);
     try {
       await handleConfigSave("tftp-autoexec", content);
+      setBootScriptContent(content);
       setActiveStep(8);
       success("Setup - Boot Script", "Boot Script saved successfully");
     } catch (e) {

@@ -8,6 +8,28 @@ use crate::{
 };
 
 #[tauri::command]
+pub fn list_block_devices() -> Result<Vec<String>, AppError> {
+    // Use lsblk to list all block devices (disks only, not partitions)
+    // Filter for disks (TYPE=disk) and exclude devices that are already part of a zpool
+    let out = run_command_output_no_sudo(&[
+        "lsblk",
+        "-d",
+        "-n",
+        "-o",
+        "NAME",
+    ])
+    .map_err(|e| AppError::Command(e.to_string()))?;
+
+    let devices: Vec<String> = out
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|s| s.trim().to_string())
+        .collect();
+
+    Ok(devices)
+}
+
+#[tauri::command]
 pub fn list_zpools() -> Result<Vec<String>, AppError> {
     // Get fresh data
     let out = run_command_output_no_sudo(&["zpool", "list", "-H", "-o", "name"])

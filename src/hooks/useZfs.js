@@ -1,5 +1,5 @@
+import * as api from "@/api/commands";
 import { useToastStore } from "@/store/useToastStore";
-import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useState } from "react";
 
 export const useZfs = () => {
@@ -15,7 +15,7 @@ export const useZfs = () => {
       }
       setLoading(true);
       try {
-        const res = await invoke("list_datasets", { zpool: pool });
+        const res = await api.listDatasets(pool);
         setDatasets(res || []);
       } catch (e) {
         error(
@@ -32,13 +32,11 @@ export const useZfs = () => {
   const createDataset = useCallback(
     async (data) => {
       try {
-        await invoke("create_zfs_dataset", {
-          req: {
-            zpool: data.zpool,
-            name: data.name,
-            usage_type: data.usage_type,
-            size: data.size ?? "",
-          },
+        await api.createZfsDataset({
+          zpool: data.zpool,
+          name: data.name,
+          usage_type: data.usage_type,
+          size: data.size ?? "",
         });
         success(`Dataset ${data.name} created successfully.`);
         return true;
@@ -56,13 +54,8 @@ export const useZfs = () => {
 
   const deleteDataset = useCallback(
     async (name) => {
-      const token = localStorage.getItem("authToken") || "";
       try {
-        const response = await invoke("delete_zfs_dataset", {
-          token,
-          dataset: name,
-          recursive: true,
-        });
+        const response = await api.deleteZfsDataset(name, true);
         if (response.message) success(response.message);
         return true;
       } catch (e) {

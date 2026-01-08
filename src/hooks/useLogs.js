@@ -1,5 +1,5 @@
+import * as api from "@/api/commands";
 import { useToastStore } from "@/store/useToastStore";
-import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useState } from "react";
 
 export const useLogs = () => {
@@ -12,13 +12,15 @@ export const useLogs = () => {
       if (!unit) return;
       setLoading(true);
       try {
-        const out = await invoke("get_service_logs", {
-          serviceName: unit,
-          lines,
-        });
-        setLogs(out);
+        console.log("Fetching logs for unit:", unit, "lines:", lines);
+        const response = await api.getLogs(unit, lines);
+        console.log("Logs response:", response);
+        // Extract the text from the response object
+        const logText = response?.text || response || "";
+        console.log("Extracted log text:", logText);
+        setLogs(logText);
       } catch (err) {
-        console.error(err);
+        console.error("Error fetching logs:", err);
         error(
           `Failed to fetch logs: ${
             err?.message || String(err) || "Unknown error"

@@ -37,8 +37,10 @@ const BootScriptStep = ({ onSubmit, isSubmitting }) => {
   const [script, setScript] = useState(defaultScript);
 
   useEffect(() => {
-    fetchServiceConfig("tftp-autoexec").then((script) => {
-      setScript(script.text);
+    fetchServiceConfig("tftp-autoexec").then((config) => {
+      if (config?.text) {
+        setScript(config.text);
+      }
     });
   }, [fetchServiceConfig]);
 

@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { invoke } from "@tauri-apps/api/core";
+import { checkAdminExists } from "@/api/commands";
 import { useAuth } from "@/contexts/auth";
 
 const StartupCheck = () => {
@@ -23,7 +23,8 @@ const StartupCheck = () => {
     const checkSystemStatus = async () => {
       try {
         // Check if admin user exists
-        const adminExists = await invoke("check_admin_exists");
+        const response = await checkAdminExists();
+        const adminExists = response.exists || response.admin_exists;
 
         if (adminExists) {
           // Admin exists, go to login

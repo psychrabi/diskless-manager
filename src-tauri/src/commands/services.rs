@@ -152,7 +152,7 @@ pub async fn get_service_config(
     info!("get_service_config: {}", service_key);
 
     match service_key.as_str() {
-        "tftp-autoexec" => match run_command_output(["cat", "/srv/tftp/autoexec.ipxe"]) {
+        "tftp-autoexec" => match std::fs::read_to_string("/srv/tftp/autoexec.ipxe") {
             Ok(content) => {
                 info!("Read {}: {} bytes", service_key, content.len());
                 Ok(json!({ "text": content, "path": "/srv/tftp/autoexec.ipxe" }))

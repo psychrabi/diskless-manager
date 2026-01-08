@@ -1,19 +1,18 @@
 import { useToastStore } from "@/store/useToastStore";
-import { invoke } from "@tauri-apps/api/core";
+import { getLogs, clearLogs } from "@/api/commands";
 import { BrushCleaning, Loader, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button, Card } from "../ui";
 
-export default function AppLogs({ tokenProp }) {
+export default function AppLogs() {
   const [logs, setLogs] = useState("");
   const [loading, setLoading] = useState(false);
-  const token = tokenProp || localStorage.getItem("authToken") || "";
   const { success, error } = useToastStore();
 
   async function load() {
     setLoading(true);
     try {
-      const resp = await invoke("get_logs", { token });
+      const resp = await getLogs();
       const text =
         resp && typeof resp === "object" && "text" in resp
           ? resp.text
@@ -27,10 +26,10 @@ export default function AppLogs({ tokenProp }) {
     }
   }
 
-  async function clearLogs() {
+  async function handleClearLogs() {
     setLoading(true);
     try {
-      await invoke("clear_logs", { token });
+      await clearLogs();
       success("Logs", "Application logs have been cleared successfully.");
       await load();
     } catch (e) {
@@ -63,7 +62,7 @@ export default function AppLogs({ tokenProp }) {
             )}
           </Button>
           <Button
-            onClick={clearLogs}
+            onClick={handleClearLogs}
             className="btn btn-error btn-sm"
             disabled={loading}
           >

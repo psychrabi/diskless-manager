@@ -45,8 +45,8 @@ const StorageStep = ({
             >
               <option value="">-- Select Disk --</option>
               {disks.map((disk) => (
-                <option key={disk.name} value={disk.name}>
-                  {disk.name} ({disk.size})
+                <option key={disk} value={disk}>
+                  {disk}
                 </option>
               ))}
             </Select>
