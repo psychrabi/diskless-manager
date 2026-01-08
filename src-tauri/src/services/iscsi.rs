@@ -163,34 +163,6 @@ impl IscsiService {
         Ok(())
     }
 
-    pub async fn remove_target_by_iqn(
-        &self,
-        target_iqn: &str,
-        block_device: &Option<String>,
-    ) -> anyhow::Result<()> {
-        // Remove the specific target by its full IQN
-        let _ = self
-            .run_targetcli(&format!("/iscsi delete wwn={}", target_iqn))
-            .await
-            .inspect_err(|e| tracing::debug!("Target {} may not have existed: {}", target_iqn, e));
-
-        // Remove the associated backstore if block_device is provided
-        if let Some(device) = block_device {
-            let _ = self
-                .run_targetcli(&format!("/backstores/block delete name={}", device))
-                .await
-                .inspect_err(|e| {
-                    tracing::debug!("Backstore {} may not have existed: {}", device, e)
-                });
-        }
-
-        // Save configuration
-        self.save_config().await?;
-
-        info!("iSCSI target removed: {}", target_iqn);
-        Ok(())
-    }
-
     async fn run_targetcli(&self, command: &str) -> anyhow::Result<()> {
         let output = Command::new("sudo")
             .arg("-n")
