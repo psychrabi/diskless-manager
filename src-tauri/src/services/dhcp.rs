@@ -336,18 +336,39 @@ include "/etc/dhcp/clients.conf";
 
         for client in clients {
             if !client.ip.is_empty() && client.ip != "N/A" {
-                client_config.push_str(&format!(
-                    r#"
+                // Only add root-path if target_iqn is available
+                if let Some(ref target_iqn) = client.target_iqn {
+                    let server_ip = crate::cmd::get_server_ip(); // Get server IP for iSCSI
+                    client_config.push_str(&format!(
+                        r#"
+host {name} {{
+    hardware ethernet {mac};
+    fixed-address {ip};
+    option host-name "{name}";
+    option root-path "iscsi:{server_ip}::::{target_iqn}";
+}}
+"#,
+                        name = client.name,
+                        mac = client.mac,
+                        ip = client.ip,
+                        server_ip = server_ip,
+                        target_iqn = target_iqn,
+                    ));
+                } else {
+                    // Fallback to basic host entry if no target_iqn
+                    client_config.push_str(&format!(
+                        r#"
 host {name} {{
     hardware ethernet {mac};
     fixed-address {ip};
     option host-name "{name}";
 }}
 "#,
-                    name = client.name,
-                    mac = client.mac,
-                    ip = client.ip,
-                ));
+                        name = client.name,
+                        mac = client.mac,
+                        ip = client.ip,
+                    ));
+                }
             }
         }
 

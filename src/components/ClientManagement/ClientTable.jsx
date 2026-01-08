@@ -11,8 +11,8 @@ const ClientStatusBadge = React.memo(({ status }) => {
   const badgeClass = isOnline
     ? "badge-success"
     : isLeased
-      ? "badge-warning"
-      : "badge-neutral";
+    ? "badge-warning"
+    : "badge-neutral";
   const Icon = isOnline ? Power : PowerOff;
   return (
     <span className={`badge ${badgeClass} gap-1`}>
@@ -167,7 +167,7 @@ const ClientTable = ({ handleClientContextMenu }) => {
                 {client.snapshot ?? "-"}
               </TableCell>
               <TableCell className="hidden xl:table-cell text-xs font-mono break-all">
-                {client.block_device}
+                {client.block_store}
               </TableCell>
               <TableCell>
                 <ClientStatusBadge status={client.status} />
