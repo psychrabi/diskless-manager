@@ -3,13 +3,14 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use log::info;
+use log::{error, info};
 use serde::Deserialize;
 
 use crate::core::client::{
     BootLogEntry, Client, ClientManager, CreateClientRequest, UpdateClientRequest,
 };
 use crate::state::AppState;
+use crate::zfs::{get_writeback_or_default_dataset, zfs_clone, zfs_destroy, zfs_exists};
 
 #[derive(Deserialize)]
 pub struct Pagination {
@@ -41,38 +42,56 @@ pub async fn create_client(
 ) -> Result<Json<Client>, StatusCode> {
     let settings = state.settings.read().await;
 
+    info!("Creating client: {:?}", request);
+
+    request.target_iqn = Some(format!(
+        "{}:client.{}",
+        settings.iscsi.target_prefix,
+        request.name.to_lowercase()
+    ));
+    request.block_store = Some(format!("/dev/zvol/{}", request.master));
+    request.block_device = Some(format!("block_{}", request.name.to_lowercase()));
+
+    let client_name: &str = &request.name;
+
+    let clone_dataset = get_writeback_or_default_dataset(client_name);
+
+    // Check if a clone already exists and destroy it first
+    if zfs_exists(&clone_dataset) {
+        if let Err(e) = zfs_destroy(&clone_dataset) {
+            error!(
+                "Failed to destroy existing ZFS clone for client '{}': {}",
+                client_name, e
+            );
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+        info!(
+            "Successfully destroyed existing ZFS clone for client '{}' before creating new one",
+            client_name
+        );
+    }
+
     // Generate iSCSI target details based on whether snapshot is provided
     if let Some(snapshot) = &request.snapshot {
-        if !snapshot.is_empty() {
-            // Client with snapshot: use clone-based block store
-            let clone_dataset = crate::zfs::get_writeback_or_default_dataset(&request.name);
-            let block_store_path = format!("/dev/zvol/{}", clone_dataset);
-            let target_iqn = format!(
-                "{}:client.{}",
-                settings.iscsi.target_prefix,
-                request.name.to_lowercase()
-            );
-
-            request.block_store = Some(block_store_path);
-            request.block_device = Some(format!("block_{}", request.name.to_lowercase()));
-            request.target_iqn = Some(target_iqn);
-        }
-    } else {
-        // Client without snapshot: use master image directly
-        let block_store_path = format!("/dev/zvol/{}", request.master);
-        let target_iqn = format!(
-            "{}:client.{}",
-            settings.iscsi.target_prefix,
-            request.name.to_lowercase()
-        );
-
+        // If snapshot is provided, create ZFS clone for the snapshot
+        let block_store_path = format!("/dev/zvol/{}", clone_dataset);
         request.block_store = Some(block_store_path);
-        request.block_device = Some(format!("block_{}", request.name.to_lowercase()));
-        request.target_iqn = Some(target_iqn);
+        // Create the ZFS clone from the snapshot
+        if let Err(e) = zfs_clone(snapshot, &clone_dataset) {
+            error!(
+                "Failed to create ZFS clone for client '{}': {}",
+                client_name, e
+            );
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+        info!(
+            "Successfully created ZFS clone for client '{}' from snapshot '{}'",
+            client_name, snapshot
+        );
     }
 
     info!(
-        "Generated iSCSI details for client '{}': block_store={}, block_device={}, target_iqn={}",
+        "Generated iSCSI details for client '{}': block_store={}\n, block_device={}\n, target_iqn={}",
         request.name,
         request.block_store.clone().ok_or(StatusCode::BAD_REQUEST)?,
         request
@@ -122,92 +141,21 @@ pub async fn update_client(
     Path(id): Path<String>,
     Json(mut request): Json<UpdateClientRequest>,
 ) -> Result<Json<Client>, StatusCode> {
-    let manager = ClientManager::new(state.db_pool.clone());
+    info!("Updating client: {:?}", request);
 
+    let manager = ClientManager::new(state.db_pool.clone());
     // Get existing client to determine the name for iSCSI details
     let existing_client = manager.get(&id).await.map_err(|_| StatusCode::NOT_FOUND)?;
 
     let settings = state.settings.read().await;
 
-    // Generate iSCSI target details based on snapshot presence
-    // Use new name if provided, otherwise use existing name
-    let client_name = request.name.as_deref().unwrap_or(&existing_client.name);
-
-    if let Some(snapshot) = &request.snapshot {
-        if !snapshot.is_empty() {
-            // Client with snapshot: use clone-based block store
-            let clone_dataset = crate::zfs::get_writeback_or_default_dataset(client_name);
-            let block_store_path = format!("/dev/zvol/{}", clone_dataset);
-            let target_iqn = format!(
-                "{}:client.{}",
-                settings.iscsi.target_prefix,
-                client_name.to_lowercase()
-            );
-
-            request.block_store = Some(block_store_path);
-            request.block_device = Some(format!("block_{}", client_name.to_lowercase()));
-            request.target_iqn = Some(target_iqn);
-
-            info!(
-                "Generated iSCSI details for client '{}' with snapshot: block_store={}, block_device={}, target_iqn={}",
-                client_name,
-                request.block_store.as_ref().ok_or(StatusCode::BAD_REQUEST)?,
-                request.block_device.as_ref().ok_or(StatusCode::BAD_REQUEST)?,
-                request.target_iqn.as_ref().ok_or(StatusCode::BAD_REQUEST)?
-            );
-        } else {
-            // Empty snapshot means remove snapshot and use master
-            let master = request.master.as_deref().unwrap_or(&existing_client.master);
-            let block_store_path = format!("/dev/zvol/{}", master);
-            let target_iqn = format!(
-                "{}:client.{}",
-                settings.iscsi.target_prefix,
-                client_name.to_lowercase()
-            );
-
-            request.block_store = Some(block_store_path);
-            request.block_device = Some(format!("block_{}", client_name.to_lowercase()));
-            request.target_iqn = Some(target_iqn);
-
-            info!(
-                "Generated iSCSI details for client '{}' using master: block_store={}, block_device={}, target_iqn={}",
-                client_name,
-                request.block_store.as_ref().ok_or(StatusCode::BAD_REQUEST)?,
-                request.block_device.as_ref().ok_or(StatusCode::BAD_REQUEST)?,
-                request.target_iqn.as_ref().ok_or(StatusCode::BAD_REQUEST)?
-            );
-        }
-    } else if request.master.is_some() {
-        // Master changed but no snapshot specified - use new master
-        let master = request.master.as_ref().ok_or(StatusCode::BAD_REQUEST)?;
-        let block_store_path = format!("/dev/zvol/{}", master);
-        let target_iqn = format!(
-            "{}:client.{}",
-            settings.iscsi.target_prefix,
-            client_name.to_lowercase()
-        );
-
-        request.block_store = Some(block_store_path);
-        request.block_device = Some(format!("block_{}", client_name.to_lowercase()));
-        request.target_iqn = Some(target_iqn);
-
-        info!(
-            "Generated iSCSI details for client '{}' with new master: block_store={}, block_device={}, target_iqn={}",
-            client_name,
-            request.block_store.as_ref().ok_or(StatusCode::BAD_REQUEST)?,
-            request.block_device.as_ref().ok_or(StatusCode::BAD_REQUEST)?,
-            request.target_iqn.as_ref().ok_or(StatusCode::BAD_REQUEST)?
-        );
-    }
-
-    let client = manager
-        .update(&id, request)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
     // Regenerate iSCSI target if iSCSI details were updated
     let iscsi_service = crate::services::IscsiService::new(settings.clone());
     // First remove the old target if it existed
+    info!(
+        "Removing old iSCSI target for client: {}",
+        existing_client.name
+    );
     if existing_client.target_iqn.is_some() {
         let _ = iscsi_service
             .remove_target(&existing_client.name)
@@ -219,21 +167,108 @@ pub async fn update_client(
                     e
                 );
             });
-    }
-
-    // Create the new target if all required iSCSI details are present
-    if client.block_store.is_some() && client.block_device.is_some() && client.target_iqn.is_some()
-    {
-        let _ = iscsi_service.create_target(&client).await.inspect_err(|e| {
-            tracing::error!("Failed to create updated iSCSI target for client: {}", e);
-        });
-        info!("Updated iSCSI target for client: {}", client.name);
-    } else {
         info!(
-            "Client {} does not have complete iSCSI details, skipping target creation",
-            client.name
+            "Removed old iSCSI target for client: {}",
+            existing_client.name
         );
     }
+
+    // Generate iSCSI target details based on snapshot presence
+    // Use new name if provided, otherwise use existing name
+    let client_name: &str = request.name.as_deref().unwrap_or(&existing_client.name);
+
+    // Ensure required iSCSI fields are set
+    if request.target_iqn.is_none() {
+        request.target_iqn = Some(format!(
+            "{}:client.{}",
+            settings.iscsi.target_prefix,
+            client_name.to_lowercase()
+        ));
+    }
+
+    if request.block_device.is_none() {
+        request.block_device = Some(format!("block_{}", client_name.to_lowercase()));
+    }
+
+    // Handle ZFS clone based on snapshot value in request
+    if let Some(snapshot) = &request.snapshot {
+        // If snapshot is provided, create ZFS clone for the snapshot
+        let clone_dataset = get_writeback_or_default_dataset(client_name);
+
+        // Check if a clone already exists and destroy it first
+        if zfs_exists(&clone_dataset) {
+            if let Err(e) = zfs_destroy(&clone_dataset) {
+                error!(
+                    "Failed to destroy existing ZFS clone for client '{}': {}",
+                    client_name, e
+                );
+                return Err(StatusCode::INTERNAL_SERVER_ERROR);
+            }
+            info!(
+                "Successfully destroyed existing ZFS clone for client '{}' before creating new one",
+                client_name
+            );
+        }
+
+        let block_store_path = format!("/dev/zvol/{}", clone_dataset);
+        request.block_store = Some(block_store_path);
+        // Create the ZFS clone from the snapshot
+        if let Err(e) = zfs_clone(snapshot, &clone_dataset) {
+            error!(
+                "Failed to create ZFS clone for client '{}': {}",
+                client_name, e
+            );
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+        info!(
+            "Successfully created ZFS clone for client '{}' from snapshot '{}'",
+            client_name, snapshot
+        );
+    } else {
+        // Previous client had a snapshot, but now it's being removed
+        let clone_dataset = get_writeback_or_default_dataset(client_name);
+        if zfs_exists(&clone_dataset) {
+            if let Err(e) = zfs_destroy(&clone_dataset) {
+                error!(
+                    "Failed to destroy ZFS clone for client '{}': {}",
+                    client_name, e
+                );
+                return Err(StatusCode::INTERNAL_SERVER_ERROR);
+            }
+            info!(
+                "Successfully destroyed ZFS clone for client '{}' after snapshot removal",
+                client_name
+            );
+        }
+
+        // Since previous client had a snapshot but it's not provided in request,
+        // we should clear the snapshot in the database to indicate no snapshot is used
+        request.snapshot = None;
+
+        // Use master image as block store
+        let master_dataset = &existing_client.master; // Use the master dataset name directly
+        let block_store_path = format!("/dev/zvol/{}", master_dataset);
+        request.block_store = Some(block_store_path);
+        info!(
+            "Using master image as block store for client '{}'",
+            client_name
+        );
+    }
+
+    let manager = ClientManager::new(state.db_pool.clone());
+    info!("Updating client in database: {:?}", request);
+    let client = manager
+        .update(&id, request)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    info!("Updated client: {}", client.name);
+
+    let iscsi_service = crate::services::IscsiService::new(settings.clone());
+    let _ = iscsi_service.create_target(&client).await.inspect_err(|e| {
+        tracing::error!("Failed to create iSCSI target for client: {}", e);
+    });
+    info!("Created iSCSI target for client: {}", client.name);
 
     // Regenerate DHCP configuration with updated client
     if settings.dhcp.enabled {
@@ -266,18 +301,44 @@ pub async fn delete_client(
 
     // Remove the iSCSI target if it exists
     let settings = state.settings.read().await;
-    if let Some(ref target_iqn) = client.target_iqn {
-        let iscsi_service = crate::services::IscsiService::new(settings.clone());
-        let _ = iscsi_service
-            .remove_target_by_iqn(target_iqn, &client.block_device)
-            .await
-            .inspect_err(|e| {
-                tracing::warn!(
-                    "Failed to remove iSCSI target for client '{}': {}",
-                    client.name,
-                    e
-                );
-            });
+    let iscsi_service = crate::services::IscsiService::new(settings.clone());
+    let _ = iscsi_service
+        .remove_target(&client.name)
+        .await
+        .inspect_err(|e| {
+            tracing::warn!(
+                "Failed to remove iSCSI target for client '{}': {}",
+                client.name,
+                e
+            );
+        });
+    if let Some(snapshot) = client.snapshot {
+        let block_store = client.block_store.as_ref().unwrap();
+        if block_store.starts_with("/dev/zvol/") {
+            // Extract the dataset name from the block_store path
+            let dataset_name = block_store
+                .strip_prefix("/dev/zvol/")
+                .unwrap_or(block_store);
+            info!(
+                "Found potential ZFS dataset in block_store: {} (extracted: {})",
+                block_store, dataset_name
+            );
+
+            if zfs_exists(dataset_name) {
+                info!("ZFS dataset {} exists, attempting to destroy", dataset_name);
+                let result = zfs_destroy(dataset_name);
+                match result {
+                    Ok(_) => info!("Successfully destroyed ZFS dataset: {}", dataset_name),
+                    Err(e) => tracing::warn!(
+                        "Failed to destroy ZFS dataset for client '{}': {}",
+                        client.name,
+                        e
+                    ),
+                }
+            } else {
+                info!("ZFS dataset {} does not exist", dataset_name);
+            }
+        }
     }
 
     // Delete the client from the database

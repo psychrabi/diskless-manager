@@ -298,15 +298,10 @@ impl ClientManager {
         if let Some(master) = req.master {
             client.master = master;
         }
-        if let Some(snapshot) = req.snapshot {
-            client.snapshot = Some(snapshot);
-        }
-        if let Some(block_store) = req.block_store {
-            client.block_store = Some(block_store);
-        }
-        if let Some(target_iqn) = req.target_iqn {
-            client.target_iqn = Some(target_iqn);
-        }
+        client.snapshot = req.snapshot;
+        client.block_store = req.block_store;
+        client.target_iqn = req.target_iqn;
+        client.block_device = req.block_device;
         if let Some(keep_writeback) = req.keep_writeback {
             client.keep_writeback = Some(keep_writeback);
         }
