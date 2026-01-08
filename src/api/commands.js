@@ -261,16 +261,15 @@ export async function logout() {
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ username, password }),
   });
 
   if (!response.ok) {
-    throw new Error(`Login failed: ${response.status} ${response.statusText}`);
+    throw new Error(`Logout failed: ${response.status} ${response.statusText}`);
   }
 
-  const data = await response.json();
-  setAuthToken(data.token);
-  return data;
+  // Clear the auth token
+  setAuthToken(null);
+  return response.json();
 }
 
 // ============================================================================
@@ -379,14 +378,11 @@ export async function getClientBootHistory(clientId, limit) {
 // ============================================================================
 
 export async function listImages() {
-  const token = getAuthToken();
   return invoke("list_images");
 }
 
 export async function listMasters() {
-  // return apiRequest("/api/masters");
-  const token = getAuthToken();
-  return invoke("get_images", { token });
+  return apiRequest("/api/masters");
 }
 
 export async function getImage(id) {
@@ -405,7 +401,7 @@ export async function importImage(request) {
   return invoke("import_image", { request });
 }
 
-export async function deleteImage(id, force) {
+export async function deleteImage(id) {
   // API doesn't currently support force parameter
   return apiRequest(`/api/images/${id}`, { method: "DELETE" });
 }
