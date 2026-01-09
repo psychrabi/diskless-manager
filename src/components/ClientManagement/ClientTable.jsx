@@ -1,8 +1,10 @@
-import { Layers, Monitor, Power, PowerOff, RefreshCw, Zap } from "lucide-react";
-import React from "react";
+import { Layers, Monitor, Power, PowerOff, RefreshCw, Zap, MoveDown, MoveUp, Clock } from "lucide-react";
+import React, { useState, useEffect } from "react";
 import { TableVirtuoso } from "react-virtuoso";
 import { useAppStore } from "../../store/useAppStore";
+import { useMetrics } from "@/contexts/MetricsContext";
 import { TableCell, TableHead } from "@/components/ui";
+import { formatUptime } from "@/utils/formatUptime";
 
 const ClientStatusBadge = React.memo(({ status }) => {
   const currentStatus = status || "Offline";
@@ -88,6 +90,38 @@ const VirtuosoTableComponents = {
 
 const ClientTable = ({ handleClientContextMenu }) => {
   const clients = useAppStore((state) => state.clients);
+  const setClients = useAppStore((state) => state.setClients);
+  const { metrics } = useMetrics();
+  const [metricsMap, setMetricsMap] = useState({});
+
+  // Build a map of client IP to metrics for quick lookup and update client statuses
+  useEffect(() => {
+    if (metrics?.clients) {
+      const map = {};
+      metrics.clients.forEach((metric) => {
+        map[metric.ip] = metric;
+      });
+      setMetricsMap(map);
+
+      // Update client statuses from metrics
+      const updatedClients = clients.map((client) => {
+        const metric = map[client.ip];
+        if (metric && client.status !== metric.status) {
+          return { ...client, status: metric.status };
+        }
+        return client;
+      });
+
+      // Only update if there are actual changes
+      if (JSON.stringify(updatedClients) !== JSON.stringify(clients)) {
+        setClients(updatedClients);
+      }
+    }
+  }, [metrics, clients, setClients]);
+
+  const getClientMetrics = (clientIp) => {
+    return metricsMap[clientIp] || null;
+  };
 
   return (
     <div className="bg-base-100 rounded-lg h-[calc(100vh-20rem)] w-full border border-base-200">
@@ -101,15 +135,18 @@ const ClientTable = ({ handleClientContextMenu }) => {
                   MAC Address
                 </TableHead>
                 <TableHead>IP Address</TableHead>
+                    <TableHead >Read (MB/s)</TableHead>
+                <TableHead >Write (MB/s)</TableHead>
                 <TableHead className="hidden md:table-cell">Image</TableHead>
-                <TableHead className="hidden xl:table-cell">
+                <TableHead className="hidden 2xl:table-cell">
                   Restore Point
                 </TableHead>
-                <TableHead className="hidden xl:table-cell">
+                <TableHead className="hidden 2xl:table-cell">
                   Boot disk
                 </TableHead>
                 <TableHead className="text-center">Status</TableHead>
                 <TableHead>Mode</TableHead>
+                <TableHead className="hidden lg:table-cell">Uptime</TableHead>
               </tr>
             </thead>
             <tbody>
@@ -130,52 +167,89 @@ const ClientTable = ({ handleClientContextMenu }) => {
           context={{ handleClientContextMenu }}
           components={VirtuosoTableComponents}
           fixedHeaderContent={() => (
-            <tr className="bg-base-100 border-b border-base-200 shadow-sm z-10 w-full">
+            <tr className="bg-base-100 border-b border-base-200 shadow-sm z-10 w-full text-center">
               <TableHead className="bg-base-100">Name</TableHead>
-              <TableHead className="hidden md:table-cell bg-base-100">
+              <TableHead className="hidden md:table-cell bg-base-100 ">
                 MAC Address
               </TableHead>
-              <TableHead className="bg-base-100">IP Address</TableHead>
+              <TableHead className="bg-base-100 ">IP Address</TableHead>
+  <TableHead className="bg-base-100 ">Read (MB/s)</TableHead>
+              <TableHead className="bg-base-100 ">Write (MB/s)</TableHead>
               <TableHead className="hidden md:table-cell bg-base-100">
                 Image
               </TableHead>
-              <TableHead className="hidden xl:table-cell bg-base-100">
+              <TableHead className="hidden 2xl:table-cell bg-base-100">
                 Restore Point
               </TableHead>
-              <TableHead className="hidden xl:table-cell bg-base-100">
+              <TableHead className="hidden 2xl:table-cell bg-base-100">
                 Boot disk
               </TableHead>
-              <TableHead className="text-center bg-base-100">Status</TableHead>
-              <TableHead className="bg-base-100">Mode</TableHead>
+              <TableHead className="bg-base-100 ">Status</TableHead>
+              <TableHead className="bg-base-100 ">Mode</TableHead>
+              <TableHead className="hidden lg:table-cell bg-base-100">Uptime</TableHead>
             </tr>
           )}
-          itemContent={(index, client) => (
-            <>
-              <TableCell className="font-bold font-mono">
-                <Monitor className="inline mr-2 h-4 w-4" />
-                {client.name}
-              </TableCell>
-              <TableCell className="hidden md:table-cell text-xs font-mono">
-                {client.mac}
-              </TableCell>
-              <TableCell className="font-mono text-xs">{client.ip}</TableCell>
-              <TableCell className="hidden md:table-cell text-xs font-mono break-all">
-                {client.master}
-              </TableCell>
-              <TableCell className="hidden xl:table-cell text-xs font-mono break-all">
-                {client.snapshot ?? "-"}
-              </TableCell>
-              <TableCell className="hidden xl:table-cell text-xs font-mono break-all">
-                {client.block_store}
-              </TableCell>
-              <TableCell>
-                <ClientStatusBadge status={client.status} />
-              </TableCell>
-              <TableCell>
-                <ClientModeBadge client={client} />
-              </TableCell>
-            </>
-          )}
+          itemContent={(_, client) => {
+            const clientMetrics = getClientMetrics(client.ip);
+            return (
+              <>
+                <TableCell className="font-bold font-mono">
+                  <Monitor className="inline mr-2 h-4 w-4" />
+                  {client.name}
+                </TableCell>
+                <TableCell className="hidden md:table-cell text-xs font-mono">
+                  {client.mac}
+                </TableCell>
+                <TableCell className="font-mono text-xs">{client.ip}</TableCell>
+                    <TableCell className="hidden lg:table-cell font-mono ">
+                  {clientMetrics ? (
+                    <span className="flex items-center justify-center gap-1">
+                      <MoveUp className="w-3 h-3 text-info" />
+                      {clientMetrics.read_speed_mbps.toFixed(2)}
+                    </span>
+                  ) : (
+                    <span className="text-base-content/40">-</span>
+                  )}
+                </TableCell>
+                <TableCell className="hidden lg:table-cell font-mono">
+                  {clientMetrics ? (
+                    <span className="flex items-center justify-center gap-1">
+                      <MoveDown className="w-3 h-3 text-warning" />
+                      {clientMetrics.write_speed_mbps.toFixed(2)}
+                    </span>
+                  ) : (
+                    <span className="text-base-content/40">-</span>
+                  )}
+                </TableCell>
+                <TableCell className="hidden xl:table-cell text-xs font-mono break-all">
+                  {client.master}
+                </TableCell>
+                <TableCell className="hidden 2xl:table-cell text-xs font-mono break-all">
+                  {client.snapshot ?? "-"}
+                </TableCell>
+                <TableCell className="hidden 2xl:table-cell text-xs font-mono break-all">
+                  {client.block_store}
+                </TableCell>
+                <TableCell>
+                  <ClientStatusBadge status={client.status} />
+                </TableCell>
+                <TableCell>
+                  <ClientModeBadge client={client} />
+                </TableCell>
+                <TableCell className="hidden lg:table-cell text-xs font-mono">
+                  {clientMetrics ? (
+                    <span className="flex items-center gap-1">
+                      <Clock className="w-3 h-3 text-secondary" />
+                      {formatUptime(clientMetrics.uptime_seconds)}
+                    </span>
+                  ) : (
+                    <span className="text-base-content/40">-</span>
+                  )}
+                </TableCell>
+            
+              </>
+            );
+          }}
         />
       )}
     </div>

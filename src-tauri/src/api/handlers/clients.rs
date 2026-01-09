@@ -125,6 +125,11 @@ pub async fn create_client(
 
     info!("Created client: {}", client.name);
 
+    // Refresh client IPs cache
+    if let Err(e) = state.refresh_client_ips().await {
+        tracing::warn!("Failed to refresh client IPs cache: {}", e);
+    }
+
     let iscsi_service = crate::services::IscsiService::new(settings.clone());
     let _ = iscsi_service.create_target(&client).await.inspect_err(|e| {
         tracing::error!("Failed to create iSCSI target for client: {}", e);
@@ -430,6 +435,11 @@ pub async fn update_client(
 
     info!("Updated client: {}", client.name);
 
+    // Refresh client IPs cache
+    if let Err(e) = state.refresh_client_ips().await {
+        tracing::warn!("Failed to refresh client IPs cache: {}", e);
+    }
+
     let iscsi_service = crate::services::IscsiService::new(settings.clone());
     let _ = iscsi_service.create_target(&client).await.inspect_err(|e| {
         tracing::error!("Failed to create iSCSI target for client: {}", e);
@@ -512,6 +522,11 @@ pub async fn delete_client(
         .delete(&id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Refresh client IPs cache
+    if let Err(e) = state.refresh_client_ips().await {
+        tracing::warn!("Failed to refresh client IPs cache: {}", e);
+    }
 
     // Regenerate DHCP configuration without deleted client
     if settings.dhcp.enabled {

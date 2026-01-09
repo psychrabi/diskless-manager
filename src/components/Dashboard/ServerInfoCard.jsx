@@ -18,7 +18,7 @@ const ServerInfoCard = () => {
         </Button>}>
 
           {serverInfo ? (
-            <div className="space-y-4">
+            <div className="space-y-1">
               <div className="flex justify-between border-b border-base-200 pb-2">
                 <span className="text-base-content/70">Hostname</span>
                 <span className="font-medium">{serverInfo.hostname}</span>

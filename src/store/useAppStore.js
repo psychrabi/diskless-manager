@@ -40,7 +40,8 @@ export const useAppStore = create()(
       saving: true,
       setSaving: (saving) => set({ saving }),
 
-      serverInfo: null, // Added
+      serverInfo: null, // System information (hostname, OS, etc.)
+      serverStatus: null, // Server status (services, clients, images counts)
       licenseInfo: null, // Added
       _pollIntervalId: null, // Added
 
@@ -197,6 +198,15 @@ export const useAppStore = create()(
         }
       },
 
+      fetchServerStatus: async () => {
+        try {
+          const serverStatusRes = await api.getServerStatus();
+          set({ serverStatus: serverStatusRes });
+        } catch (err) {
+          console.error("Failed to fetch server status:", err);
+        }
+      },
+
       fetchDependencies: async () => {
         try {
           const dependenciesRes = await api.checkDependencies();
@@ -257,6 +267,7 @@ export const useAppStore = create()(
           fetchServices,
           fetchDependencies,
           fetchServerInfo,
+          fetchServerStatus,
           fetchDisks,
           fetchLicenseInfo,
           fetchRamUsage,
@@ -271,6 +282,7 @@ export const useAppStore = create()(
             fetchServices(),
             fetchDependencies(),
             fetchServerInfo(),
+            fetchServerStatus(),
             fetchDisks(),
             fetchLicenseInfo(),
             fetchRamUsage(),

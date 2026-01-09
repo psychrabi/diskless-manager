@@ -36,11 +36,15 @@ const ClientOverviewCard = () => {
         <ul className="space-y-2 ">
           <li className="flex justify-between">
             <span className="font-semibold">Total Clients:</span>
-            {overview.total_clients}
+            {overview.total}
           </li>
           <li className="flex justify-between">
-            <span className="font-semibold">Active Clients:</span>
-            {overview.active_clients}
+            <span className="font-semibold">Online Clients:</span>
+            {overview.online}
+          </li>
+          <li className="flex justify-between">
+            <span className="font-semibold">Offline Clients:</span>
+            {overview.offline}
           </li>
         </ul>
       ) : (

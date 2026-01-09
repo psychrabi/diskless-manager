@@ -10,6 +10,7 @@ pub struct AppState {
     pub settings: Arc<RwLock<Settings>>,
     pub db_pool: SqlitePool,
     pub config_path: PathBuf,
+    pub client_ips: Arc<RwLock<Vec<String>>>,
 }
 
 impl AppState {
@@ -46,11 +47,32 @@ impl AppState {
 
         info!("Database initialized at {}", db_path.display());
 
+        // Load all client IPs from database
+        let client_ips = Self::load_client_ips(&pool).await?;
+        info!("Loaded {} client IPs from database", client_ips.len());
+
         Ok(Self {
             settings: Arc::new(RwLock::new(settings)),
             db_pool: pool,
             config_path,
+            client_ips: Arc::new(RwLock::new(client_ips)),
         })
+    }
+
+    /// Load all client IPs from the database
+    async fn load_client_ips(pool: &SqlitePool) -> anyhow::Result<Vec<String>> {
+        let ips: Vec<String> = sqlx::query_scalar("SELECT ip FROM clients WHERE enabled = 1")
+            .fetch_all(pool)
+            .await?;
+        Ok(ips)
+    }
+
+    /// Update the client IPs cache by reloading from database
+    pub async fn refresh_client_ips(&self) -> anyhow::Result<()> {
+        let ips = Self::load_client_ips(&self.db_pool).await?;
+        let mut cache = self.client_ips.write().await;
+        *cache = ips;
+        Ok(())
     }
 
     async fn init_database(pool: &SqlitePool) -> anyhow::Result<()> {

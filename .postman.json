@@ -1,0 +1,177 @@
+{
+  "workspace": {
+    "id": "71a1b6d5-3d69-47de-9991-757e4bcd51d3",
+    "name": "Diskless Manager API"
+  },
+  "collections": {
+    "complete": {
+      "id": "36e76cb2-4300-42d3-aec5-b85c6ce09822",
+      "name": "Diskless Manager - Complete API",
+      "uid": "9942933-36e76cb2-4300-42d3-aec5-b85c6ce09822",
+      "status": "comprehensive_endpoints"
+    }
+  },
+  "environment": {
+    "id": "8d4114cd-f107-45b2-87c0-1b829902b9fc",
+    "name": "Local Development",
+    "uid": "9942933-8d4114cd-f107-45b2-87c0-1b829902b9fc",
+    "variables": {
+      "base_url": "http://localhost:8080",
+      "admin_password": "admin123",
+      "auth_token": "{{auth_token}}"
+    }
+  },
+  "api_endpoints": {
+    "authentication": {
+      "check_admin_exists": "GET /api/auth/admin/exists",
+      "login": "POST /api/auth/login",
+      "validate_token": "POST /api/auth/validate",
+      "update_admin_password": "PUT /api/auth/admin/password"
+    },
+    "client_management": {
+      "list_clients": "GET /api/clients",
+      "create_client": "POST /api/clients",
+      "get_client": "GET /api/clients/{id}",
+      "update_client": "PUT /api/clients/{id}",
+      "delete_client": "DELETE /api/clients/{id}",
+      "get_boot_history": "GET /api/clients/{id}/boot-history"
+    },
+    "image_management": {
+      "list_images": "GET /api/images",
+      "list_masters": "GET /api/masters",
+      "create_image": "POST /api/images",
+      "get_image": "GET /api/images/{id}",
+      "update_image": "PUT /api/images/{id}",
+      "delete_image": "DELETE /api/images/{id}",
+      "rename_image": "PUT /api/images/{id}/rename",
+      "import_image": "POST /api/images/import",
+      "clone_image": "POST /api/images/{id}/clone",
+      "create_snapshot": "POST /api/images/{id}/snapshots",
+      "get_image_info": "GET /api/images/{id}/info",
+      "resize_image": "POST /api/images/{id}/resize",
+      "verify_image": "POST /api/images/{id}/verify"
+    },
+    "service_management": {
+      "list_services": "GET /api/services",
+      "get_service_status": "GET /api/services/{name}/status",
+      "start_service": "POST /api/services/{name}/start",
+      "stop_service": "POST /api/services/{name}/stop",
+      "restart_service": "POST /api/services/{name}/restart",
+      "start_all_services": "POST /api/services/all/start",
+      "stop_all_services": "POST /api/services/all/stop",
+      "restart_all_services": "POST /api/services/all/restart",
+      "get_service_config": "GET /api/services/{name}/config",
+      "configure_service": "POST /api/services/{name}/configure"
+    },
+    "system_management": {
+      "get_system_info": "GET /api/system/info",
+      "get_server_status": "GET /api/system/status",
+      "initialize_server": "POST /api/system/initialize",
+      "check_dependencies": "GET /api/system/dependencies",
+      "clear_cache": "POST /api/system/cache/clear",
+      "get_network_interfaces": "GET /api/system/network/interfaces",
+      "get_interface_ip": "GET /api/system/network/interfaces/{name}/ip",
+      "detect_server_network": "POST /api/system/network/detect",
+      "apply_network_settings": "POST /api/system/network/apply",
+      "get_settings": "GET /api/system/settings",
+      "save_settings": "PUT /api/system/settings",
+      "setup_privileged_access": "POST /api/system/privileged-access",
+      "get_ram_usage": "GET /api/system/ram-usage",
+      "get_zfs_arcstat": "GET /api/system/zfs-arcstat"
+    },
+    "disk_management": {
+      "list_disks": "GET /api/disks",
+      "rename_disk": "PUT /api/disks/{name}/rename",
+      "create_pool": "POST /api/disks/pool",
+      "pool_exists": "GET /api/disks/pool/exists"
+    },
+    "zfs_management": {
+      "list_zpools": "GET /api/zfs/pools",
+      "get_zpool_stats": "GET /api/zfs/pools/stats",
+      "list_datasets": "GET /api/zfs/datasets",
+      "create_dataset": "POST /api/zfs/datasets",
+      "delete_dataset": "DELETE /api/zfs/datasets/{dataset}"
+    },
+    "dashboard": {
+      "get_default_image": "GET /api/dashboard/default-image",
+      "get_client_overview": "GET /api/dashboard/clients"
+    },
+    "logs": {
+      "get_logs": "GET /api/logs",
+      "clear_logs": "DELETE /api/logs"
+    },
+    "license": {
+      "get_license_info": "GET /api/license/info"
+    },
+    "config": {
+      "get_config": "GET /api/config"
+    }
+  },
+  "sample_requests": {
+    "authentication_flow": [
+      {
+        "step": 1,
+        "description": "Check if admin exists",
+        "request": "GET {{base_url}}/api/auth/admin/exists"
+      },
+      {
+        "step": 2,
+        "description": "Login to get JWT token",
+        "request": "POST {{base_url}}/api/auth/login",
+        "body": {
+          "username": "admin",
+          "password": "{{admin_password}}"
+        }
+      },
+      {
+        "step": 3,
+        "description": "Use token for authenticated requests",
+        "headers": {
+          "Authorization": "Bearer {{auth_token}}"
+        }
+      }
+    ],
+    "client_operations": [
+      {
+        "description": "List all clients",
+        "request": "GET {{base_url}}/api/clients",
+        "headers": {"Authorization": "Bearer {{auth_token}}"}
+      },
+      {
+        "description": "Create new client",
+        "request": "POST {{base_url}}/api/clients",
+        "headers": {"Authorization": "Bearer {{auth_token}}", "Content-Type": "application/json"},
+        "body": {
+          "name": "test-client",
+          "mac": "00:11:22:33:44:55",
+          "ip": "192.168.1.100",
+          "master": "ubuntu-desktop"
+        }
+      }
+    ],
+    "service_operations": [
+      {
+        "description": "Get DHCP service status",
+        "request": "GET {{base_url}}/api/services/dhcp/status",
+        "headers": {"Authorization": "Bearer {{auth_token}}"}
+      },
+      {
+        "description": "Start TFTP service",
+        "request": "POST {{base_url}}/api/services/tftp/start",
+        "headers": {"Authorization": "Bearer {{auth_token}}"}
+      }
+    ]
+  },
+  "testing_notes": {
+    "authentication": "Most endpoints require Bearer token from login",
+    "base_url": "API server runs on http://localhost:8080",
+    "frontend": "Frontend runs on http://localhost:5173",
+    "services": "DHCP, TFTP, iSCSI, Samba, HTTP services can be managed",
+    "zfs": "ZFS operations for image and snapshot management",
+    "network": "Network configuration and interface management"
+  },
+  "created_requests": 22,
+  "total_available_endpoints": 50,
+  "created_at": "2026-01-09T09:35:00.000Z",
+  "updated_at": "2026-01-09T09:44:00.000Z"
+}

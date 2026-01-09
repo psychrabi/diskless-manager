@@ -2,6 +2,7 @@ import ErrorBoundary from "@/components/ErrorBoundary";
 import { Loading } from "@/components/ui";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ConfirmDialogProvider } from "@/contexts/ConfirmDialogContext.jsx";
+import { MetricsProvider } from "@/contexts/MetricsContext";
 import { NotificationProvider } from "@/contexts/NotificationContext";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import "@/index.css";
@@ -16,11 +17,13 @@ createRoot(document.getElementById("root")).render(
       <Suspense fallback={<Loading />}>
         <NotificationProvider>
           <AuthProvider>
-            <ConfirmDialogProvider>
-              <ThemeProvider>
-                <RouterProvider router={router} />
-              </ThemeProvider>
-            </ConfirmDialogProvider>
+            <MetricsProvider>
+              <ConfirmDialogProvider>
+                <ThemeProvider>
+                  <RouterProvider router={router} />
+                </ThemeProvider>
+              </ConfirmDialogProvider>
+            </MetricsProvider>
           </AuthProvider>
         </NotificationProvider>
       </Suspense>

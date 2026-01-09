@@ -83,6 +83,47 @@ pub async fn require_auth(
         return Ok(next.run(request).await);
     }
 
+    // For WebSocket connections, check query parameter
+    if path == "/ws/metrics" {
+        log::info!("WebSocket auth check for path: {}", path);
+        if let Some(query) = request.uri().query() {
+            log::debug!("Query string found: {}", query);
+            if let Some(token_start) = query.find("token=") {
+                let token_part = &query[token_start + 6..];
+                let token = token_part.split('&').next().unwrap_or("");
+                log::debug!("Token extracted from query");
+                let decoded_token = urlencoding::decode(token)
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|_| token.to_string());
+                
+                let secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| {
+                    "default_secret_key".to_string()
+                });
+
+                match decode::<Claims>(
+                    &decoded_token,
+                    &DecodingKey::from_secret(secret.as_ref()),
+                    &Validation::new(Algorithm::HS256),
+                ) {
+                    Ok(_) => {
+                        log::info!("WebSocket auth successful");
+                        return Ok(next.run(request).await);
+                    }
+                    Err(e) => {
+                        log::warn!("WebSocket auth failed: {}", e);
+                        return Err(StatusCode::UNAUTHORIZED);
+                    }
+                }
+            } else {
+                log::warn!("No token found in query string");
+            }
+        } else {
+            log::warn!("No query string in WebSocket request");
+        }
+        log::warn!("WebSocket request missing token");
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
     let headers = request.headers();
     let auth_header = headers
         .get(axum::http::header::AUTHORIZATION)

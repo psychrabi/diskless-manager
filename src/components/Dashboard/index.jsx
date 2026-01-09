@@ -1,6 +1,6 @@
 import { useAppStore } from "@/store/useAppStore";
 import { StatusBadge } from "@/components/ui/StatusBadge";
-import { LoadingSkeleton, CardSkeleton } from "@/components/ui/LoadingSkeleton";
+import { CardSkeleton } from "@/components/ui/LoadingSkeleton";
 import { Disc, Laptop, MemoryStick, Server, Settings, Activity, TrendingUp } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { Card } from "@/components/ui";
@@ -11,14 +11,15 @@ import ServicesStatus from "./ServicesStatus";
 import ZfsPoolCard from "./ZfsPoolCard";
 
 export default function Dashboard() {
-  const { serverInfo, loading } = useAppStore(
+  const { serverStatus, ramUsage, loading } = useAppStore(
     useShallow((state) => ({
-      serverInfo: state.serverInfo,
+      serverStatus: state.serverStatus,
+      ramUsage: state.ramUsage,
       loading: state.loading,
     })),
   );
 
-  const serverStatus = serverInfo || {};
+  const serverStatusData = serverStatus || {};
 
   if (loading) {
     return (
@@ -62,14 +63,14 @@ export default function Dashboard() {
                     <span className="text-body-sm font-medium text-base-content/70">Services</span>
                   </div>
                   <div className="text-display-sm font-bold text-base-content">
-                    {serverStatus?.services_running ?? 0}
+                    {serverStatusData?.services_running ?? 0}
                   </div>
                   <div className="text-body-sm text-base-content/60">
-                    of {serverStatus?.services_total ?? 0} running
+                    of {serverStatusData?.services_total ?? 0} running
                   </div>
                 </div>
                 <StatusBadge
-                  status={serverStatus?.services_running === serverStatus?.services_total ? "success" : "warning"}
+                  status={serverStatusData?.services_running === serverStatusData?.services_total ? "success" : "warning"}
                   showIcon={false}
                 />
               </div>
@@ -88,7 +89,7 @@ export default function Dashboard() {
                     <span className="text-body-sm font-medium text-base-content/70">Clients</span>
                   </div>
                   <div className="text-display-sm font-bold text-base-content">
-                    {serverStatus?.clients_count ?? 0}
+                    {serverStatusData?.clients_count ?? 0}
                   </div>
                   <div className="text-body-sm text-base-content/60">
                     Registered devices
@@ -113,7 +114,7 @@ export default function Dashboard() {
                     <span className="text-body-sm font-medium text-base-content/70">Images</span>
                   </div>
                   <div className="text-display-sm font-bold text-base-content">
-                    {serverStatus?.images_count ?? 0}
+                    {serverStatusData?.images_count ?? 0}
                   </div>
                   <div className="text-body-sm text-base-content/60">
                     Boot images available
@@ -138,7 +139,7 @@ export default function Dashboard() {
                     <span className="text-body-sm font-medium text-base-content/70">Memory</span>
                   </div>
                   <div className="text-display-sm font-bold text-base-content">
-                    {serverStatus?.memory_usage ?? "0%"}
+                    {ramUsage?.percent ? `${ramUsage.percent.toFixed(1)}%` : "0%"}
                   </div>
                   <div className="text-body-sm text-base-content/60">
                     System utilization
@@ -155,12 +156,16 @@ export default function Dashboard() {
 
       {/* Detailed Overview Cards */}
       <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
+               
+
         <ServerInfoCard />
         <ServicesStatus />
         <ZfsPoolCard />
         <ClientOverviewCard />
         <MasterImageOverviewCard />
       </div>
+
+   
     </div>
   );
 }

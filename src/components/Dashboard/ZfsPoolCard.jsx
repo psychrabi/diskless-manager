@@ -4,7 +4,7 @@ import { Card } from "@/components/ui";
 const ZfsPoolCard = ({ loading }) => {
   const zpoolStats = useAppStore((state) => state.zpoolStats);
   return (
-    <Card title="ZFS Pool Usage">
+    <Card title="Disk Usage">
       {loading ? (
         <div>Loading...</div>
       ) : zpoolStats ? (

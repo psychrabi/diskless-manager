@@ -3,6 +3,7 @@ use axum::{
     Router,
 };
 
+// API routes configuration
 use crate::api::handlers::{
     auth::{check_admin_exists, login, update_admin_password, validate_auth_token},
     clients::{
@@ -10,7 +11,7 @@ use crate::api::handlers::{
         update_client,
     },
     config::get_config,
-    dashboard::{get_client_overview, get_default_image},
+    dashboard::{get_client_overview, get_default_image, get_client_io_metrics},
     disks::{create_pool, list_disks, pool_exists, rename_disk},
     images::{
         clone_image, create_image, create_snapshot, delete_image, get_image, get_image_info,
@@ -30,6 +31,7 @@ use crate::api::handlers::{
         get_system_info, get_zfs_arcstat, initialize_server, save_settings,
         setup_privileged_access,
     },
+    ws::ws_metrics_handler,
     zfs::{create_dataset, delete_dataset, get_zpool_stats, list_datasets, list_zpools},
 };
 use crate::api::middleware::{cors_layer, require_auth};
@@ -37,12 +39,23 @@ use tower::limit::ConcurrencyLimitLayer;
 use tower_http::trace::TraceLayer;
 
 pub fn create_app(state: crate::state::AppState) -> Router {
-    Router::new()
-        // Auth routes (no auth required)
+    // Health check and auth routes (no auth middleware)
+    let public_router = Router::new()
+        .route("/health", get(|| async { "OK" }))
         .route("/api/auth/login", post(login))
         .route("/api/auth/validate", post(validate_auth_token))
         .route("/api/auth/admin/password", put(update_admin_password))
         .route("/api/auth/admin/exists", get(check_admin_exists))
+        .with_state(state.clone());
+
+    // WebSocket routes (with custom auth handling)
+    let ws_router = Router::new()
+        .route("/ws/metrics", axum::routing::get(ws_metrics_handler))
+        .with_state(state.clone())
+        .layer(axum::middleware::from_fn_with_state(state.clone(), require_auth));
+
+    // API routes (with standard auth middleware)
+    let api_router = Router::new()
         // Client routes (auth required)
         .route("/api/clients", get(list_clients).post(create_client))
         .route(
@@ -116,13 +129,20 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         // Dashboard routes (auth required)
         .route("/api/dashboard/default-image", get(get_default_image))
         .route("/api/dashboard/clients", get(get_client_overview))
+        .route("/api/dashboard/clients/io-metrics", get(get_client_io_metrics))
         // Logs routes (auth required)
         .route("/api/logs", get(get_logs).delete(clear_logs))
         // License routes (auth required)
         .route("/api/license/info", get(get_license_info_handler))
         .with_state(state.clone())
+        .layer(axum::middleware::from_fn_with_state(state.clone(), require_auth));
+
+    // Combine routers
+    Router::new()
+        .merge(public_router)
+        .merge(ws_router)
+        .merge(api_router)
         .layer(TraceLayer::new_for_http())
         .layer(ConcurrencyLimitLayer::new(100))
-        .layer(axum::middleware::from_fn_with_state(state, require_auth))
         .layer(cors_layer())
 }

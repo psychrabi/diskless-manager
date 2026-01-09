@@ -183,6 +183,8 @@ pub async fn check_dependencies() -> Result<Vec<DependencyStatus>, String> {
         ("wakeonlan", "wakeonlan"),
         ("zfs", "zfsutils-linux"),
         ("xfreerdp3", "freerdp3-x11"),
+        ("iftop", "iftop")
+        
     ];
 
     let mut handles = Vec::new();

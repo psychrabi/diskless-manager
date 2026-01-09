@@ -590,6 +590,10 @@ export async function getClientOverview() {
   return apiRequest("/api/dashboard/clients");
 }
 
+export async function getClientIOMetrics() {
+  return apiRequest("/api/dashboard/clients/io-metrics");
+}
+
 // ============================================================================
 // Service Installation Commands
 // ============================================================================

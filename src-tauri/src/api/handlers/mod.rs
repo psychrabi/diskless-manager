@@ -9,3 +9,4 @@ pub mod logs;
 pub mod services;
 pub mod system;
 pub mod zfs;
+pub mod ws;
