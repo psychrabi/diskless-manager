@@ -2,7 +2,7 @@
 dhcp
 # Force gateway to be the iSCSI target server (kludge for stupid window behavior)
 # Some menu defaults
-set boot-url http://${next-server}/boot/winpe
+set boot-url http://${next-server}:4433/boot/winpe
 set menu-timeout 3000
 set keep-san 1
 
@@ -11,10 +11,10 @@ set keep-san 1
 :start
 menu Diskless Boot Menu (Server IP: ${next-server})
 item --gap --             ------------------------- Operating systems ------------------------------
-item --key w boot_windows   Diskless boot Windows 11
 item --key d boot_debian    Diskless boot Debian 13.1
 item --key b boot_ubuntu    Diskless boot Ubuntu 25.10
 item --key a boot_anduinos  Diskless boot Anduin OS 25.04
+item --key w boot_windows   Diskless boot Windows 11
 item --key i boot_pe        Boot from WinPE (WIM)
 item --key i boot_pe_iso    Boot from WinPE (ISO)
 
@@ -60,7 +60,7 @@ echo ${root-path}
 set keep-san 1
 set net0/gateway 0.0.0.0
 sanhook ${root-path} || goto failed
-sanboot --drive 0x81 http://${next-server}/winpe.iso || goto failed
+sanboot --drive 0x81 http://${next-server}:4433/winpe.iso || goto failed
 
 :boot_pe
 echo ${root-path}
@@ -76,36 +76,35 @@ initrd ${boot-url}/boot.wim boot.wim || goto failed
 boot || goto failed
 
 :boot_debian
-kernel http://192.168.1.250/debian/vmlinuz \
+kernel http://${next-server}:4433/debian/vmlinuz \
   ip=dhcp \
-  iscsi_initiator=iqn.2025-04.client:${net0/mac:hexhyp} \
-  iscsi_target_name=iqn.2025-04.local.diskless:${net0/mac:hexhyp} \
-  iscsi_target_ip=192.168.1.250 \
-  root=/dev/disk/by-path/ip-192.168.1.250:3260-iscsi-iqn.2025-04.local.diskless:${net0/mac:hexhyp}-lun-0-part2 \
+  iscsi_initiator=iqn.2026-01.client:client.pc001 \
+  iscsi_target_name=iqn.2026-01.local.diskless:client.pc001 \
+  iscsi_target_ip=${next-server} \
+  root=/dev/disk/by-path/ip-${next-server}:3260-iscsi-iqn.2026-01.local.diskless:client.pc001-lun-0-part2 \
   rw
-initrd http://192.168.1.250/debian/initrd.img
+initrd http://${next-server}:4433/debian/initrd.img
 boot || goto failed
 
 :boot_ubuntu
-kernel http://192.168.1.250/ubuntu/vmlinuz \
+kernel http://${next-server}:4433/ubuntu/vmlinuz \
   ip=dhcp \
-  iscsi_initiator=iqn.2025-04.client:${net0/mac:hexhyp} \
-  iscsi_target_name=iqn.2025-04.local.diskless:${net0/mac:hexhyp} \
-  iscsi_target_ip=192.168.1.250 \
-  root=/dev/disk/by-path/ip-192.168.1.250:3260-iscsi-iqn.2025-04.local.diskless:${net0/mac:hexhyp}-lun-0-part2 \
+  iscsi_initiator=iqn.2026-01.client:client.pc001 \
+  iscsi_target_name=iqn.2026-01.local.diskless:client.pc001 \
+  iscsi_target_ip=${next-server} \
+  root=/dev/disk/by-path/ip-${next-server}:3260-iscsi-iqn.2026-01.local.diskless:client.pc001-lun-0-part2 \
   rw
-initrd http://192.168.1.250/ubuntu/initrd.img
+initrd http://${next-server}:4433/ubuntu/initrd.img
 boot || goto failed
 
 
 :boot_anduinos
-kernel http://192.168.1.250/anduinos/vmlinuz \
+kernel http://${next-server}:4433/anduinos/vmlinuz \
   ip=dhcp \
-  iscsi_initiator=iqn.2025-04.client:${net0/mac:hexhyp} \
-  iscsi_target_name=iqn.2025-04.local.diskless:${net0/mac:hexhyp} \
-  iscsi_target_ip=192.168.1.250 \
-  root=/dev/disk/by-path/ip-192.168.1.250:3260-iscsi-iqn.2025-04.local.diskless:${net0/mac:hexhyp}-lun-0-part2 \
+  iscsi_initiator=iqn.2026-01.client:client.pc001 \
+  iscsi_target_name=iqn.2026-01.local.diskless:client.pc001 \
+  iscsi_target_ip=${next-server} \
+  root=/dev/disk/by-path/ip-${next-server}:3260-iscsi-iqn.2026-01.local.diskless:client.pc001-lun-0-part2 \
   rw
-initrd http://192.168.1.250/anduinos/initrd.img
+initrd http://${next-server}:4433/anduinos/initrd.img
 boot || goto failed
-

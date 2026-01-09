@@ -1,6 +1,6 @@
 import { useClientActions } from "@/hooks/useClientActions";
 import { StatusBadge, LoadingSkeleton } from "@/components/ui";
-import { Laptop, PlusCircle, Users, Wifi, WifiOff } from "lucide-react";
+import { Laptop, PlusCircle, Users, Wifi, WifiOff, History, Clock } from "lucide-react";
 import { memo, useCallback, useState } from "react";
 import { Link } from "react-router-dom";
 import { useShallow } from "zustand/react/shallow";
@@ -9,6 +9,9 @@ import { Button, Card } from "@/components/ui";
 import { ContextMenu } from "../ui/ContextMenu";
 import ClientFormModal from "./ClientFormModal";
 import ClientTable from "./ClientTable";
+import ClientHero from "./ClientHero";
+import AuditLogViewer from "./AuditLogViewer";
+import ScheduledOperationsList from "./ScheduledOperationsList";
 
 const MemoizedClientTable = memo(ClientTable);
 const MemoizedContextMenu = memo(ContextMenu);
@@ -31,6 +34,8 @@ const ClientManagement = () => {
   );
 
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isAuditLogViewerOpen, setIsAuditLogViewerOpen] = useState(false);
+  const [isScheduledOperationsOpen, setIsScheduledOperationsOpen] = useState(false);
   const [client, setClient] = useState({
     name: "",
     mac: "",
@@ -140,14 +145,32 @@ const ClientManagement = () => {
         icon={Laptop}
         variant="elevated"
         actions={
-          <Button
-            variant="primary"
-            onClick={handleClientFormModalOpen}
-            icon={PlusCircle}
-            size="sm"
-          >
-            Add Client
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setIsScheduledOperationsOpen(true)}
+              icon={Clock}
+              size="sm"
+            >
+              Scheduled Ops
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => setIsAuditLogViewerOpen(true)}
+              icon={History}
+              size="sm"
+            >
+              Audit Logs
+            </Button>
+            <Button
+              variant="primary"
+              onClick={handleClientFormModalOpen}
+              icon={PlusCircle}
+              size="sm"
+            >
+              Add Client
+            </Button>
+          </div>
         }
       >
         {clients.length > 0 && (
@@ -229,6 +252,14 @@ const ClientManagement = () => {
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         refresh={refreshData}
+      />
+      <AuditLogViewer
+        isOpen={isAuditLogViewerOpen}
+        onClose={() => setIsAuditLogViewerOpen(false)}
+      />
+      <ScheduledOperationsList
+        isOpen={isScheduledOperationsOpen}
+        onClose={() => setIsScheduledOperationsOpen(false)}
       />
     </div>
   );

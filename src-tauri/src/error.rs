@@ -23,6 +23,18 @@ pub enum AppError {
 
     #[error("Internal error: {0}")]
     Internal(String),
+
+    #[error("SSH connection error: {0}")]
+    SshConnection(String),
+
+    #[error("SSH command timeout")]
+    SshTimeout,
+
+    #[error("SSH command failed: {0}")]
+    SshCommand(String),
+
+    #[error("SSH authentication failed: {0}")]
+    SshAuth(String),
 }
 
 impl From<crate::validation::ValidationError> for AppError {

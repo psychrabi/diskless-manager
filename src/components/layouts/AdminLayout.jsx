@@ -122,12 +122,6 @@ const AdminLayout = () => {
 
       <div
         className="flex-1 flex flex-col overflow-hidden"
-        style={{
-          marginLeft: isSidebarCollapsed
-            ? "var(--sidebar-width-collapsed)"
-            : "var(--sidebar-width-open)",
-          transition: "margin-left 0.3s ease-in-out",
-        }}
       >
         <Header onToggleSidebar={() => setIsSidebarOpen((v) => !v)} />
         <main

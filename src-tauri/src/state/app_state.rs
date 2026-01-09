@@ -1,4 +1,5 @@
 use crate::core::config::Settings;
+use crate::ssh_executor::SshExecutor;
 use log::info;
 use sqlx::sqlite::SqlitePool;
 use std::path::PathBuf;
@@ -11,6 +12,7 @@ pub struct AppState {
     pub db_pool: SqlitePool,
     pub config_path: PathBuf,
     pub client_ips: Arc<RwLock<Vec<String>>>,
+    pub ssh_executor: Arc<SshExecutor>,
 }
 
 impl AppState {
@@ -56,6 +58,7 @@ impl AppState {
             db_pool: pool,
             config_path,
             client_ips: Arc::new(RwLock::new(client_ips)),
+            ssh_executor: Arc::new(SshExecutor::new()),
         })
     }
 
@@ -180,6 +183,82 @@ impl AppState {
         .execute(pool)
         .await?;
 
+        // Control operations audit log
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS control_operations (
+                id TEXT PRIMARY KEY,
+                client_id TEXT NOT NULL,
+                client_name TEXT NOT NULL,
+                client_ip TEXT NOT NULL,
+                os_type TEXT NOT NULL,
+                operation_type TEXT NOT NULL,
+                operation_mode TEXT NOT NULL,
+                delay_minutes INTEGER,
+                administrator TEXT,
+                result TEXT NOT NULL,
+                result_message TEXT,
+                duration_ms INTEGER,
+                timestamp TEXT NOT NULL,
+                FOREIGN KEY (client_id) REFERENCES clients(id)
+            )
+            "#,
+        )
+        .execute(pool)
+        .await?;
+
+        // Error log
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS error_logs (
+                id TEXT PRIMARY KEY,
+                client_id TEXT,
+                operation_type TEXT NOT NULL,
+                error_type TEXT NOT NULL,
+                error_message TEXT NOT NULL,
+                error_code TEXT,
+                stack_trace TEXT,
+                timestamp TEXT NOT NULL,
+                FOREIGN KEY (client_id) REFERENCES clients(id)
+            )
+            "#,
+        )
+        .execute(pool)
+        .await?;
+
+        // Scheduled operations
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS scheduled_operations (
+                id TEXT PRIMARY KEY,
+                client_id TEXT NOT NULL,
+                operation_type TEXT NOT NULL,
+                operation_mode TEXT NOT NULL,
+                scheduled_time TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                cancelled_at TEXT,
+                result TEXT,
+                FOREIGN KEY (client_id) REFERENCES clients(id)
+            )
+            "#,
+        )
+        .execute(pool)
+        .await?;
+
+        // OS type cache
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS os_type_cache (
+                client_id TEXT PRIMARY KEY,
+                os_type TEXT NOT NULL,
+                detected_at TEXT NOT NULL,
+                FOREIGN KEY (client_id) REFERENCES clients(id)
+            )
+            "#,
+        )
+        .execute(pool)
+        .await?;
+
         // Create indexes
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_clients_mac ON clients(mac)")
             .execute(pool)
@@ -190,6 +269,22 @@ impl AppState {
             .await?;
 
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_boot_logs_client ON boot_logs(client_id)")
+            .execute(pool)
+            .await?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_control_ops_client ON control_operations(client_id)")
+            .execute(pool)
+            .await?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_control_ops_timestamp ON control_operations(timestamp)")
+            .execute(pool)
+            .await?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_error_logs_client ON error_logs(client_id)")
+            .execute(pool)
+            .await?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_scheduled_ops_client ON scheduled_operations(client_id)")
             .execute(pool)
             .await?;
 

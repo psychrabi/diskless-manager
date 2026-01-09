@@ -55,8 +55,8 @@ const Sidebar = ({
   return (
     <aside
       className={cn(
-        "fixed inset-y-0 left-0 z-40 flex h-full flex-col bg-base-100/95 backdrop-blur-sm text-base-content border-r border-base-200/50 transform transition-all duration-300 ease-in-out",
-        "lg:static lg:translate-x-0",
+        "fixed inset-y-0 left-0 z-40 flex h-full flex-col bg-base-100/95 backdrop-blur-sm text-base-content border-r border-base-200/50 transform transition-all duration-300 ease-in-out overflow-hidden",
+        "lg:static lg:translate-x-0 lg:flex-shrink-0",
         isOpen ? "translate-x-0" : "-translate-x-full",
         isCollapsed ? "w-20" : "w-64"
       )}
@@ -86,7 +86,7 @@ const Sidebar = ({
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+      <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto overflow-x-hidden">
         {menuItems.map((item) => {
           const Icon = item.icon;
           return (

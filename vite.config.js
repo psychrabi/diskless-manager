@@ -13,7 +13,13 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "jsdom",
-    setupFiles: "./src/test/setup.js",
+    environmentOptions: {
+      jsdom: {
+        resources: "usable",
+      },
+    },
+    setupFiles: ["./src/test/setup.js"],
     css: true,
+    include: ["src/**/*.test.{js,jsx}"],
   },
 });

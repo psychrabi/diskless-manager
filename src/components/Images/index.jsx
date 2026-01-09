@@ -7,7 +7,7 @@ import {
   createSnapshot,
 } from "@/api/commands";
 import { useToastStore } from "@/store/useToastStore";
-import { Modal } from ""@/components/ui"/Modal";
+import { Modal } from "@/components/ui";
 import CreateImageForm from "./CreateImageForm";
 import { useConfirm } from "@/contexts/confirmDialog";
 import { useAppStore } from "@/store/useAppStore";

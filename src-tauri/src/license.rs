@@ -195,3 +195,72 @@ pub fn get_license_info() -> Result<LicenseInfo, String> {
         license_expires: expires,
     })
 }
+
+/// HTTP handler version of activate_license (for API endpoints)
+pub async fn activate_license_http(state: AppState, key: &str) -> Result<String, String> {
+    if key.trim().is_empty() {
+        return Err("License key cannot be empty".to_string());
+    }
+    if key.trim() == "trial" {
+        // special case for trial license
+        let mut cfg = config::read_config_db(&state.db_pool)
+            .await
+            .map_err(|e| format!("failed to read config: {}", e))?;
+        let mut settings = cfg.settings.as_object().cloned().unwrap_or_default();
+        // set trial license
+        settings.insert(
+            "license_key".to_string(),
+            serde_json::to_value("trial").map_err(|e| format!("failed to serialize license key: {}", e))?,
+        );
+        settings.insert(
+            "license_status".to_string(),
+            serde_json::to_value("valid").map_err(|e| format!("failed to serialize license status: {}", e))?,
+        );
+        settings.insert(
+            "license_expires".to_string(),
+            serde_json::to_value("2027-10-12").map_err(|e| format!("failed to serialize expires: {}", e))?,
+        );
+        cfg.settings = serde_json::Value::Object(settings);
+        config::write_config(&state.db_pool, &cfg)
+            .await
+            .map_err(|e| format!("failed to save license: {}", e))?;
+        info!("Trial License activated: {}", key);
+        Ok("Trial License activated".to_string())
+    } else {
+        // verify with remote
+        let res: LicenseVerifyResponse =
+            verify_license_remote(key).map_err(|e| e)?;
+        if !res.valid {
+            return Err(res
+                .message
+                .unwrap_or_else(|| "License not valid".to_string()));
+        }
+
+        // write license key and status to config
+        let mut cfg = config::read_config_db(&state.db_pool)
+            .await
+            .map_err(|e| format!("failed to read config: {}", e))?;
+        let mut settings = cfg.settings.as_object().cloned().unwrap_or_default();
+        settings.insert(
+            "license_key".to_string(),
+            serde_json::to_value(key).map_err(|e| format!("failed to serialize license key: {}", e))?,
+        );
+        settings.insert(
+            "license_status".to_string(),
+            serde_json::to_value("valid").map_err(|e| format!("failed to serialize license status: {}", e))?,
+        );
+        if let Some(expires) = res.expires_at {
+            settings.insert(
+                "license_expires".to_string(),
+                serde_json::to_value(expires).map_err(|e| format!("failed to serialize expires: {}", e))?,
+            );
+        }
+        cfg.settings = serde_json::Value::Object(settings);
+        config::write_config(&state.db_pool, &cfg)
+            .await
+            .map_err(|e| format!("failed to save license: {}", e))?;
+
+        info!("License activated: {}", key);
+        Ok("License activated".to_string())
+    }
+}

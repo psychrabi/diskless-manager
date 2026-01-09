@@ -5,6 +5,7 @@ import { useAppStore } from "../../store/useAppStore";
 import { useMetrics } from "@/contexts/MetricsContext";
 import { TableCell, TableHead } from "@/components/ui";
 import { formatUptime } from "@/utils/formatUptime";
+import ControlActionButtons from "./ControlActionButtons";
 
 const ClientStatusBadge = React.memo(({ status }) => {
   const currentStatus = status || "Offline";
@@ -147,6 +148,7 @@ const ClientTable = ({ handleClientContextMenu }) => {
                 <TableHead className="text-center">Status</TableHead>
                 <TableHead>Mode</TableHead>
                 <TableHead className="hidden lg:table-cell">Uptime</TableHead>
+                <TableHead className="text-center">Actions</TableHead>
               </tr>
             </thead>
             <tbody>
@@ -187,6 +189,7 @@ const ClientTable = ({ handleClientContextMenu }) => {
               <TableHead className="bg-base-100 ">Status</TableHead>
               <TableHead className="bg-base-100 ">Mode</TableHead>
               <TableHead className="hidden lg:table-cell bg-base-100">Uptime</TableHead>
+              <TableHead className="bg-base-100 text-center">Actions</TableHead>
             </tr>
           )}
           itemContent={(_, client) => {
@@ -246,7 +249,9 @@ const ClientTable = ({ handleClientContextMenu }) => {
                     <span className="text-base-content/40">-</span>
                   )}
                 </TableCell>
-            
+                <TableCell className="text-center">
+                  <ControlActionButtons client={client} onActionComplete={() => {}} />
+                </TableCell>
               </>
             );
           }}

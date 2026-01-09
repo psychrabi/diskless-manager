@@ -13,6 +13,13 @@ pub mod types;
 
 pub mod validation;
 mod zfs;
+pub mod ssh_executor;
+pub mod os_detector;
+pub mod command_builder;
+pub mod control_handler;
+pub mod remote_desktop_launcher;
+pub mod audit_logger;
+pub mod error_logger;
 
 mod cmd;
 mod commands;

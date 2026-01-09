@@ -43,11 +43,14 @@ pub fn cors_layer() -> CorsLayer {
         "http://127.0.0.1:5173", // Alternative localhost
         "http://localhost:3000", // Common React port
         "http://127.0.0.1:3000", // Alternative
+        "http://localhost:1420", // Tauri dev server
+        "http://127.0.0.1:1420", // Tauri dev server alternative
+        "tauri://localhost",     // Tauri protocol
     ];
 
     let parsed_origins: Vec<_> = origins
         .iter()
-        .map(|origin| origin.parse().expect("Failed to parse CORS origin"))
+        .filter_map(|origin| origin.parse().ok())
         .collect();
 
     CorsLayer::new()
@@ -76,10 +79,15 @@ pub async fn require_auth(
 
     let path = request.uri().path();
 
-    // Skip auth for login and admin setup endpoints
-    if path == "/api/auth/login" 
+    // Skip auth for public endpoints
+    if path == "/health"
+        || path == "/api/auth/login" 
         || path == "/api/auth/validate"
-        || path == "/api/auth/admin/exists" {
+        || path == "/api/auth/admin/exists"
+        || path == "/api/auth/admin/password"
+        || path == "/api/system/dependencies"
+        || path == "/api/license/info"
+        || path == "/api/disks/pool/exists" {
         return Ok(next.run(request).await);
     }
 

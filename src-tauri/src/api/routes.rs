@@ -11,6 +11,9 @@ use crate::api::handlers::{
         update_client,
     },
     config::get_config,
+    control::{
+        cancel_operation, get_audit_logs, get_scheduled_operations, remote_desktop_client, reboot_client, shutdown_client,
+    },
     dashboard::{get_client_overview, get_default_image, get_client_io_metrics},
     disks::{create_pool, list_disks, pool_exists, rename_disk},
     images::{
@@ -18,7 +21,7 @@ use crate::api::handlers::{
         import_image, list_images, list_masters, rename_image, resize_image, update_image,
         verify_image,
     },
-    license::get_license_info_handler,
+    license::{get_license_info_handler, activate_license_handler},
     logs::{clear_logs, get_logs},
     services::{
         configure_service, get_service_config, get_service_status, list_services,
@@ -39,13 +42,19 @@ use tower::limit::ConcurrencyLimitLayer;
 use tower_http::trace::TraceLayer;
 
 pub fn create_app(state: crate::state::AppState) -> Router {
-    // Health check and auth routes (no auth middleware)
+    // CORS layer must be applied first (outermost) to handle preflight requests
+    let cors = cors_layer();
+    
+    // Public routes (no auth middleware)
     let public_router = Router::new()
         .route("/health", get(|| async { "OK" }))
         .route("/api/auth/login", post(login))
         .route("/api/auth/validate", post(validate_auth_token))
         .route("/api/auth/admin/password", put(update_admin_password))
         .route("/api/auth/admin/exists", get(check_admin_exists))
+        .route("/api/system/dependencies", get(check_dependencies))
+        .route("/api/license/info", get(get_license_info_handler))
+        .route("/api/disks/pool/exists", get(pool_exists))
         .with_state(state.clone());
 
     // WebSocket routes (with custom auth handling)
@@ -54,7 +63,7 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .with_state(state.clone())
         .layer(axum::middleware::from_fn_with_state(state.clone(), require_auth));
 
-    // API routes (with standard auth middleware)
+    // Protected API routes (with auth middleware)
     let api_router = Router::new()
         // Client routes (auth required)
         .route("/api/clients", get(list_clients).post(create_client))
@@ -66,6 +75,13 @@ pub fn create_app(state: crate::state::AppState) -> Router {
             "/api/clients/{id}/boot-history",
             get(get_client_boot_history),
         )
+        // Control operation routes (auth required)
+        .route("/api/clients/{id}/shutdown", post(shutdown_client))
+        .route("/api/clients/{id}/reboot", post(reboot_client))
+        .route("/api/clients/{id}/remote-desktop", post(remote_desktop_client))
+        .route("/api/operations/{operation_id}/cancel", post(cancel_operation))
+        .route("/api/audit-logs", get(get_audit_logs))
+        .route("/api/scheduled-operations", get(get_scheduled_operations))
         // Image routes (auth required)
         .route("/api/images", get(list_images).post(create_image))
         .route("/api/masters", get(list_masters))
@@ -95,7 +111,6 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route("/api/system/info", get(get_system_info))
         .route("/api/system/status", get(get_server_status))
         .route("/api/system/initialize", post(initialize_server))
-        .route("/api/system/dependencies", get(check_dependencies))
         .route("/api/system/cache/clear", post(clear_cache))
         .route(
             "/api/system/network/interfaces",
@@ -118,7 +133,6 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route("/api/disks", get(list_disks))
         .route("/api/disks/{name}/rename", put(rename_disk))
         .route("/api/disks/pool", post(create_pool))
-        .route("/api/disks/pool/exists", get(pool_exists))
         // ZFS routes (auth required)
         .route("/api/zfs/pools", get(list_zpools))
         .route("/api/zfs/pools/stats", get(get_zpool_stats))
@@ -133,16 +147,17 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         // Logs routes (auth required)
         .route("/api/logs", get(get_logs).delete(clear_logs))
         // License routes (auth required)
-        .route("/api/license/info", get(get_license_info_handler))
+        .route("/api/license/activate", post(activate_license_handler))
         .with_state(state.clone())
         .layer(axum::middleware::from_fn_with_state(state.clone(), require_auth));
 
-    // Combine routers
+    // Combine all routers
     Router::new()
         .merge(public_router)
         .merge(ws_router)
         .merge(api_router)
+        .layer(cors)
         .layer(TraceLayer::new_for_http())
         .layer(ConcurrencyLimitLayer::new(100))
-        .layer(cors_layer())
 }
+

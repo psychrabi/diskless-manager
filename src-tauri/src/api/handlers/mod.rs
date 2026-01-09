@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod clients;
 pub mod config;
+pub mod control;
 pub mod dashboard;
 pub mod disks;
 pub mod images;
