@@ -4,7 +4,7 @@ import { useToastStore } from "@/store/useToastStore";
 import { File } from "lucide-react";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
-import { Button, Card } from "../ui";
+import { Button, Card } from "@/components/ui";
 
 export default function LicenseActivation() {
   const { activateLicense } = useSettings();
@@ -60,7 +60,7 @@ export default function LicenseActivation() {
             variant="secondary"
             onClick={() => {
               reset();
-            info("License activation form has been reset.");
+              info("License activation form has been reset.");
             }}
             disabled={loading}
           >

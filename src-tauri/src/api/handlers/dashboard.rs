@@ -1,8 +1,4 @@
-use axum::{
-    extract::State,
-    http::StatusCode,
-    Json,
-};
+use axum::{extract::State, http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 
 use crate::state::AppState;
@@ -23,30 +19,17 @@ pub struct ClientOverviewResponse {
 pub async fn get_default_image(
     State(state): State<AppState>,
 ) -> Result<Json<DefaultImageResponse>, StatusCode> {
-    // Get the default image from config
-    let cfg = crate::config::get_config();
-    let default_image = cfg
-        .settings
-        .as_object()
-        .and_then(|obj| obj.get("default_image"))
-        .and_then(|val| val.as_str())
-        .map(|s| s.to_string());
+    // Query the database for an image where is_default = 1
+    let result: Result<(String, String), _> =
+        sqlx::query_as("SELECT id, name FROM images WHERE is_default = 1 LIMIT 1")
+            .fetch_one(&state.db_pool)
+            .await;
 
-    // Try to find the image in the database
-    if let Some(image_name) = default_image {
-        let result: Result<(String,), _> = sqlx::query_as(
-            "SELECT id FROM images WHERE name = ? LIMIT 1"
-        )
-        .bind(&image_name)
-        .fetch_one(&state.db_pool)
-        .await;
-
-        if let Ok((id,)) = result {
-            return Ok(Json(DefaultImageResponse {
-                name: Some(image_name),
-                id: Some(id),
-            }));
-        }
+    if let Ok((id, name)) = result {
+        return Ok(Json(DefaultImageResponse {
+            name: Some(name),
+            id: Some(id),
+        }));
     }
 
     Ok(Json(DefaultImageResponse {

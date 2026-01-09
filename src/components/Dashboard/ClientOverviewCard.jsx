@@ -2,7 +2,7 @@ import { useToastStore } from "@/store/useToastStore";
 import { getClientOverview } from "@/api/commands";
 import { Users } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Card } from "../ui";
+import { Card } from "@/components/ui";
 
 const ClientOverviewCard = () => {
   const [overview, setOverview] = useState(null);
@@ -16,8 +16,7 @@ const ClientOverviewCard = () => {
         setOverview(data);
       } catch (err) {
         error(
-          `Failed to load client overview: ${
-            err.message || "An unknown error occurred"
+          `Failed to load client overview: ${err.message || "An unknown error occurred"
           }`,
         );
         console.error(err);

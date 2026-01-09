@@ -2,7 +2,7 @@ import { Layers, Monitor, Power, PowerOff, RefreshCw, Zap } from "lucide-react";
 import React from "react";
 import { TableVirtuoso } from "react-virtuoso";
 import { useAppStore } from "../../store/useAppStore";
-import { TableCell, TableHead } from "../ui";
+import { TableCell, TableHead } from "@/components/ui";
 
 const ClientStatusBadge = React.memo(({ status }) => {
   const currentStatus = status || "Offline";
@@ -11,8 +11,8 @@ const ClientStatusBadge = React.memo(({ status }) => {
   const badgeClass = isOnline
     ? "badge-success"
     : isLeased
-    ? "badge-warning"
-    : "badge-neutral";
+      ? "badge-warning"
+      : "badge-neutral";
   const Icon = isOnline ? Power : PowerOff;
   return (
     <span className={`badge ${badgeClass} gap-1`}>
@@ -68,7 +68,7 @@ const VirtuosoTableComponents = {
   TableBody: React.forwardRef((props, ref) => <tbody {...props} ref={ref} />),
   TableRow: React.forwardRef((props, ref) => {
     // Destructure to avoid passing non-DOM props to tr, but capture item and context
-    // eslint-disable-next-line no-unused-vars
+
     const { item, context, ...rest } = props;
     return (
       <tr
@@ -78,9 +78,8 @@ const VirtuosoTableComponents = {
             context.handleClientContextMenu(e, item);
           }
         }}
-        className={`border-b border-base-200 transition-colors hover:bg-base-200/50 cursor-context-menu ${
-          props.className || ""
-        }`}
+        className={`border-b border-base-200 transition-colors hover:bg-base-200/50 cursor-context-menu ${props.className || ""
+          }`}
         ref={ref}
       />
     );

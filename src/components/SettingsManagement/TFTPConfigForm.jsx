@@ -5,7 +5,7 @@ import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Network } from "lucide-react";
 import { useForm } from "react-hook-form";
-import { Button, Card } from "../ui";
+import { Button, Card } from "@/components/ui";
 import TFTPForm from "./Forms/TFTPForm";
 
 export default function TFTPConfigForm() {

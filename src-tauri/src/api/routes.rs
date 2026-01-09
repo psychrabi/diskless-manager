@@ -4,31 +4,33 @@ use axum::{
 };
 
 use crate::api::handlers::{
-    auth::{login, validate_auth_token, update_admin_password, check_admin_exists},
+    auth::{check_admin_exists, login, update_admin_password, validate_auth_token},
     clients::{
         create_client, delete_client, get_client, get_client_boot_history, list_clients,
         update_client,
     },
     config::get_config,
-    dashboard::{get_default_image, get_client_overview},
+    dashboard::{get_client_overview, get_default_image},
     disks::{create_pool, list_disks, pool_exists, rename_disk},
     images::{
-        create_image, delete_image, get_image, list_images, list_masters, rename_image,
-        update_image, import_image, clone_image, create_snapshot, get_image_info, resize_image,
+        clone_image, create_image, create_snapshot, delete_image, get_image, get_image_info,
+        import_image, list_images, list_masters, rename_image, resize_image, update_image,
         verify_image,
     },
     license::get_license_info_handler,
-    logs::{get_logs, clear_logs},
+    logs::{clear_logs, get_logs},
     services::{
-        configure_service, get_service_config, get_service_status, list_services, restart_all_services,
-        restart_service, start_all_services, start_service, stop_all_services, stop_service,
+        configure_service, get_service_config, get_service_status, list_services,
+        restart_all_services, restart_service, start_all_services, start_service,
+        stop_all_services, stop_service,
     },
     system::{
         apply_network_settings, check_dependencies, clear_cache, detect_server_network,
-        get_interface_ip, get_network_interfaces, get_server_status, get_settings, get_system_info,
-        initialize_server, save_settings, setup_privileged_access, get_ram_usage, get_zfs_arcstat,
+        get_interface_ip, get_network_interfaces, get_ram_usage, get_server_status, get_settings,
+        get_system_info, get_zfs_arcstat, initialize_server, save_settings,
+        setup_privileged_access,
     },
-    zfs::{list_zpools, get_zpool_stats, list_datasets, create_dataset, delete_dataset},
+    zfs::{create_dataset, delete_dataset, get_zpool_stats, list_datasets, list_zpools},
 };
 use crate::api::middleware::{cors_layer, require_auth};
 use tower::limit::ConcurrencyLimitLayer;
@@ -82,12 +84,21 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route("/api/system/initialize", post(initialize_server))
         .route("/api/system/dependencies", get(check_dependencies))
         .route("/api/system/cache/clear", post(clear_cache))
-        .route("/api/system/network/interfaces", get(get_network_interfaces))
-        .route("/api/system/network/interfaces/{name}/ip", get(get_interface_ip))
+        .route(
+            "/api/system/network/interfaces",
+            get(get_network_interfaces),
+        )
+        .route(
+            "/api/system/network/interfaces/{name}/ip",
+            get(get_interface_ip),
+        )
         .route("/api/system/network/detect", post(detect_server_network))
         .route("/api/system/network/apply", post(apply_network_settings))
         .route("/api/system/settings", get(get_settings).put(save_settings))
-        .route("/api/system/privileged-access", post(setup_privileged_access))
+        .route(
+            "/api/system/privileged-access",
+            post(setup_privileged_access),
+        )
         .route("/api/system/ram-usage", get(get_ram_usage))
         .route("/api/system/zfs-arcstat", get(get_zfs_arcstat))
         // Disk routes (auth required)

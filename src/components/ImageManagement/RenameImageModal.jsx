@@ -5,7 +5,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { Save } from "lucide-react";
 import { useForm } from "react-hook-form";
 import z from "zod";
-import { Button, Modal } from "../ui";
+import { Button, Modal } from "@/components/ui";
 
 const renameImageSchema = z.object({
   newName: z

@@ -2,7 +2,7 @@ import { useToastStore } from "@/store/useToastStore";
 import { getLogs, clearLogs } from "@/api/commands";
 import { BrushCleaning, Loader, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Button, Card } from "../ui";
+import { Button, Card } from "@/components/ui";
 
 export default function AppLogs() {
   const [logs, setLogs] = useState("");

@@ -1,7 +1,7 @@
 import { useAppStore } from "@/store/useAppStore";
 import { HardDrive, PlusCircle } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { Button, Card } from "../ui";
+import { Button, Card } from "@/components/ui";
 import DiskFormModal from "./DiskFormModal";
 import DiskTable from "./DiskTable";
 
@@ -38,6 +38,7 @@ export default function DisksManagement() {
   return (
     <Card
       title="Disk Management"
+      subtitle="Manage diskless boot server disks"
       icon={HardDrive}
       className="bg-base-300"
       actions={

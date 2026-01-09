@@ -1,5 +1,5 @@
 import { Wrench } from "lucide-react";
-import { Card } from "../ui";
+import { Card } from "@/components/ui";
 import AdminPasswordForm from "./AdminPasswordForm";
 import PrivilegeManagementForm from "./PrivilegeManagementForm";
 

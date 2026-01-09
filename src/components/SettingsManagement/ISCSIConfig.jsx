@@ -5,7 +5,7 @@ import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import ISCSIForm from "./Forms/ISCSIForm";
-import { Button, Card } from "../ui";
+import { Button, Card } from "@/components/ui";
 import { Network } from "lucide-react";
 
 export default function ISCSIConfig() {

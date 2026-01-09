@@ -1,5 +1,5 @@
 import { CheckCircle } from "lucide-react";
-import { Button, Card } from "../ui";
+import { Button, Card } from "@/components/ui";
 
 const FinishedStep = ({ onNavigateHome }) => {
   return (

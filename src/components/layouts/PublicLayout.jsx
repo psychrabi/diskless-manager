@@ -3,7 +3,7 @@ import { useToastStore } from "@/store/useToastStore";
 import { checkDependencies, checkZfsPoolExists, getLicenseInfo } from "@/api/commands";
 import { useEffect, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
-import { Loading } from "../ui";
+import { Loading } from "@/components/ui";
 import Toast from "../ui/Toast";
 
 const PublicLayout = () => {
@@ -36,8 +36,7 @@ const PublicLayout = () => {
         }
       } catch (e) {
         error(
-          `Preflight Check Failed : ${
-            e.message || "An unknown error occurred."
+          `Preflight Check Failed : ${e.message || "An unknown error occurred."
           }`,
         );
         console.warn("Preflight check failed:", e);
@@ -50,8 +49,7 @@ const PublicLayout = () => {
         await getLicenseInfo();
       } catch (err) {
         error(
-          `License Check Failed : ${
-            err.message || "An unknown error occurred."
+          `License Check Failed : ${err.message || "An unknown error occurred."
           }`,
         );
       }

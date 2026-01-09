@@ -3,7 +3,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { LockKeyhole } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
-import { Button, Card, Input } from "../ui";
+import { Button, Card, Input } from "@/components/ui";
 
 const adminSchema = z.object({
   old_password: z.string().min(1, "Old password is required"),
@@ -32,7 +32,7 @@ export default function AdminPasswordForm() {
   };
 
   return (
-    <Card title="Admin password" icon={LockKeyhole}>
+    <Card title="Admin password" subtitle="Change admin password" icon={LockKeyhole}>
       <form onSubmit={handleSubmit(onSubmit)}>
         <div className="space-y-4">
           <Input

@@ -3,7 +3,7 @@ import { cloneSchema } from "@/schema";
 import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
-import { Input, Modal } from "../ui";
+import { Input, Modal } from "@/components/ui";
 
 export default function CreateCloneForm({ show, onClose, selectedImage }) {
   const { success, error } = useToastStore();

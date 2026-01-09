@@ -1,7 +1,7 @@
 import { useServiceManager } from "@/hooks/useServiceManager";
 import { Code } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Button } from "../ui";
+import { Button, Card } from "@/components/ui";
 
 const defaultScript = `#!ipxe
 
@@ -45,21 +45,12 @@ const BootScriptStep = ({ onSubmit, isSubmitting }) => {
   }, [fetchServiceConfig]);
 
   return (
-    <div className="space-y-6">
-      <div className="text-center space-y-2">
-        <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-primary/10 text-primary mb-2">
-          <Code className="w-6 h-6" />
-        </div>
-        <h2 className="text-2xl font-bold">Boot IPXE Script</h2>
-        <p className="text-base-content/60 max-w-sm mx-auto">
-          Customize your iPXE boot script. This script controls the initial boot
-          menu and how clients load their OS.
-        </p>
-      </div>
-
+    <Card title="Boot Menu - iPXE Script" subtitle="Customize your boot script. This script controls the initial boot
+          menu and how clients load their OS." icon={Code} className="border-t-4 border-primary overflow-hidden"
+    >
       <div className="space-y-4">
         <textarea
-          className="w-full h-80 p-4 font-mono text-sm bg-base-300 rounded-lg outline-none focus:ring-2 focus:ring-primary/50 transition-all resize-none"
+          className="w-full h-130 p-4 font-mono text-sm bg-base-300 rounded-lg outline-none focus:ring-2 focus:ring-primary/50 transition-all resize-none"
           value={script}
           onChange={(e) => setScript(e.target.value)}
           spellCheck={false}
@@ -77,7 +68,7 @@ const BootScriptStep = ({ onSubmit, isSubmitting }) => {
             : "Save & Finish Configuration"}
         </Button>
       </div>
-    </div>
+    </Card>
   );
 };
 

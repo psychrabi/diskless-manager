@@ -3,7 +3,7 @@ import { imageSchema } from "@/schema";
 import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
-import { Input, Select } from "../ui";
+import { Input, Select } from "@/components/ui";
 import { Modal } from "../ui/Modal";
 
 export default function CreateImageForm({ show, onClose }) {

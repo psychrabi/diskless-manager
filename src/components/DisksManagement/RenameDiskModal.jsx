@@ -4,7 +4,7 @@ import { renameDisk } from "@/api/commands";
 import { Save } from "lucide-react";
 import { useForm } from "react-hook-form";
 import z from "zod";
-import { Button, Modal } from "../ui";
+import { Button, Modal } from "@/components/ui";
 
 const renameDiskSchema = z.object({
   newName: z

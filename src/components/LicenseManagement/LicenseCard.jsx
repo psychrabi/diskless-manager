@@ -1,6 +1,6 @@
 import { useAppStore } from "@/store/useAppStore";
 import { Key } from "lucide-react";
-import { Card } from "../ui";
+import { Card } from "@/components/ui";
 
 export default function LicenseCard() {
   const license = useAppStore((state) => state.licenseInfo) || {};

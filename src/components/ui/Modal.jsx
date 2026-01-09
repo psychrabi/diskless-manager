@@ -9,6 +9,8 @@ export const Modal = ({
   children,
   size = "md",
   id = "modal-dialog",
+  showCloseButton = true,
+  className = "",
 }) => {
   const dialogRef = useRef(null);
   const lastFocusedElement = useRef(null);
@@ -68,48 +70,56 @@ export const Modal = ({
 
   const sizeClasses = {
     sm: "max-w-sm",
-    md: "",
+    md: "max-w-md",
     lg: "max-w-lg",
     xl: "max-w-xl",
     "2xl": "max-w-2xl",
     "3xl": "max-w-3xl",
     "4xl": "max-w-4xl",
     "5xl": "max-w-5xl",
-    full: "modal-bottom sm:modal-middle",
+    full: "max-w-full mx-4",
   };
 
   return (
     <dialog
       ref={dialogRef}
       id={id}
-      className={`modal ${isOpen ? "modal-open" : ""}`}
-      onClose={onClose}
+      className="modal modal-professional"
       onKeyDown={handleKeyDown}
-      aria-modal="true"
-      aria-labelledby={`${id}-title`}
+      onClose={onClose}
     >
-      <div className={`modal-box ${sizeClasses[size] || ""}`}>
-        <div className="flex justify-between items-center mb-4 border-b border-base-200 pb-3">
-          <h2 id={`${id}-title`} className="text-xl font-semibold">
-            {title}
-          </h2>
-          <Button
-            onClick={onClose}
-            variant="destructive"
-            size="icon"
-            className="h-8 w-8"
-            aria-label="Close modal"
-            title="Close modal"
-          >
-            <X className="h-5 w-5" aria-hidden="true" />
-          </Button>
+      <div className={`modal-box ${sizeClasses[size]} ${className}`}>
+        {/* Header */}
+        {(title || showCloseButton) && (
+          <div className="flex items-center justify-between mb-6 pb-4 border-b border-base-200/30">
+            {title && (
+              <h2 className="text-heading-lg font-semibold text-base-content">
+                {title}
+              </h2>
+            )}
+            {showCloseButton && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={onClose}
+                className="ml-auto hover:bg-base-200"
+                aria-label="Close modal"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            )}
+          </div>
+        )}
+
+        {/* Content */}
+        <div className="modal-content">
+          {children}
         </div>
-        <div>{children}</div>
       </div>
-      <form method="dialog" className="modal-backdrop">
-        <button tabIndex={-1} aria-label="Close modal" onClick={onClose}>
-          close
-        </button>
+
+      {/* Backdrop */}
+      <form method="dialog" className="modal-backdrop bg-black/20 backdrop-blur-sm">
+        <button onClick={onClose} aria-label="Close modal">close</button>
       </form>
     </dialog>
   );

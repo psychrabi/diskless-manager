@@ -2,19 +2,17 @@ import { ShieldCheck, ShieldAlert } from "lucide-react";
 import { useState } from "react";
 import { setupPrivilegedAccess } from "@/api/commands";
 import { useToastStore } from "@/store/useToastStore";
-import { Button, Card } from "../ui";
+import { Button, Card } from "@/components/ui";
 
 export default function PrivilegeManagementForm() {
-  const { success, error, info } = useToastStore();
+  const { success, error } = useToastStore();
   const [loading, setLoading] = useState(false);
 
   const handleSetup = async () => {
     setLoading(true);
     try {
-      info("Requesting administrative authorization...");
       const response = await setupPrivilegedAccess({});
-      console.log(response);
-      success("Authorization",response.message);
+      success("Authorization", response.message);
     } catch (e) {
       error(e.toString());
     } finally {
@@ -23,7 +21,7 @@ export default function PrivilegeManagementForm() {
   };
 
   return (
-    <Card title="Privilege Management" icon={ShieldCheck}>
+    <Card title="Privilege Management" subtitle="Authorize application to perform administrative tasks" icon={ShieldCheck}>
       <div className="space-y-4">
         <p className="text-sm text-base-content/60">
           Authorize the application to perform administrative tasks (service

@@ -1,7 +1,7 @@
 import { PlayCircle, Server, StopCircle } from "lucide-react";
 import { useCallback, useState } from "react";
 import { useServiceManager } from "../../hooks/useServiceManager";
-import { Button, Card } from "../ui";
+import { Button, Card } from "@/components/ui";
 import BootScript from "./BootScript";
 import ServiceConfigModal from "./ServiceConfigModal";
 import ServicesList from "./ServicesList";

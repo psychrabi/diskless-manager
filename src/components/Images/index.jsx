@@ -2,14 +2,12 @@ import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import {
-  listImages,
   importImage,
   deleteImage,
-  cloneImage,
   createSnapshot,
 } from "@/api/commands";
 import { useToastStore } from "@/store/useToastStore";
-import { Modal } from "@/components/ui/Modal";
+import { Modal } from ""@/components/ui"/Modal";
 import CreateImageForm from "./CreateImageForm";
 import { useConfirm } from "@/contexts/confirmDialog";
 import { useAppStore } from "@/store/useAppStore";

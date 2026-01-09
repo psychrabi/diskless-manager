@@ -1,7 +1,7 @@
 import { useAppStore } from "@/store/useAppStore";
 import { Settings } from "lucide-react";
 import { useEffect } from "react";
-import { Card } from "../ui";
+import { Card } from "@/components/ui";
 import BootProcessOverview from "./BootProcessOverview";
 import DHCPConfigForm from "./DHCPConfigForm";
 import HTTPConfigForm from "./HTTPConfigForm";
@@ -18,29 +18,29 @@ const SettingsManagement = () => {
   }, [fetchConfig]);
 
   return (
-    <Card title="System Settings" icon={Settings} className="bg-base-300">
-      <div className="min-h-[calc(100vh-14rem)] space-y-6">
-        <div className="grid gap-6 md:grid-cols-2">
-          {/* Server Network Configuration */}
-          <NetworkConfig />
+    <Card title="System Settings" subtitle="Manage diskless boot server configurations" icon={Settings} className="bg-base-300">
 
-          {/* DHCP Server Configuration */}
-          <DHCPConfigForm />
-          {/* TFTP Server Configuration */}
-          <TFTPConfigForm />
+      <div className="grid gap-4 xl:grid-cols-4 mb-4">
+        {/* Server Network Configuration */}
+        <NetworkConfig />
 
-          {/* TFTP Server Configuration */}
-          <HTTPConfigForm />
+        {/* DHCP Server Configuration */}
+        <DHCPConfigForm />
 
-          {/* Samba Server Configuration */}
-          <SambaConfigForm />
+        {/* TFTP Server Configuration */}
+        <TFTPConfigForm />
 
-          {/* ISCSI Target Configuration */}
-          <ISCSIConfig />
-        </div>
-        {/* Boot Process Overview Card */}
-        <BootProcessOverview />
+        {/* TFTP Server Configuration */}
+        <HTTPConfigForm />
+
+        {/* Samba Server Configuration */}
+        <SambaConfigForm />
+
+        {/* ISCSI Target Configuration */}
+        <ISCSIConfig />
       </div>
+      {/* Boot Process Overview Card */}
+      <BootProcessOverview />
     </Card>
   );
 };

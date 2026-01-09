@@ -37,7 +37,8 @@ const Login = () => {
 
       // Set auth context immediately so ProtectedRoute sees it
       setAuth(response.user, response.token);
-      success("Login Successful", "You have successfully logged in");
+      success("Authentication", "You have successfully logged in");
+      localStorage.removeItem("last_path");
       navigate("/");
     } catch (e) {
       const errorMessage = e instanceof Error ? e.message : "An unknown error occurred";

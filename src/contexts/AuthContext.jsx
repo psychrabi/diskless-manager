@@ -15,11 +15,11 @@ export const AuthProvider = ({ children }) => {
     setToken(null);
     localStorage.removeItem("authToken");
     localStorage.removeItem("user");
-    success("Logout Successful");
-  }, []);
+    success("Authentication", "Logout Successful");
+  }, [success]);
 
   const validateToken = useCallback(
-    async (authToken) => {
+    async () => {
       try {
         // Validate the token through the API
         await validateAuthToken();

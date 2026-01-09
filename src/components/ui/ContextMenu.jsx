@@ -1,5 +1,4 @@
 import {
-  Edit,
   History,
   Play,
   Power,
@@ -8,12 +7,13 @@ import {
   Trash2,
   ShieldAlert,
   Settings,
+  HardDrive,
 } from "lucide-react";
 import { useRef, useLayoutEffect, useState } from "react";
 import { useOnClickOutside } from "../../hooks/useOnClickOutside";
 
 const MenuItem = ({
-  icon: Icon,
+  icon: Icon, // eslint-disable-line no-unused-vars
   label,
   onClick,
   variant = "default",
@@ -34,11 +34,10 @@ const MenuItem = ({
     <li>
       <a onClick={onClick} className={`${variants[variant]} ${className}`}>
         <Icon
-          className={`w-4 h-4 ${
-            variant === "destructive"
+          className={`w-4 h-4 ${variant === "destructive"
               ? "group-hover:scale-110 transition-transform"
               : ""
-          }`}
+            }`}
         />
         <span>{label}</span>
       </a>
@@ -158,7 +157,7 @@ export const ContextMenu = ({
               </>
             ) : (
               <MenuItem
-                icon={RefreshCw}
+                icon={HardDrive}
                 label="Enable Super mode"
                 variant="secondary"
                 onClick={() => handleAction(actions.enableSuper)}

@@ -1,6 +1,6 @@
 import { useMasterManager } from "@/hooks/useMasterManager";
 import { RotateCcw, Trash2 } from "lucide-react";
-import { Button } from "../ui";
+import { Button } from "@/components/ui";
 
 const SnapshotItem = ({
   snap,

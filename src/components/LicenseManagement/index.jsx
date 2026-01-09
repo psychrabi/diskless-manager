@@ -1,5 +1,5 @@
 import { Copy } from "lucide-react";
-import { Card } from "../ui";
+import { Card } from "@/components/ui";
 import LicenseActivation from "./LicenseActivation";
 import LicenseCard from "./LicenseCard";
 

@@ -1,14 +1,13 @@
+import * as api from "@/api/commands";
+import { clientSchema } from "@/schema";
+import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Save } from "lucide-react";
 import { useEffect } from "react";
 import { useForm, useWatch } from "react-hook-form";
-import { z } from "zod";
-import { useToastStore } from "@/store/useToastStore";
-import { Button, Input, Modal, Select } from "../ui";
-import { clientSchema } from "@/schema";
-import * as api from "@/api/commands";
+import { Button, Input, Modal, Select } from "@/components/ui";
 
-const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
+const ClientFormModal = ({ client, masters, isOpen, onClose, refresh }) => {
   const { success, error } = useToastStore();
 
   const {
@@ -18,7 +17,6 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
     setValue,
     control,
     reset,
-    watch,
   } = useForm({
     mode: "onChange",
     resolver: zodResolver(clientSchema),
@@ -64,7 +62,7 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
           `Client ${data.name} updated successfully.`
         );
       }
-      setIsOpen(false);
+      onClose();
       reset(); // Reset to clear form
       await refresh();
     } catch (e) {
@@ -80,7 +78,7 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
   return (
     <Modal
       isOpen={isOpen}
-      onClose={() => setIsOpen(false)}
+      onClose={() => onClose()}
       title={client?.id ? "Edit Client" : "Add Client"}
       size="xl"
     >
@@ -118,7 +116,7 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
           error={errors.master?.message}
         >
           <option value="">Select image ...</option>
-          {masters.map((master) => (
+          {masters?.map((master) => (
             <option key={master.name} value={master.name}>
               {master.name}
             </option>
@@ -131,8 +129,7 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
           error={errors.snapshot?.message}
         >
           <option value="">Use master directly</option>
-          {masters
-            .find((m) => m.name === selectedMaster)
+          {masters?.find((m) => m.name === selectedMaster)
             ?.snapshots?.map((snap) => (
               <option key={snap.name} value={snap.name}>
                 {snap.name} ({snap.created}, {snap.size})
@@ -181,7 +178,7 @@ const ClientFormModal = ({ client, masters, isOpen, setIsOpen, refresh }) => {
           <Button
             type="button"
             variant="ghost"
-            onClick={() => setIsOpen(false)}
+            onClick={() => onClose()}
           >
             Cancel
           </Button>

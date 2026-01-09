@@ -2,7 +2,7 @@ import { File, HardDrive, PlusCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAppStore } from "../../store/useAppStore";
-import { Button, Card } from "../ui";
+import { Button, Card } from "@/components/ui";
 import CreateImageModal from "./CreateImageModal";
 import { ImagesList } from "./ImagesList";
 
@@ -37,6 +37,8 @@ const ImageManagement = () => {
   return (
     <Card
       title="Image Management"
+      subtitle="Manage diskless boot images and their snapshots
+"
       className="bg-base-300"
       icon={HardDrive}
       actions={

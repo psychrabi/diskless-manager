@@ -1,6 +1,6 @@
 import { AlertCircle, CheckCircle, Database } from "lucide-react";
 import { useForm } from "react-hook-form";
-import { Button, Card, Input, Select } from "../ui";
+import { Button, Card, Input, Select } from "@/components/ui";
 
 const StorageStep = ({
   disks,

@@ -3,7 +3,7 @@ import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Save } from "lucide-react";
 import { useForm } from "react-hook-form";
-import { Button, Modal } from "../ui";
+import { Button, Modal } from "@/components/ui";
 import * as api from "@/api/commands";
 import { imageSchema } from "@/schema";
 

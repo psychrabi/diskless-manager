@@ -1,5 +1,5 @@
 import { Code, Eye } from "lucide-react";
-import { Button, Card } from "../ui";
+import { Button, Card } from "@/components/ui";
 
 function BootScript({ onViewConfig }) {
   return (

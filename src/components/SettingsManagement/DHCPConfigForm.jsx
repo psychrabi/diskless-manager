@@ -6,7 +6,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { Network } from "lucide-react";
 import { useEffect } from "react";
 import { useForm } from "react-hook-form";
-import { Button, Card } from "../ui";
+import { Button, Card } from "@/components/ui";
 import DHCPForm from "./Forms/DHCPForm";
 
 export default function DHCPConfigForm() {
@@ -39,14 +39,13 @@ export default function DHCPConfigForm() {
   };
 
   return (
-    <Card title="DHCP Server Configuration" icon={Network}>
+    <Card title="DHCP Server Configuration" icon={Network} className="xl:col-span-2">
       <form onSubmit={handleSubmit(onSubmit)}>
         <DHCPForm
           register={register}
           errors={errors}
           config={config?.settings?.dhcp}
         />
-
         <Button
           variant="primary"
           type="submit"

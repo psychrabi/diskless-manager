@@ -2,7 +2,7 @@ import { Folder, Globe, RefreshCw, Save, Settings } from "lucide-react";
 import React from "react";
 import { useShallow } from "zustand/shallow";
 import { useAppStore } from "../../store/useAppStore";
-import { Button, Card } from "../ui";
+import { Button, Card } from "@/components/ui";
 import { restartAllServices } from "@/api/commands";
 import { useConfirm } from "@/contexts/confirmDialog";
 

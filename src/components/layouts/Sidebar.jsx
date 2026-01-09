@@ -1,11 +1,10 @@
-import { Activity, Button } from "@/components/ui";
+import { Button } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { exit } from "@tauri-apps/plugin-process";
 
 import {
   File,
   FilesIcon,
-  Gamepad,
   HardDrive,
   KeyRound,
   Laptop2,
@@ -14,6 +13,7 @@ import {
   PanelRightClose,
   Power,
   Settings,
+  Shield,
   SquareLibrary,
 } from "lucide-react";
 import { NavLink, useNavigate } from "react-router-dom";
@@ -23,7 +23,6 @@ const menuItems = [
   { id: "clients", to: "/clients", label: "Clients", icon: Laptop2 },
   { id: "disks", to: "/disks", label: "Disks", icon: HardDrive },
   { id: "images", to: "/images", label: "Images", icon: FilesIcon },
-  // { id: "zfs", to: "/zfs", label: "ZFS Vols", icon: FilesIcon },
   { id: "setup", to: "/setup", label: "Setup", icon: SquareLibrary },
   { id: "services", to: "/services", label: "Services", icon: Settings },
   { id: "settings", to: "/settings", label: "System Settings", icon: Settings },
@@ -45,7 +44,6 @@ const handleExit = async () => {
 };
 
 const Sidebar = ({
-  activeTab,
   onTabChange,
   isOpen = false,
   onClose,
@@ -53,127 +51,145 @@ const Sidebar = ({
   onToggleCollapse,
 }) => {
   const navigate = useNavigate();
+
   return (
-    <div
+    <aside
       className={cn(
-        "fixed inset-y-0 left-0 z-40 flex h-full flex-col bg-base-100 text-base-content shadow-md transform transition-all duration-200 ease-in-out",
+        "fixed inset-y-0 left-0 z-40 flex h-full flex-col bg-base-100/95 backdrop-blur-sm text-base-content border-r border-base-200/50 transform transition-all duration-300 ease-in-out",
         "lg:static lg:translate-x-0",
         isOpen ? "translate-x-0" : "-translate-x-full",
         isCollapsed ? "w-20" : "w-64"
       )}
       role="navigation"
-      aria-label="Sidebar"
+      aria-label="Main navigation"
     >
+      {/* Header */}
       <div
         className={cn(
-          "flex h-16 items-center border-b border-base-300",
-          isCollapsed ? "justify-center px-2" : "px-6 gap-2"
+          "flex h-16 items-center border-b border-base-200/30 bg-base-100/50",
+          isCollapsed ? "justify-center px-2" : "px-6 gap-3"
         )}
       >
-        <Gamepad />
-        {!isCollapsed && <h1 className="text-xl font-bold">Hak3r'z Cafe</h1>}
+        <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center flex-shrink-0">
+          <Shield className="h-5 w-5 text-primary-content" />
+        </div>
+        {!isCollapsed && (
+          <div>
+            <h1 className="text-heading-sm font-bold text-base-content">
+              Diskless Manager
+            </h1>
+            <p className="text-caption text-base-content/60">
+              Boot Server Control
+            </p>
+          </div>
+        )}
       </div>
-      <div className="flex-1 px-3">
-        <nav className="space-y-2 py-4">
-          {menuItems.map((item) => {
-            const Icon = item.icon;
-            return (
-              <NavLink
-                to={item.to}
-                key={item.id}
-                variant={activeTab === item.id ? "secondary" : "ghost"}
-                className={({ isActive }) =>
-                  cn(
-                    "group relative flex items-center p-2 rounded-md overflow-hidden whitespace-nowrap",
-                    isActive
-                      ? "bg-base-200 text-base-content"
-                      : "text-base-content/70 hover:bg-base-200 hover:text-base-content",
-                    isCollapsed
-                      ? "justify-center w-10 h-10"
-                      : "w-full justify-start gap-3"
-                  )
-                }
-                onClick={() => {
-                  onTabChange(item.id);
-                  if (onClose) onClose();
-                }}
-              >
-                <Icon className="h-5 w-5" />
-                <Activity mode={!isCollapsed ? "visible" : "hidden"}>
+
+      {/* Navigation */}
+      <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+        {menuItems.map((item) => {
+          const Icon = item.icon;
+          return (
+            <NavLink
+              key={item.id}
+              to={item.to}
+              className={({ isActive }) =>
+                cn(
+                  "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 group relative",
+                  isActive
+                    ? "bg-primary text-primary-content shadow-sm"
+                    : "text-base-content/70 hover:text-base-content hover:bg-base-200/50",
+                  isCollapsed ? "justify-center" : ""
+                )
+              }
+              onClick={() => {
+                onTabChange?.(item.id);
+                if (window.innerWidth < 1024) onClose?.();
+              }}
+              title={isCollapsed ? item.label : undefined}
+            >
+              <Icon className={cn("flex-shrink-0", isCollapsed ? "h-5 w-5" : "h-4 w-4")} />
+              {!isCollapsed && (
+                <span className="truncate">{item.label}</span>
+              )}
+
+              {/* Tooltip for collapsed state */}
+              {isCollapsed && (
+                <div className="absolute left-full ml-2 px-2 py-1 bg-base-content text-base-100 text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap z-50">
                   {item.label}
-                </Activity>
+                </div>
+              )}
+            </NavLink>
+          );
+        })}
+      </nav>
 
-                <Activity mode={isCollapsed ? "visible" : "hidden"}>
-                  <span className="absolute left-full ml-3 px-2 py-1 bg-base-300 text-base-content rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none z-50">
-                    {item.label}
-                  </span>
-                </Activity>
-              </NavLink>
-            );
-          })}
-        </nav>
-      </div>
-      <div className="p-3 border-t border-base-300 space-y-2">
+      {/* Footer */}
+      <div className={cn("p-3 border-t border-base-200/30 space-y-2")}>
+        {/* Collapse toggle */}
         <Button
           variant="ghost"
-          className={cn(
-            "w-full text-base-content/70 hover:bg-base-200 hover:text-base-content",
-            isCollapsed ? "justify-center" : "justify-start gap-3",
-            "group relative"
-          )}
-          onClick={() => navigate("/license")}
-        >
-          <KeyRound className="h-5 w-5" />
-
-          {!isCollapsed && "License"}
-          {isCollapsed && (
-            <span className="absolute left-full ml-3 px-2 py-1 bg-base-300 text-base-content rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none z-50">
-              License
-            </span>
-          )}
-        </Button>
-        <Button
-          variant="ghost"
-          className={cn(
-            "w-full text-base-content/70 hover:bg-base-200 hover:text-base-content",
-            isCollapsed ? "justify-center" : "justify-start gap-3",
-            "group relative"
-          )}
+          size={isCollapsed ? "icon" : "sm"}
           onClick={onToggleCollapse}
+          className={cn(
+            "w-full justify-start gap-3 text-base-content/70 hover:text-base-content",
+            isCollapsed ? "justify-center" : ""
+          )}
+          title={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
         >
-          <Activity mode={!isCollapsed ? "visible" : "hidden"}>
-            <PanelLeftClose className="h-5 w-5" />
-            Minimize
-          </Activity>
-          <Activity mode={isCollapsed ? "visible" : "hidden"}>
-            <PanelRightClose className="h-5 w-5" />
-            <span className="absolute left-full ml-3 px-2 py-1 bg-base-300 text-base-content rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none z-50">
-              {isCollapsed ? "Expand" : "Minimize"}
-            </span>
-          </Activity>
+          {isCollapsed ? (
+            <PanelRightClose className="h-4 w-4" />
+          ) : (
+            <>
+              <PanelLeftClose className="h-4 w-4" />
+              <span className="text-sm">Collapse</span>
+            </>
+          )}
         </Button>
+
+        {/* License button */}
         <Button
           variant="ghost"
-          className={cn(
-            "w-full text-base-content/70 hover:bg-base-200 hover:text-base-content",
-            isCollapsed ? "justify-center" : "justify-start gap-3",
-            "group relative"
-          )}
+          size={isCollapsed ? "icon" : "sm"}
           onClick={() => {
-            if (onClose) onClose();
-            handleExit();
+            navigate("/license");
+            if (window.innerWidth < 1024) onClose?.();
           }}
-        >
-          <Power className="h-5 w-5" />
-          {!isCollapsed && "Exit"}
-          {isCollapsed && (
-            <span className="absolute left-full ml-3 px-2 py-1 bg-base-300 text-base-content rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none z-50">
-              Exit
-            </span>
+          className={cn(
+            "w-full justify-start gap-3 text-base-content/70 hover:text-base-content",
+            isCollapsed ? "justify-center" : ""
           )}
+          title={isCollapsed ? "License" : undefined}
+        >
+          <KeyRound className="h-4 w-4" />
+          {!isCollapsed && <span className="text-sm">License</span>}
+        </Button>
+
+        {/* Exit button */}
+        <Button
+          variant="ghost"
+          size={isCollapsed ? "icon" : "sm"}
+          onClick={handleExit}
+          className={cn(
+            "w-full justify-start gap-3 text-error/70 hover:text-error hover:bg-error/10",
+            isCollapsed ? "justify-center" : ""
+          )}
+          title={isCollapsed ? "Exit application" : undefined}
+        >
+          <Power className="h-4 w-4" />
+          {!isCollapsed && <span className="text-sm">Exit</span>}
         </Button>
       </div>
-    </div>
+
+      {/* Mobile overlay */}
+      {isOpen && (
+        <div
+          className="fixed inset-0 bg-black/20 backdrop-blur-sm lg:hidden"
+          onClick={onClose}
+          aria-hidden="true"
+        />
+      )}
+    </aside>
   );
 };
 

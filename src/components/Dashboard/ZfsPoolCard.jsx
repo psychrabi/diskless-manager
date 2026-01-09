@@ -1,5 +1,5 @@
 import { useAppStore } from "@/store/useAppStore";
-import { Card } from "../ui";
+import { Card } from "@/components/ui";
 
 const ZfsPoolCard = ({ loading }) => {
   const zpoolStats = useAppStore((state) => state.zpoolStats);
@@ -17,16 +17,16 @@ const ZfsPoolCard = ({ loading }) => {
               <span className="font-semibold">Size:</span> {zpoolStats.size}
             </li>
             <li className="flex justify-between">
-              <span className="font-semibold">Used:</span> {zpoolStats.alloc}
+              <span className="font-semibold">Used:</span> {zpoolStats.allocated}
             </li>
             <li className="flex justify-between">
-              <span className="font-semibold">Available:</span>{" "}
+              <span className="font-semibold">Available:</span>
               {zpoolStats.free}
             </li>
             <li className="flex justify-between">
-              <span className="font-semibold">Health:</span>{" "}
+              <span className="font-semibold">Health:</span>
               <span className="badge badge-success rounded-full">
-                {zpoolStats.health}
+                {zpoolStats.health == "-" ? "Good" : zpoolStats.health}
               </span>
             </li>
           </div>

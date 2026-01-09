@@ -1,5 +1,5 @@
 import { GitPullRequestArrow } from "lucide-react";
-import { Card } from "../ui";
+import { Card } from "@/components/ui";
 
 export default function BootProcessOverview() {
   return (

@@ -4,7 +4,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { serverSchema } from "@/schema";
 import { useSettings } from "@/hooks/useSettings";
 import { useAppStore } from "@/store/useAppStore";
-import { Card, Button, Input } from "../ui";
+import { Card, Button, Input } from "@/components/ui";
 import { Monitor, RefreshCcw, Shield, Globe, Network } from "lucide-react";
 
 export default function NetworkConfig() {
@@ -122,7 +122,7 @@ export default function NetworkConfig() {
   };
 
   return (
-    <Card title="Server Network Configuration" icon={Network}>
+    <Card title="Server Network Configuration" icon={Network} className="xl:col-span-2">
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-2">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {/* Left Column: Interface & Identification */}
@@ -161,11 +161,10 @@ export default function NetworkConfig() {
                     return (
                       <label
                         key={iface}
-                        className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition-all border ${
-                          isSelected
-                            ? "bg-primary/10 border-primary/30 text-primary shadow-sm"
-                            : "bg-base-100 border-transparent hover:border-base-300 hover:bg-base-200"
-                        }`}
+                        className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition-all border ${isSelected
+                          ? "bg-primary/10 border-primary/30 text-primary shadow-sm"
+                          : "bg-base-100 border-transparent hover:border-base-300 hover:bg-base-200"
+                          }`}
                       >
                         <div className="flex items-center gap-3">
                           <input

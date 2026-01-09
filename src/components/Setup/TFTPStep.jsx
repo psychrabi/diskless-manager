@@ -1,7 +1,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Network } from "lucide-react";
 import { useForm } from "react-hook-form";
-import { Button } from "../ui";
+import { Button, Card } from "@/components/ui";
 import { tftpSchema } from "@/schema";
 import TFTPForm from "../SettingsManagement/Forms/TFTPForm";
 
@@ -24,25 +24,15 @@ const TFTPStep = ({ onSubmit, isSubmitting, initialConfig }) => {
   });
 
   return (
-    <div className="space-y-6">
-      <div className="text-center space-y-2">
-        <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-primary/10 text-primary mb-2">
-          <Network className="w-6 h-6" />
-        </div>
-        <h2 className="text-2xl font-bold">TFTP Server</h2>
-        <p className="text-base-content/60 max-w-sm mx-auto">
-          Configure the TFTP server to serve boot files (iPXE, kernels, etc.) to
-          your clients.
-        </p>
-      </div>
-
+    <Card title="TFTP Server" subtitle="Configure the TFTP server to serve boot files (iPXE, kernels, etc.) to
+            your clients." icon={Network} className="border-t-4 border-primary overflow-hidden"
+    >
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         <TFTPForm
           register={register}
           errors={errors}
           config={initialConfig || tftpInitial}
         />
-
         <Button
           type="submit"
           variant="primary"
@@ -52,7 +42,7 @@ const TFTPStep = ({ onSubmit, isSubmitting, initialConfig }) => {
           {isSubmitting ? "Configuring TFTP..." : "Save & Continue"}
         </Button>
       </form>
-    </div>
+    </Card>
   );
 };
 

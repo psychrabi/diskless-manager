@@ -50,7 +50,7 @@ async function apiRequest(endpoint, options = {}) {
           errorMessage = errorData.error;
         }
       }
-    } catch (e) {
+    } catch {
       // If we can't parse the error response, use the default message
     }
     throw new Error(errorMessage);
@@ -159,6 +159,7 @@ async function apiRequest(endpoint, options = {}) {
 //   description: string | null;
 //   parent_id: string | null;
 //   checksum: string | null;
+//   is_default: boolean;
 //   created_at: string;
 //   updated_at: string;
 // }
@@ -306,12 +307,6 @@ export async function clearRamCache() {
   return apiRequest("/api/system/cache/clear", { method: "POST" });
 }
 
-
-
-
-
-
-
 export async function getSystemSettings() {
   return apiRequest("/api/system/settings");
 }
@@ -367,8 +362,6 @@ export async function stopAllServices() {
 export async function restartAllServices() {
   return apiRequest("/api/services/all/restart", { method: "POST" });
 }
-
-
 
 export async function configureServiceConfig(name, config) {
   return apiRequest(`/api/services/${name}/configure`, {
@@ -674,7 +667,9 @@ export async function getNetworkInterfaces() {
 }
 
 export async function getInterfaceIp(interfaceName) {
-  return apiRequest(`/api/system/network/interfaces/${encodeURIComponent(interfaceName)}/ip`);
+  return apiRequest(
+    `/api/system/network/interfaces/${encodeURIComponent(interfaceName)}/ip`
+  );
 }
 
 export async function detectServerNetwork() {
@@ -697,40 +692,57 @@ export async function getServiceConfig(serviceName) {
 }
 
 export async function saveServiceConfig(serviceName, config) {
-  return apiRequest(`/api/services/${encodeURIComponent(serviceName)}/configure`, {
-    method: "POST",
-    body: JSON.stringify(config),
-  });
+  return apiRequest(
+    `/api/services/${encodeURIComponent(serviceName)}/configure`,
+    {
+      method: "POST",
+      body: JSON.stringify(config),
+    }
+  );
 }
 
 export async function configureService(serviceName) {
-  return apiRequest(`/api/services/${encodeURIComponent(serviceName)}/configure`, {
-    method: "POST",
-  });
+  return apiRequest(
+    `/api/services/${encodeURIComponent(serviceName)}/configure`,
+    {
+      method: "POST",
+    }
+  );
 }
-
-
 
 // ============================================================================
 // Snapshot Commands
 // ============================================================================
 
 export async function deleteSnapshot(masterName, snapshotName) {
-  return apiRequest(`/api/images/${encodeURIComponent(masterName)}/snapshots/${encodeURIComponent(snapshotName)}`, {
-    method: "DELETE",
-  });
+  return apiRequest(
+    `/api/images/${encodeURIComponent(
+      masterName
+    )}/snapshots/${encodeURIComponent(snapshotName)}`,
+    {
+      method: "DELETE",
+    }
+  );
 }
 
 export async function rollbackImageSnapshot(masterName, snapshotName) {
-  return apiRequest(`/api/images/${encodeURIComponent(masterName)}/snapshots/${encodeURIComponent(snapshotName)}/rollback`, {
-    method: "POST",
-  });
+  return apiRequest(
+    `/api/images/${encodeURIComponent(
+      masterName
+    )}/snapshots/${encodeURIComponent(snapshotName)}/rollback`,
+    {
+      method: "POST",
+    }
+  );
 }
 
 export async function setDefaultImage(masterName) {
-  return apiRequest(`/api/images/${encodeURIComponent(masterName)}/set-default`, {
-    method: "POST",
-  });
+  return apiRequest(
+    `/api/images/${encodeURIComponent(masterName)}/set-default`,
+    {
+      method: "POST",
+    }
+  );
 }
 
 // ============================================================================

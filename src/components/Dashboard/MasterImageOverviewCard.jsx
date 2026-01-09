@@ -2,7 +2,7 @@ import { useToastStore } from "@/store/useToastStore";
 import { getDefaultImageOverview } from "@/api/commands";
 import { HardDrive, RefreshCw } from "lucide-react"; // Add Refresh icon
 import { useEffect, useState } from "react";
-import { Button, Card } from "../ui"; // Assume Button component
+import { Button, Card } from "@/components/ui"; // Assume Button component
 
 const MasterImageOverviewCard = () => {
   const [overview, setOverview] = useState(null);

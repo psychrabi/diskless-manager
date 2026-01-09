@@ -99,6 +99,7 @@ pub struct Image {
     pub description: Option<String>,
     pub parent_id: Option<String>,
     pub checksum: Option<String>,
+    pub is_default: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -166,12 +167,13 @@ impl ImageManager {
                 Option<String>,
                 Option<String>,
                 Option<String>,
+                i64,
                 String,
                 String,
             ),
         >(
             r#"
-            SELECT id, name, os_type, size_gb, path, format, status, description, parent_id, checksum, created_at, updated_at 
+            SELECT id, name, os_type, size_gb, path, format, status, description, parent_id, checksum, is_default, created_at, updated_at 
             FROM images 
             ORDER BY name
             "#,
@@ -193,6 +195,7 @@ impl ImageManager {
                     description,
                     parent_id,
                     checksum,
+                    is_default,
                     created_at,
                     updated_at,
                 )| {
@@ -207,6 +210,7 @@ impl ImageManager {
                         description,
                         parent_id,
                         checksum,
+                        is_default: is_default != 0,
                         created_at: DateTime::parse_from_rfc3339(&created_at)
                             .ok()?
                             .with_timezone(&Utc),
@@ -235,12 +239,13 @@ impl ImageManager {
                 Option<String>,
                 Option<String>,
                 Option<String>,
+                i64,
                 String,
                 String,
             ),
         >(
             r#"
-            SELECT id, name, os_type, size_gb, path, format, status, description, parent_id, checksum, created_at, updated_at 
+            SELECT id, name, os_type, size_gb, path, format, status, description, parent_id, checksum, is_default, created_at, updated_at 
             FROM images 
             WHERE id = ? OR name = ?
             "#,
@@ -262,6 +267,7 @@ impl ImageManager {
             description,
             parent_id,
             checksum,
+            is_default,
             created_at,
             updated_at,
         ) = row;
@@ -277,6 +283,7 @@ impl ImageManager {
             description,
             parent_id,
             checksum,
+            is_default: is_default != 0,
             created_at: DateTime::parse_from_rfc3339(&created_at)?.with_timezone(&Utc),
             updated_at: DateTime::parse_from_rfc3339(&updated_at)?.with_timezone(&Utc),
         })
@@ -405,14 +412,15 @@ impl ImageManager {
             description: req.description,
             parent_id: None,
             checksum: None,
+            is_default: false,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
 
         sqlx::query(
             r#"
-            INSERT INTO images (id, name, os_type, size_gb, path, format, status, description, parent_id, checksum, created_at, updated_at) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO images (id, name, os_type, size_gb, path, format, status, description, parent_id, checksum, is_default, created_at, updated_at) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&image.id)
@@ -425,6 +433,7 @@ impl ImageManager {
         .bind(&image.description)
         .bind(&image.parent_id)
         .bind(&image.checksum)
+        .bind(if image.is_default { 1i64 } else { 0i64 })
         .bind(image.created_at.to_rfc3339())
         .bind(image.updated_at.to_rfc3339())
         .execute(&self.pool)
@@ -549,7 +558,7 @@ impl ImageManager {
         sqlx::query(
             r#"
             UPDATE images 
-            SET name = ?, os_type = ?, status = ?, description = ?, path = ?, updated_at = ?
+            SET name = ?, os_type = ?, status = ?, description = ?, path = ?, is_default = ?, updated_at = ?
             WHERE id = ?
             "#,
         )
@@ -558,6 +567,7 @@ impl ImageManager {
         .bind(&image.status)
         .bind(&image.description)
         .bind(image.path.to_string_lossy().to_string())
+        .bind(if image.is_default { 1i64 } else { 0i64 })
         .bind(image.updated_at.to_rfc3339())
         .bind(&image.id)
         .execute(&self.pool)
@@ -727,6 +737,7 @@ impl ImageManager {
             description: req.description,
             parent_id: None,
             checksum: None,
+            is_default: false,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -747,6 +758,7 @@ impl ImageManager {
         .bind(&image.description)
         .bind(&image.parent_id)
         .bind(&image.checksum)
+        .bind(if image.is_default { 1i64 } else { 0i64 })
         .bind(image.created_at.to_rfc3339())
         .bind(image.updated_at.to_rfc3339())
         .execute(&self.pool)
@@ -825,6 +837,7 @@ impl ImageManager {
             description: Some(format!("Clone of {}", source.name)),
             parent_id: Some(source.id),
             checksum: None,
+            is_default: false,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -845,6 +858,7 @@ impl ImageManager {
         .bind(&image.description)
         .bind(&image.parent_id)
         .bind(&image.checksum)
+        .bind(if image.is_default { 1i64 } else { 0i64 })
         .bind(image.created_at.to_rfc3339())
         .bind(image.updated_at.to_rfc3339())
         .execute(&self.pool)
@@ -899,6 +913,7 @@ impl ImageManager {
             description: Some(format!("Snapshot of {}", source.name)),
             parent_id: Some(source.id),
             checksum: None,
+            is_default: false,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -919,6 +934,7 @@ impl ImageManager {
         .bind(&image.description)
         .bind(&image.parent_id)
         .bind(&image.checksum)
+        .bind(if image.is_default { 1i64 } else { 0i64 })
         .bind(image.created_at.to_rfc3339())
         .bind(image.updated_at.to_rfc3339())
         .execute(&self.pool)

@@ -10,7 +10,7 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "../ui";
+} from "@/components/ui";
 import RenameDiskModal from "./RenameDiskModal";
 
 const DiskTable = ({ datasets, onRefresh }) => {

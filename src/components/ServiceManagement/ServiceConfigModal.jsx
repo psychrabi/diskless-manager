@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useServiceManager } from "../../hooks/useServiceManager";
-import { Button, Modal } from "../ui";
+import { Button, Modal } from "@/components/ui";
 
 function ServiceConfigModal({
   isOpen,

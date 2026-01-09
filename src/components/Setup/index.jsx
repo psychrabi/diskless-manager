@@ -18,7 +18,7 @@ import {
   Package,
   Share2,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useShallow } from "zustand/shallow";
 import { useAppStore } from "../../store/useAppStore";
@@ -120,8 +120,8 @@ const Setup = () => {
   }, [allServicesInstalled, poolExists, appConfig?.settings?.dhcp, appConfig?.settings?.tftp, appConfig?.settings?.http, appConfig?.settings?.samba, bootScriptContent]);
 
   // Auto-progress logic - only advance if we are on the current step
-  const prevInstalled = useRef(allServicesInstalled);
-  const prevPool = useRef(poolExists);
+  // const prevInstalled = useRef(allServicesInstalled);
+  // const prevPool = useRef(poolExists);
 
   const handleCreatePool = async (data) => {
     try {

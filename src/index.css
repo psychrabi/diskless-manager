@@ -1,6 +1,179 @@
 @import "tailwindcss";
 @plugin "daisyui";
 
+/* Professional Typography Scale */
+@layer utilities {
+  .text-display-lg {
+    @apply text-6xl leading-tight font-extrabold;
+  }
+  .text-display-md {
+    @apply text-4xl leading-tight font-bold;
+  }
+  .text-display-sm {
+    @apply text-3xl leading-snug font-semibold;
+  }
+  .text-heading-lg {
+    @apply text-2xl leading-normal font-semibold;
+  }
+  .text-heading-md {
+    @apply text-xl leading-normal font-semibold;
+  }
+  .text-heading-sm {
+    @apply text-lg leading-normal font-medium;
+  }
+  .text-body-lg {
+    @apply text-lg leading-relaxed font-normal;
+  }
+  .text-body-md {
+    @apply text-base leading-relaxed font-normal;
+  }
+  .text-body-sm {
+    @apply text-sm leading-normal font-normal;
+  }
+  .text-caption {
+    @apply text-xs leading-tight font-medium;
+  }
+}
+
+/* Enhanced Card Styles */
+@layer components {
+  .card-professional {
+    @apply bg-base-100 border border-base-200/50 shadow-lg rounded-xl;
+    backdrop-filter: blur(8px);
+    transition: all 0.2s ease-in-out;
+  }
+
+  .card-header-professional {
+    @apply p-6 pb-4 border-b border-base-200/30;
+  }
+
+  .card-body-professional {
+    @apply p-6;
+  }
+}
+
+/* Enhanced Button Styles */
+@layer components {
+  .btn-professional {
+    @apply font-medium transition-all duration-200 ease-in-out rounded-lg;
+  }
+
+  .btn-professional:active {
+    transform: translateY(0);
+  }
+}
+
+/* Status Indicators */
+@layer components {
+  .status-indicator {
+    @apply inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium;
+  }
+
+  .status-success {
+    @apply bg-success/10 text-success border border-success/20;
+  }
+  .status-warning {
+    @apply bg-warning/10 text-warning border border-warning/20;
+  }
+  .status-error {
+    @apply bg-error/10 text-error border border-error/20;
+  }
+  .status-info {
+    @apply bg-info/10 text-info border border-info/20;
+  }
+  .status-neutral {
+    @apply bg-base-200 text-base-content/70 border border-base-300;
+  }
+}
+
+/* Enhanced Form Styles */
+@layer components {
+  .form-group {
+    @apply space-y-2;
+  }
+
+  .form-label {
+    @apply text-sm font-medium text-base-content/80;
+  }
+
+  .form-input {
+    @apply input w-full transition-all duration-200 rounded-lg border border-base-300 bg-base-100;
+  }
+
+  .form-input:focus {
+    @apply ring-2 ring-primary/20 border-primary outline-none;
+  }
+
+  .form-error {
+    @apply text-error text-sm mt-1;
+  }
+
+  .form-helper {
+    @apply text-base-content/60 text-sm mt-1;
+  }
+}
+
+/* Enhanced Table Styles */
+@layer components {
+  .table-professional {
+    @apply table table-zebra w-full;
+  }
+
+  .table-professional thead {
+    @apply bg-base-200/50;
+  }
+
+  .table-professional th {
+    @apply text-lg font-semibold text-base-content/80 py-4;
+  }
+
+  .table-professional td {
+    @apply py-4 text-base;
+  }
+
+  .table-professional tbody tr:hover {
+    @apply bg-base-200/30;
+  }
+}
+
+/* Loading Skeleton */
+@layer components {
+  .skeleton {
+    @apply animate-pulse bg-base-200 rounded;
+  }
+
+  .skeleton-text {
+    @apply h-4 bg-base-200 rounded;
+  }
+
+  .skeleton-avatar {
+    @apply w-10 h-10 bg-base-200 rounded-full;
+  }
+}
+
+/* Enhanced Modal Styles */
+@layer components {
+  .modal-professional .modal-box {
+    @apply bg-base-100 border border-base-200/50 shadow-2xl rounded-2xl;
+    backdrop-filter: blur(16px);
+  }
+}
+
+/* Gradient Backgrounds */
+@layer utilities {
+  .gradient-primary {
+    background: linear-gradient(135deg, hsl(var(--p)) 0%, hsl(var(--pf)) 100%);
+  }
+
+  .gradient-secondary {
+    background: linear-gradient(135deg, hsl(var(--s)) 0%, hsl(var(--sf)) 100%);
+  }
+
+  .gradient-accent {
+    background: linear-gradient(135deg, hsl(var(--a)) 0%, hsl(var(--af)) 100%);
+  }
+}
+
 /* Screen reader only utility */
 .sr-only {
   position: absolute;

@@ -3,6 +3,7 @@ use axum::{
     http::StatusCode,
     Json,
 };
+use log::info;
 use serde::{Deserialize, Serialize};
 use std::process::Command;
 
@@ -45,9 +46,7 @@ pub struct DeleteDatasetRequest {
     pub recursive: bool,
 }
 
-pub async fn list_zpools(
-    State(_state): State<AppState>,
-) -> Result<Json<Vec<String>>, StatusCode> {
+pub async fn list_zpools(State(_state): State<AppState>) -> Result<Json<Vec<String>>, StatusCode> {
     let output = Command::new("zpool")
         .args(&["list", "-H", "-o", "name"])
         .output();
@@ -69,9 +68,7 @@ pub async fn list_zpools(
 pub async fn get_zpool_stats(
     State(_state): State<AppState>,
 ) -> Result<Json<Vec<ZpoolStats>>, StatusCode> {
-    let output = Command::new("zpool")
-        .args(&["list", "-H"])
-        .output();
+    let output = Command::new("zpool").args(&["list", "-H"]).output();
 
     match output {
         Ok(output) if output.status.success() => {
@@ -93,6 +90,7 @@ pub async fn get_zpool_stats(
                     }
                 })
                 .collect();
+            info!("Zpool stats: {:?}", stats);
             Ok(Json(stats))
         }
         _ => Ok(Json(vec![])),
@@ -103,9 +101,16 @@ pub async fn list_datasets(
     Query(params): Query<DatasetQuery>,
 ) -> Result<Json<Vec<Dataset>>, StatusCode> {
     use std::process::Command;
-    
+
     let output = Command::new("zfs")
-        .args(&["list", "-H", "-o", "name,used,avail,refer,mountpoint", "-r", &params.zpool])
+        .args(&[
+            "list",
+            "-H",
+            "-o",
+            "name,used,avail,refer,mountpoint",
+            "-r",
+            &params.zpool,
+        ])
         .output();
 
     match output {
@@ -182,24 +187,22 @@ pub async fn create_dataset(
     Json(request): Json<CreateDatasetRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let dataset_name = format!("{}/{}", request.zpool, request.name);
-    
+
     let mut cmd = Command::new("zfs");
     cmd.args(&["create"]);
-    
+
     // Add size quota if provided
     if let Some(size) = request.size {
         cmd.args(&["-o", &format!("quota={}", size)]);
     }
-    
+
     cmd.arg(&dataset_name);
-    
+
     match cmd.output() {
-        Ok(output) if output.status.success() => {
-            Ok(Json(serde_json::json!({
-                "success": true,
-                "message": format!("Dataset {} created successfully", dataset_name)
-            })))
-        }
+        Ok(output) if output.status.success() => Ok(Json(serde_json::json!({
+            "success": true,
+            "message": format!("Dataset {} created successfully", dataset_name)
+        }))),
         Ok(output) => {
             let _error = String::from_utf8_lossy(&output.stderr);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
@@ -214,20 +217,18 @@ pub async fn delete_dataset(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let mut cmd = Command::new("zfs");
     cmd.args(&["destroy"]);
-    
+
     if request.recursive {
         cmd.arg("-r");
     }
-    
+
     cmd.arg(&dataset);
-    
+
     match cmd.output() {
-        Ok(output) if output.status.success() => {
-            Ok(Json(serde_json::json!({
-                "success": true,
-                "message": format!("Dataset {} deleted successfully", dataset)
-            })))
-        }
+        Ok(output) if output.status.success() => Ok(Json(serde_json::json!({
+            "success": true,
+            "message": format!("Dataset {} deleted successfully", dataset)
+        }))),
         Ok(_output) => Err(StatusCode::INTERNAL_SERVER_ERROR),
         Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }

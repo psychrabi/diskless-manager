@@ -1,3 +1,4 @@
+import { useToastStore } from "@/store/useToastStore";
 import {
   Eye,
   Folder,
@@ -12,8 +13,7 @@ import {
   StopCircle,
 } from "lucide-react";
 import { useState } from "react";
-import { useToastStore } from "@/store/useToastStore";
-import { Button, Card } from "../ui";
+import { Button, Card } from "@/components/ui";
 
 export default function ServiceCard({
   onViewConfig,
@@ -39,16 +39,16 @@ export default function ServiceCard({
 
   function getServiceDescription(name) {
     const descriptions = {
-      "isc-dhcp-server":
+      "dhcp":
         "Provides IP addresses and PXE boot parameters to network clients.",
-      "tftpd-hpa":
+      "tftp":
         "Serves boot files (bootloader, kernel, initrd) via TFTP protocol.",
-      target:
+      'iscsi':
         "iSCSI Target (LIO) - serves disk images as network block devices via LIO/ConfigFS.",
-      "nfs-kernel-server":
+      "nfs":
         "Network File System server for sharing filesystems.",
-      smbd: "Samba file server for Windows-compatible network file sharing.",
-      apache2: "Apache2 HTTP server for serving boot files and iPXE scripts.",
+      "samba": "Samba file server for Windows-compatible network file sharing.",
+      "http": "Apache2 HTTP server for serving boot files and iPXE scripts.",
     };
     return descriptions[name] || "System service";
   }
@@ -82,9 +82,8 @@ export default function ServiceCard({
       key={service.name}
       actions={
         <div
-          className={`badge rounded-full hidden xl:block ${
-            service.running ? "badge-success" : "badge-error"
-          } gap-2`}
+          className={`badge rounded-full hidden xl:block ${service.running ? "badge-success" : "badge-error"
+            } gap-2`}
         >
           {service.running ? "Running" : "Stopped"}
         </div>
@@ -99,9 +98,8 @@ export default function ServiceCard({
           PID: <span className="font-mono">{service.pid ?? "—"}</span>
         </span>
         <span
-          className={`badge rounded-full ${
-            service.enabled ? "badge-success" : "badge-error"
-          } badge-sm`}
+          className={`badge rounded-full ${service.enabled ? "badge-success" : "badge-error"
+            } badge-sm`}
         >
           {service.enabled ? "Enabled at boot" : "Disabled at boot"}
         </span>

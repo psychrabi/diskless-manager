@@ -228,7 +228,7 @@ export const useSettings = () => {
   const fetchInterfaces = useCallback(async () => {
     try {
       return await api.getNetworkInterfaces();
-    } catch (err) {
+    } catch {
       error("Network Interfaces", "Failed to fetch network interfaces");
       return [];
     }
@@ -245,7 +245,7 @@ export const useSettings = () => {
   const detectNetwork = useCallback(async () => {
     try {
       return await api.detectServerNetwork();
-    } catch (err) {
+    } catch {
       error("Network Detection", "Failed to auto-detect network settings");
       return null;
     }

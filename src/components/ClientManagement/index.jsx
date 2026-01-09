@@ -1,10 +1,11 @@
 import { useClientActions } from "@/hooks/useClientActions";
-import { Laptop, PlusCircle, Users } from "lucide-react";
-import { memo, useCallback, useEffect, useState } from "react";
+import { StatusBadge, LoadingSkeleton } from "@/components/ui";
+import { Laptop, PlusCircle, Users, Wifi, WifiOff } from "lucide-react";
+import { memo, useCallback, useState } from "react";
 import { Link } from "react-router-dom";
 import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "../../store/useAppStore";
-import { Button, Card } from "../ui";
+import { Button, Card } from "@/components/ui";
 import { ContextMenu } from "../ui/ContextMenu";
 import ClientFormModal from "./ClientFormModal";
 import ClientTable from "./ClientTable";
@@ -18,18 +19,17 @@ const ClientManagement = () => {
     fetchClients,
     fetchImages,
     masters,
-    startClientStatusPolling,
-    stopClientStatusPolling,
+    loading,
   } = useAppStore(
     useShallow((state) => ({
       clients: state.clients,
       fetchClients: state.fetchClients,
       fetchImages: state.fetchImages,
       masters: state.masters,
-      startClientStatusPolling: state.startClientStatusPolling,
-      stopClientStatusPolling: state.stopClientStatusPolling,
+      loading: state.loading,
     })),
   );
+
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [client, setClient] = useState({
     name: "",
@@ -45,6 +45,7 @@ const ClientManagement = () => {
     y: 0,
     client: null,
   });
+
   const handleClientContextMenu = useCallback((event, client) => {
     event.preventDefault();
     setContextMenu({
@@ -78,35 +79,25 @@ const ClientManagement = () => {
     if (clients.length > 0) {
       // Sort clients by name to find the "last" one logically
       const sortedClients = [...clients].sort((a, b) =>
-        a.name.localeCompare(b.name, undefined, {
-          numeric: true,
-          sensitivity: "base",
-        }),
+        a.name.localeCompare(b.name)
       );
       const lastClient = sortedClients[sortedClients.length - 1];
 
-      // Increment name (e.g., pc002 -> pc003)
-      const nameMatch = lastClient.name.match(/^(.*?)(\d+)$/);
+      // Extract number from last client name and increment
+      const nameMatch = lastClient.name.match(/(\d+)$/);
       if (nameMatch) {
-        const prefix = nameMatch[1];
-        const numberPart = nameMatch[2];
-        const num = parseInt(numberPart, 10) + 1;
-        newName = `${prefix}${num.toString().padStart(numberPart.length, "0")}`;
+        const lastNumber = parseInt(nameMatch[1], 10);
+        const nextNumber = lastNumber + 1;
+        const prefix = lastClient.name.replace(/\d+$/, "");
+        newName = `${prefix}${nextNumber.toString().padStart(3, "0")}`;
       }
 
-      // Increment IP last octet
-      // Find the highest IP to avoid collisions
-      const sortedIps = [...clients]
-        .map((c) => c.ip)
-        .filter((ip) => ip.startsWith("192.168.1.")) // Assuming standard subnet
-        .map((ip) => parseInt(ip.split(".")[3], 10))
-        .sort((a, b) => a - b);
-
-      if (sortedIps.length > 0) {
-        const lastOctet = sortedIps[sortedIps.length - 1];
-        if (lastOctet < 254) {
-          newIp = `192.168.1.${lastOctet + 1}`;
-        }
+      // Extract IP and increment
+      const ipMatch = lastClient.ip.match(/^(\d+\.\d+\.\d+\.)(\d+)$/);
+      if (ipMatch) {
+        const ipBase = ipMatch[1];
+        const lastOctet = parseInt(ipMatch[2], 10);
+        newIp = `${ipBase}${lastOctet + 1}`;
       }
     }
 
@@ -114,87 +105,132 @@ const ClientManagement = () => {
       name: newName,
       mac: "",
       ip: newIp,
-      master: masters[0]?.name || "",
+      master: masters.length > 0 ? masters[0].name : "",
       snapshot: "",
       clone: "",
     });
     setIsModalOpen(true);
   }, [clients, masters]);
 
-  useEffect(() => {
-    // Start polling when this page mounts; stop when it unmounts
-    startClientStatusPolling();
-    return () => stopClientStatusPolling();
-  }, [startClientStatusPolling, stopClientStatusPolling]);
+  // Calculate statistics
+  const onlineClients = clients.filter(c => c.status === "online").length;
+  const offlineClients = clients.length - onlineClients;
+
+  if (loading && clients.length === 0) {
+    return (
+      <div className="space-y-6">
+        <Card
+          title="Client Management"
+          subtitle="Loading client information..."
+          icon={Laptop}
+          variant="elevated"
+        >
+          <LoadingSkeleton variant="table" count={5} />
+        </Card>
+      </div>
+    );
+  }
 
   return (
-    <Card
-      title="Client Management"
-      icon={Users}
-      className="bg-base-300"
-      actions={clients.length > 0 &&
-        <Button
-          variant="primary"
-          onClick={handleClientFormModalOpen}
-          icon={PlusCircle}
-          disabled={masters.length === 0}
-        >
-          Add Client
-        </Button >
-      }
-    >
-      <div className="min-h-[calc(100vh-15rem)]">
-        {clients.length === 0 ? (
-          <div className="card bg-base-100 shadow-xl border border-base-200/50">
-            <div className="card-body items-center text-center p-12">
-              <div className="w-20 h-20 bg-base-200 rounded-full flex items-center justify-center text-4xl mb-4">
-                <Laptop />
+    <div className="space-y-6">
+      {/* Page Header with Stats */}
+      <Card
+        title="Client Management"
+        subtitle="Manage diskless boot clients and monitor their connection status"
+        icon={Laptop}
+        variant="elevated"
+        actions={
+          <Button
+            variant="primary"
+            onClick={handleClientFormModalOpen}
+            icon={PlusCircle}
+            size="sm"
+          >
+            Add Client
+          </Button>
+        }
+      >
+        {clients.length > 0 && (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Total Clients */}
+            <div className="card-professional bg-gradient-to-br from-primary/10 to-primary/5 border-primary/20">
+              <div className="card-body-professional py-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-heading-sm font-semibold text-base-content">
+                      {clients.length}
+                    </div>
+                    <div className="text-body-sm text-base-content/60">
+                      Total Clients
+                    </div>
+                  </div>
+                  <Users className="h-8 w-8 text-primary/60" />
+                </div>
               </div>
-              <h2 className="card-title text-2xl mb-2">No Clients Registered</h2>
-              <p className="text-base-content/60 max-w-md mb-6">
-                Add your first PXE boot client to get started managing your
-                diskless infrastructure.
-              </p>
-              <Button
-                variant="primary"
-                onClick={handleClientFormModalOpen}
-                icon={PlusCircle}
-                disabled={masters.length === 0}
-              >
-                Add Client
-              </Button>
-              {masters.length === 0 && (
-                <Link to="/images" className="btn btn-link">
-                  Add a boot image first
-                </Link>
-              )}
+            </div>
+
+            {/* Online Clients */}
+            <div className="card-professional bg-gradient-to-br from-success/10 to-success/5 border-success/20">
+              <div className="card-body-professional py-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-heading-sm font-semibold text-base-content">
+                      {onlineClients}
+                    </div>
+                    <div className="text-body-sm text-base-content/60">
+                      Online
+                    </div>
+                  </div>
+                  <Wifi className="h-8 w-8 text-success/60" />
+                </div>
+              </div>
+            </div>
+
+            {/* Offline Clients */}
+            <div className="card-professional bg-gradient-to-br from-base-300/50 to-base-200/30 border-base-300">
+              <div className="card-body-professional py-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-heading-sm font-semibold text-base-content">
+                      {offlineClients}
+                    </div>
+                    <div className="text-body-sm text-base-content/60">
+                      Offline
+                    </div>
+                  </div>
+                  <WifiOff className="h-8 w-8 text-base-content/40" />
+                </div>
+              </div>
             </div>
           </div>
-        ) : (
-          <>
+        )}
+      </Card>
 
-            <MemoizedClientTable
-              handleClientContextMenu={handleClientContextMenu}
-            />
-            <MemoizedContextMenu
-              isOpen={contextMenu.isOpen}
-              xPos={contextMenu.x}
-              yPos={contextMenu.y}
-              targetClient={contextMenu.client}
-              onClose={closeContextMenu}
-              actions={contextActions}
-            />
-          </>)}
-      </div>
+      {/* Client Table or Empty State */}
+      {clients.length === 0 ? (
+        <ClientHero handleClientFormModalOpen={handleClientFormModalOpen} />
+      ) : (
+        <MemoizedClientTable
+          handleClientContextMenu={handleClientContextMenu}
+        />
+      )}
+      <MemoizedContextMenu
+        isOpen={contextMenu.isOpen}
+        xPos={contextMenu.x}
+        yPos={contextMenu.y}
+        targetClient={contextMenu.client}
+        onClose={closeContextMenu}
+        actions={contextActions}
+      />
       <ClientFormModal
         client={client}
         setClient={setClient}
         masters={masters}
         isOpen={isModalOpen}
-        setIsOpen={setIsModalOpen}
+        onClose={() => setIsModalOpen(false)}
         refresh={refreshData}
       />
-    </Card >
+    </div>
   );
 };
 

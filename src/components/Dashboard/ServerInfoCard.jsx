@@ -1,6 +1,6 @@
 import { RefreshCw } from "lucide-react";
 import { useAppStore } from "../../store/useAppStore";
-import { Card, Button } from "../ui";
+import { Card, Button } from "@/components/ui";
 import { clearRamCache } from "@/api/commands";
 
 const ServerInfoCard = () => {

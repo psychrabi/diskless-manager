@@ -1,7 +1,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Share2 } from "lucide-react";
 import { useForm } from "react-hook-form";
-import { Button } from "../ui";
+import { Button, Card } from "@/components/ui";
 import { sambaSchema } from "@/schema";
 import SambaForm from "../SettingsManagement/Forms/SambaForm";
 
@@ -30,25 +30,15 @@ const SambaStep = ({ onSubmit, isSubmitting, initialConfig }) => {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="text-center space-y-2">
-        <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-primary/10 text-primary mb-2">
-          <Share2 className="w-6 h-6" />
-        </div>
-        <h2 className="text-2xl font-bold">Samba Share</h2>
-        <p className="text-base-content/60 max-w-sm mx-auto">
-          Configure a default Samba share for your network clients to access
-          shared files and games.
-        </p>
-      </div>
-
+    <Card title="Samba Server" subtitle="Configure a default Samba share for your network clients to access
+            shared files and games." icon={Share2} className="border-t-4 border-primary overflow-hidden"
+    >
       <form onSubmit={handleSubmit(handleFormSubmit)} className="space-y-4">
         <SambaForm
           register={register}
           errors={errors}
           config={initialConfig || sambaInitial}
         />
-
         <Button
           type="submit"
           variant="primary"
@@ -58,7 +48,7 @@ const SambaStep = ({ onSubmit, isSubmitting, initialConfig }) => {
           {isSubmitting ? "Configuring Samba..." : "Save & Continue"}
         </Button>
       </form>
-    </div>
+    </Card>
   );
 };
 

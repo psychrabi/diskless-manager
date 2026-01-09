@@ -84,10 +84,13 @@ pub async fn initialize_server(
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
 
-    Ok(Json(serde_json::json!({ "message": "Server initialized successfully" })))
+    Ok(Json(
+        serde_json::json!({ "message": "Server initialized successfully" }),
+    ))
 }
 
-pub async fn check_dependencies() -> Result<Json<Vec<crate::commands::system::DependencyStatus>>, StatusCode> {
+pub async fn check_dependencies(
+) -> Result<Json<Vec<crate::commands::system::DependencyStatus>>, StatusCode> {
     match crate::commands::system::check_dependencies().await {
         Ok(deps) => Ok(Json(deps)),
         Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
@@ -103,7 +106,9 @@ pub async fn clear_cache() -> Result<Json<serde_json::Value>, StatusCode> {
                 .arg("-c")
                 .arg("echo 3 > /proc/sys/vm/drop_caches")
                 .output();
-            Ok(Json(serde_json::json!({ "message": "Cache cleared successfully" })))
+            Ok(Json(
+                serde_json::json!({ "message": "Cache cleared successfully" }),
+            ))
         }
         Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
@@ -125,7 +130,8 @@ pub async fn get_interface_ip(
     }
 }
 
-pub async fn detect_server_network() -> Result<Json<crate::commands::system::NetworkDetection>, StatusCode> {
+pub async fn detect_server_network(
+) -> Result<Json<crate::commands::system::NetworkDetection>, StatusCode> {
     match crate::commands::system::detect_server_network().await {
         Ok(detection) => Ok(Json(detection)),
         Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
@@ -246,7 +252,9 @@ pub async fn apply_network_settings(
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
 
-    Ok(Json(serde_json::json!({ "message": "Network settings applied and services updated successfully" })))
+    Ok(Json(
+        serde_json::json!({ "message": "Network settings applied and services updated successfully" }),
+    ))
 }
 
 pub async fn get_settings(
@@ -296,7 +304,9 @@ pub async fn save_settings(
         // Log but don't fail if TOML save fails
     }
 
-    Ok(Json(serde_json::json!({ "message": "Settings saved successfully" })))
+    Ok(Json(
+        serde_json::json!({ "message": "Settings saved successfully" }),
+    ))
 }
 
 pub async fn setup_privileged_access() -> Result<Json<serde_json::Value>, StatusCode> {
@@ -334,7 +344,7 @@ pub async fn get_ram_usage(
     State(_state): State<AppState>,
 ) -> Result<Json<RamUsageResponse>, StatusCode> {
     use std::process::Command;
-    
+
     // Try to get memory info from /proc/meminfo
     let output = Command::new("grep")
         .args(&["MemTotal\\|MemAvailable", "/proc/meminfo"])
@@ -387,7 +397,7 @@ pub async fn get_zfs_arcstat(
     State(_state): State<AppState>,
 ) -> Result<Json<ArcStatResponse>, StatusCode> {
     use std::fs;
-    
+
     // Try to get ARC stats from /proc/spl/kstat/zfs/arcstats
     match fs::read_to_string("/proc/spl/kstat/zfs/arcstats") {
         Ok(content) => {

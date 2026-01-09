@@ -35,6 +35,18 @@ const Notification = lazy(() =>
 const Error = lazy(() =>
   import("./Error.jsx").then((module) => ({ default: module.Error })),
 );
+const StatusBadge = lazy(() =>
+  import("./StatusBadge.jsx").then((module) => ({ default: module.StatusBadge })),
+);
+const LoadingSkeleton = lazy(() =>
+  import("./LoadingSkeleton.jsx").then((module) => ({ default: module.LoadingSkeleton })),
+);
+const TableSkeleton = lazy(() =>
+  import("./LoadingSkeleton.jsx").then((module) => ({ default: module.TableSkeleton })),
+);
+const CardSkeleton = lazy(() =>
+  import("./LoadingSkeleton.jsx").then((module) => ({ default: module.CardSkeleton })),
+);
 
 export * from "./Table";
 
@@ -42,11 +54,15 @@ export {
   Activity,
   Button,
   Card,
+  CardSkeleton,
   ContextMenu,
   Error,
   Input,
   Loading,
+  LoadingSkeleton,
   Modal,
   Notification,
   Select,
+  StatusBadge,
+  TableSkeleton,
 };
