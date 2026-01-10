@@ -27,12 +27,12 @@ export default function ServiceCard({
 
   function getServiceIcon(name) {
     const icons = {
-      "isc-dhcp-server": Network,
-      "tftpd-hpa": FolderOpen,
-      "rtslib-fb-targetctl": Save,
-      "nfs-kernel-server": FolderOpenDot,
-      smbd: Folder,
-      apache2: Globe,
+      "dhcp": Network,
+      "tftp": FolderOpen,
+      "iscsi": Save,
+      "nfs": FolderOpenDot,
+      "samba": Folder,
+      "http": Globe,
     };
     return icons[name] || Settings;
   }
@@ -93,7 +93,7 @@ export default function ServiceCard({
         {getServiceDescription(service.name)}
       </p>
 
-      <div className="flex items-center justify-between text-sm text-base-content/50 mb-6 bg-base-200/30 p-2 rounded-">
+      <div className="flex items-center justify-between text-sm text-base-content/50 mb-6 bg-base-200/30">
         <span>
           PID: <span className="font-mono">{service.pid ?? "—"}</span>
         </span>

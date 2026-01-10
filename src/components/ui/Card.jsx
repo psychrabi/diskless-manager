@@ -29,12 +29,12 @@ export const Card = ({
   return (
     <div className={`${variants[variant]} ${sizes[size]} ${className}`}>
       {title && (
-        <div className={`card-header-professional ${headerClass}`}>
-          <div className="flex justify-between items-start">
+        <div className={`card-header-professional ${headerClass} pb-0`}>
+          <div className="flex justify-between items-center">
             <div className="flex items-center min-w-0 flex-1">
               {icon && (
                 <div className="flex-shrink-0 mr-4">
-                  <div className="w-10 h-10 bg-primary/10 rounded-lg flex items-center justify-center">
+                  <div className="p-2 w-12 h-12 bg-primary/10 rounded-lg flex items-center justify-center">
                     {React.createElement(icon, {
                       className: "h-10 w-10 text-primary",
                     })}

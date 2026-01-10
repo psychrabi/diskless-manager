@@ -29,8 +29,8 @@ export default function PrivilegeManagementForm() {
           password prompts.
         </p>
 
-        <div className="flex items-start gap-3 p-4 bg-warning/10 border border-warning/20 rounded-lg text-warning text-xs">
-          <ShieldAlert size={20} className="shrink-0" />
+        <div className="flex items-center gap-3 p-3 bg-warning/10 border border-warning/20 rounded-lg text-warning text-xs">
+          <ShieldAlert size={24} className="shrink-0" />
           <p>
             This will create a specific sudoers rule for the current user. A
             one-time password prompt (Polkit) will appear to authorize this

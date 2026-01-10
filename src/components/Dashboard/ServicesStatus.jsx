@@ -1,4 +1,4 @@
-import { Folder, Globe, RefreshCw, Save, Settings } from "lucide-react";
+import { Folder, FolderOpen, FolderOpenDot, Globe, Network, RefreshCw, Save, Settings } from "lucide-react";
 import React from "react";
 import { useShallow } from "zustand/shallow";
 import { useAppStore } from "../../store/useAppStore";
@@ -17,12 +17,12 @@ export default function ServicesStatus() {
 
   function getServiceIcon(name) {
     const icons = {
-      "isc-dhcp-server": Globe,
-      "tftpd-hpa": Folder,
-      target: Save,
-      "nfs-kernel-server": Folder,
-      smbd: Folder,
-      apache2: Globe,
+      "dhcp": Network,
+      "tftp": FolderOpen,
+      "iscsi": Save,
+      "nfs": FolderOpenDot,
+      "samba": Folder,
+      "http": Globe,
     };
     return icons[name] || Settings;
   }
