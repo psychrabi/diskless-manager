@@ -462,6 +462,12 @@ export async function createSnapshot(sourceId, snapshotName) {
   });
 }
 
+export async function getSnapshots(imageId) {
+  return apiRequest(`/api/images/${imageId}/snapshots`, {
+    method: "GET",
+  });
+}
+
 export async function getImageInfo(id) {
   return apiRequest(`/api/images/${id}/info`);
 }

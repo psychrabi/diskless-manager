@@ -97,7 +97,7 @@ pub struct Image {
     pub format: ImageFormat,
     pub status: String,
     pub description: Option<String>,
-    pub parent_id: Option<String>,
+    pub parent_id: Option<String>,    
     pub checksum: Option<String>,
     pub is_default: bool,
     pub created_at: DateTime<Utc>,

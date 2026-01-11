@@ -34,6 +34,9 @@ const ClientFormModal = ({ client, masters, isOpen, onClose, refresh }) => {
 
   const onSubmit = async (data) => {
     try {
+      // If using master directly (no snapshot), force super client mode
+      const mode = !data.snapshot ? "super" : data.mode || "normal";
+
       if (!client?.id) {
         // Create new client
         await api.addClient({
@@ -42,6 +45,7 @@ const ClientFormModal = ({ client, masters, isOpen, onClose, refresh }) => {
           ip: data.ip,
           master: data.master,
           snapshot: data.snapshot || null,
+          mode: mode,
           keep_writeback: data.keep_writeback,
           use_game_disk: data.use_game_disk,
         });
@@ -54,6 +58,7 @@ const ClientFormModal = ({ client, masters, isOpen, onClose, refresh }) => {
           ip: data.ip,
           master: data.master,
           snapshot: data.snapshot || null,
+          mode: mode,
           keep_writeback: data.keep_writeback,
           use_game_disk: data.use_game_disk,
         });
@@ -74,6 +79,18 @@ const ClientFormModal = ({ client, masters, isOpen, onClose, refresh }) => {
     control,
     name: "master",
   });
+
+  const selectedSnapshot = useWatch({
+    control,
+    name: "snapshot",
+  });
+
+  // Auto-set mode to "super" when using master directly (no snapshot)
+  useEffect(() => {
+    if (!selectedSnapshot) {
+      setValue("mode", "super", { shouldValidate: true });
+    }
+  }, [selectedSnapshot, setValue]);
 
   return (
     <Modal

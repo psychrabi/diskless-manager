@@ -31,7 +31,7 @@ const ImageCard = ({
       <Button
         variant="primary"
         className="join-item"
-        onClick={() => handleCreateSnapshot(master.name)}
+        onClick={() => handleCreateSnapshot(master.id)}
         size="icon"
         icon={PlusCircle}
         title={"Create Snapshot"}

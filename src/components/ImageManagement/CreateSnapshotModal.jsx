@@ -30,7 +30,7 @@ const CreateSnapshotModal = ({
   const onSubmit = async (data) => {
     if (!selectedImage) return;
     try {
-      await api.createSnapshot(selectedImage.id, data.newName)
+      await api.createSnapshot(selectedImage.id, data.name)
       success("Image Management", `Snapshot created successfully`);
       await fetchMasters();
       reset();
@@ -47,7 +47,7 @@ const CreateSnapshotModal = ({
     <Modal
       isOpen={openSnapshotCreateModal}
       onClose={() => setOpenSnapshotCreateModal(false)}
-      title={`Create Snapshot for ${selectedImage}`}
+      title={`Create Snapshot for ${selectedImage.name}`}
       size="2xl"
     >
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-2">
@@ -68,7 +68,7 @@ const CreateSnapshotModal = ({
         </fieldset>
         <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
           This operation will capture the current state of{" "}
-          <strong className="font-semibold">{selectedImage}</strong>.
+          <strong className="font-semibold">{selectedImage.name}</strong>.
         </p>
         <div className="mt-6 flex justify-end space-x-3">
           <Button

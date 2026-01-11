@@ -19,7 +19,7 @@ use crate::api::handlers::{
     images::{
         clone_image, create_image, create_snapshot, delete_image, get_image, get_image_info,
         import_image, list_images, list_masters, rename_image, resize_image, update_image,
-        verify_image,
+        verify_image, get_snapshots,
     },
     license::{get_license_info_handler, activate_license_handler},
     logs::{clear_logs, get_logs},
@@ -92,7 +92,7 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route("/api/images/{id}/rename", put(rename_image))
         .route("/api/images/import", post(import_image))
         .route("/api/images/{id}/clone", post(clone_image))
-        .route("/api/images/{id}/snapshots", post(create_snapshot))
+        .route("/api/images/{id}/snapshots", post(create_snapshot).get(get_snapshots))
         .route("/api/images/{id}/info", get(get_image_info))
         .route("/api/images/{id}/resize", post(resize_image))
         .route("/api/images/{id}/verify", post(verify_image))

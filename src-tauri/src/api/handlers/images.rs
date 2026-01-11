@@ -56,6 +56,36 @@ pub async fn get_image(
     Ok(Json(image))
 }
 
+pub async fn get_snapshots(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<crate::types::image::Snapshot>>, StatusCode> {
+    let settings = state.settings.read().await;
+    let manager = ImageManager::new(
+        state.db_pool.clone(),
+        settings.storage.images_dir.clone(),
+        settings.storage.snapshots_dir.clone(),
+    );
+
+    let images = manager
+        .list()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Filter images where parent_id matches the given id
+    let snapshots: Vec<crate::types::image::Snapshot> = images
+        .into_iter()
+        .filter(|img| img.parent_id.as_ref() == Some(&id))
+        .map(|snap| crate::types::image::Snapshot {
+            name: snap.name,
+            created: snap.created_at.to_rfc3339(),
+            used: format!("{}GB", snap.size_gb),
+        })
+        .collect();
+
+    Ok(Json(snapshots))
+}
+
 pub async fn create_image(
     State(state): State<AppState>,
     Json(request): Json<CreateImageRequest>,

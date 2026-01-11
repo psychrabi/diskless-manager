@@ -26,22 +26,26 @@ const ClientStatusBadge = React.memo(({ status }) => {
 });
 
 const ClientModeBadge = React.memo(({ client }) => {
-  if (client.mode === "super") {
+  // Check if using master directly (no snapshot)
+  const isUsingMasterDirectly = !client.snapshot || client.snapshot === "";
+  
+  if (isUsingMasterDirectly) {
     return (
       <span
         className="badge badge-warning gap-1"
-        title="Using the image directly"
+        title={`Direct Master: ${client.master}`}
       >
         <Zap className="h-3 w-3" /> Super Client
       </span>
     );
   }
 
+  // Using a snapshot - check writeback mode
   if (client.keep_writeback === false) {
     return (
       <span
         className="badge badge-secondary gap-1"
-        title="Changes are lost on reset (Non-Persistent)"
+        title={`Snapshot: ${client.snapshot} (Non-Persistent)`}
       >
         <RefreshCw className="h-3 w-3" /> Non-Persistent
       </span>
@@ -51,7 +55,7 @@ const ClientModeBadge = React.memo(({ client }) => {
   return (
     <span
       className="badge badge-info gap-1"
-      title="Client changes will be kept in the clone"
+      title={`Snapshot: ${client.snapshot} (Persistent)`}
     >
       <Layers className="h-3 w-3" /> Writeback
     </span>
