@@ -7,12 +7,26 @@ use axum::{
 use chrono::Utc;
 use log::{error, info};
 use serde::{Deserialize, Serialize};
+use std::process::Command;
 
 use crate::core::client::{
     BootLogEntry, Client, ClientManager, CreateClientRequest, UpdateClientRequest,
 };
 use crate::state::AppState;
 use crate::zfs::{get_writeback_or_default_dataset, zfs_clone, zfs_destroy, zfs_exists};
+
+// Helper function to get master OS
+fn get_master_os(master_name: &str) -> Option<String> {
+    // This would typically query the database or cache to get the master image OS
+    // For now, return a default based on the master name
+    if master_name.to_lowercase().contains("windows") {
+        Some("windows".to_string())
+    } else if master_name.to_lowercase().contains("linux") {
+        Some("linux".to_string())
+    } else {
+        None
+    }
+}
 
 #[derive(Deserialize)]
 pub struct Pagination {
@@ -267,13 +281,101 @@ pub async fn update_client(
                 }
             }
             "reboot" => {
-                // Reboot is handled by sending a command to the client
-                info!("Reboot command for client: {}", existing_client.name);
+                let ip = &existing_client.ip;
+                if ip.is_empty() {
+                    let error_msg = format!("IP address not found for '{}'", existing_client.name);
+                    error!("{}", error_msg);
+                    return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: error_msg })));
+                }
+
+                let master_os = get_master_os(&existing_client.master).unwrap_or_default().to_lowercase();
+                
+                if master_os.contains("linux") {
+                    // Linux: SSH reboot
+                    let output = Command::new("ssh")
+                        .args(&[
+                            "-o", "StrictHostKeyChecking=no",
+                            "-o", "ConnectTimeout=5",
+                            &format!("root@{}", ip),
+                            "reboot",
+                        ])
+                        .output()
+                        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: format!("Failed to execute SSH: {}", e) })))?;
+
+                    if !output.status.success() {
+                        let error_msg = format!("Failed to reboot Linux client (SSH): {}", String::from_utf8_lossy(&output.stderr));
+                        error!("{}", error_msg);
+                        return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: error_msg })));
+                    }
+                } else {
+                    // Windows: NET RPC
+                    let output = Command::new("net")
+                        .args(&[
+                            "rpc", "shutdown", "-r",
+                            "-I", ip,
+                            "-U", "diskless%1",
+                            "-f", "-t", "0",
+                        ])
+                        .output()
+                        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: format!("Failed to execute net rpc: {}", e) })))?;
+
+                    if !output.status.success() {
+                        let error_msg = format!("Failed to reboot client: {}", String::from_utf8_lossy(&output.stderr));
+                        error!("{}", error_msg);
+                        return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: error_msg })));
+                    }
+                }
+
+                info!("Reboot command sent to {} ({})", existing_client.name, ip);
                 return Ok(Json(existing_client));
             }
             "shutdown" => {
-                // Shutdown is handled by sending a command to the client
-                info!("Shutdown command for client: {}", existing_client.name);
+                let ip = &existing_client.ip;
+                if ip.is_empty() {
+                    let error_msg = format!("IP address not found for '{}'", existing_client.name);
+                    error!("{}", error_msg);
+                    return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: error_msg })));
+                }
+
+                let master_os = get_master_os(&existing_client.master).unwrap_or_default().to_lowercase();
+                
+                if master_os.contains("linux") {
+                    // Linux: SSH poweroff
+                    let output = Command::new("ssh")
+                        .args(&[
+                            "-o", "StrictHostKeyChecking=no",
+                            "-o", "ConnectTimeout=5",
+                            &format!("root@{}", ip),
+                            "poweroff",
+                        ])
+                        .output()
+                        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: format!("Failed to execute SSH: {}", e) })))?;
+
+                    if !output.status.success() {
+                        let error_msg = format!("Failed to shutdown Linux client (SSH): {}", String::from_utf8_lossy(&output.stderr));
+                        error!("{}", error_msg);
+                        return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: error_msg })));
+                    }
+                } else {
+                    // Windows: NET RPC
+                    let output = Command::new("net")
+                        .args(&[
+                          "rpc", "shutdown", "-S",
+                            "-I", ip,
+                            "-U", "diskless%1",
+                            "-f", "-t", "0",
+                        ])
+                        .output()
+                        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: format!("Failed to execute net rpc: {}", e) })))?;
+
+                    if !output.status.success() {
+                        let error_msg = format!("Failed to shutdown client: {}", String::from_utf8_lossy(&output.stderr));
+                        error!("{}", error_msg);
+                        return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: error_msg })));
+                    }
+                }
+
+                info!("Shutdown command sent to {} ({})", existing_client.name, ip);
                 return Ok(Json(existing_client));
             }
             "remote" => {

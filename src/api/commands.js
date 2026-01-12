@@ -790,9 +790,13 @@ export async function rebootClient(clientId, options = {}) {
   });
 }
 
-export async function remoteDesktopClient(clientId) {
+export async function remoteDesktopClient(clientId, credentials = {}) {
   return apiRequest(`/api/clients/${clientId}/remote-desktop`, {
     method: "POST",
+    body: JSON.stringify({
+      username: credentials.username || "diskless",
+      password: credentials.password || "1",
+    }),
   });
 }
 
