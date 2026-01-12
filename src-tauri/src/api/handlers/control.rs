@@ -5,14 +5,25 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 use tracing::{error, info};
 
 use crate::audit_logger::{AuditLogFilter, AuditLogger, ControlOperation, OperationResult};
-use crate::control_handler::ControlHandler;
 use crate::core::client::Client;
 use crate::state::AppState;
 use chrono::Utc;
+
+// Helper function to get master OS
+fn get_master_os(master_name: &str) -> Option<String> {
+    if master_name.to_lowercase().contains("windows") {
+        Some("windows".to_string())
+    } else if master_name.to_lowercase().contains("linux") {
+        Some("linux".to_string())
+    } else {
+        None
+    }
+}
 
 /// Request to perform a shutdown operation
 #[derive(Debug, Deserialize)]
@@ -26,6 +37,13 @@ pub struct ShutdownRequest {
 pub struct RebootRequest {
     pub force: Option<bool>,
     pub delay_minutes: Option<u32>,
+}
+
+/// Request for remote desktop connection
+#[derive(Debug, Deserialize)]
+pub struct RemoteDesktopRequest {
+    pub username: Option<String>,
+    pub password: Option<String>,
 }
 
 /// Request to cancel a scheduled operation
@@ -111,29 +129,6 @@ impl IntoResponse for ErrorResponse {
     }
 }
 
-/// Convert core::client::Client to types::client::Client
-fn convert_client(client: &Client) -> crate::types::client::Client {
-    crate::types::client::Client {
-        id: client.id.clone(),
-        name: client.name.clone(),
-        mac: client.mac.clone(),
-        ip: client.ip.clone(),
-        master: client.master.clone(),
-        snapshot: client.snapshot.clone(),
-        block_store: client.block_store.clone(),
-        target_iqn: client.target_iqn.clone(),
-        writeback: client.writeback.clone(),
-        created_at: client.created_at.to_rfc3339().into(),
-        last_modified: client.last_modified.clone(),
-        block_device: client.block_device.clone(),
-        status: client.status.clone(),
-        mode: client.mode.clone(),
-        pxe_mode: client.pxe_mode.clone(),
-        keep_writeback: client.keep_writeback,
-        use_game_disk: client.use_game_disk,
-    }
-}
-
 /// Handle shutdown request for a client
 pub async fn shutdown_client(
     State(state): State<AppState>,
@@ -161,29 +156,129 @@ pub async fn shutdown_client(
         )
     })?;
 
-    // Convert to types::client::Client
-    let types_client = convert_client(&client);
+    let ip = &client.ip;
+    if ip.is_empty() {
+        let error_msg = format!("IP address not found for '{}'", client.name);
+        error!("{}", error_msg);
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: error_msg,
+                details: None,
+            }),
+        ));
+    }
 
-    // Get the master image to determine OS type
-    let master_os = None; // Will be determined by OS detector
+    let master_os = get_master_os(&client.master).unwrap_or_default().to_lowercase();
+    let mut success = true;
+    let mut message = String::new();
 
-    // Create control handler
-    let control_handler = ControlHandler::new(state.ssh_executor.clone());
+    if master_os.contains("linux") {
+        // Linux: SSH poweroff
+        let output = Command::new("ssh")
+            .args(&[
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "ConnectTimeout=5",
+                &format!("root@{}", ip),
+                "poweroff",
+            ])
+            .output()
+            .map_err(|e| {
+                error!("Failed to execute SSH: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: format!("Failed to execute SSH: {}", e),
+                        details: None,
+                    }),
+                )
+            })?;
 
-    // Execute shutdown
-    let (response, audit_entry) = control_handler
-        .handle_shutdown(&types_client, force, delay_minutes, master_os)
-        .await
-        .map_err(|e| {
-            error!("Failed to execute shutdown: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: "Failed to execute shutdown".to_string(),
-                    details: Some(e.to_string()),
-                }),
-            )
-        })?;
+        if !output.status.success() {
+            success = false;
+            message = format!("Failed to shutdown Linux client (SSH): {}", String::from_utf8_lossy(&output.stderr));
+            error!("{}", message);
+        } else {
+            message = format!("Shutdown command sent to {} ({})", client.name, ip);
+            info!("{}", message);
+        }
+    } else {
+        // Windows: Try NET RPC first, fall back to SSH
+        let mut rpc_output = Command::new("net")
+            .args(&[
+                "rpc", "shutdown", "-S",
+                "-I", ip,
+                "-U", "diskless%1",
+            ])
+            .output();
+
+        if let Ok(output) = rpc_output {
+            if output.status.success() {
+                message = format!("Shutdown command sent to {} ({})", client.name, ip);
+                info!("{}", message);
+            } else {
+                // NET RPC failed, try SSH
+                info!("NET RPC failed, falling back to SSH for shutdown");
+                let ssh_output = Command::new("ssh")
+                    .args(&[
+                        "-o", "StrictHostKeyChecking=no",
+                        "-o", "ConnectTimeout=5",
+                        &format!("Administrator@{}", ip),
+                        "shutdown /s /t 30",
+                    ])
+                    .output()
+                    .map_err(|e| {
+                        error!("Failed to execute SSH: {}", e);
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(ErrorResponse {
+                                error: format!("Failed to execute SSH: {}", e),
+                                details: None,
+                            }),
+                        )
+                    })?;
+
+                if !ssh_output.status.success() {
+                    success = false;
+                    message = format!("Failed to shutdown Windows client (SSH): {}", String::from_utf8_lossy(&ssh_output.stderr));
+                    error!("{}", message);
+                } else {
+                    message = format!("Shutdown command sent to {} ({})", client.name, ip);
+                    info!("{}", message);
+                }
+            }
+        } else {
+            // NET RPC command not found, try SSH
+            info!("NET RPC not available, using SSH for shutdown");
+            let ssh_output = Command::new("ssh")
+                .args(&[
+                    "-o", "StrictHostKeyChecking=no",
+                    "-o", "ConnectTimeout=5",
+                    &format!("Administrator@{}", ip),
+                    "shutdown /s /t 30",
+                ])
+                .output()
+                .map_err(|e| {
+                    error!("Failed to execute SSH: {}", e);
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ErrorResponse {
+                            error: format!("Failed to execute SSH: {}", e),
+                            details: None,
+                        }),
+                    )
+                })?;
+
+            if !ssh_output.status.success() {
+                success = false;
+                message = format!("Failed to shutdown Windows client (SSH): {}", String::from_utf8_lossy(&ssh_output.stderr));
+                error!("{}", message);
+            } else {
+                message = format!("Shutdown command sent to {} ({})", client.name, ip);
+                info!("{}", message);
+            }
+        }
+    }
 
     // Log the operation
     let audit_logger = AuditLogger::new(Arc::new(state.db_pool.clone()));
@@ -191,16 +286,16 @@ pub async fn shutdown_client(
         client_id: client.id.clone(),
         client_name: client.name.clone(),
         client_ip: client.ip.clone(),
-        os_type: audit_entry.os_type.clone(),
+        os_type: master_os.clone(),
         operation_type: "shutdown".to_string(),
         operation_mode: if force { "force" } else { "graceful" }.to_string(),
         delay_minutes,
         timestamp: Utc::now(),
-        administrator: "system".to_string(), // TODO: Get from auth context
-        result: if response.success {
+        administrator: "system".to_string(),
+        result: if success {
             OperationResult::Success
         } else {
-            OperationResult::Failed(response.message.clone())
+            OperationResult::Failed(message.clone())
         },
     };
 
@@ -209,10 +304,10 @@ pub async fn shutdown_client(
     }
 
     Ok(Json(ControlOperationResponse {
-        success: response.success,
-        message: response.message,
-        operation_id: response.operation_id,
-        timestamp: response.timestamp,
+        success,
+        message,
+        operation_id: None,
+        timestamp: chrono::Utc::now().to_rfc3339(),
     }))
 }
 
@@ -243,29 +338,81 @@ pub async fn reboot_client(
         )
     })?;
 
-    // Convert to types::client::Client
-    let types_client = convert_client(&client);
+    let ip = &client.ip;
+    if ip.is_empty() {
+        let error_msg = format!("IP address not found for '{}'", client.name);
+        error!("{}", error_msg);
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: error_msg,
+                details: None,
+            }),
+        ));
+    }
 
-    // Get the master image to determine OS type
-    let master_os = None; // Will be determined by OS detector
+    let master_os = get_master_os(&client.master).unwrap_or_default().to_lowercase();
+    let mut success = true;
+    let mut message = String::new();
 
-    // Create control handler
-    let control_handler = ControlHandler::new(state.ssh_executor.clone());
+    if master_os.contains("linux") {
+        // Linux: SSH reboot
+        let output = Command::new("ssh")
+            .args(&[
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "ConnectTimeout=5",
+                &format!("root@{}", ip),
+                "reboot",
+            ])
+            .output()
+            .map_err(|e| {
+                error!("Failed to execute SSH: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: format!("Failed to execute SSH: {}", e),
+                        details: None,
+                    }),
+                )
+            })?;
 
-    // Execute reboot
-    let (response, audit_entry) = control_handler
-        .handle_reboot(&types_client, force, delay_minutes, master_os)
-        .await
-        .map_err(|e| {
-            error!("Failed to execute reboot: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: "Failed to execute reboot".to_string(),
-                    details: Some(e.to_string()),
-                }),
-            )
-        })?;
+        if !output.status.success() {
+            success = false;
+            message = format!("Failed to reboot Linux client (SSH): {}", String::from_utf8_lossy(&output.stderr));
+            error!("{}", message);
+        } else {
+            message = format!("Reboot command sent to {} ({})", client.name, ip);
+            info!("{}", message);
+        }
+    } else {
+         let output = Command::new("net")
+            .args(&[
+                "rpc", "shutdown", "-S",
+                "-I", ip,
+                "-U", "diskless%1",
+                "-f", "-t", "0",
+            ])
+            .output()
+            .map_err(|e| {
+                error!("Failed to execute SSH: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: format!("Failed to execute SSH: {}", e),
+                        details: None,
+                    }),
+                )
+            })?;
+
+        if !output.status.success() {
+            success = false;
+            message = format!("Failed to reboot Windows client (SSH): {}", String::from_utf8_lossy(&output.stderr));
+            error!("{}", message);
+        } else {
+            message = format!("Reboot command sent to {} ({})", client.name, ip);
+            info!("{}", message);
+        }
+    }
 
     // Log the operation
     let audit_logger = AuditLogger::new(Arc::new(state.db_pool.clone()));
@@ -273,16 +420,16 @@ pub async fn reboot_client(
         client_id: client.id.clone(),
         client_name: client.name.clone(),
         client_ip: client.ip.clone(),
-        os_type: audit_entry.os_type.clone(),
+        os_type: master_os.clone(),
         operation_type: "reboot".to_string(),
         operation_mode: if force { "force" } else { "graceful" }.to_string(),
         delay_minutes,
         timestamp: Utc::now(),
-        administrator: "system".to_string(), // TODO: Get from auth context
-        result: if response.success {
+        administrator: "system".to_string(),
+        result: if success {
             OperationResult::Success
         } else {
-            OperationResult::Failed(response.message.clone())
+            OperationResult::Failed(message.clone())
         },
     };
 
@@ -291,10 +438,10 @@ pub async fn reboot_client(
     }
 
     Ok(Json(ControlOperationResponse {
-        success: response.success,
-        message: response.message,
-        operation_id: response.operation_id,
-        timestamp: response.timestamp,
+        success,
+        message,
+        operation_id: None,
+        timestamp: chrono::Utc::now().to_rfc3339(),
     }))
 }
 
@@ -302,6 +449,7 @@ pub async fn reboot_client(
 pub async fn remote_desktop_client(
     State(state): State<AppState>,
     Path(client_id): Path<String>,
+    Json(request): Json<RemoteDesktopRequest>,
 ) -> Result<Json<RemoteDesktopResponse>, (StatusCode, Json<ErrorResponse>)> {
     info!("Remote desktop request for client {}", client_id);
 
@@ -318,29 +466,239 @@ pub async fn remote_desktop_client(
         )
     })?;
 
-    // Convert to types::client::Client
-    let types_client = convert_client(&client);
+    let ip = client.ip.clone();
+    if ip.is_empty() {
+        let error_msg = format!("IP address not found for '{}'", client.name);
+        error!("{}", error_msg);
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: error_msg,
+                details: None,
+            }),
+        ));
+    }
 
-    // Get the master image to determine OS type
-    let master_os = None; // Will be determined by OS detector
+    let username = request.username.unwrap_or_else(|| "Administrator".to_string());
+    let password = request.password.unwrap_or_else(|| "1".to_string());
+    let client_name = client.name.clone();
 
-    // Create control handler
-    let control_handler = ControlHandler::new(state.ssh_executor.clone());
+    let master_os = get_master_os(&client.master).unwrap_or_default().to_lowercase();
+    let protocol_used: String;
+    let mut success = true;
+    let mut message = String::new();
 
-    // Execute remote desktop
-    let response = control_handler
-        .handle_remote_desktop(&types_client, master_os)
-        .await
-        .map_err(|e| {
-            error!("Failed to launch remote desktop: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: "Failed to launch remote desktop".to_string(),
-                    details: Some(e.to_string()),
-                }),
-            )
-        })?;
+    if master_os.contains("windows") {
+        // Windows: Launch RDP client
+        protocol_used = "RDP".to_string();
+        
+        // Try to launch xfreerdp with proper display handling
+        let mut xfreerdp_cmd = Command::new("xfreerdp3");
+        xfreerdp_cmd
+            .args(&[
+                "/v:".to_string() + &ip,
+                "/u:".to_string() + &username,
+                "/p:".to_string() + &password,
+                "/cert:ignore".to_string(),
+                "/w:1920".to_string(),
+                "/h:1080".to_string(),
+                "/dynamic-resolution".to_string(),
+                "/gdi:hw".to_string(),
+                "/network:lan".to_string(),
+                "/bpp:32".to_string(),
+                "/sec:nla".to_string(),
+                "/timeout:20000".to_string(),
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        // Set DISPLAY if available
+        if let Ok(display) = std::env::var("DISPLAY") {
+            xfreerdp_cmd.env("DISPLAY", display);
+        }
+
+        let result = xfreerdp_cmd.spawn();
+
+        match result {
+            Ok(mut child) => {
+                // Spawn a thread to wait for the process and log any errors
+                std::thread::spawn(move || {
+                    if let Ok(output) = child.wait_with_output() {
+                        if !output.status.success() {
+                            let stderr = String::from_utf8_lossy(&output.stderr);
+                            let stdout = String::from_utf8_lossy(&output.stdout);
+                            if !stderr.is_empty() {
+                                error!("xfreerdp error: {}", stderr);
+                            }
+                            if !stdout.is_empty() {
+                                info!("xfreerdp output: {}", stdout);
+                            }
+                        } else {
+                            info!("xfreerdp connection closed successfully");
+                        }
+                    }
+                });
+                success = true;
+                message = format!("RDP connection initiated to {} ({}). The RDP window should open shortly.", client_name, ip);
+                info!("{}", message);
+            }
+            Err(e) => {
+                error!("Failed to launch xfreerdp: {}", e);
+                
+                // Fallback to rdesktop with NLA/CredSSP bypass
+                let mut rdesktop_cmd = Command::new("rdesktop");
+                rdesktop_cmd
+                    .args(&[
+                        ip.as_str(),
+                        "-u", username.as_str(),
+                        "-p", password.as_str(),
+                        "-x", "m",
+                        "-a", "32",
+                        "-N",  // Disable encryption
+                        "-V", "1.2",  // TLS version 1.2
+                        "-E",  // Disable encryption from client to server
+                    ])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped());
+
+                // Set DISPLAY if available
+                if let Ok(display) = std::env::var("DISPLAY") {
+                    rdesktop_cmd.env("DISPLAY", display);
+                }
+
+                match rdesktop_cmd.spawn() {
+                    Ok(mut child) => {
+                        let ip_clone = ip.clone();
+                        // Spawn a thread to wait for the process and log any errors
+                        std::thread::spawn(move || {
+                            if let Ok(output) = child.wait_with_output() {
+                                if !output.status.success() {
+                                    let stderr = String::from_utf8_lossy(&output.stderr);
+                                    let stdout = String::from_utf8_lossy(&output.stdout);
+                                    
+                                    if stderr.contains("CredSSP") || stdout.contains("CredSSP") {
+                                        error!("RDP connection failed: CredSSP/NLA is required by the Windows client. To fix this, on the Windows client run: gpedit.msc > Computer Configuration > Administrative Templates > System > Credentials Delegation > Allow delegating fresh credentials with NTLM-only server authentication > Enable and set to 'true'");
+                                    } else if !stderr.is_empty() {
+                                        error!("rdesktop error: {}", stderr);
+                                    }
+                                    if !stdout.is_empty() {
+                                        info!("rdesktop output: {}", stdout);
+                                    }
+                                } else {
+                                    info!("rdesktop connection closed successfully");
+                                }
+                            }
+                        });
+                        success = true;
+                        message = format!("RDP connection initiated to {} ({}). The RDP window should open shortly.", client_name, ip_clone);
+                        info!("{}", message);
+                    }
+                    Err(e) => {
+                        success = false;
+                        message = format!("Failed to launch RDP client: {}. Make sure rdesktop is installed.", e);
+                        error!("{}", message);
+                    }
+                }
+            }
+        }
+    } else {
+        // Linux: Launch VNC client
+        protocol_used = "VNC".to_string();
+        
+        // Try to launch VNC client (vncviewer or vinagre)
+        let mut vncviewer_cmd = Command::new("vncviewer");
+        vncviewer_cmd
+            .arg(ip.as_str())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        // Set DISPLAY if available
+        if let Ok(display) = std::env::var("DISPLAY") {
+            vncviewer_cmd.env("DISPLAY", display);
+        }
+
+        let result = vncviewer_cmd.spawn();
+
+        match result {
+            Ok(mut child) => {
+                let ip_clone = ip.clone();
+                // Spawn a thread to wait for the process and log any errors
+                std::thread::spawn(move || {
+                    if let Ok(output) = child.wait_with_output() {
+                        if !output.status.success() {
+                            let stderr = String::from_utf8_lossy(&output.stderr);
+                            let stdout = String::from_utf8_lossy(&output.stdout);
+                            if stderr.contains("Connection refused") || stderr.contains("refused") {
+                                error!("VNC connection refused for {}. Make sure VNC server is running on the client.", ip_clone);
+                            } else if !stderr.is_empty() {
+                                error!("vncviewer error: {}", stderr);
+                            }
+                            if !stdout.is_empty() {
+                                info!("vncviewer output: {}", stdout);
+                            }
+                        } else {
+                            info!("vncviewer connection closed successfully");
+                        }
+                    }
+                });
+                success = true;
+                message = format!("VNC connection initiated to {} ({}). The VNC window should open shortly.", client_name, ip);
+                info!("{}", message);
+            }
+            Err(e) => {
+                error!("Failed to launch vncviewer: {}", e);
+                
+                // Fallback to vinagre
+                let mut vinagre_cmd = Command::new("vinagre");
+                vinagre_cmd
+                    .arg(ip.as_str())
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped());
+
+                // Set DISPLAY if available
+                if let Ok(display) = std::env::var("DISPLAY") {
+                    vinagre_cmd.env("DISPLAY", display);
+                }
+
+                match vinagre_cmd.spawn() {
+                    Ok(mut child) => {
+                        let ip_clone = ip.clone();
+                        // Spawn a thread to wait for the process and log any errors
+                        std::thread::spawn(move || {
+                            if let Ok(output) = child.wait_with_output() {
+                                if !output.status.success() {
+                                    let stderr = String::from_utf8_lossy(&output.stderr);
+                                    let stdout = String::from_utf8_lossy(&output.stdout);
+                                    if stderr.contains("Connection refused") || stderr.contains("refused") {
+                                        error!("VNC connection refused for {}. Make sure VNC server is running on the client.", ip_clone);
+                                    } else if !stderr.is_empty() {
+                                        error!("vinagre error: {}", stderr);
+                                    }
+                                    if !stdout.is_empty() {
+                                        info!("vinagre output: {}", stdout);
+                                    }
+                                } else {
+                                    info!("vinagre connection closed successfully");
+                                }
+                            }
+                        });
+                        success = true;
+                        message = format!("VNC connection initiated to {} ({}). The VNC window should open shortly.", client_name, ip);
+                        info!("{}", message);
+                    }
+                    Err(e) => {
+                        success = false;
+                        message = format!("Failed to launch VNC client: {}. Make sure vncviewer or vinagre is installed, and VNC server is running on the client.", e);
+                        error!("{}", message);
+                    }
+                }
+            }
+        }
+    }
 
     // Log the operation
     let audit_logger = AuditLogger::new(Arc::new(state.db_pool.clone()));
@@ -348,13 +706,17 @@ pub async fn remote_desktop_client(
         client_id: client.id.clone(),
         client_name: client.name.clone(),
         client_ip: client.ip.clone(),
-        os_type: "unknown".to_string(), // Will be determined by OS detector
+        os_type: master_os.clone(),
         operation_type: "remote".to_string(),
         operation_mode: "interactive".to_string(),
         delay_minutes: None,
         timestamp: Utc::now(),
-        administrator: "system".to_string(), // TODO: Get from auth context
-        result: OperationResult::Success,
+        administrator: "system".to_string(),
+        result: if success {
+            OperationResult::Success
+        } else {
+            OperationResult::Failed(message.clone())
+        },
     };
 
     if let Err(e) = audit_logger.log_operation(&operation).await {
@@ -362,9 +724,9 @@ pub async fn remote_desktop_client(
     }
 
     Ok(Json(RemoteDesktopResponse {
-        success: true,
-        protocol_used: response.protocol_used,
-        message: response.message,
+        success,
+        protocol_used,
+        message,
         timestamp: chrono::Utc::now().to_rfc3339(),
     }))
 }
