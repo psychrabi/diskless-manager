@@ -12,16 +12,12 @@ const ClientStatusBadge = React.memo(({ status }) => {
   const isOnline = currentStatus === "Online";
   const isLeased = currentStatus === "Leased";
   const badgeClass = isOnline
-    ? "badge-success"
+    ? "text-success"
     : isLeased
-      ? "badge-warning"
-      : "badge-neutral";
-  const Icon = isOnline ? Power : PowerOff;
+      ? "text-warning"
+      : "text-neutral";
   return (
-    <span className={`badge ${badgeClass} gap-1`}>
-      <Icon className="h-3 w-3" />
-      {currentStatus}
-    </span>
+    <Monitor className={`inline mr-2 h-4 w-4 ${badgeClass}`} />  
   );
 });
 
@@ -32,10 +28,9 @@ const ClientModeBadge = React.memo(({ client }) => {
   if (isUsingMasterDirectly) {
     return (
       <span
-        className="badge badge-warning gap-1"
-        title={`Direct Master: ${client.master}`}
+        className="status status-warning status-lg"
+        title={`Super Client : ${client.master}`}
       >
-        <Zap className="h-3 w-3" /> Super Client
       </span>
     );
   }
@@ -44,20 +39,20 @@ const ClientModeBadge = React.memo(({ client }) => {
   if (client.keep_writeback === false) {
     return (
       <span
-        className="badge badge-secondary gap-1"
-        title={`Snapshot: ${client.snapshot} (Non-Persistent)`}
+        className="status status-secondary status-lg"
+        title={`Non-Persistent`}
       >
-        <RefreshCw className="h-3 w-3" /> Non-Persistent
+      
       </span>
     );
   }
 
   return (
     <span
-      className="badge badge-info gap-1"
-      title={`Snapshot: ${client.snapshot} (Persistent)`}
+      className="status status-info status-lg"
+      title={`Persistent: ${client.block_store}`}
     >
-      <Layers className="h-3 w-3" /> Writeback
+      
     </span>
   );
 });
@@ -135,13 +130,13 @@ const ClientTable = ({ handleClientContextMenu }) => {
           <table className="table w-full">
             <thead>
               <tr className="border-b border-base-200">
-                <TableHead>Name</TableHead>
+                <TableHead >Name</TableHead>
                 <TableHead className="hidden md:table-cell">
                   MAC Address
                 </TableHead>
                 <TableHead>IP Address</TableHead>
-                    <TableHead >Read (MB/s)</TableHead>
-                <TableHead >Write (MB/s)</TableHead>
+                    <TableHead className="hidden md:table-cell">Read <span className="hidden">(MB/s)</span></TableHead>
+                <TableHead className="hidden md:table-cell" >Write (MB/s)</TableHead>
                 <TableHead className="hidden md:table-cell">Image</TableHead>
                 <TableHead className="hidden 2xl:table-cell">
                   Restore Point
@@ -149,9 +144,9 @@ const ClientTable = ({ handleClientContextMenu }) => {
                 <TableHead className="hidden 2xl:table-cell">
                   Boot disk
                 </TableHead>
-                <TableHead className="text-center">Status</TableHead>
-                <TableHead>Mode</TableHead>
-                <TableHead className="hidden lg:table-cell">Uptime</TableHead>
+                
+                <TableHead className="hidden md:table-cell">Mode</TableHead>
+                <TableHead className="hidden md:table-cell">Uptime</TableHead>
                 <TableHead className="text-center">Actions</TableHead>
               </tr>
             </thead>
@@ -179,9 +174,9 @@ const ClientTable = ({ handleClientContextMenu }) => {
                 MAC Address
               </TableHead>
               <TableHead className="bg-base-100 ">IP Address</TableHead>
-  <TableHead className="bg-base-100 ">Read (MB/s)</TableHead>
-              <TableHead className="bg-base-100 ">Write (MB/s)</TableHead>
-              <TableHead className="hidden md:table-cell bg-base-100">
+                    <TableHead className="bg-base-100 hidden lg:table-cell">Read <span className="hidden">(MB/s)</span></TableHead>
+                    <TableHead className="bg-base-100 hidden lg:table-cell">Write <span className="hidden">(MB/s)</span></TableHead>
+              <TableHead className="hidden 2xl:table-cell bg-base-100">
                 Image
               </TableHead>
               <TableHead className="hidden 2xl:table-cell bg-base-100">
@@ -190,8 +185,8 @@ const ClientTable = ({ handleClientContextMenu }) => {
               <TableHead className="hidden 2xl:table-cell bg-base-100">
                 Boot disk
               </TableHead>
-              <TableHead className="bg-base-100 ">Status</TableHead>
-              <TableHead className="bg-base-100 ">Mode</TableHead>
+              
+              <TableHead className="bg-base-100 lg:table-cell">Mode</TableHead>
               <TableHead className="hidden lg:table-cell bg-base-100">Uptime</TableHead>
               <TableHead className="bg-base-100 text-center">Actions</TableHead>
             </tr>
@@ -201,7 +196,7 @@ const ClientTable = ({ handleClientContextMenu }) => {
             return (
               <>
                 <TableCell className="font-bold font-mono">
-                  <Monitor className="inline mr-2 h-4 w-4" />
+                  <ClientStatusBadge status={client.status} />
                   {client.name}
                 </TableCell>
                 <TableCell className="hidden md:table-cell text-xs font-mono">
@@ -237,10 +232,8 @@ const ClientTable = ({ handleClientContextMenu }) => {
                 <TableCell className="hidden 2xl:table-cell text-xs font-mono break-all">
                   {client.block_store}
                 </TableCell>
-                <TableCell>
-                  <ClientStatusBadge status={client.status} />
-                </TableCell>
-                <TableCell>
+              
+                <TableCell className="text-center">
                   <ClientModeBadge client={client} />
                 </TableCell>
                 <TableCell className="hidden lg:table-cell text-xs font-mono">

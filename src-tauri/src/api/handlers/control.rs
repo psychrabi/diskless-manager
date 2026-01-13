@@ -169,7 +169,7 @@ pub async fn shutdown_client(
         ));
     }
 
-    let master_os = get_master_os(&client.master).unwrap_or_default().to_lowercase();
+     let master_os = get_master_os(&client.master).unwrap_or_default().to_lowercase();
     let mut success = true;
     let mut message = String::new();
 
@@ -203,80 +203,32 @@ pub async fn shutdown_client(
             info!("{}", message);
         }
     } else {
-        // Windows: Try NET RPC first, fall back to SSH
-        let mut rpc_output = Command::new("net")
+         let output = Command::new("net")
             .args(&[
-                "rpc", "shutdown", "-S",
+                "rpc", "shutdown",
                 "-I", ip,
                 "-U", "diskless%1",
+                "-f", "-t", "0",
             ])
-            .output();
+            .output()
+            .map_err(|e| {
+                error!("Failed to execute SSH: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: format!("Failed to execute SSH: {}", e),
+                        details: None,
+                    }),
+                )
+            })?;
 
-        if let Ok(output) = rpc_output {
-            if output.status.success() {
-                message = format!("Shutdown command sent to {} ({})", client.name, ip);
-                info!("{}", message);
-            } else {
-                // NET RPC failed, try SSH
-                info!("NET RPC failed, falling back to SSH for shutdown");
-                let ssh_output = Command::new("ssh")
-                    .args(&[
-                        "-o", "StrictHostKeyChecking=no",
-                        "-o", "ConnectTimeout=5",
-                        &format!("Administrator@{}", ip),
-                        "shutdown /s /t 30",
-                    ])
-                    .output()
-                    .map_err(|e| {
-                        error!("Failed to execute SSH: {}", e);
-                        (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ErrorResponse {
-                                error: format!("Failed to execute SSH: {}", e),
-                                details: None,
-                            }),
-                        )
-                    })?;
-
-                if !ssh_output.status.success() {
-                    success = false;
-                    message = format!("Failed to shutdown Windows client (SSH): {}", String::from_utf8_lossy(&ssh_output.stderr));
-                    error!("{}", message);
-                } else {
-                    message = format!("Shutdown command sent to {} ({})", client.name, ip);
-                    info!("{}", message);
-                }
-            }
+        if !output.status.success() {
+            success = false;
+            message = format!("Failed to shutdown Windows client: {}", String::from_utf8_lossy(&output.stderr));
+            error!("{}", message);
         } else {
-            // NET RPC command not found, try SSH
-            info!("NET RPC not available, using SSH for shutdown");
-            let ssh_output = Command::new("ssh")
-                .args(&[
-                    "-o", "StrictHostKeyChecking=no",
-                    "-o", "ConnectTimeout=5",
-                    &format!("Administrator@{}", ip),
-                    "shutdown /s /t 30",
-                ])
-                .output()
-                .map_err(|e| {
-                    error!("Failed to execute SSH: {}", e);
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(ErrorResponse {
-                            error: format!("Failed to execute SSH: {}", e),
-                            details: None,
-                        }),
-                    )
-                })?;
-
-            if !ssh_output.status.success() {
-                success = false;
-                message = format!("Failed to shutdown Windows client (SSH): {}", String::from_utf8_lossy(&ssh_output.stderr));
-                error!("{}", message);
-            } else {
-                message = format!("Shutdown command sent to {} ({})", client.name, ip);
-                info!("{}", message);
-            }
+            message = format!("Shutdown command sent to {} ({})", client.name, ip);
+            info!("{}", message);
         }
     }
 
@@ -387,7 +339,7 @@ pub async fn reboot_client(
     } else {
          let output = Command::new("net")
             .args(&[
-                "rpc", "shutdown", "-S",
+                "rpc", "shutdown", "-r",
                 "-I", ip,
                 "-U", "diskless%1",
                 "-f", "-t", "0",

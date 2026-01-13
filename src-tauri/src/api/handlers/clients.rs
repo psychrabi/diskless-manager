@@ -360,7 +360,7 @@ pub async fn update_client(
                     // Windows: NET RPC
                     let output = Command::new("net")
                         .args(&[
-                          "rpc", "shutdown", "-S",
+                          "rpc", "shutdown",
                             "-I", ip,
                             "-U", "diskless%1",
                             "-f", "-t", "0",

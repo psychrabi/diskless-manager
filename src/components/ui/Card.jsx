@@ -30,8 +30,8 @@ export const Card = ({
     <div className={`${variants[variant]} ${sizes[size]} ${className}`}>
       {title && (
         <div className={`card-header-professional ${headerClass} pb-0`}>
-          <div className="flex justify-between items-center">
-            <div className="flex items-center min-w-0 flex-1">
+          <div className="flex justify-between items-center flex-col md:flex-row">
+            <div className="flex items-center min-w-0 flex-1 mb-5">
               {icon && (
                 <div className="flex-shrink-0 mr-4">
                   <div className="p-2 w-12 h-12 bg-primary/10 rounded-lg flex items-center justify-center">
