@@ -800,10 +800,24 @@ impl ImageManager {
         //     ));
         // }
 
-        // Delete ZFS dataset
-        if zfs_exists(&image.name) {
-            // Use the image name as the ZFS dataset name
-            zfs_destroy(&image.name)?;
+        // Determine the ZFS dataset/snapshot name to delete
+        let zfs_name = if let Some(parent_id) = &image.parent_id {
+            // This is a snapshot - need to construct full snapshot path
+            let parent = self.get(parent_id).await?;
+            let snapshot_full_name = format!("{}@{}", parent.name, image.name);
+            info!("Deleting snapshot with full ZFS path: {}", snapshot_full_name);
+            snapshot_full_name
+        } else {
+            // This is a regular image/dataset
+            image.name.clone()
+        };
+
+        // Delete ZFS dataset or snapshot
+        if zfs_exists(&zfs_name) {
+            info!("ZFS dataset/snapshot '{}' exists, destroying it", zfs_name);
+            zfs_destroy(&zfs_name)?;
+        } else {
+            info!("ZFS dataset/snapshot '{}' does not exist, skipping ZFS deletion", zfs_name);
         }
 
         // Delete from database

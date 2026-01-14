@@ -573,6 +573,8 @@ pub async fn delete_client(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<(), StatusCode> {
+    tracing::info!("DELETE CLIENT CALLED - Starting deletion for client: {}", id);
+    
     // Get the client first to access its iSCSI details
     let manager = ClientManager::new(state.db_pool.clone());
     let client = manager.get(&id).await.map_err(|_| StatusCode::NOT_FOUND)?;
@@ -591,39 +593,46 @@ pub async fn delete_client(
             );
         });
     if let Some(_snapshot) = client.snapshot {
-        let block_store = client.block_store.as_ref().unwrap();
-        if block_store.starts_with("/dev/zvol/") {
-            // Extract the dataset name from the block_store path
-            let dataset_name = block_store
-                .strip_prefix("/dev/zvol/")
-                .unwrap_or(block_store);
-            info!(
-                "Found potential ZFS dataset in block_store: {} (extracted: {})",
-                block_store, dataset_name
-            );
+        if let Some(block_store) = client.block_store.as_ref() {
+            if block_store.starts_with("/dev/zvol/") {
+                // Extract the dataset name from the block_store path
+                let dataset_name = block_store
+                    .strip_prefix("/dev/zvol/")
+                    .unwrap_or(block_store);
+                info!(
+                    "Found potential ZFS dataset in block_store: {} (extracted: {})",
+                    block_store, dataset_name
+                );
 
-            if zfs_exists(dataset_name) {
-                info!("ZFS dataset {} exists, attempting to destroy", dataset_name);
-                let result = zfs_destroy(dataset_name);
-                match result {
-                    Ok(_) => info!("Successfully destroyed ZFS dataset: {}", dataset_name),
-                    Err(e) => tracing::warn!(
-                        "Failed to destroy ZFS dataset for client '{}': {}",
-                        client.name,
-                        e
-                    ),
+                if zfs_exists(dataset_name) {
+                    info!("ZFS dataset {} exists, attempting to destroy", dataset_name);
+                    let result = zfs_destroy(dataset_name);
+                    match result {
+                        Ok(_) => info!("Successfully destroyed ZFS dataset: {}", dataset_name),
+                        Err(e) => tracing::warn!(
+                            "Failed to destroy ZFS dataset for client '{}': {}",
+                            client.name,
+                            e
+                        ),
+                    }
+                } else {
+                    info!("ZFS dataset {} does not exist", dataset_name);
                 }
-            } else {
-                info!("ZFS dataset {} does not exist", dataset_name);
             }
         }
     }
 
     // Delete the client from the database
+    tracing::info!("DELETE CLIENT - About to delete from database: {}", id);
     manager
         .delete(&id)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|e| {
+            tracing::error!("DELETE CLIENT - Database deletion failed: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    
+    tracing::info!("DELETE CLIENT - Successfully deleted from database: {}", id);
 
     // Refresh client IPs cache
     if let Err(e) = state.refresh_client_ips().await {
@@ -635,14 +644,16 @@ pub async fn delete_client(
         let dhcp_service =
             crate::services::DhcpService::new(settings.clone(), state.db_pool.clone());
         if let Err(e) = dhcp_service.generate_client_configs().await {
-            tracing::warn!("Failed to regenerate DHCP client config: {}", e);
+            tracing::error!("Failed to regenerate DHCP client config: {}", e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
         } else {
             info!("DHCP client configuration regenerated after deleting client");
         }
 
         // Reload DHCP service to apply changes
         if let Err(e) = dhcp_service.reload().await {
-            tracing::warn!("Failed to reload DHCP service: {}", e);
+            tracing::error!("Failed to reload DHCP service: {}", e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
         } else {
             info!("DHCP service reloaded successfully after deleting client");
         }

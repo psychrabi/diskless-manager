@@ -148,7 +148,7 @@ const ClientFormModal = ({ client, masters, isOpen, onClose, refresh }) => {
           <option value="">Use master directly</option>
           {masters?.find((m) => m.name === selectedMaster)
             ?.snapshots?.map((snap) => (
-              <option key={snap.name} value={snap.name}>
+              <option key={snap.name} value={`${selectedMaster}@${snap.name}`}>
                 {snap.name} ({snap.created}, {snap.size})
               </option>
             ))}

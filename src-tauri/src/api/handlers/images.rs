@@ -372,3 +372,180 @@ pub async fn verify_image(
     log::info!("Image '{}' verification result: {}", id, is_valid);
     Ok(Json(serde_json::json!({ "valid": is_valid })))
 }
+
+pub async fn delete_snapshot(
+    State(state): State<AppState>,
+    Path((master_name, snapshot_name)): Path<(String, String)>,
+) -> Result<(), StatusCode> {
+    log::info!(
+        "Received delete snapshot request for master '{}', snapshot '{}'",
+        master_name,
+        snapshot_name
+    );
+    let settings = state.settings.read().await;
+    let manager = ImageManager::new(
+        state.db_pool.clone(),
+        settings.storage.images_dir.clone(),
+        settings.storage.snapshots_dir.clone(),
+    );
+
+    // Get all images to find the master and snapshot
+    let images = manager
+        .list()
+        .await
+        .map_err(|e| {
+            log::error!("Failed to list images: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    // First, find the master image by name (could be ID or name)
+    let master = images
+        .iter()
+        .find(|img| img.id == master_name || img.name == master_name)
+        .ok_or_else(|| {
+            log::error!("Master image '{}' not found", master_name);
+            StatusCode::NOT_FOUND
+        })?;
+
+    log::info!("Found master image with id: {}", master.id);
+
+    // Find the snapshot by name and parent_id
+    let snapshot = images
+        .iter()
+        .find(|img| {
+            img.name == snapshot_name && img.parent_id.as_ref() == Some(&master.id)
+        })
+        .ok_or_else(|| {
+            log::error!(
+                "Snapshot '{}' not found for master '{}'",
+                snapshot_name,
+                master_name
+            );
+            StatusCode::NOT_FOUND
+        })?;
+
+    log::info!("Found snapshot with id: {}", snapshot.id);
+
+    // Delete the snapshot using its ID
+    manager
+        .delete(&snapshot.id, false)
+        .await
+        .map_err(|e| {
+            log::error!("Failed to delete snapshot '{}': {}", snapshot_name, e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    log::info!("Successfully deleted snapshot '{}'", snapshot_name);
+    Ok(())
+}
+
+pub async fn rollback_snapshot(
+    State(state): State<AppState>,
+    Path((master_name, snapshot_name)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    log::info!(
+        "Received rollback snapshot request for master '{}', snapshot '{}'",
+        master_name,
+        snapshot_name
+    );
+    let settings = state.settings.read().await;
+    let manager = ImageManager::new(
+        state.db_pool.clone(),
+        settings.storage.images_dir.clone(),
+        settings.storage.snapshots_dir.clone(),
+    );
+
+    // Get all images to find the master and snapshot
+    let images = manager
+        .list()
+        .await
+        .map_err(|e| {
+            log::error!("Failed to list images: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    // First, find the master image by name (could be ID or name)
+    let master = images
+        .iter()
+        .find(|img| img.id == master_name || img.name == master_name)
+        .ok_or_else(|| {
+            log::error!("Master image '{}' not found", master_name);
+            StatusCode::NOT_FOUND
+        })?;
+
+    log::info!("Found master image: {} (id: {})", master.name, master.id);
+
+    // Find the target snapshot to get its creation time
+    let target_snapshot = images
+        .iter()
+        .find(|img| {
+            img.name == snapshot_name && img.parent_id.as_ref() == Some(&master.id)
+        })
+        .ok_or_else(|| {
+            log::error!(
+                "Snapshot '{}' not found for master '{}'",
+                snapshot_name,
+                master_name
+            );
+            StatusCode::NOT_FOUND
+        })?;
+
+    log::info!("Target snapshot created at: {}", target_snapshot.created_at);
+
+    // Find all snapshots newer than the target snapshot (will be destroyed by rollback -r)
+    let newer_snapshots: Vec<String> = images
+        .iter()
+        .filter(|img| {
+            img.parent_id.as_ref() == Some(&master.id)
+                && img.created_at > target_snapshot.created_at
+        })
+        .map(|img| img.id.clone())
+        .collect();
+
+    log::info!(
+        "Found {} newer snapshots that will be destroyed by rollback",
+        newer_snapshots.len()
+    );
+
+    // Construct the full ZFS snapshot path
+    let snapshot_full_path = format!("{}@{}", master.name, snapshot_name);
+    log::info!("Full ZFS snapshot path: {}", snapshot_full_path);
+
+    // Perform the ZFS rollback (destroys newer snapshots and their clones)
+    use crate::cmd::run_command;
+    run_command(&["zfs", "rollback", "-r", &snapshot_full_path])
+        .map_err(|e| {
+            log::error!("Failed to rollback snapshot '{}': {}", snapshot_full_path, e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    log::info!("Successfully rolled back to snapshot '{}'", snapshot_name);
+
+    // Delete newer snapshots from database
+    if !newer_snapshots.is_empty() {
+        let placeholders = newer_snapshots.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let query = format!("DELETE FROM images WHERE id IN ({})", placeholders);
+        
+        let mut query_builder = sqlx::query(&query);
+        for id in &newer_snapshots {
+            query_builder = query_builder.bind(id);
+        }
+        
+        query_builder
+            .execute(&state.db_pool)
+            .await
+            .map_err(|e| {
+                log::error!("Failed to delete newer snapshots from database: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
+        log::info!(
+            "Deleted {} newer snapshots from database",
+            newer_snapshots.len()
+        );
+    }
+    
+    Ok(Json(serde_json::json!({
+        "message": format!("Successfully rolled back to snapshot '{}' and removed {} newer snapshots", snapshot_name, newer_snapshots.len())
+    })))
+}

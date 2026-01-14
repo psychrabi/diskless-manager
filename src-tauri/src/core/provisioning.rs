@@ -235,7 +235,7 @@ pub async fn add_client_provisioning(
     // Step 1: Create client image (ZFS clone or use master directly)
     let mut used_master_directly = false;
     let clone_result = if !snapshot.is_empty() {
-        // Use provided snapshot
+        // Use provided snapshot (full ZFS path: master@snapshot_name)
         run_command(&["zfs", "clone", &snapshot, &paths["clone"]])
     } else {
         // Use master volume directly

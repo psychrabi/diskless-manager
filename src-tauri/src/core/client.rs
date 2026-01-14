@@ -370,12 +370,46 @@ impl ClientManager {
     pub async fn delete(&self, id: &str) -> anyhow::Result<()> {
         let client = self.get(id).await?;
 
+        // Delete all related records first (foreign key constraints)
+        // Order matters - delete child records before parent
+        
+        // Delete boot logs
+        sqlx::query("DELETE FROM boot_logs WHERE client_id = ?")
+            .bind(&client.id)
+            .execute(&self.pool)
+            .await?;
+
+        // Delete control operations
+        sqlx::query("DELETE FROM control_operations WHERE client_id = ?")
+            .bind(&client.id)
+            .execute(&self.pool)
+            .await?;
+
+        // Delete error logs
+        sqlx::query("DELETE FROM error_logs WHERE client_id = ?")
+            .bind(&client.id)
+            .execute(&self.pool)
+            .await?;
+
+        // Delete scheduled operations
+        sqlx::query("DELETE FROM scheduled_operations WHERE client_id = ?")
+            .bind(&client.id)
+            .execute(&self.pool)
+            .await?;
+
+        // Delete OS type cache
+        sqlx::query("DELETE FROM os_type_cache WHERE client_id = ?")
+            .bind(&client.id)
+            .execute(&self.pool)
+            .await?;
+
+        // Finally, delete the client
         sqlx::query("DELETE FROM clients WHERE id = ?")
             .bind(&client.id)
             .execute(&self.pool)
             .await?;
 
-        info!("Client '{}' deleted", client.name);
+        info!("Client '{}' and all related records deleted", client.name);
         Ok(())
     }
 
