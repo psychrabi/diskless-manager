@@ -213,6 +213,12 @@ pub async fn run() {
             // Version commands
             commands::versions::list_versions,
             commands::versions::get_version_history,
+            // User management commands
+            commands::users::list_users,
+            commands::users::create_user,
+            commands::users::update_user,
+            commands::users::update_user_password,
+            commands::users::delete_user,
         ])
         .setup(|app| {
             info!("Application startup");

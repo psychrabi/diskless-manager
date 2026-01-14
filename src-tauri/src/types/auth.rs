@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 /// User structure
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
 pub struct User {
     pub id: String,
     pub username: String,

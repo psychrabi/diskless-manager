@@ -34,6 +34,9 @@ use crate::api::handlers::{
         get_system_info, get_zfs_arcstat, initialize_server, save_settings,
         setup_privileged_access,
     },
+    users::{
+        create_user, delete_user, get_user, list_users, update_user, update_user_password,
+    },
     ws::ws_metrics_handler,
     zfs::{create_dataset, delete_dataset, get_zpool_stats, list_datasets, list_zpools},
 };
@@ -148,6 +151,13 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route("/api/logs", get(get_logs).delete(clear_logs))
         // License routes (auth required)
         .route("/api/license/activate", post(activate_license_handler))
+        // User management routes (auth required, admin only)
+        .route("/api/users", get(list_users).post(create_user))
+        .route(
+            "/api/users/{id}",
+            get(get_user).put(update_user).delete(delete_user),
+        )
+        .route("/api/users/{id}/password", put(update_user_password))
         .with_state(state.clone())
         .layer(axum::middleware::from_fn_with_state(state.clone(), require_auth));
 

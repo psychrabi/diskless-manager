@@ -53,23 +53,42 @@ const InitialSetup = () => {
 
   const onSubmit = async (data) => {
     try {
-      // Call the update_admin_password API endpoint
-      await updateAdminPassword(data.password);
+      // Try to update password with default password first
+      try {
+        await updateAdminPassword({
+          old_password: "admin123",
+          new_password: data.password
+        });
+        console.log("Password updated successfully");
+      } catch (passwordError) {
+        // Password might already be changed, try with the new password as old
+        console.log("Default password failed, password might already be set");
+        try {
+          await updateAdminPassword({
+            old_password: data.password,
+            new_password: data.password
+          });
+        } catch (secondError) {
+          // Ignore - password is likely already set correctly
+          console.log("Password already set, proceeding to login");
+        }
+      }
 
-      // Now attempt to log in with the newly created admin credentials
+      // Now attempt to log in with the password
       const loginResponse = await login(data.username, data.password);
 
       // Set auth context immediately so ProtectedRoute sees it
       setAuth(loginResponse.user, loginResponse.token);
       success(
-        "User Account Created",
-        "Admin user created and logged in successfully"
+        "Setup Complete",
+        "Successfully logged in to Diskless Manager"
       );
       navigate("/");
     } catch (e) {
+      console.error("Setup error:", e);
       const errorMessage = e instanceof Error ? e.message : "An unknown error occurred";
       error(
-        "User Account Creation Failed",
+        "Setup Failed",
         errorMessage
       );
       reset({ password: "", confirmPassword: "" }); // Clear password fields on error

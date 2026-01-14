@@ -9,5 +9,6 @@ pub mod license;
 pub mod logs;
 pub mod services;
 pub mod system;
+pub mod users;
 pub mod zfs;
 pub mod ws;

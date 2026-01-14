@@ -248,39 +248,23 @@ async function apiRequest(endpoint, options = {}) {
 // ============================================================================
 
 export async function login(username, password) {
-  const response = await fetch("http://127.0.0.1:8080/api/auth/login", {
+  const data = await apiRequest("/api/auth/login", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
     body: JSON.stringify({ username, password }),
   });
 
-  if (!response.ok) {
-    const errorMsg = `Login failed: ${response.status} ${response.statusText}`;
-    throw new Error(errorMsg);
-  }
-
-  const data = await response.json();
   setAuthToken(data.token);
   return data;
 }
 
 export async function logout() {
-  const response = await fetch("http://127.0.0.1:8080/api/auth/logout", {
+  const data = await apiRequest("/api/auth/logout", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
   });
-
-  if (!response.ok) {
-    throw new Error(`Logout failed: ${response.status} ${response.statusText}`);
-  }
 
   // Clear the auth token
   setAuthToken(null);
-  return response.json().catch(() => ({}));
+  return data;
 }
 
 // ============================================================================
@@ -533,10 +517,15 @@ export async function validateAuthToken() {
   });
 }
 
-export async function updateAdminPassword(newPassword) {
+export async function updateAdminPassword(passwordData) {
+  // Support both object format and legacy string format
+  const body = typeof passwordData === 'string'
+    ? { new_password: passwordData }
+    : passwordData;
+
   return apiRequest("/api/auth/admin/password", {
     method: "PUT",
-    body: JSON.stringify({ new_password: newPassword }),
+    body: JSON.stringify(body),
   });
 }
 
@@ -826,4 +815,44 @@ export async function getScheduledOperations(filters = {}) {
   if (filters.status) params.append("status", filters.status);
 
   return apiRequest(`/api/scheduled-operations?${params.toString()}`);
+}
+
+// ============================================================================
+// User Management Commands
+// ============================================================================
+
+
+export async function listUsers() {
+  return apiRequest("/api/users");
+}
+
+export async function getUser(userId) {
+  return apiRequest(`/api/users/${userId}`);
+}
+
+export async function createUser(userData) {
+  return apiRequest("/api/users", {
+    method: "POST",
+    body: JSON.stringify(userData),
+  });
+}
+
+export async function updateUser(userId, updates) {
+  return apiRequest(`/api/users/${userId}`, {
+    method: "PUT",
+    body: JSON.stringify(updates),
+  });
+}
+
+export async function updateUserPassword(userId, password) {
+  return apiRequest(`/api/users/${userId}/password`, {
+    method: "PUT",
+    body: JSON.stringify({ password }),
+  });
+}
+
+export async function deleteUser(userId) {
+  return apiRequest(`/api/users/${userId}`, {
+    method: "DELETE",
+  });
 }

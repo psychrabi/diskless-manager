@@ -268,7 +268,10 @@ export const useSettings = () => {
     async (oldPassword, newPassword) => {
       setLoading(true);
       try {
-        const response = await api.updateAdminPassword(newPassword);
+        const response = await api.updateAdminPassword({
+          old_password: oldPassword,
+          new_password: newPassword
+        });
         if (response) success("Admin Password", response.message || response);
         return true;
       } catch (err) {

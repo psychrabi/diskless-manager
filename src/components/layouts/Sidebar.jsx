@@ -14,7 +14,8 @@ import {
   Power,
   Settings,
   Shield,
-  SquareLibrary,
+  SquareLibrary,  
+  Users2,
 } from "lucide-react";
 import { NavLink, useNavigate } from "react-router-dom";
 
@@ -32,6 +33,8 @@ const menuItems = [
     label: "Application Settings",
     icon: Settings,
   },
+    { id: "users", to: "/users", label: "Users", icon: Users2 },
+
   { id: "logs", to: "/logs", label: "Logs", icon: File },
 ];
 

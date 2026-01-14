@@ -259,6 +259,23 @@ impl AppState {
         .execute(pool)
         .await?;
 
+        // Users table
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                username TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'user',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                last_login TEXT
+            )
+            "#,
+        )
+        .execute(pool)
+        .await?;
+
         // Create indexes
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_clients_mac ON clients(mac)")
             .execute(pool)
@@ -287,6 +304,49 @@ impl AppState {
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_scheduled_ops_client ON scheduled_operations(client_id)")
             .execute(pool)
             .await?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
+            .execute(pool)
+            .await?;
+
+        // Seed default admin user if no users exist
+        Self::seed_default_admin(pool).await?;
+
+        Ok(())
+    }
+
+    /// Seed default admin user if no users exist
+    async fn seed_default_admin(pool: &SqlitePool) -> anyhow::Result<()> {
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+            .fetch_one(pool)
+            .await?;
+
+        if count == 0 {
+            use bcrypt::{hash, DEFAULT_COST};
+            use chrono::Utc;
+            use uuid::Uuid;
+
+            let password_hash = hash("admin123", DEFAULT_COST)?;
+            let now = Utc::now().to_rfc3339();
+            let id = Uuid::new_v4().to_string();
+
+            sqlx::query(
+                r#"
+                INSERT INTO users (id, username, password_hash, role, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                "#,
+            )
+            .bind(&id)
+            .bind("admin")
+            .bind(&password_hash)
+            .bind("admin")
+            .bind(&now)
+            .bind(&now)
+            .execute(pool)
+            .await?;
+
+            info!("Default admin user created (username: admin, password: admin123)");
+        }
 
         Ok(())
     }

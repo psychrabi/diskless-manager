@@ -124,7 +124,7 @@ const ClientTable = ({ handleClientContextMenu }) => {
   };
 
   return (
-    <div className="bg-base-100 rounded-lg h-[calc(100vh-20rem)] w-full border border-base-200">
+    <div className="bg-base-100 rounded-lg h-[calc(100vh-27.5rem)] w-full border border-base-200">
       {clients.length === 0 ? (
         <div className="p-4">
           <table className="table w-full">

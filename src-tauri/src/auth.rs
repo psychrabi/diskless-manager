@@ -4,7 +4,7 @@ use bcrypt::{hash, verify, DEFAULT_COST};
 use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use log::{info, warn};
-use std::collections::HashMap;
+use sqlx::SqlitePool;
 use std::env;
 
 use crate::types::{AuthError, Claims, LoginRequest, LoginResponse, UserResponse};
@@ -24,53 +24,57 @@ lazy_static::lazy_static! {
             })
             .into_bytes()
     };
-}
-
-// In a real application, this would be stored in a database
-lazy_static::lazy_static! {
-    pub static ref USERS: HashMap<String, User> = {
-        let mut m = HashMap::new();
-        // Default admin user (password: admin123)
-        let password_hash = hash("admin123", DEFAULT_COST).expect("Failed to hash default admin password");
-        m.insert(
-            "admin".to_string(),
-            User {
-                id: "1".to_string(),
-                username: "admin".to_string(),
-                password_hash,
-                role: "admin".to_string(),
-            },
-        );
-        m
-    };
     static ref SECRET_ENCODING_KEY: EncodingKey = EncodingKey::from_secret(&SECRET_KEY);
     static ref SECRET_DECODING_KEY: DecodingKey = DecodingKey::from_secret(&SECRET_KEY);
 }
 
-pub fn authenticate_user(username: &str, password: &str) -> Result<LoginResponse, AuthError> {
-    // Find user by username in the in-memory store (base data)
-    let user = USERS.get(username).ok_or_else(|| AuthError {
+/// Fetch user from database by username
+async fn get_user_by_username(pool: &SqlitePool, username: &str) -> Result<User, AuthError> {
+    sqlx::query_as::<_, User>(
+        r#"
+        SELECT id, username, password_hash, role
+        FROM users
+        WHERE username = ?
+        "#,
+    )
+    .bind(username)
+    .fetch_one(pool)
+    .await
+    .map_err(|_| AuthError {
         message: "Invalid username or password".to_string(),
+    })
+}
+
+/// Update last login timestamp for user
+async fn update_last_login(pool: &SqlitePool, user_id: &str) -> Result<(), AuthError> {
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        r#"
+        UPDATE users
+        SET last_login = ?
+        WHERE id = ?
+        "#,
+    )
+    .bind(&now)
+    .bind(user_id)
+    .execute(pool)
+    .await
+    .map_err(|e| AuthError {
+        message: format!("Failed to update last login: {}", e),
     })?;
+    Ok(())
+}
 
-    // Determine which password hash to use:
-    // - If username is "admin" and a hashed admin_password exists in config.json, use that.
-    // - Otherwise use the password_hash from the USERS map.
-    let mut password_hash = user.password_hash.clone();
-    if username == "admin" {
-        let cfg = crate::config::get_config();
-        if let Some(obj) = cfg.settings.as_object() {
-            if let Some(val) = obj.get("admin_password") {
-                if let Some(s) = val.as_str() {
-                    // use configured admin password hash
-                    password_hash = s.to_string();
-                }
-            }
-        }
-    }
+pub async fn authenticate_user(
+    pool: &SqlitePool,
+    username: &str,
+    password: &str,
+) -> Result<LoginResponse, AuthError> {
+    // Fetch user from database
+    let user = get_user_by_username(pool, username).await?;
 
-    // Verify password against the selected hash
-    let valid = verify(password, &password_hash).map_err(|_| AuthError {
+    // Verify password against the hash from database
+    let valid = verify(password, &user.password_hash).map_err(|_| AuthError {
         message: "Invalid username or password".to_string(),
     })?;
 
@@ -79,6 +83,9 @@ pub fn authenticate_user(username: &str, password: &str) -> Result<LoginResponse
             message: "Invalid username or password".to_string(),
         });
     }
+
+    // Update last login timestamp
+    let _ = update_last_login(pool, &user.id).await;
 
     // Generate JWT token
     let expiration = Utc::now()
@@ -131,8 +138,8 @@ pub fn validate_token(token: &str) -> Result<Claims, AuthError> {
 
 // Tauri command for login
 #[tauri::command]
-pub fn login(
-    _state: tauri::State<'_, crate::state::AppState>,
+pub async fn login(
+    state: tauri::State<'_, crate::state::AppState>,
     request: LoginRequest,
 ) -> Result<LoginResponse, AuthError> {
     let username = request.username.clone();
@@ -143,12 +150,11 @@ pub fn login(
     // gate login behind activated license
     // ensure_license_valid()?;
 
-    let auth_result = authenticate_user(&username, &password);
+    let auth_result = authenticate_user(&state.db_pool, &username, &password).await;
 
     match &auth_result {
         Ok(response) => {
             info!("login success: user={}", username);
-            // response is a &LoginResponse — return an owned value
             Ok(response.clone())
         }
         Err(_) => {
@@ -182,28 +188,12 @@ pub async fn update_admin_password(
         });
     }
 
-    // determine current admin password hash (config override or default USERS)
-    let mut current_hash = None;
-    let cfg = crate::config::get_config();
-    if let Some(obj) = cfg.settings.as_object() {
-        if let Some(val) = obj.get("admin_password") {
-            if let Some(s) = val.as_str() {
-                current_hash = Some(s.to_string());
-            }
-        }
-    }
-    if current_hash.is_none() {
-        if let Some(u) = USERS.get("admin") {
-            current_hash = Some(u.password_hash.clone());
-        }
-    }
-    let current_hash = current_hash.ok_or_else(|| AuthError {
-        message: "No admin password available to verify against".to_string(),
-    })?;
+    // Fetch current user from database
+    let user = get_user_by_username(&state.db_pool, &claims.username).await?;
 
     // verify provided old_password
-    let valid = verify(old_password, &current_hash).map_err(|_| AuthError {
-        message: "Failed to verify current admin password".to_string(),
+    let valid = verify(old_password, &user.password_hash).map_err(|_| AuthError {
+        message: "Failed to verify current password".to_string(),
     })?;
     if !valid {
         return Err(AuthError {
@@ -211,27 +201,29 @@ pub async fn update_admin_password(
         });
     }
 
-    // hash the new password server-side
+    // hash the new password
     let hashed = hash(new_password, DEFAULT_COST).map_err(|e| AuthError {
         message: format!("Failed to hash password: {}", e),
     })?;
 
-    // update config with the hashed password
-    let mut cfg = crate::config::get_config();
-    let mut settings = cfg.settings.as_object().cloned().unwrap_or_default();
-    settings.insert(
-        "admin_password".to_string(),
-        serde_json::to_value(&hashed).map_err(|e| AuthError {
-            message: format!("Failed to serialize password: {}", e),
-        })?,
-    );
-    cfg.settings = serde_json::Value::Object(settings);
-    crate::config::write_config(&state.db_pool, &cfg)
-        .await
-        .map_err(|e| AuthError {
-            message: format!("Failed to save admin password: {}", e),
-        })?;
+    // update password in database
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        r#"
+        UPDATE users
+        SET password_hash = ?, updated_at = ?
+        WHERE id = ?
+        "#,
+    )
+    .bind(&hashed)
+    .bind(&now)
+    .bind(&user.id)
+    .execute(&state.db_pool)
+    .await
+    .map_err(|e| AuthError {
+        message: format!("Failed to update password: {}", e),
+    })?;
 
-    info!("admin password updated");
-    Ok("Admin password updated successfully".to_string())
+    info!("password updated for user: {}", claims.username);
+    Ok("Password updated successfully".to_string())
 }

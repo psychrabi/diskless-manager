@@ -1,3 +1,4 @@
+import UserManagement from "@/components/UserMangement";
 import PublicRoute from "@/components/Authentication/PublicRoute";
 import PublicLayout from "@/components/layouts/PublicLayout";
 import { lazy } from "react";
@@ -84,6 +85,10 @@ export const router = createHashRouter([
       {
         path: "/application-settings",
         element: <ApplicationSettings />,
+      },
+            {
+        path: "/users",
+        element: <UserManagement />,
       },
       {
         path: "/logs",

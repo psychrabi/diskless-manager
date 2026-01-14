@@ -12,13 +12,16 @@ use crate::{
     state::AppState,
 };
 
-pub async fn login(Json(request): Json<LoginRequest>) -> Result<Json<LoginResponse>, StatusCode> {
+pub async fn login(
+    State(state): State<AppState>,
+    Json(request): Json<LoginRequest>,
+) -> Result<Json<LoginResponse>, StatusCode> {
     let username = request.username.clone();
     let password = request.password.clone();
 
     info!("login attempt: user={}", username);
 
-    let auth_result = authenticate_user(&username, &password);
+    let auth_result = authenticate_user(&state.db_pool, &username, &password).await;
 
     match auth_result {
         Ok(response) => {
@@ -76,30 +79,22 @@ pub async fn update_admin_password(
     Json(request): Json<UpdateAdminPasswordRequest>,
 ) -> Result<Json<UpdateAdminPasswordResponse>, StatusCode> {
     use bcrypt::{hash, verify, DEFAULT_COST};
+    use chrono::Utc;
 
-    // Get current admin password hash from config
-    let cfg = crate::config::get_config();
-    let mut current_hash = None;
-    
-    if let Some(obj) = cfg.settings.as_object() {
-        if let Some(val) = obj.get("admin_password") {
-            if let Some(s) = val.as_str() {
-                current_hash = Some(s.to_string());
-            }
-        }
-    }
-
-    // Fallback to default admin user hash if not in config
-    if current_hash.is_none() {
-        if let Some(u) = crate::auth::USERS.get("admin") {
-            current_hash = Some(u.password_hash.clone());
-        }
-    }
-
-    let current_hash = current_hash.ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    // Fetch admin user from database
+    let admin_user = sqlx::query_as::<_, crate::types::User>(
+        r#"
+        SELECT id, username, password_hash, role
+        FROM users
+        WHERE username = 'admin'
+        "#,
+    )
+    .fetch_one(&state.db_pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // Verify old password
-    let valid = verify(&request.old_password, &current_hash)
+    let valid = verify(&request.old_password, &admin_user.password_hash)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     if !valid {
@@ -110,19 +105,21 @@ pub async fn update_admin_password(
     let hashed = hash(&request.new_password, DEFAULT_COST)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    // Update config with new password hash
-    let mut cfg = crate::config::get_config();
-    let mut settings = cfg.settings.as_object().cloned().unwrap_or_default();
-    settings.insert(
-        "admin_password".to_string(),
-        serde_json::to_value(&hashed).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
-    );
-    cfg.settings = serde_json::Value::Object(settings);
-
-    // Write config to database
-    crate::config::write_config(&state.db_pool, &cfg)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // Update password in database
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        r#"
+        UPDATE users
+        SET password_hash = ?, updated_at = ?
+        WHERE id = ?
+        "#,
+    )
+    .bind(&hashed)
+    .bind(&now)
+    .bind(&admin_user.id)
+    .execute(&state.db_pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     info!("admin password updated");
     Ok(Json(UpdateAdminPasswordResponse {
@@ -135,18 +132,16 @@ pub struct AdminExistsResponse {
     pub exists: bool,
 }
 
-pub async fn check_admin_exists() -> Result<Json<AdminExistsResponse>, StatusCode> {
-    // Check if admin user exists in the system
-    let cfg = crate::config::get_config();
-    let has_admin_password = cfg
-        .settings
-        .as_object()
-        .and_then(|obj| obj.get("admin_password"))
-        .and_then(|val| val.as_str())
-        .is_some();
+pub async fn check_admin_exists(State(state): State<AppState>) -> Result<Json<AdminExistsResponse>, StatusCode> {
+    // Check if any admin user exists in the database
+    let count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*) FROM users WHERE role = 'admin'
+        "#,
+    )
+    .fetch_one(&state.db_pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    // Admin exists if either configured password exists or default admin user exists
-    let exists = has_admin_password || crate::auth::USERS.contains_key("admin");
-
-    Ok(Json(AdminExistsResponse { exists }))
+    Ok(Json(AdminExistsResponse { exists: count > 0 }))
 }
