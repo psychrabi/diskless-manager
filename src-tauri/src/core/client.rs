@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqlitePool;
 use uuid::Uuid;
 
+/// Core Client type with DateTime fields for business logic
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Client {
     pub id: String,
@@ -95,6 +96,36 @@ impl Client {
             use_game_disk: req.use_game_disk,
         })
     }
+
+    /// Check if client is online
+    pub fn is_online(&self) -> bool {
+        matches!(self.status.as_deref(), Some("Online"))
+    }
+
+    /// Check if client is offline
+    pub fn is_offline(&self) -> bool {
+        matches!(self.status.as_deref(), Some("Offline"))
+    }
+
+    /// Check if client is in super mode
+    pub fn is_super_mode(&self) -> bool {
+        matches!(self.mode.as_deref(), Some("super"))
+    }
+
+    /// Get normalized MAC address (uppercase, colon-separated)
+    pub fn normalized_mac(&self) -> String {
+        self.mac.to_uppercase()
+    }
+
+    /// Check if client has a master image assigned
+    pub fn has_master(&self) -> bool {
+        !self.master.is_empty()
+    }
+
+    /// Check if client has a snapshot assigned
+    pub fn has_snapshot(&self) -> bool {
+        self.snapshot.is_some() && !self.snapshot.as_ref().map_or(false, |s| s.is_empty())
+    }
 }
 
 fn normalize_mac(mac: &str) -> anyhow::Result<String> {
@@ -149,6 +180,43 @@ struct ClientRow {
 impl ClientManager {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
+    }
+
+    /// Public helper function to upsert a client (INSERT OR REPLACE)
+    /// Used by create(), update() methods and config.rs
+    pub async fn upsert_client(pool: &SqlitePool, client: &Client) -> anyhow::Result<()> {
+        sqlx::query(
+            r#"
+            INSERT OR REPLACE INTO clients (
+                id, name, mac, ip, master, snapshot, block_store, target_iqn,
+                writeback, block_device, status, mode, pxe_mode, keep_writeback,
+                use_game_disk, created_at, last_modified, enabled, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(&client.id)
+        .bind(&client.name)
+        .bind(&client.mac)
+        .bind(&client.ip)
+        .bind(&client.master)
+        .bind(&client.snapshot)
+        .bind(&client.block_store)
+        .bind(&client.target_iqn)
+        .bind(&client.writeback)
+        .bind(&client.block_device)
+        .bind(&client.status)
+        .bind(&client.mode)
+        .bind(client.pxe_mode.as_ref().unwrap_or(&"uefi".to_string()))
+        .bind(client.keep_writeback.unwrap_or(true))
+        .bind(client.use_game_disk.unwrap_or(false))
+        .bind(client.created_at.to_rfc3339())
+        .bind(&client.last_modified)
+        .bind(client.enabled)
+        .bind(client.updated_at.to_rfc3339())
+        .execute(pool)
+        .await?;
+        
+        Ok(())
     }
 
     pub async fn list(&self) -> anyhow::Result<Vec<Client>> {
@@ -256,34 +324,7 @@ impl ClientManager {
     pub async fn create(&self, req: CreateClientRequest) -> anyhow::Result<Client> {
         let client = Client::new(req)?;
 
-        sqlx::query(
-            r#"
-            INSERT INTO clients (id, name, mac, ip, master, enabled, created_at, updated_at,
-                                snapshot, block_store, target_iqn, writeback, last_modified,
-                                block_device, status, mode, keep_writeback, use_game_disk)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            "#,
-        )
-        .bind(&client.id)
-        .bind(&client.name)
-        .bind(&client.mac)
-        .bind(&client.ip)
-        .bind(&client.master)
-        .bind(client.enabled)
-        .bind(client.created_at.to_rfc3339())
-        .bind(client.updated_at.to_rfc3339())
-        .bind(&client.snapshot)
-        .bind(&client.block_store)
-        .bind(&client.target_iqn)
-        .bind(&client.writeback)
-        .bind(&client.last_modified)
-        .bind(&client.block_device)
-        .bind(&client.status)
-        .bind(&client.mode)
-        .bind(client.keep_writeback)
-        .bind(client.use_game_disk)
-        .execute(&self.pool)
-        .await?;
+        Self::upsert_client(&self.pool, &client).await?;
 
         info!("Client '{}' created with MAC {}", client.name, client.mac);
         Ok(client)
@@ -320,34 +361,7 @@ impl ClientManager {
         client.updated_at = Utc::now();
         client.last_modified = Some(client.updated_at.format("%Y-%m-%d %H:%M:%S").to_string());
 
-        sqlx::query(
-            r#"
-            UPDATE clients
-            SET name = ?, mac = ?, ip = ?, master = ?, snapshot = ?, block_store = ?, target_iqn = ?,
-                writeback = ?, last_modified = ?, block_device = ?, status = ?, mode = ?,
-                keep_writeback = ?, use_game_disk = ?, enabled = ?, updated_at = ?
-            WHERE id = ?
-            "#,
-        )
-        .bind(&client.name)
-        .bind(&client.mac)
-        .bind(&client.ip)
-        .bind(&client.master)
-        .bind(&client.snapshot)
-        .bind(&client.block_store)
-        .bind(&client.target_iqn)
-        .bind(&client.writeback)
-        .bind(&client.last_modified)
-        .bind(&client.block_device)
-        .bind(&client.status)
-        .bind(&client.mode)
-        .bind(client.keep_writeback)
-        .bind(client.use_game_disk)
-        .bind(client.enabled)
-        .bind(client.updated_at.to_rfc3339())
-        .bind(&client.id)
-        .execute(&self.pool)
-        .await?;
+        Self::upsert_client(&self.pool, &client).await?;
 
         info!("Client '{}' updated", client.name);
         Ok(client)

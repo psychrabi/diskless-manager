@@ -82,7 +82,7 @@ pub async fn get_clients(
     })
 }
 
-async fn try_get_client(state: &AppState, id: &str) -> Option<crate::types::Client> {
+async fn try_get_client(state: &AppState, id: &str) -> Option<crate::core::client::Client> {
     // 1. Try legacy config.json
     if let Some(c) = get_client_by_id(id) {
         return Some(c);
@@ -91,25 +91,7 @@ async fn try_get_client(state: &AppState, id: &str) -> Option<crate::types::Clie
     // 2. Try SQLite database
     let manager = ClientManager::new(state.db_pool.clone());
     if let Ok(c) = manager.get(id).await {
-        return Some(crate::types::Client {
-            id: c.id,
-            name: c.name,
-            mac: c.mac,
-            ip: c.ip,
-            master: c.master,
-            snapshot: c.snapshot,
-            block_store: c.block_store,
-            target_iqn: c.target_iqn,
-            writeback: c.writeback,
-            created_at: Some(c.created_at.to_rfc3339()),
-            last_modified: c.last_modified,
-            block_device: c.block_device,
-            status: c.status,
-            mode: c.mode,
-            pxe_mode: c.pxe_mode,
-            keep_writeback: c.keep_writeback,
-            use_game_disk: c.use_game_disk,
-        });
+        return Some(c);
     }
 
     None

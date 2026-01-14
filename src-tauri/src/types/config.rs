@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 /// Main configuration structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
-    pub clients: Vec<super::client::Client>,
+    pub clients: Vec<crate::core::client::Client>,
     pub masters: serde_json::Value,
     pub services: serde_json::Value,
     pub settings: serde_json::Value,

@@ -3,7 +3,7 @@ use crate::error::AppError;
 use crate::os_detector::OsDetector;
 use crate::remote_desktop_launcher::{RemoteDesktopLauncher, RemoteDesktopResponse};
 use crate::ssh_executor::SshExecutor;
-use crate::types::Client;
+use crate::core::client::Client;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;

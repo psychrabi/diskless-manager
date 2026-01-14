@@ -99,10 +99,12 @@ pub fn parse_zfs_list(output: &str) -> Vec<Snapshot> {
         .filter_map(|line| {
             let parts: Vec<&str> = line.split('\t').collect();
             if parts.len() == 3 {
+                let used_str = parts[2].trim().to_string();
                 Some(Snapshot {
                     name: parts[0].trim().to_string(),
                     created: parts[1].trim().to_string(),
-                    used: parts[2].trim().to_string(),
+                    used: used_str.clone(),
+                    size: Some(used_str),
                 })
             } else {
                 None

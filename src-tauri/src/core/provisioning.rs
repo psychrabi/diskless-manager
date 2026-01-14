@@ -1,10 +1,10 @@
 use crate::cmd::{run_command, run_command_async, run_command_output_no_sudo};
 use crate::config::{get_config, get_zpool_name};
+use crate::core::client::Client;
 use crate::dhcp::{create_dhcp_entry, update_dhcp_config};
 use crate::error::AppError;
 use crate::iscsi::{cleanup_iscsi_target, setup_iscsi_target, setup_iscsi_target_with_game_disks};
 use crate::state::AppState;
-use crate::types::Client;
 use crate::zfs::{get_writeback_or_default_dataset, zfs_destroy};
 use chrono::Local;
 use log::{error, info, warn};
@@ -130,13 +130,16 @@ pub async fn add_client_provisioning(
 ) -> Result<serde_json::Value, AppError> {
     // If no master image is selected, only save to config files
     if master.is_empty() {
-        let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        let now = chrono::Utc::now();
         let client_data = Client {
             id: name.clone(),
             name: name.to_uppercase(),
             mac: mac.clone(),
             ip: ip.clone(),
             master: master.clone(),
+            enabled: true,
+            created_at: now,
+            updated_at: now,
             snapshot: if snapshot.is_empty() {
                 None
             } else {
@@ -146,8 +149,7 @@ pub async fn add_client_provisioning(
             block_device: None,
             block_store: None,
             writeback: None,
-            created_at: Some(now.clone()),
-            last_modified: Some(now.clone()),
+            last_modified: Some(now.format("%Y-%m-%d %H:%M:%S").to_string()),
             status: None,
             mode: None,
             pxe_mode: Some("uefi".to_string()),
@@ -287,13 +289,16 @@ pub async fn add_client_provisioning(
     rollback_dhcp = true;
 
     // Step 4: Save client configuration to JSON file
-    let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let now = chrono::Utc::now();
     let client_data = Client {
         id: name.clone(),
         name: name.to_uppercase(),
         mac: mac.clone(),
         ip: ip.clone(),
         master: master.clone(),
+        enabled: true,
+        created_at: now,
+        updated_at: now,
         snapshot: if used_master_directly {
             None
         } else {
@@ -307,8 +312,7 @@ pub async fn add_client_provisioning(
         } else {
             Some(paths["clone"].clone())
         },
-        created_at: Some(now.clone()),
-        last_modified: Some(now.clone()),
+        last_modified: Some(now.format("%Y-%m-%d %H:%M:%S").to_string()),
         status: None,
         mode: if used_master_directly {
             Some("super".to_string())

@@ -1,8 +1,6 @@
 import { useMasterManager } from "@/hooks/useMasterManager";
 import { RotateCcw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui";
-import { useEffect, useState } from "react";
-import * as api from "@/api/commands";
 
 const SnapshotItem = ({
   snap,
@@ -45,33 +43,9 @@ const SnapshotItem = ({
 
 export const SnapshotsList = ({ master }) => {
   const { handleDeleteSnapshot, handleRollbackSnapshot } = useMasterManager();
-  const [snapshots, setSnapshots] = useState([]);
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    const fetchSnapshots = async () => {
-      setLoading(true);
-      try {
-        console.log("Fetching snapshots for master ID:", master.id);
-        const snaps = await api.getSnapshots(master.id);
-        console.log("Snapshots received:", snaps);
-        setSnapshots(snaps || []);
-      } catch (err) {
-        console.error(`Failed to fetch snapshots for ${master.name}:`, err);
-        setSnapshots([]);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    if (master.id) {
-      fetchSnapshots();
-    }
-  }, [master.id, master.name]);
-
-  if (loading) {
-    return <p className="text-sm text-base-content/60">Loading snapshots...</p>;
-  }
+  
+  // Use snapshots from master prop if available, otherwise empty array
+  const snapshots = master.snapshots || [];
 
   if (!snapshots || snapshots.length === 0) {
     return (

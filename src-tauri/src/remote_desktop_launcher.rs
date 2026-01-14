@@ -1,7 +1,7 @@
 use crate::error::AppError;
 use crate::os_detector::OsType;
 use crate::ssh_executor::SshExecutor;
-use crate::types::Client;
+use crate::core::client::Client;
 use serde::{Deserialize, Serialize};
 use std::process::Command;
 use std::sync::Arc;

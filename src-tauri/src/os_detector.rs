@@ -1,5 +1,5 @@
 use crate::error::AppError;
-use crate::types::Client;
+use crate::core::client::Client;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 

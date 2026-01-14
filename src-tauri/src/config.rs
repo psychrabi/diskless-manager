@@ -30,68 +30,56 @@ pub fn set_config(config: &AppConfig) {
     *w = config.clone();
 }
 
+/// Helper function to insert or replace a key-value pair in app_config table
+async fn upsert_config_value(
+    pool: &sqlx::SqlitePool,
+    key: &str,
+    value: &str,
+) -> Result<(), String> {
+    sqlx::query("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)")
+        .bind(key)
+        .bind(value)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 pub async fn write_config(pool: &sqlx::SqlitePool, config: &AppConfig) -> Result<(), String> {
     set_config(config);
 
-    // 1. Persist masters, services, settings to app_config
-    sqlx::query("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)")
-        .bind("masters")
-        .bind(serde_json::to_string(&config.masters).map_err(|e| e.to_string())?)
-        .execute(pool)
-        .await
-        .map_err(|e| e.to_string())?;
+    // 1. Persist masters and services to app_config
+    upsert_config_value(
+        pool,
+        "masters",
+        &serde_json::to_string(&config.masters).map_err(|e| e.to_string())?,
+    )
+    .await?;
 
-    sqlx::query("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)")
-        .bind("services")
-        .bind(serde_json::to_string(&config.services).map_err(|e| e.to_string())?)
-        .execute(pool)
-        .await
-        .map_err(|e| e.to_string())?;
+    upsert_config_value(
+        pool,
+        "services",
+        &serde_json::to_string(&config.services).map_err(|e| e.to_string())?,
+    )
+    .await?;
 
     // 2. Persist each setting under its own key in the app_config table
     if let Some(obj) = config.settings.as_object() {
         for (k, v) in obj {
-            sqlx::query("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)")
-                .bind(k)
-                .bind(serde_json::to_string(v).map_err(|e| e.to_string())?)
-                .execute(pool)
-                .await
-                .map_err(|e| e.to_string())?;
+            upsert_config_value(
+                pool,
+                k,
+                &serde_json::to_string(v).map_err(|e| e.to_string())?,
+            )
+            .await?;
         }
     }
 
-    // 2. Persist clients (this is harder as we need to sync)
-    // For simplicity in this first pass, we'll clear and re-insert or use UPSERT
+    // 3. Persist clients using ClientManager's upsert function
     for client in &config.clients {
-        sqlx::query(
-            r#"
-            INSERT OR REPLACE INTO clients (
-                id, name, mac, ip, master, snapshot, block_store, target_iqn,
-                writeback, block_device, status, mode, pxe_mode, keep_writeback,
-                use_game_disk, created_at, last_modified
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            "#,
-        )
-        .bind(&client.id)
-        .bind(&client.name)
-        .bind(&client.mac)
-        .bind(&client.ip)
-        .bind(&client.master)
-        .bind(&client.snapshot)
-        .bind(&client.block_store)
-        .bind(&client.target_iqn)
-        .bind(&client.writeback)
-        .bind(&client.block_device)
-        .bind(&client.status)
-        .bind(&client.mode)
-        .bind(client.pxe_mode.as_ref().unwrap_or(&"uefi".to_string()))
-        .bind(client.keep_writeback.unwrap_or(true))
-        .bind(client.use_game_disk.unwrap_or(false))
-        .bind(&client.created_at)
-        .bind(&client.last_modified)
-        .execute(pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        crate::core::client::ClientManager::upsert_client(pool, client)
+            .await
+            .map_err(|e| e.to_string())?;
     }
 
     Ok(())
@@ -177,24 +165,33 @@ pub async fn read_config_db(pool: &sqlx::SqlitePool) -> Result<AppConfig, String
     .map_err(|e| e.to_string())?;
 
     for c in clients {
-        config.clients.push(crate::types::client::Client {
+        config.clients.push(crate::core::client::Client {
             id: c.id,
             name: c.name,
             mac: c.mac,
             ip: c.ip,
             master: c.master.unwrap_or_default(),
+            enabled: true, // Default to enabled
+            created_at: c.created_at
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+                .unwrap_or_else(chrono::Utc::now),
+            updated_at: c.last_modified
+                .as_ref()
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+                .unwrap_or_else(chrono::Utc::now),
             snapshot: c.snapshot,
             block_store: c.block_store,
             target_iqn: c.target_iqn,
             writeback: c.writeback,
+            last_modified: c.last_modified,
             block_device: c.block_device,
             status: c.status,
             mode: c.mode,
             pxe_mode: Some(c.pxe_mode),
             keep_writeback: Some(c.keep_writeback),
             use_game_disk: Some(c.use_game_disk),
-            created_at: c.created_at,
-            last_modified: c.last_modified,
         });
     }
 

@@ -1,11 +1,25 @@
-use crate::core::image::{CreateImageRequest, ImageManager, ImportImageRequest, ImageInfo};
+use crate::core::image::{CreateImageRequest, Image, ImageManager, ImportImageRequest, ImageInfo};
 use crate::state::AppState;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
     Json,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+
+// Helper function to convert images to snapshots for a given parent_id
+fn images_to_snapshots(images: &[Image], parent_id: &str) -> Vec<crate::types::image::Snapshot> {
+    images
+        .iter()
+        .filter(|img| img.parent_id.as_ref() == Some(&parent_id.to_string()))
+        .map(|snap| crate::types::image::Snapshot {
+            name: snap.name.clone(),
+            created: snap.created_at.to_rfc3339(),
+            used: format!("{}GB", snap.size_gb),
+            size: Some(format!("{}GB", snap.size_gb)),
+        })
+        .collect()
+}
 
 pub async fn list_images(
     State(state): State<AppState>,
@@ -24,9 +38,16 @@ pub async fn list_images(
     Ok(Json(images))
 }
 
+#[derive(Serialize)]
+pub struct MasterWithSnapshots {
+    #[serde(flatten)]
+    pub image: crate::core::image::Image,
+    pub snapshots: Vec<crate::types::image::Snapshot>,
+}
+
 pub async fn list_masters(
     State(state): State<AppState>,
-) -> Result<Json<Vec<crate::core::image::Image>>, StatusCode> {
+) -> Result<Json<Vec<MasterWithSnapshots>>, StatusCode> {
     let settings = state.settings.read().await;
     let manager = ImageManager::new(
         state.db_pool.clone(),
@@ -38,7 +59,31 @@ pub async fn list_masters(
         .list()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(images))
+
+    log::info!("list_masters: Found {} total images", images.len());
+    for img in &images {
+        log::info!("  Image: id={}, name={}, parent_id={:?}", img.id, img.name, img.parent_id);
+    }
+
+    // Separate masters (no parent_id) from snapshots (have parent_id)
+    let mut masters_with_snapshots = Vec::new();
+    
+    for image in images.iter() {
+        // Only include images that are NOT snapshots (parent_id is None)
+        if image.parent_id.is_none() {
+            // Use helper function to get snapshots for this master
+            let snapshots = images_to_snapshots(&images, &image.id);
+
+            log::info!("Master '{}' (id={}) has {} snapshots", image.name, image.id, snapshots.len());
+
+            masters_with_snapshots.push(MasterWithSnapshots {
+                image: image.clone(),
+                snapshots,
+            });
+        }
+    }
+
+    Ok(Json(masters_with_snapshots))
 }
 
 pub async fn get_image(
@@ -72,16 +117,8 @@ pub async fn get_snapshots(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    // Filter images where parent_id matches the given id
-    let snapshots: Vec<crate::types::image::Snapshot> = images
-        .into_iter()
-        .filter(|img| img.parent_id.as_ref() == Some(&id))
-        .map(|snap| crate::types::image::Snapshot {
-            name: snap.name,
-            created: snap.created_at.to_rfc3339(),
-            used: format!("{}GB", snap.size_gb),
-        })
-        .collect();
+    // Use helper function to get snapshots for the given image id
+    let snapshots = images_to_snapshots(&images, &id);
 
     Ok(Json(snapshots))
 }

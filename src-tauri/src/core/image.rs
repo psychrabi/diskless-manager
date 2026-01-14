@@ -153,6 +153,34 @@ impl ImageManager {
         }
     }
 
+    /// Helper function to insert an image into the database
+    /// This centralizes the INSERT logic to avoid repetition and errors
+    async fn insert_image(&self, image: &Image) -> anyhow::Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO images (id, name, os_type, size_gb, path, format, status, description, parent_id, checksum, is_default, created_at, updated_at) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(&image.id)
+        .bind(&image.name)
+        .bind(image.os_type.to_string())
+        .bind(image.size_gb as i64)
+        .bind(image.path.to_string_lossy().to_string())
+        .bind(image.format.to_string())
+        .bind(&image.status)
+        .bind(&image.description)
+        .bind(&image.parent_id)
+        .bind(&image.checksum)
+        .bind(if image.is_default { 1i64 } else { 0i64 })
+        .bind(image.created_at.to_rfc3339())
+        .bind(image.updated_at.to_rfc3339())
+        .execute(&self.pool)
+        .await?;
+        
+        Ok(())
+    }
+
     pub async fn list(&self) -> anyhow::Result<Vec<Image>> {
         let rows = sqlx::query_as::<
             _,
@@ -199,24 +227,52 @@ impl ImageManager {
                     created_at,
                     updated_at,
                 )| {
+                    let os_type_parsed = match os_type.parse() {
+                        Ok(v) => v,
+                        Err(e) => {
+                            log::warn!("Failed to parse os_type '{}' for image '{}': {}", os_type, name, e);
+                            return None;
+                        }
+                    };
+                    
+                    let format_parsed = match format.parse() {
+                        Ok(v) => v,
+                        Err(e) => {
+                            log::warn!("Failed to parse format '{}' for image '{}': {}", format, name, e);
+                            return None;
+                        }
+                    };
+                    
+                    let created_at_parsed = match DateTime::parse_from_rfc3339(&created_at) {
+                        Ok(v) => v.with_timezone(&Utc),
+                        Err(e) => {
+                            log::warn!("Failed to parse created_at '{}' for image '{}': {}", created_at, name, e);
+                            return None;
+                        }
+                    };
+                    
+                    let updated_at_parsed = match DateTime::parse_from_rfc3339(&updated_at) {
+                        Ok(v) => v.with_timezone(&Utc),
+                        Err(e) => {
+                            log::warn!("Failed to parse updated_at '{}' for image '{}': {}", updated_at, name, e);
+                            return None;
+                        }
+                    };
+
                     Some(Image {
                         id,
                         name,
-                        os_type: os_type.parse().ok()?,
+                        os_type: os_type_parsed,
                         size_gb: size_gb as u64,
                         path: PathBuf::from(path),
-                        format: format.parse().ok()?,
+                        format: format_parsed,
                         status,
                         description,
                         parent_id,
                         checksum,
                         is_default: is_default != 0,
-                        created_at: DateTime::parse_from_rfc3339(&created_at)
-                            .ok()?
-                            .with_timezone(&Utc),
-                        updated_at: DateTime::parse_from_rfc3339(&updated_at)
-                            .ok()?
-                            .with_timezone(&Utc),
+                        created_at: created_at_parsed,
+                        updated_at: updated_at_parsed,
                     })
                 },
             )
@@ -417,27 +473,7 @@ impl ImageManager {
             updated_at: Utc::now(),
         };
 
-        sqlx::query(
-            r#"
-            INSERT INTO images (id, name, os_type, size_gb, path, format, status, description, parent_id, checksum, is_default, created_at, updated_at) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            "#,
-        )
-        .bind(&image.id)
-        .bind(&image.name)
-        .bind(image.os_type.to_string())
-        .bind(image.size_gb as i64)
-        .bind(image.path.to_string_lossy().to_string())
-        .bind(image.format.to_string())
-        .bind(&image.status)
-        .bind(&image.description)
-        .bind(&image.parent_id)
-        .bind(&image.checksum)
-        .bind(if image.is_default { 1i64 } else { 0i64 })
-        .bind(image.created_at.to_rfc3339())
-        .bind(image.updated_at.to_rfc3339())
-        .execute(&self.pool)
-        .await?;
+        self.insert_image(&image).await?;
 
         info!(
             "Image '{}' created as ZFS volume ({} GB)",
@@ -742,27 +778,7 @@ impl ImageManager {
             updated_at: Utc::now(),
         };
 
-        sqlx::query(
-            r#"
-            INSERT INTO images (id, name, os_type, size_gb, path, format, status, description, parent_id, checksum, created_at, updated_at) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            "#,
-        )
-        .bind(&image.id)
-        .bind(&image.name)
-        .bind(image.os_type.to_string())
-        .bind(image.size_gb as i64)
-        .bind(image.path.to_string_lossy().to_string())
-        .bind(image.format.to_string())
-        .bind(&image.status)
-        .bind(&image.description)
-        .bind(&image.parent_id)
-        .bind(&image.checksum)
-        .bind(if image.is_default { 1i64 } else { 0i64 })
-        .bind(image.created_at.to_rfc3339())
-        .bind(image.updated_at.to_rfc3339())
-        .execute(&self.pool)
-        .await?;
+        self.insert_image(&image).await?;
 
         info!("Image '{}' imported from {}", req.name, req.source_path);
         Ok(image)
@@ -842,27 +858,7 @@ impl ImageManager {
             updated_at: Utc::now(),
         };
 
-        sqlx::query(
-            r#"
-            INSERT INTO images (id, name, os_type, size_gb, path, format, status, description, parent_id, checksum, created_at, updated_at) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            "#,
-        )
-        .bind(&image.id)
-        .bind(&image.name)
-        .bind(image.os_type.to_string())
-        .bind(image.size_gb as i64)
-        .bind(image.path.to_string_lossy().to_string())
-        .bind(image.format.to_string())
-        .bind(&image.status)
-        .bind(&image.description)
-        .bind(&image.parent_id)
-        .bind(&image.checksum)
-        .bind(if image.is_default { 1i64 } else { 0i64 })
-        .bind(image.created_at.to_rfc3339())
-        .bind(image.updated_at.to_rfc3339())
-        .execute(&self.pool)
-        .await?;
+        self.insert_image(&image).await?;
 
         info!("Image '{}' cloned to '{}'", source.name, new_name);
         Ok(image)
@@ -918,27 +914,7 @@ impl ImageManager {
             updated_at: Utc::now(),
         };
 
-        sqlx::query(
-            r#"
-            INSERT INTO images (id, name, os_type, size_gb, path, format, status, description, parent_id, checksum, created_at, updated_at) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            "#,
-        )
-        .bind(&image.id)
-        .bind(&image.name)
-        .bind(image.os_type.to_string())
-        .bind(image.size_gb as i64)
-        .bind(image.path.to_string_lossy().to_string())
-        .bind(image.format.to_string())
-        .bind(&image.status)
-        .bind(&image.description)
-        .bind(&image.parent_id)
-        .bind(&image.checksum)
-        .bind(if image.is_default { 1i64 } else { 0i64 })
-        .bind(image.created_at.to_rfc3339())
-        .bind(image.updated_at.to_rfc3339())
-        .execute(&self.pool)
-        .await?;
+        self.insert_image(&image).await?;
 
         info!(
             "Snapshot '{}' created from '{}'",

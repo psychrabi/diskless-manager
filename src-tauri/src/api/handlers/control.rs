@@ -10,7 +10,6 @@ use std::sync::Arc;
 use tracing::{error, info};
 
 use crate::audit_logger::{AuditLogFilter, AuditLogger, ControlOperation, OperationResult};
-use crate::core::client::Client;
 use crate::state::AppState;
 use chrono::Utc;
 

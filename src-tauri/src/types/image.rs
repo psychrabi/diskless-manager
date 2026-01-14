@@ -21,6 +21,8 @@ pub struct Snapshot {
     pub name: String,
     pub created: String,
     pub used: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<String>,
 }
 
 /// Master data structure (legacy format)
