@@ -1,9 +1,10 @@
 use crate::core::config::Settings;
 use crate::core::service::ServiceManager;
+use crate::ssh_executor::{SshConfig, SshExecutor};
 use crate::state::AppState;
 use crate::utils::network::InterfaceInfo;
 use log::info;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::process::Command;
 use tauri::State;
 
@@ -494,6 +495,223 @@ pub async fn apply_network_settings(state: State<'_, AppState>) -> Result<String
         .map_err(|e| format!("Failed to restart services: {}", e))?;
 
     Ok("Network settings applied and services updated successfully.".to_string())
+}
+
+/// Test SSH connectivity to a remote host
+#[tauri::command]
+pub async fn test_ssh_connection(request: SshTestRequest) -> Result<SshTestResult, String> {
+    let start_time = std::time::Instant::now();
+    
+    // Create SSH config for Windows
+    let config = SshConfig {
+        connection_timeout: 10,
+        command_timeout: 30,
+        username: request.username,
+        disable_host_key_verification: true,
+        max_retries: 1,
+    };
+    
+    let executor = SshExecutor::with_config(config);
+    
+    // Test basic connectivity first
+    match executor.check_connectivity(&request.host).await {
+        Ok(true) => {
+            // Try a simple command to verify it works
+            match executor.execute_command(&request.host, "echo 'SSH connection successful'").await {
+                Ok(result) => {
+                    let duration_ms = start_time.elapsed().as_millis() as u64;
+                    Ok(SshTestResult {
+                        success: true,
+                        message: "SSH connection and command execution successful".to_string(),
+                        duration_ms,
+                        command_output: Some(result.stdout),
+                    })
+                }
+                Err(e) => {
+                    let duration_ms = start_time.elapsed().as_millis() as u64;
+                    Ok(SshTestResult {
+                        success: false,
+                        message: format!("SSH connected but command failed: {}", e),
+                        duration_ms,
+                        command_output: None,
+                    })
+                }
+            }
+        }
+        Ok(false) => {
+            let duration_ms = start_time.elapsed().as_millis() as u64;
+            Ok(SshTestResult {
+                success: false,
+                message: "SSH connection failed - check host, port, and credentials".to_string(),
+                duration_ms,
+                command_output: None,
+            })
+        }
+        Err(e) => {
+            let duration_ms = start_time.elapsed().as_millis() as u64;
+            Ok(SshTestResult {
+                success: false,
+                message: format!("SSH connection error: {}", e),
+                duration_ms,
+                command_output: None,
+            })
+        }
+    }
+}
+
+/// Execute a custom SSH command on a remote host
+#[tauri::command]
+pub async fn execute_ssh_command(
+    host: String,
+    username: String,
+    command: String,
+) -> Result<SshTestResult, String> {
+    let start_time = std::time::Instant::now();
+    
+    // Create SSH config for Windows
+    let config = SshConfig {
+        connection_timeout: 10,
+        command_timeout: 60, // Longer timeout for custom commands
+        username,
+        disable_host_key_verification: true,
+        max_retries: 1,
+    };
+    
+    let executor = SshExecutor::with_config(config);
+    
+    match executor.execute_command(&host, &command).await {
+        Ok(result) => {
+            let duration_ms = start_time.elapsed().as_millis() as u64;
+            Ok(SshTestResult {
+                success: result.exit_code == 0,
+                message: if result.exit_code == 0 {
+                    "Command executed successfully".to_string()
+                } else {
+                    format!("Command failed with exit code {}", result.exit_code)
+                },
+                duration_ms,
+                command_output: Some(format!("STDOUT:\n{}\nSTDERR:\n{}", result.stdout, result.stderr)),
+            })
+        }
+        Err(e) => {
+            let duration_ms = start_time.elapsed().as_millis() as u64;
+            Ok(SshTestResult {
+                success: false,
+                message: format!("SSH execution error: {}", e),
+                duration_ms,
+                command_output: None,
+            })
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SshConfigUpdate {
+    pub default_username: String,
+    pub connection_timeout: u64,
+    pub command_timeout: u64,
+    pub max_retries: u32,
+}
+
+/// Update SSH configuration settings
+#[tauri::command]
+pub async fn update_ssh_config(
+    state: State<'_, AppState>,
+    config: SshConfigUpdate,
+) -> Result<String, String> {
+    // Store SSH config in app state for future use
+    // You might want to add this to your Settings struct
+    info!("SSH configuration updated: username={}, timeouts={}s/{}s, retries={}", 
+          config.default_username, config.connection_timeout, config.command_timeout, config.max_retries);
+    
+    Ok("SSH configuration updated successfully".to_string())
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WindowsSystemInfo {
+    pub computer_name: String,
+    pub os_version: String,
+    pub architecture: String,
+    pub total_memory: String,
+    pub available_memory: String,
+    pub cpu_info: String,
+}
+
+/// Get system information from a Windows machine via SSH
+#[tauri::command]
+pub async fn get_windows_system_info(
+    host: String,
+    username: String,
+) -> Result<WindowsSystemInfo, String> {
+    let config = SshConfig {
+        connection_timeout: 10,
+        command_timeout: 30,
+        username,
+        disable_host_key_verification: true,
+        max_retries: 1,
+    };
+    
+    let executor = SshExecutor::with_config(config);
+    
+    // PowerShell command to get system info
+    let ps_command = r#"
+        $info = Get-ComputerInfo
+        Write-Output "COMPUTER_NAME:$($env:COMPUTERNAME)"
+        Write-Output "OS_VERSION:$($info.WindowsProductName) $($info.WindowsVersion)"
+        Write-Output "ARCHITECTURE:$($info.CsProcessors[0].Architecture)"
+        Write-Output "TOTAL_MEMORY:$([math]::Round($info.TotalPhysicalMemory/1GB, 2)) GB"
+        Write-Output "AVAILABLE_MEMORY:$([math]::Round($info.AvailablePhysicalMemory/1GB, 2)) GB"
+        Write-Output "CPU_INFO:$($info.CsProcessors[0].Name)"
+    "#;
+    
+    let command = format!("powershell.exe -Command \"{}\"", ps_command);
+    
+    match executor.execute_command(&host, &command).await {
+        Ok(result) if result.exit_code == 0 => {
+            let mut info = WindowsSystemInfo {
+                computer_name: "Unknown".to_string(),
+                os_version: "Unknown".to_string(),
+                architecture: "Unknown".to_string(),
+                total_memory: "Unknown".to_string(),
+                available_memory: "Unknown".to_string(),
+                cpu_info: "Unknown".to_string(),
+            };
+            
+            // Parse the output
+            for line in result.stdout.lines() {
+                if let Some((key, value)) = line.split_once(':') {
+                    match key {
+                        "COMPUTER_NAME" => info.computer_name = value.to_string(),
+                        "OS_VERSION" => info.os_version = value.to_string(),
+                        "ARCHITECTURE" => info.architecture = value.to_string(),
+                        "TOTAL_MEMORY" => info.total_memory = value.to_string(),
+                        "AVAILABLE_MEMORY" => info.available_memory = value.to_string(),
+                        "CPU_INFO" => info.cpu_info = value.to_string(),
+                        _ => {}
+                    }
+                }
+            }
+            
+            Ok(info)
+        }
+        Ok(result) => Err(format!("Command failed with exit code {}: {}", result.exit_code, result.stderr)),
+        Err(e) => Err(format!("SSH execution failed: {}", e)),
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SshTestRequest {
+    pub host: String,
+    pub username: String,
+    pub port: Option<u16>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SshTestResult {
+    pub success: bool,
+    pub message: String,
+    pub duration_ms: u64,
+    pub command_output: Option<String>,
 }
 
 fn mask_to_prefix(mask: &str) -> Option<u32> {

@@ -15,6 +15,7 @@ import {
   Settings,
   Shield,
   SquareLibrary,  
+  Terminal,
   Users2,
 } from "lucide-react";
 import { NavLink, useNavigate } from "react-router-dom";
@@ -33,8 +34,8 @@ const menuItems = [
     label: "Application Settings",
     icon: Settings,
   },
-    { id: "users", to: "/users", label: "Users", icon: Users2 },
-
+  { id: "users", to: "/users", label: "Users", icon: Users2 },
+  { id: "ssh-tester", to: "/ssh-tester", label: "SSH Tester", icon: Terminal },
   { id: "logs", to: "/logs", label: "Logs", icon: File },
 ];
 

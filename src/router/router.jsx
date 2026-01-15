@@ -18,6 +18,7 @@ const ApplicationSettings = lazy(() =>
   import("@/components/ApplicationMangement")
 );
 const Logs = lazy(() => import("@/components/Logs"));
+const SshTester = lazy(() => import("@/components/SshTester/SshTester"));
 const Login = lazy(() => import("@/components/Authentication/Login"));
 const ProtectedRoute = lazy(() =>
   import("@/components/Authentication/ProtectedRoute")
@@ -93,6 +94,10 @@ export const router = createHashRouter([
       {
         path: "/logs",
         element: <Logs />,
+      },
+      {
+        path: "/ssh-tester",
+        element: <SshTester />,
       },
     ],
   },

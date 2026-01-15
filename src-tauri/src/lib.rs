@@ -192,6 +192,10 @@ pub async fn run() {
             commands::system::get_interface_ip,
             commands::system::detect_server_network,
             commands::system::apply_network_settings,
+            commands::system::test_ssh_connection,
+            commands::system::execute_ssh_command,
+            commands::system::update_ssh_config,
+            commands::system::get_windows_system_info,
             // Client commands
             commands::clients::list_clients,
             commands::clients::get_client,
