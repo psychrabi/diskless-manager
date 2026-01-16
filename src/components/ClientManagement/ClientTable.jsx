@@ -169,13 +169,13 @@ const ClientTable = ({ handleClientContextMenu }) => {
           components={VirtuosoTableComponents}
           fixedHeaderContent={() => (
             <tr className="bg-base-100 border-b border-base-200 shadow-sm z-10 w-full text-center">
-              <TableHead className="bg-base-100">Name</TableHead>
-              <TableHead className="hidden md:table-cell bg-base-100 ">
+              <TableHead className="bg-base-100 w-30">Name</TableHead>
+              <TableHead className="hidden md:table-cell bg-base-100 w-40">
                 MAC Address
               </TableHead>
-              <TableHead className="bg-base-100 ">IP Address</TableHead>
-                    <TableHead className="bg-base-100 hidden lg:table-cell">Read <span className="hidden">(MB/s)</span></TableHead>
-                    <TableHead className="bg-base-100 hidden lg:table-cell">Write <span className="hidden">(MB/s)</span></TableHead>
+              <TableHead className="bg-base-100 w-36">IP Address</TableHead>
+                    <TableHead className="bg-base-100 hidden lg:table-cell w-20">Read <span className="hidden">(MB/s)</span></TableHead>
+                    <TableHead className="bg-base-100 hidden lg:table-cell w-20">Write <span className="hidden">(MB/s)</span></TableHead>
               <TableHead className="hidden 2xl:table-cell bg-base-100">
                 Image
               </TableHead>
@@ -202,7 +202,7 @@ const ClientTable = ({ handleClientContextMenu }) => {
                 <TableCell className="hidden md:table-cell text-xs font-mono">
                   {client.mac}
                 </TableCell>
-                <TableCell className="font-mono text-xs">{client.ip}</TableCell>
+                <TableCell className="font-mono text-xs text-center">{client.ip}</TableCell>
                     <TableCell className="hidden lg:table-cell font-mono ">
                   {clientMetrics ? (
                     <span className="flex items-center justify-center gap-1">
@@ -223,20 +223,20 @@ const ClientTable = ({ handleClientContextMenu }) => {
                     <span className="text-base-content/40">-</span>
                   )}
                 </TableCell>
-                <TableCell className="hidden xl:table-cell text-xs font-mono break-all">
+                <TableCell className="hidden xl:table-cell text-xs font-mono break-all text-center">
                   {client.master}
                 </TableCell>
-                <TableCell className="hidden 2xl:table-cell text-xs font-mono break-all">
+                <TableCell className="hidden 2xl:table-cell text-xs font-mono break-all text-center">
                   {client.snapshot ?? "-"}
                 </TableCell>
-                <TableCell className="hidden 2xl:table-cell text-xs font-mono break-all">
+                <TableCell className="hidden 2xl:table-cell text-xs font-mono break-all text-center">
                   {client.block_store}
                 </TableCell>
               
                 <TableCell className="text-center">
                   <ClientModeBadge client={client} />
                 </TableCell>
-                <TableCell className="hidden lg:table-cell text-xs font-mono">
+                <TableCell className="hidden lg:table-cell text-xs font-mono text-center">
                   {clientMetrics ? (
                     <span className="flex items-center gap-1">
                       <Clock className="w-3 h-3 text-secondary" />
@@ -246,7 +246,7 @@ const ClientTable = ({ handleClientContextMenu }) => {
                     <span className="text-base-content/40">-</span>
                   )}
                 </TableCell>
-                <TableCell className="text-center">
+                <TableCell className="">
                   <ControlActionButtons client={client} onActionComplete={() => {}} />
                 </TableCell>
               </>
