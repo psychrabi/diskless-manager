@@ -1,11 +1,11 @@
-import { CheckCircle, XCircle, AlertCircle, Clock, Minus } from "lucide-react";
+import { AlertCircle, CheckCircle, Clock, Minus, XCircle } from "lucide-react";
 
-export const StatusBadge = ({ 
-  status, 
-  children, 
+export const StatusBadge = ({
+  status,
+  children,
   size = "md",
   showIcon = true,
-  className = "" 
+  className = ""
 }) => {
   const statusConfig = {
     success: {
@@ -14,7 +14,7 @@ export const StatusBadge = ({
       label: children || "Success"
     },
     error: {
-      className: "status-error", 
+      className: "status-error",
       icon: XCircle,
       label: children || "Error"
     },
@@ -58,7 +58,7 @@ export const StatusBadge = ({
 
   const iconSizes = {
     sm: "h-3 w-3",
-    md: "h-3.5 w-3.5", 
+    md: "h-3.5 w-3.5",
     lg: "h-4 w-4"
   };
 
@@ -70,7 +70,7 @@ export const StatusBadge = ({
       status-indicator 
       ${config.className} 
       ${sizeClasses[size]}
-      ${className}
+      ${className} text-base-content
     `}>
       {showIcon && <Icon className={`${iconSizes[size]} mr-1.5`} />}
       {config.label}

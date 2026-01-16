@@ -1,0 +1,134 @@
+import { Card } from "@/components/ui";
+import { StatusBadge } from "@/components/ui/StatusBadge";
+import { useAppStore } from "@/store/useAppStore";
+import { useShallow } from "zustand/react/shallow";
+
+import { Activity, Disc, Laptop, MemoryStick, Server, Settings, TrendingUp } from "lucide-react";
+
+
+export default function MetricsCard() {
+	const { serverStatus, ramUsage, loading } = useAppStore(
+		useShallow((state) => ({
+			serverStatus: state.serverStatus,
+			ramUsage: state.ramUsage,
+			loading: state.loading,
+		})),
+	);
+
+	const serverStatusData = serverStatus || {};
+
+	return (
+
+		<Card
+			title="System Dashboard"
+			subtitle="Monitor your diskless boot server infrastructure and manage connected clients"
+			icon={Server}
+			variant="elevated"
+			className="bg-gradient-to-r from-primary/5 to-secondary/5"
+		>
+			{/* Key Metrics */}
+			<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+				{/* Services Status */}
+				<div className="card-professional bg-gradient-to-br from-success/10 to-success/5 border-success/20">
+					<div className="card-body-professional">
+						<div className="flex items-center justify-between">
+							<div>
+								<div className="flex items-center gap-2 mb-2">
+									<div className="w-8 h-8 bg-success/20 rounded-lg flex items-center justify-center">
+										<Settings className="h-4 w-4 text-success" />
+									</div>
+									<span className="text-body-sm font-medium text-base-content/70">Services</span>
+								</div>
+								<div className="text-display-sm font-bold text-base-content">
+									{serverStatusData?.services_running ?? 0}
+								</div>
+								<div className="text-body-sm text-base-content/60">
+									of {serverStatusData?.services_total ?? 0} running
+								</div>
+							</div>
+							<StatusBadge
+								status={serverStatusData?.services_running === serverStatusData?.services_total ? "success" : "warning"}
+								showIcon={false}
+							/>
+						</div>
+					</div>
+				</div>
+
+				{/* Clients Count */}
+				<div className="card-professional bg-gradient-to-br from-info/10 to-info/5 border-info/20">
+					<div className="card-body-professional">
+						<div className="flex items-center justify-between">
+							<div>
+								<div className="flex items-center gap-2 mb-2">
+									<div className="w-8 h-8 bg-info/20 rounded-lg flex items-center justify-center">
+										<Laptop className="h-4 w-4 text-info" />
+									</div>
+									<span className="text-body-sm font-medium text-base-content/70">Clients</span>
+								</div>
+								<div className="text-display-sm font-bold text-base-content">
+									{serverStatusData?.clients_count ?? 0}
+								</div>
+								<div className="text-body-sm text-base-content/60">
+									Registered devices
+								</div>
+							</div>
+							<div className="text-info">
+								<TrendingUp className="h-5 w-5" />
+							</div>
+						</div>
+					</div>
+				</div>
+
+				{/* Images Count */}
+				<div className="card-professional bg-gradient-to-br from-warning/10 to-warning/5 border-warning/20">
+					<div className="card-body-professional">
+						<div className="flex items-center justify-between">
+							<div>
+								<div className="flex items-center gap-2 mb-2">
+									<div className="w-8 h-8 bg-warning/20 rounded-lg flex items-center justify-center">
+										<Disc className="h-4 w-4 text-warning" />
+									</div>
+									<span className="text-body-sm font-medium text-base-content/70">Images</span>
+								</div>
+								<div className="text-display-sm font-bold text-base-content">
+									{serverStatusData?.images_count ?? 0}
+								</div>
+								<div className="text-body-sm text-base-content/60">
+									Boot images available
+								</div>
+							</div>
+							<div className="text-warning">
+								<Activity className="h-5 w-5" />
+							</div>
+						</div>
+					</div>
+				</div>
+
+				{/* Memory Usage */}
+				<div className="card-professional bg-gradient-to-br from-secondary/10 to-secondary/5 border-secondary/20">
+					<div className="card-body-professional">
+						<div className="flex items-center justify-between">
+							<div>
+								<div className="flex items-center gap-2 mb-2">
+									<div className="w-8 h-8 bg-secondary/20 rounded-lg flex items-center justify-center">
+										<MemoryStick className="h-4 w-4 text-secondary" />
+									</div>
+									<span className="text-body-sm font-medium text-base-content/70">Memory</span>
+								</div>
+								<div className="text-display-sm font-bold text-base-content">
+									{ramUsage?.percent ? `${ramUsage.percent.toFixed(1)}%` : "0%"}
+								</div>
+								<div className="text-body-sm text-base-content/60">
+									System utilization
+								</div>
+							</div>
+							<div className="text-secondary">
+								<MemoryStick className="h-5 w-5" />
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</Card>
+	)
+}
