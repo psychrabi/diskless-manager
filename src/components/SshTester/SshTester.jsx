@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import * as api from '../../api/commands';
 
 const SshTester = () => {
   const [connectionForm, setConnectionForm] = useState({
@@ -24,18 +24,16 @@ const SshTester = () => {
     setTestResult(null);
     
     try {
-      const result = await invoke('test_ssh_connection', {
-        request: {
-          host: connectionForm.host,
-          username: connectionForm.username,
-          port: connectionForm.port
-        }
-      });
+      const result = await api.testSshConnection(
+        connectionForm.host,
+        connectionForm.username,
+        connectionForm.port
+      );
       setTestResult(result);
     } catch (error) {
       setTestResult({
         success: false,
-        message: `Error: ${error}`,
+        message: `Error: ${error.message || error}`,
         duration_ms: 0,
         command_output: null
       });
@@ -49,16 +47,16 @@ const SshTester = () => {
     setCommandResult(null);
     
     try {
-      const result = await invoke('execute_ssh_command', {
-        host: commandForm.host,
-        username: commandForm.username,
-        command: commandForm.command
-      });
+      const result = await api.executeSshCommand(
+        commandForm.host,
+        commandForm.username,
+        commandForm.command
+      );
       setCommandResult(result);
     } catch (error) {
       setCommandResult({
         success: false,
-        message: `Error: ${error}`,
+        message: `Error: ${error.message || error}`,
         duration_ms: 0,
         command_output: null
       });
@@ -72,14 +70,14 @@ const SshTester = () => {
     setSystemInfo(null);
     
     try {
-      const result = await invoke('get_windows_system_info', {
-        host: connectionForm.host,
-        username: connectionForm.username
-      });
+      const result = await api.getWindowsSystemInfo(
+        connectionForm.host,
+        connectionForm.username
+      );
       setSystemInfo(result);
     } catch (error) {
       setSystemInfo({
-        error: `Error: ${error}`
+        error: `Error: ${error.message || error}`
       });
     } finally {
       setLoading(false);

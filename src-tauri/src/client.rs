@@ -23,7 +23,7 @@ use crate::utils::network::{get_client_status_realtime, ping_host};
 use crate::utils::remote::{launch_remote_desktop, launch_vnc_viewer};
 use crate::validation::validate_client_id;
 
-#[tauri::command]
+
 pub async fn get_clients(
     state: State<'_, AppState>,
     token: String,
@@ -97,7 +97,7 @@ async fn try_get_client(state: &AppState, id: &str) -> Option<crate::core::clien
     None
 }
 
-#[tauri::command]
+
 pub async fn remote_client(
     state: State<'_, AppState>,
     token: String,
@@ -153,7 +153,7 @@ pub async fn remote_client(
     }
 }
 
-#[tauri::command]
+
 pub async fn add_client(
     state: State<'_, AppState>,
     token: String,
@@ -231,7 +231,7 @@ pub async fn add_client_impl(
     .await
 }
 
-#[tauri::command]
+
 pub async fn edit_client(
     state: State<'_, AppState>,
     token: String,
@@ -361,7 +361,7 @@ pub async fn edit_client(
     Ok(serde_json::json!({"message": format!("Successfully updated client {}", client_id)}))
 }
 
-#[tauri::command]
+
 pub async fn delete_client(
     state: State<'_, AppState>,
     token: String,
@@ -417,7 +417,7 @@ pub async fn delete_client(
     Ok(serde_json::json!({"message": format!("Client {} deleted successfully", client_id)}))
 }
 
-#[tauri::command]
+
 pub async fn control_client(
     state: State<'_, AppState>,
     token: String,
@@ -752,7 +752,7 @@ pub async fn control_client(
     }
 }
 
-#[tauri::command]
+
 pub async fn reset_client(
     state: State<'_, AppState>,
     token: String,
@@ -860,7 +860,7 @@ pub async fn reset_client(
 }
 
 /// Reset a non-persistent client to clean state by recreating writeback from snapshot
-#[tauri::command]
+
 pub async fn reset_client_to_clean(
     state: State<'_, AppState>,
     token: String,
@@ -915,7 +915,7 @@ pub async fn reset_client_to_clean(
     }))
 }
 
-#[tauri::command]
+
 pub async fn get_client_overview() -> Result<crate::types::ClientOverview, AppError> {
     let config = get_config();
     let mut online_clients = 0;

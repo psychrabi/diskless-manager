@@ -2,7 +2,7 @@ use crate::core::image::{CreateImageRequest, Image, ImageInfo, ImageManager, Imp
 use crate::state::AppState;
 use tauri::State;
 
-#[tauri::command]
+
 pub async fn list_images(state: State<'_, AppState>) -> Result<Vec<Image>, String> {
     let settings = state.settings.read().await;
     let manager = ImageManager::new(
@@ -13,7 +13,7 @@ pub async fn list_images(state: State<'_, AppState>) -> Result<Vec<Image>, Strin
     manager.list().await.map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+
 pub async fn get_image(state: State<'_, AppState>, id: String) -> Result<Image, String> {
     let settings = state.settings.read().await;
     let manager = ImageManager::new(
@@ -24,7 +24,7 @@ pub async fn get_image(state: State<'_, AppState>, id: String) -> Result<Image, 
     manager.get(&id).await.map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+
 pub async fn create_image_command(
     state: State<'_, AppState>,
     request: CreateImageRequest,
@@ -38,7 +38,7 @@ pub async fn create_image_command(
     manager.create(request).await.map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+
 pub async fn import_image(
     state: State<'_, AppState>,
     request: ImportImageRequest,
@@ -52,7 +52,7 @@ pub async fn import_image(
     manager.import(request).await.map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+
 pub async fn delete_image_command(
     state: State<'_, AppState>,
     id: String,
@@ -67,7 +67,7 @@ pub async fn delete_image_command(
     manager.delete(&id, force).await.map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+
 pub async fn clone_image(
     state: State<'_, AppState>,
     source_id: String,
@@ -85,7 +85,7 @@ pub async fn clone_image(
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+
 pub async fn create_snapshot_command(
     state: State<'_, AppState>,
     source_id: String,
@@ -103,7 +103,7 @@ pub async fn create_snapshot_command(
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+
 pub async fn get_image_info(state: State<'_, AppState>, id: String) -> Result<ImageInfo, String> {
     let settings = state.settings.read().await;
     let manager = ImageManager::new(
@@ -114,7 +114,7 @@ pub async fn get_image_info(state: State<'_, AppState>, id: String) -> Result<Im
     manager.get_info(&id).await.map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+
 pub async fn resize_image(
     state: State<'_, AppState>,
     id: String,
@@ -132,7 +132,7 @@ pub async fn resize_image(
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+
 pub async fn verify_image(state: State<'_, AppState>, id: String) -> Result<bool, String> {
     let settings = state.settings.read().await;
     let manager = ImageManager::new(

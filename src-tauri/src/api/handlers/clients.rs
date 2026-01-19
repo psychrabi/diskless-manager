@@ -411,13 +411,138 @@ pub async fn update_client(
                 }
             }
             "reset" => {
-                // Reset writeback
+                // Reset writeback - destroy and recreate the client's ZFS clone
                 info!("Reset writeback for client: {}", existing_client.name);
-                return Ok(Json(existing_client));
+                
+                let clone_dataset = get_writeback_or_default_dataset(&existing_client.name);
+                
+                // Only proceed if the client has a snapshot to clone from
+                if let Some(snapshot) = &existing_client.snapshot {
+                    // First, remove the iSCSI target if it exists to free up the dataset
+                    if existing_client.target_iqn.is_some() {
+                        let settings = state.settings.read().await;
+                        let iscsi_service = crate::services::IscsiService::new(settings.clone());
+                        
+                        info!("Removing iSCSI target for client '{}' before reset", existing_client.name);
+                        if let Err(e) = iscsi_service.remove_target(&existing_client.name).await {
+                            log::warn!("Failed to remove iSCSI target for client '{}': {}", existing_client.name, e);
+                            // Continue anyway - the target might not exist or be in an inconsistent state
+                        }
+                    }
+                    
+                    // Destroy existing clone if it exists
+                    if zfs_exists(&clone_dataset) {
+                        if let Err(e) = zfs_destroy(&clone_dataset) {
+                            log::warn!("Failed to destroy existing clone for client '{}': {}", existing_client.name, e);
+                            return Err((
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(ErrorResponse {
+                                    error: format!("Failed to destroy existing writeback clone: {}. The dataset may still be in use by a running client.", e)
+                                })
+                            ));
+                        }
+                        info!("Destroyed existing writeback clone: {}", clone_dataset);
+                    }
+                    
+                    // Recreate the clone from the snapshot
+                    if let Err(e) = zfs_clone(snapshot, &clone_dataset) {
+                        log::error!("Failed to recreate writeback clone for client '{}': {}", existing_client.name, e);
+                        return Err((
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(ErrorResponse {
+                                error: format!("Failed to recreate writeback clone: {}", e)
+                            })
+                        ));
+                    }
+                    
+                    // Recreate the iSCSI target if it existed
+                    if existing_client.target_iqn.is_some() {
+                        let settings = state.settings.read().await;
+                        let iscsi_service = crate::services::IscsiService::new(settings.clone());
+                        
+                        info!("Recreating iSCSI target for client '{}' after reset", existing_client.name);
+                        if let Err(e) = iscsi_service.create_target(&existing_client).await {
+                            log::warn!("Failed to recreate iSCSI target for client '{}': {}", existing_client.name, e);
+                            // Don't fail the entire operation - the clone was successfully created
+                        }
+                    }
+                    
+                    info!("Successfully reset writeback for client '{}': recreated clone from {}", existing_client.name, snapshot);
+                    return Ok(Json(existing_client));
+                } else {
+                    log::warn!("Cannot reset writeback for client '{}': no snapshot configured", existing_client.name);
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        Json(ErrorResponse {
+                            error: "Cannot reset writeback: client has no snapshot configured".to_string()
+                        })
+                    ));
+                }
             }
             "reset_clean" => {
-                // Reset to clean state
+                // Reset to clean state - destroy clone and recreate from master image directly
                 info!("Reset to clean state for client: {}", existing_client.name);
+                
+                let clone_dataset = get_writeback_or_default_dataset(&existing_client.name);
+                
+                // First, remove the iSCSI target if it exists to free up the dataset
+                if existing_client.target_iqn.is_some() {
+                    let settings = state.settings.read().await;
+                    let iscsi_service = crate::services::IscsiService::new(settings.clone());
+                    
+                    info!("Removing iSCSI target for client '{}' before clean reset", existing_client.name);
+                    if let Err(e) = iscsi_service.remove_target(&existing_client.name).await {
+                        log::warn!("Failed to remove iSCSI target for client '{}': {}", existing_client.name, e);
+                        // Continue anyway - the target might not exist or be in an inconsistent state
+                    }
+                }
+                
+                // Destroy existing clone if it exists
+                if zfs_exists(&clone_dataset) {
+                    if let Err(e) = zfs_destroy(&clone_dataset) {
+                        log::warn!("Failed to destroy existing clone for client '{}': {}", existing_client.name, e);
+                        return Err((
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(ErrorResponse {
+                                error: format!("Failed to destroy existing clone: {}. The dataset may still be in use by a running client.", e)
+                            })
+                        ));
+                    }
+                    info!("Destroyed existing clone for clean reset: {}", clone_dataset);
+                }
+                
+                // For clean reset, recreate from the base snapshot or master
+                let source = if let Some(snapshot) = &existing_client.snapshot {
+                    snapshot.clone()
+                } else {
+                    // If no snapshot, try to use the master directly
+                    existing_client.master.clone()
+                };
+                
+                // Recreate the clone
+                if let Err(e) = zfs_clone(&source, &clone_dataset) {
+                    log::error!("Failed to recreate clean clone for client '{}': {}", existing_client.name, e);
+                    return Err((
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ErrorResponse {
+                            error: format!("Failed to recreate clean clone: {}", e)
+                        })
+                    ));
+                }
+                
+                // Recreate the iSCSI target if it existed
+                if existing_client.target_iqn.is_some() {
+                    let settings = state.settings.read().await;
+                    let iscsi_service = crate::services::IscsiService::new(settings.clone());
+                    
+                    info!("Recreating iSCSI target for client '{}' after clean reset", existing_client.name);
+                    if let Err(e) = iscsi_service.create_target(&existing_client).await {
+                        log::warn!("Failed to recreate iSCSI target for client '{}': {}", existing_client.name, e);
+                        // Don't fail the entire operation - the clone was successfully created
+                    }
+                }
+                
+                info!("Successfully reset client '{}' to clean state: recreated clone from {}", existing_client.name, source);
                 return Ok(Json(existing_client));
             }
             _ => {

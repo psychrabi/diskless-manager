@@ -27,7 +27,6 @@ pub struct UpdateUserPasswordRequest {
 }
 
 /// List all users (without password hashes)
-#[tauri::command]
 pub async fn list_users(
     state: tauri::State<'_, crate::state::AppState>,
     token: &str,
@@ -64,7 +63,6 @@ pub async fn list_users(
 }
 
 /// Create a new user
-#[tauri::command]
 pub async fn create_user(
     state: tauri::State<'_, crate::state::AppState>,
     token: &str,
@@ -121,7 +119,6 @@ pub async fn create_user(
 }
 
 /// Update user details (username and/or role)
-#[tauri::command]
 pub async fn update_user(
     state: tauri::State<'_, crate::state::AppState>,
     token: &str,
@@ -189,7 +186,6 @@ pub async fn update_user(
 }
 
 /// Update user password (admin can change any user's password)
-#[tauri::command]
 pub async fn update_user_password(
     state: tauri::State<'_, crate::state::AppState>,
     token: &str,
@@ -238,7 +234,6 @@ pub async fn update_user_password(
 }
 
 /// Delete a user
-#[tauri::command]
 pub async fn delete_user(
     state: tauri::State<'_, crate::state::AppState>,
     token: &str,

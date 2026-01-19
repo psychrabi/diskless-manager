@@ -137,7 +137,7 @@ pub fn validate_token(token: &str) -> Result<Claims, AuthError> {
 }
 
 // Tauri command for login
-#[tauri::command]
+
 pub async fn login(
     state: tauri::State<'_, crate::state::AppState>,
     request: LoginRequest,
@@ -167,13 +167,13 @@ pub async fn login(
 }
 
 // Tauri command for token validation
-#[tauri::command]
+
 pub fn validate_auth_token(token: &str) -> Result<Claims, AuthError> {
     validate_token(token)
 }
 
 // Tauri command for updating admin password
-#[tauri::command]
+
 pub async fn update_admin_password(
     state: tauri::State<'_, crate::state::AppState>,
     token: &str,

@@ -8,6 +8,7 @@ pub mod images;
 pub mod license;
 pub mod logs;
 pub mod services;
+pub mod ssh;
 pub mod system;
 pub mod users;
 pub mod zfs;

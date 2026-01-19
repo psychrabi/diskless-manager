@@ -254,7 +254,7 @@ pub fn get_server_ip() -> String {
     "192.168.1.200".to_string()
 }
 
-#[tauri::command]
+
 pub fn list_disks() -> Result<Vec<Disk>, AppError> {
     let output = Command::new("lsblk")
         .args(["-dn", "-o", "NAME,SIZE,TYPE"])
@@ -280,7 +280,7 @@ pub fn list_disks() -> Result<Vec<Disk>, AppError> {
 }
 
 /// Get current RAM usage statistics
-#[tauri::command]
+
 pub fn get_ram_usage() -> Result<RamUsage, AppError> {
     let output = Command::new("free")
         .arg("-h")
@@ -318,7 +318,7 @@ pub fn get_ram_usage() -> Result<RamUsage, AppError> {
 }
 
 /// Clear RAM cache (sync and drop caches)
-#[tauri::command]
+
 pub async fn clear_ram_cache() -> Result<serde_json::Value, AppError> {
     // Run sync using sudo -n
     run_command_async(["sync"]).await?;
@@ -352,7 +352,7 @@ pub async fn clear_ram_cache() -> Result<serde_json::Value, AppError> {
     Ok(serde_json::json!({ "message": "RAM cache cleared successfully" }))
 }
 
-#[tauri::command]
+
 pub fn get_service_logs(service_name: String, lines: Option<u32>) -> Result<String, AppError> {
     let service = match service_name.as_str() {
         "http" => "apache2",

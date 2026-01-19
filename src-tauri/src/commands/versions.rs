@@ -14,7 +14,6 @@ pub struct VersionInfo {
     pub created_at: String,
 }
 
-#[tauri::command]
 pub async fn list_versions(
     state: State<'_, AppState>,
     base_name: String,
@@ -65,7 +64,6 @@ pub async fn list_versions(
     Ok(versions)
 }
 
-#[tauri::command]
 pub async fn get_version_history(
     state: State<'_, AppState>,
     base_name: String,

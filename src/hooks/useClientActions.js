@@ -80,8 +80,11 @@ export const useClientActions = (
       // Execution
       try {
         const response = await apiCall();
-        if (response && response.message)
+        if (response && response.message) {
           success("Client Management", response.message);
+        } else if (successMsg) {
+          success("Client Management", successMsg);
+        }
         if (fetchData) fetchData();
         if (closeContextMenu) closeContextMenu();
       } catch (error) {
@@ -154,7 +157,7 @@ export const useClientActions = (
         `Are you sure you want to reset client "${client.name}" ? This will destroy their ZFS clone and remove configurations.`,
         "Reset Client",
         () => api.updateClient(client.id, { action: "reset" }),
-        "Client Reset successfully",
+        `Successfully reset writeback for client '${client.name}'`,
         "Client reset cancelled."
       ),
 
@@ -177,7 +180,7 @@ export const useClientActions = (
         `This will delete the writeback for "${client.name}" and recreate it from the snapshot.All changes will be lost.Continue ? `,
         "Reset to Clean",
         () => api.updateClient(client.id, { action: "reset_clean" }),
-        "Client Reset to Clean successfully",
+        `Successfully reset client '${client.name}' to clean state`,
         "Reset to clean cancelled."
       );
     },

@@ -46,7 +46,7 @@ pub fn verify_license_remote(key: &str) -> Result<LicenseVerifyResponse, String>
     Ok(body)
 }
 
-#[tauri::command]
+
 pub async fn activate_license(state: State<'_, AppState>, key: &str) -> Result<String, AuthError> {
     if key.trim().is_empty() {
         return Err(AuthError {
@@ -170,7 +170,7 @@ pub fn ensure_license_valid() -> Result<(), AuthError> {
 }
 
 /// Return current license details (for dashboard display)
-#[tauri::command]
+
 pub fn get_license_info() -> Result<LicenseInfo, String> {
     let cfg = config::get_config();
     let mut key: Option<String> = None;

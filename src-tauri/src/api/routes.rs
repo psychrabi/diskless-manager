@@ -28,6 +28,9 @@ use crate::api::handlers::{
         restart_all_services, restart_service, start_all_services, start_service,
         stop_all_services, stop_service,
     },
+    ssh::{
+        execute_ssh_command, get_windows_system_info, test_ssh_connection,
+    },
     system::{
         apply_network_settings, check_dependencies, clear_cache, detect_server_network,
         get_interface_ip, get_network_interfaces, get_ram_usage, get_server_status, get_settings,
@@ -160,6 +163,10 @@ pub fn create_app(state: crate::state::AppState) -> Router {
             get(get_user).put(update_user).delete(delete_user),
         )
         .route("/api/users/{id}/password", put(update_user_password))
+        // SSH routes (auth required)
+        .route("/api/ssh/test-connection", post(test_ssh_connection))
+        .route("/api/ssh/execute-command", post(execute_ssh_command))
+        .route("/api/ssh/system-info", post(get_windows_system_info))
         .with_state(state.clone())
         .layer(axum::middleware::from_fn_with_state(state.clone(), require_auth));
 

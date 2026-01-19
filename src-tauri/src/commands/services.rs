@@ -25,7 +25,7 @@ fn convert_service_status(
     }
 }
 
-#[tauri::command]
+
 pub async fn list_services(
     state: State<'_, AppState>,
 ) -> Result<Vec<crate::core::service::ServiceInfo>, String> {
@@ -96,7 +96,7 @@ pub async fn list_services(
     Ok(services)
 }
 
-#[tauri::command]
+
 pub async fn get_service_status(
     state: State<'_, AppState>,
     name: String,
@@ -111,7 +111,7 @@ pub async fn get_service_status(
     Ok(convert_service_status(&name, status))
 }
 
-#[tauri::command]
+
 pub async fn start_service(state: State<'_, AppState>, name: String) -> Result<String, String> {
     let settings = state.settings.read().await;
     let service_manager = ServiceManager::new(settings.clone(), state.db_pool.clone());
@@ -122,7 +122,7 @@ pub async fn start_service(state: State<'_, AppState>, name: String) -> Result<S
     Ok(format!("Service {} started", name))
 }
 
-#[tauri::command]
+
 pub async fn stop_service(state: State<'_, AppState>, name: String) -> Result<String, String> {
     let settings = state.settings.read().await;
     let service_manager = ServiceManager::new(settings.clone(), state.db_pool.clone());
@@ -133,7 +133,7 @@ pub async fn stop_service(state: State<'_, AppState>, name: String) -> Result<St
     Ok(format!("Service {} stopped", name))
 }
 
-#[tauri::command]
+
 pub async fn restart_service(state: State<'_, AppState>, name: String) -> Result<String, String> {
     let settings = state.settings.read().await;
     let service_manager = ServiceManager::new(settings.clone(), state.db_pool.clone());
@@ -144,7 +144,7 @@ pub async fn restart_service(state: State<'_, AppState>, name: String) -> Result
     Ok(format!("Service {} restarted", name))
 }
 
-#[tauri::command]
+
 pub async fn get_service_config(
     state: State<'_, AppState>,
     service_key: String,
@@ -175,7 +175,7 @@ pub async fn get_service_config(
     }
 }
 
-#[tauri::command]
+
 pub async fn configure_service(
     state: State<'_, AppState>,
     service_name: String,
@@ -190,7 +190,7 @@ pub async fn configure_service(
     Ok(format!("Service {} configured successfully", service_name))
 }
 
-#[tauri::command]
+
 pub async fn start_all_services(state: State<'_, AppState>) -> Result<String, String> {
     let settings = state.settings.read().await;
     let service_manager = ServiceManager::new(settings.clone(), state.db_pool.clone());
@@ -201,7 +201,7 @@ pub async fn start_all_services(state: State<'_, AppState>) -> Result<String, St
     Ok("All services started successfully".to_string())
 }
 
-#[tauri::command]
+
 pub async fn stop_all_services(state: State<'_, AppState>) -> Result<String, String> {
     let settings = state.settings.read().await;
     let service_manager = ServiceManager::new(settings.clone(), state.db_pool.clone());
@@ -212,7 +212,7 @@ pub async fn stop_all_services(state: State<'_, AppState>) -> Result<String, Str
     Ok("All services stopped successfully".to_string())
 }
 
-#[tauri::command]
+
 pub async fn restart_all_services(state: State<'_, AppState>) -> Result<String, String> {
     let settings = state.settings.read().await;
     let service_manager = ServiceManager::new(settings.clone(), state.db_pool.clone());

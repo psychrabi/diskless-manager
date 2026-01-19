@@ -47,7 +47,7 @@ pub struct NetworkDetection {
     pub domain: String,
 }
 
-#[tauri::command]
+
 pub async fn get_system_info() -> Result<SystemInfo, String> {
     let hostname = hostname::get()
         .map(|h| h.to_string_lossy().to_string())
@@ -121,7 +121,7 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
-#[tauri::command]
+
 pub async fn get_server_status(state: State<'_, AppState>) -> Result<ServerStatus, String> {
     let service_manager = ServiceManager::new();
     let services = service_manager.list_services();
@@ -146,7 +146,7 @@ pub async fn get_server_status(state: State<'_, AppState>) -> Result<ServerStatu
     })
 }
 
-#[tauri::command]
+
 pub async fn initialize_server(state: State<'_, AppState>) -> Result<String, String> {
     let settings = state.settings.read().await;
 
@@ -171,7 +171,7 @@ pub async fn initialize_server(state: State<'_, AppState>) -> Result<String, Str
     Ok("Server initialized successfully".to_string())
 }
 
-#[tauri::command]
+
 pub async fn check_dependencies() -> Result<Vec<DependencyStatus>, String> {
     let dependencies = vec![
         ("qemu-img", "qemu-utils"),
@@ -227,13 +227,13 @@ pub async fn check_dependencies() -> Result<Vec<DependencyStatus>, String> {
     Ok(statuses)
 }
 
-#[tauri::command]
+
 pub async fn get_settings(state: State<'_, AppState>) -> Result<Settings, String> {
     let settings = state.settings.read().await;
     Ok(settings.clone())
 }
 
-#[tauri::command]
+
 pub async fn save_settings(state: State<'_, AppState>, settings: Settings) -> Result<(), String> {
     // Update the in-memory settings
     let mut current = state.settings.write().await;
@@ -272,7 +272,7 @@ pub async fn save_settings(state: State<'_, AppState>, settings: Settings) -> Re
     info!("Settings saved to database and TOML");
     Ok(())
 }
-#[tauri::command]
+
 pub async fn setup_privileged_access() -> Result<String, String> {
     let user = std::env::var("USER").unwrap_or_else(|_| {
         Command::new("id")
@@ -327,17 +327,17 @@ pub async fn setup_privileged_access() -> Result<String, String> {
         ))
     }
 }
-#[tauri::command]
+
 pub async fn get_network_interfaces() -> Result<Vec<String>, String> {
     Ok(crate::utils::network::list_interfaces())
 }
 
-#[tauri::command]
+
 pub async fn get_interface_ip(interface: String) -> Result<Option<String>, String> {
     Ok(crate::utils::network::get_interface_ip(&interface))
 }
 
-#[tauri::command]
+
 pub async fn detect_server_network() -> Result<NetworkDetection, String> {
     let interfaces_names = crate::utils::network::list_interfaces();
     let mut interfaces = Vec::new();
@@ -381,7 +381,7 @@ pub async fn detect_server_network() -> Result<NetworkDetection, String> {
     })
 }
 
-#[tauri::command]
+
 pub async fn apply_network_settings(state: State<'_, AppState>) -> Result<String, String> {
     let mut settings = state.settings.read().await.clone();
     let server = &settings.server;
@@ -498,7 +498,6 @@ pub async fn apply_network_settings(state: State<'_, AppState>) -> Result<String
 }
 
 /// Test SSH connectivity to a remote host
-#[tauri::command]
 pub async fn test_ssh_connection(request: SshTestRequest) -> Result<SshTestResult, String> {
     let start_time = std::time::Instant::now();
     
@@ -560,7 +559,6 @@ pub async fn test_ssh_connection(request: SshTestRequest) -> Result<SshTestResul
 }
 
 /// Execute a custom SSH command on a remote host
-#[tauri::command]
 pub async fn execute_ssh_command(
     host: String,
     username: String,
@@ -605,27 +603,6 @@ pub async fn execute_ssh_command(
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SshConfigUpdate {
-    pub default_username: String,
-    pub connection_timeout: u64,
-    pub command_timeout: u64,
-    pub max_retries: u32,
-}
-
-/// Update SSH configuration settings
-#[tauri::command]
-pub async fn update_ssh_config(
-    state: State<'_, AppState>,
-    config: SshConfigUpdate,
-) -> Result<String, String> {
-    // Store SSH config in app state for future use
-    // You might want to add this to your Settings struct
-    info!("SSH configuration updated: username={}, timeouts={}s/{}s, retries={}", 
-          config.default_username, config.connection_timeout, config.command_timeout, config.max_retries);
-    
-    Ok("SSH configuration updated successfully".to_string())
-}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct WindowsSystemInfo {
@@ -638,7 +615,6 @@ pub struct WindowsSystemInfo {
 }
 
 /// Get system information from a Windows machine via SSH
-#[tauri::command]
 pub async fn get_windows_system_info(
     host: String,
     username: String,

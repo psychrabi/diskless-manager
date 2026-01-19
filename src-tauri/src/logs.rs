@@ -4,7 +4,7 @@ use crate::middleware::validate_auth;
 use log::info;
 
 /// Return entire log content as string
-#[tauri::command]
+
 pub fn get_logs(token: String) -> Result<serde_json::Value, AppError> {
     validate_auth(&token)?;
     let text = cmd::read_logs();
@@ -12,7 +12,7 @@ pub fn get_logs(token: String) -> Result<serde_json::Value, AppError> {
 }
 
 /// Clear log file
-#[tauri::command]
+
 pub fn clear_logs(token: String) -> Result<serde_json::Value, AppError> {
     validate_auth(&token)?;
     info!("Log cleared by user");

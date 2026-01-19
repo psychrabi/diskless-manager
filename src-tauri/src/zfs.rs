@@ -242,7 +242,7 @@ fn ensure_parent_dataset(parent: &str, prop: &str, prop_val: &str) -> Result<(),
     Ok(())
 }
 
-#[tauri::command]
+
 pub async fn create_image(
     state: tauri::State<'_, crate::state::AppState>,
     request: CreateImageRequest,
@@ -398,7 +398,7 @@ pub async fn create_image(
     }))
 }
 
-#[tauri::command]
+
 pub async fn create_game_disk(
     state: State<'_, AppState>,
     token: String,
@@ -434,7 +434,7 @@ pub async fn create_game_disk(
     }))
 }
 
-#[tauri::command]
+
 pub async fn get_images(
     state: tauri::State<'_, crate::state::AppState>,
     token: String,
@@ -694,7 +694,7 @@ pub async fn delete_image_config(pool: &sqlx::SqlitePool, master_name: &str) -> 
     true // Nothing deleted, but success
 }
 
-#[tauri::command]
+
 pub async fn delete_image(
     state: State<'_, AppState>,
     token: String,
@@ -709,7 +709,7 @@ pub async fn delete_image(
 
 // Create a ZFS snapshot
 
-#[tauri::command]
+
 pub async fn create_snapshot(
     state: State<'_, AppState>,
     token: String,
@@ -786,7 +786,7 @@ pub async fn create_snapshot(
     }))
 }
 
-#[tauri::command]
+
 pub async fn delete_snapshot(
     state: State<'_, AppState>,
     token: String,
@@ -805,7 +805,7 @@ pub async fn delete_snapshot(
     result
 }
 
-#[tauri::command]
+
 pub fn get_zpool_list() -> Vec<ZpoolInfo> {
     let mut pools = vec![];
 
@@ -829,7 +829,7 @@ pub fn get_zpool_list() -> Vec<ZpoolInfo> {
     pools
 }
 
-#[tauri::command]
+
 pub async fn zfs_pool_exists(
     state: State<'_, AppState>,
     pool_name: Option<String>,
@@ -860,7 +860,7 @@ pub async fn zfs_pool_exists(
     }
 }
 
-#[tauri::command]
+
 pub async fn create_zfs_pool(
     state: State<'_, AppState>,
     req: CreateZpoolRequest,
@@ -885,7 +885,7 @@ pub async fn create_zfs_pool(
     Ok(())
 }
 
-#[tauri::command]
+
 pub async fn set_default_image(
     state: State<'_, AppState>,
     token: String,
@@ -903,7 +903,7 @@ pub async fn set_default_image(
     Ok(json!({"message": "Successfully set default image"}))
 }
 
-#[tauri::command]
+
 pub async fn rollback_image_snapshot(
     state: State<'_, AppState>,
     token: String,
@@ -949,7 +949,7 @@ pub async fn rollback_image_snapshot(
     }))
 }
 
-#[tauri::command]
+
 pub async fn get_zfs_arcstat() -> Result<ArcstatInfo, AppError> {
     use std::fs;
     let arcstat_path = "/proc/spl/kstat/zfs/arcstats";
@@ -977,7 +977,7 @@ pub async fn get_zfs_arcstat() -> Result<ArcstatInfo, AppError> {
     Ok(ArcstatInfo { size, hit_percent })
 }
 
-#[tauri::command]
+
 pub async fn get_default_image_overview(
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, AppError> {
@@ -1046,7 +1046,7 @@ pub async fn get_default_image_overview(
     Ok(overview)
 }
 
-#[tauri::command]
+
 pub async fn rename_image(
     state: State<'_, AppState>,
     token: String,

@@ -7,7 +7,7 @@ use crate::{
     validation::{validate_pool_name, validate_size, validate_zfs_name},
 };
 
-#[tauri::command]
+
 pub fn list_block_devices() -> Result<Vec<String>, AppError> {
     // Use lsblk to list all block devices (disks only, not partitions)
     // Filter for disks (TYPE=disk) and exclude devices that are already part of a zpool
@@ -29,7 +29,7 @@ pub fn list_block_devices() -> Result<Vec<String>, AppError> {
     Ok(devices)
 }
 
-#[tauri::command]
+
 pub fn list_zpools() -> Result<Vec<String>, AppError> {
     // Get fresh data
     let out = run_command_output_no_sudo(&["zpool", "list", "-H", "-o", "name"])
@@ -43,7 +43,7 @@ pub fn list_zpools() -> Result<Vec<String>, AppError> {
     Ok(pools)
 }
 
-#[tauri::command]
+
 pub fn list_datasets(zpool: &str) -> Result<Vec<DatasetInfo>, AppError> {
     // Get fresh data
     // Get all datasets with their properties in one command
@@ -127,7 +127,7 @@ pub fn list_datasets(zpool: &str) -> Result<Vec<DatasetInfo>, AppError> {
     Ok(result)
 }
 
-#[tauri::command]
+
 pub fn create_zfs_dataset(req: CreateDatasetRequest) -> Result<String, AppError> {
     // Validate inputs
     validate_pool_name(&req.zpool)?;
@@ -217,7 +217,7 @@ pub fn create_zfs_dataset(req: CreateDatasetRequest) -> Result<String, AppError>
 }
 
 // New: delete dataset (recursive)
-#[tauri::command]
+
 pub fn delete_zfs_dataset(dataset: &str, recursive: bool) -> Result<String, AppError> {
     if dataset.trim().is_empty() {
         return Err(AppError::Validation("dataset is required".into()));
@@ -236,7 +236,7 @@ pub fn delete_zfs_dataset(dataset: &str, recursive: bool) -> Result<String, AppE
 }
 
 // New: rename dataset (zfs rename old new)
-#[tauri::command]
+
 pub fn rename_zfs_dataset(old: &str, new: &str) -> Result<String, AppError> {
     if old.trim().is_empty() || new.trim().is_empty() {
         return Err(AppError::Validation(

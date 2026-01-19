@@ -6,19 +6,19 @@ use crate::state::AppState;
 use log::info;
 use tauri::State;
 
-#[tauri::command]
+
 pub async fn list_clients(state: State<'_, AppState>) -> Result<Vec<Client>, String> {
     let manager = ClientManager::new(state.db_pool.clone());
     manager.list().await.map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+
 pub async fn get_client(state: State<'_, AppState>, id: String) -> Result<Client, String> {
     let manager = ClientManager::new(state.db_pool.clone());
     manager.get(&id).await.map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+
 pub async fn add_client_command(
     state: State<'_, AppState>,
     request: CreateClientRequest,
@@ -47,7 +47,7 @@ pub async fn add_client_command(
     Ok(client)
 }
 
-#[tauri::command]
+
 pub async fn update_client_command(
     state: State<'_, AppState>,
     id: String,
@@ -80,7 +80,7 @@ pub async fn update_client_command(
     Ok(client)
 }
 
-#[tauri::command]
+
 pub async fn delete_client_command(state: State<'_, AppState>, id: String) -> Result<(), String> {
     let manager = ClientManager::new(state.db_pool.clone());
     manager.delete(&id).await.map_err(|e| e.to_string())?;
@@ -106,7 +106,7 @@ pub async fn delete_client_command(state: State<'_, AppState>, id: String) -> Re
     Ok(())
 }
 
-#[tauri::command]
+
 pub async fn get_client_boot_history(
     state: State<'_, AppState>,
     client_id: String,

@@ -3,7 +3,6 @@ use crate::auth::validate_token;
 use crate::types::{AuthError, Claims};
 
 /// Middleware for Tauri commands that require authentication
-#[tauri::command]
 pub fn authenticate(token: String) -> Result<Claims, AuthError> {
     validate_token(&token)
 }

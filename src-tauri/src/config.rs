@@ -85,7 +85,7 @@ pub async fn write_config(pool: &sqlx::SqlitePool, config: &AppConfig) -> Result
     Ok(())
 }
 
-#[tauri::command]
+
 pub async fn read_config(state: State<'_, AppState>) -> Result<AppConfig, String> {
     read_config_db(&state.db_pool).await
 }
@@ -200,7 +200,7 @@ pub async fn read_config_db(pool: &sqlx::SqlitePool) -> Result<AppConfig, String
     Ok(config)
 }
 
-#[tauri::command]
+
 pub async fn save_config(state: State<'_, AppState>, pool_name: String) -> Result<(), String> {
     let mut cfg = get_config();
     // Ensure settings is an object
