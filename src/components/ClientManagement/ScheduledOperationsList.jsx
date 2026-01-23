@@ -6,10 +6,11 @@ import { Button } from "@/components/ui/Button";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/Table";
 import { Modal } from "@/components/ui/Modal";
 import { cancelScheduledOperation, getScheduledOperations } from "@/api/commands";
+import { useToastStore } from "@/store/useToastStore";
 
 const ScheduledOperationsList = ({ isOpen, onClose }) => {
   const clients = useAppStore((state) => state.clients);
-  const { showNotification } = useNotification();
+  const { error, success } = useToastStore();
 
   // State for scheduled operations
   const [operations, setOperations] = useState([]);
@@ -31,8 +32,8 @@ const ScheduledOperationsList = ({ isOpen, onClose }) => {
       setLoading(true);
       const response = await getScheduledOperations();
       setOperations(response.operations || []);
-    } catch (error) {
-      showNotification(`Failed to fetch scheduled operations: ${error.message}`, "error");
+    } catch (err) {
+      error(`Failed to fetch scheduled operations: ${err.message}`);
       setOperations([]);
     } finally {
       setLoading(false);
@@ -47,10 +48,10 @@ const ScheduledOperationsList = ({ isOpen, onClose }) => {
     try {
       setCancellingId(operationId);
       await cancelScheduledOperation(operationId);
-      showNotification("Scheduled operation cancelled successfully", "success");
+      success("Scheduled operation cancelled successfully");
       await fetchScheduledOperations();
-    } catch (error) {
-      showNotification(`Failed to cancel operation: ${error.message}`, "error");
+    } catch (err) {
+      error(`Failed to cancel operation: ${err.message}`);
     } finally {
       setCancellingId(null);
     }

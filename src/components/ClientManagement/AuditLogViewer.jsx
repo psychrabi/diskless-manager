@@ -1,17 +1,23 @@
-import React, { useState, useEffect } from "react";
-import { Search, Filter, X, ChevronLeft, ChevronRight } from "lucide-react";
-import { useAppStore } from "../../store/useAppStore";
-import { useNotification } from "../../contexts/notification";
-import { Button } from "@/components/ui/Button";
-import { Input } from "@/components/ui/Input";
-import { Select } from "@/components/ui/Select";
-import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/Table";
-import { Modal } from "@/components/ui/Modal";
 import { getAuditLogs } from "@/api/commands";
+import { Button } from "@/components/ui/Button";
+import { Modal } from "@/components/ui/Modal";
+import { Select } from "@/components/ui/Select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/Table";
+import { useToastStore } from "@/store/useToastStore";
+import { ChevronLeft, ChevronRight, Filter, Search, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { useAppStore } from "../../store/useAppStore";
 
 const AuditLogViewer = ({ isOpen, onClose }) => {
   const clients = useAppStore((state) => state.clients);
-  const { showNotification } = useNotification();
+  const { error } = useToastStore();
 
   // State for logs and filtering
   const [logs, setLogs] = useState([]);
@@ -40,8 +46,8 @@ const AuditLogViewer = ({ isOpen, onClose }) => {
       const response = await getAuditLogs(filters);
       setLogs(response.logs || []);
       setCurrentPage(1); // Reset to first page when fetching new data
-    } catch (error) {
-      showNotification(`Failed to fetch audit logs: ${error.message}`, "error");
+    } catch (err) {
+      error(`Failed to fetch audit logs: ${err.message}`, "error");
       setLogs([]);
     } finally {
       setLoading(false);
@@ -158,7 +164,9 @@ const AuditLogViewer = ({ isOpen, onClose }) => {
               id="operation-filter"
               label="Operation Type"
               value={filters.operation_type}
-              onChange={(e) => handleFilterChange("operation_type", e.target.value)}
+              onChange={(e) =>
+                handleFilterChange("operation_type", e.target.value)
+              }
             >
               <option value="">All Operations</option>
               <option value="shutdown">Shutdown</option>
@@ -175,7 +183,9 @@ const AuditLogViewer = ({ isOpen, onClose }) => {
                 id="start-date"
                 type="date"
                 value={filters.start_date}
-                onChange={(e) => handleFilterChange("start_date", e.target.value)}
+                onChange={(e) =>
+                  handleFilterChange("start_date", e.target.value)
+                }
                 className="input w-full"
               />
             </div>
@@ -253,7 +263,9 @@ const AuditLogViewer = ({ isOpen, onClose }) => {
                         {log.client_ip}
                       </TableCell>
                       <TableCell>
-                        <span className={`badge ${getOperationBadgeClass(log.operation_type)}`}>
+                        <span
+                          className={`badge ${getOperationBadgeClass(log.operation_type)}`}
+                        >
                           {log.operation_type}
                         </span>
                       </TableCell>
@@ -261,7 +273,9 @@ const AuditLogViewer = ({ isOpen, onClose }) => {
                         {log.operation_mode || "-"}
                       </TableCell>
                       <TableCell>
-                        <span className={`badge ${getResultBadgeClass(log.result)}`}>
+                        <span
+                          className={`badge ${getResultBadgeClass(log.result)}`}
+                        >
                           {log.result}
                         </span>
                       </TableCell>
