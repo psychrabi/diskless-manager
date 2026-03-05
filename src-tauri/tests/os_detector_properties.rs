@@ -1,5 +1,6 @@
 use app_lib::os_detector::{OsDetector, OsType};
-use app_lib::types::Client;
+use app_lib::core::client::Client;
+use chrono::Utc;
 use proptest::prelude::*;
 
 // ============================================================================
@@ -322,11 +323,13 @@ fn create_test_client(name: &str, ip: &str) -> Client {
         mac: "00:11:22:33:44:55".to_string(),
         ip: ip.to_string(),
         master: "test-master".to_string(),
+        enabled: true,
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
         snapshot: None,
         block_store: None,
         target_iqn: None,
         writeback: None,
-        created_at: None,
         last_modified: None,
         block_device: None,
         status: Some("Online".to_string()),

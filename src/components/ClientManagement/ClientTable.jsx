@@ -1,8 +1,8 @@
-import { Layers, Monitor, Power, PowerOff, RefreshCw, Zap, MoveDown, MoveUp, Clock } from "lucide-react";
-import React, { useState, useEffect } from "react";
+import { Clock, Monitor, MoveDown, MoveUp } from "lucide-react";
+import React, { useEffect, useMemo } from "react";
 import { TableVirtuoso } from "react-virtuoso";
 import { useAppStore } from "../../store/useAppStore";
-import { useMetrics } from "@/contexts/MetricsContext";
+import { useMetrics } from "@/contexts/useMetrics";
 import { TableCell, TableHead } from "@/components/ui";
 import { formatUptime } from "@/utils/formatUptime";
 import ControlActionButtons from "./ControlActionButtons";
@@ -92,20 +92,21 @@ const ClientTable = ({ handleClientContextMenu }) => {
   const clients = useAppStore((state) => state.clients);
   const setClients = useAppStore((state) => state.setClients);
   const { metrics } = useMetrics();
-  const [metricsMap, setMetricsMap] = useState({});
+
+  const metricsMap = useMemo(() => {
+    const map = {};
+    metrics?.clients?.forEach((metric) => {
+      map[metric.ip] = metric;
+    });
+    return map;
+  }, [metrics]);
 
   // Build a map of client IP to metrics for quick lookup and update client statuses
   useEffect(() => {
     if (metrics?.clients) {
-      const map = {};
-      metrics.clients.forEach((metric) => {
-        map[metric.ip] = metric;
-      });
-      setMetricsMap(map);
-
       // Update client statuses from metrics
       const updatedClients = clients.map((client) => {
-        const metric = map[client.ip];
+        const metric = metricsMap[client.ip];
         if (metric && client.status !== metric.status) {
           return { ...client, status: metric.status };
         }
@@ -117,7 +118,7 @@ const ClientTable = ({ handleClientContextMenu }) => {
         setClients(updatedClients);
       }
     }
-  }, [metrics, clients, setClients]);
+  }, [clients, metrics?.clients, metricsMap, setClients]);
 
   const getClientMetrics = (clientIp) => {
     return metricsMap[clientIp] || null;

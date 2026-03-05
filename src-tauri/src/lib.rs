@@ -23,7 +23,7 @@ pub mod error_logger;
 
 mod cmd;
 mod commands;
-mod core;
+pub mod core;
 mod services;
 pub mod state;
 pub mod utils;

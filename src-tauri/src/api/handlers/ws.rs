@@ -231,14 +231,15 @@ async fn get_socket_bytes_for_client(client_ip: &str) -> Result<(u64, u64), Stri
 
 /// Get the network interface used to reach a client
 async fn get_client_interface(client_ip: &str) -> Result<String, String> {
+    if client_ip.parse::<std::net::IpAddr>().is_err() {
+        return Err("Invalid client IP".to_string());
+    }
+
     let output = tokio::task::spawn_blocking({
         let ip = client_ip.to_string();
         move || {
-            std::process::Command::new("bash")
-                .args(&["-c", &format!(
-                    "ip route get {} | grep -oP 'dev \\K\\S+' | head -1",
-                    ip
-                )])
+            std::process::Command::new("ip")
+                .args(["route", "get", &ip])
                 .output()
         }
     })
@@ -248,13 +249,17 @@ async fn get_client_interface(client_ip: &str) -> Result<String, String> {
     let output = output.map_err(|e| e.to_string())?;
     
     if output.status.success() {
-        let interface = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !interface.is_empty() {
-            return Ok(interface);
+        let content = String::from_utf8_lossy(&output.stdout);
+        let parts: Vec<&str> = content.split_whitespace().collect();
+        if let Some(dev_idx) = parts.iter().position(|p| *p == "dev") {
+            if let Some(interface) = parts.get(dev_idx + 1) {
+                if !interface.is_empty() {
+                    return Ok((*interface).to_string());
+                }
+            }
         }
     }
 
     // Fallback to eth0
     Ok("eth0".to_string())
 }
-

@@ -118,7 +118,7 @@ const ClientManagement = () => {
   }, [clients, masters]);
 
   // Calculate statistics
-  const onlineClients = clients.filter(c => c.status === "online").length;
+  const onlineClients = clients.filter((c) => c.status === "Online").length;
   const offlineClients = clients.length - onlineClients;
 
   if (loading && clients.length === 0) {

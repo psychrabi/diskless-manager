@@ -1,13 +1,10 @@
 import React, { useState } from "react";
 import { Power, RefreshCw, ScreenShare } from "lucide-react";
-import { useToastStore } from "@/store/useToastStore";
-import * as api from "@/api/commands";
 import ShutdownModal from "./ShutdownModal";
 import RebootModal from "./RebootModal";
 import RemoteDesktopModal from "./RemoteDesktopModal";
 
 const ControlActionButtons = ({ client, onActionComplete }) => {
-  const { success, error: showError } = useToastStore();
   const [shutdownModalOpen, setShutdownModalOpen] = useState(false);
   const [rebootModalOpen, setRebootModalOpen] = useState(false);
   const [remoteModalOpen, setRemoteModalOpen] = useState(false);

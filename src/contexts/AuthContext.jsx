@@ -15,6 +15,7 @@ export const AuthProvider = ({ children }) => {
     setToken(null);
     localStorage.removeItem("authToken");
     localStorage.removeItem("user");
+    window.dispatchEvent(new Event("auth:logout"));
     success("Authentication", "Logout Successful");
   }, [success]);
 
@@ -58,6 +59,7 @@ export const AuthProvider = ({ children }) => {
     setToken(authToken);
     localStorage.setItem("authToken", authToken);
     localStorage.setItem("user", JSON.stringify(userData));
+    window.dispatchEvent(new Event("auth:login"));
   };
 
   const value = {

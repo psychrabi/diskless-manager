@@ -1,7 +1,6 @@
-import React, { useState, useEffect } from "react";
-import { Clock, X, AlertCircle, Trash2 } from "lucide-react";
+import React, { useCallback, useEffect, useState } from "react";
+import { AlertCircle, Clock, Trash2 } from "lucide-react";
 import { useAppStore } from "../../store/useAppStore";
-import { useNotification } from "../../contexts/notification";
 import { Button } from "@/components/ui/Button";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/Table";
 import { Modal } from "@/components/ui/Modal";
@@ -17,17 +16,7 @@ const ScheduledOperationsList = ({ isOpen, onClose }) => {
   const [loading, setLoading] = useState(false);
   const [cancellingId, setCancellingId] = useState(null);
 
-  // Fetch scheduled operations when modal opens
-  useEffect(() => {
-    if (isOpen) {
-      fetchScheduledOperations();
-      // Refresh every 10 seconds
-      const interval = setInterval(fetchScheduledOperations, 10000);
-      return () => clearInterval(interval);
-    }
-  }, [isOpen]);
-
-  const fetchScheduledOperations = async () => {
+  const fetchScheduledOperations = useCallback(async () => {
     try {
       setLoading(true);
       const response = await getScheduledOperations();
@@ -38,7 +27,17 @@ const ScheduledOperationsList = ({ isOpen, onClose }) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [error]);
+
+  // Fetch scheduled operations when modal opens
+  useEffect(() => {
+    if (isOpen) {
+      fetchScheduledOperations();
+      // Refresh every 10 seconds
+      const interval = setInterval(fetchScheduledOperations, 10000);
+      return () => clearInterval(interval);
+    }
+  }, [isOpen, fetchScheduledOperations]);
 
   const handleCancelOperation = async (operationId) => {
     if (!window.confirm("Are you sure you want to cancel this scheduled operation?")) {

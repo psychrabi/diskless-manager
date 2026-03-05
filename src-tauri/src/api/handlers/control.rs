@@ -684,19 +684,93 @@ pub async fn remote_desktop_client(
 
 /// Handle cancel scheduled operation request
 pub async fn cancel_operation(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Path(operation_id): Path<String>,
-    Json(_request): Json<CancelOperationRequest>,
+    request: Option<Json<CancelOperationRequest>>,
 ) -> Result<Json<ControlOperationResponse>, (StatusCode, Json<ErrorResponse>)> {
     info!("Cancel operation request for operation {}", operation_id);
 
-    // TODO: Implement scheduled operation cancellation
-    // For now, return a success response
+    let reason = request
+        .and_then(|Json(req)| req.reason)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    let existing = sqlx::query_as::<_, (Option<String>,)>(
+        "SELECT result FROM scheduled_operations WHERE id = ? LIMIT 1",
+    )
+    .bind(&operation_id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|e| {
+        error!("Failed to query scheduled operation {}: {}", operation_id, e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: "Failed to query scheduled operation".to_string(),
+                details: Some(e.to_string()),
+            }),
+        )
+    })?;
+
+    let Some((current_result,)) = existing else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Scheduled operation {} not found", operation_id),
+                details: None,
+            }),
+        ));
+    };
+
+    if current_result
+        .as_deref()
+        .is_some_and(|result| result != "pending")
+    {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(ErrorResponse {
+                error: format!(
+                    "Scheduled operation {} is already finalized and cannot be cancelled",
+                    operation_id
+                ),
+                details: None,
+            }),
+        ));
+    }
+
+    let now = Utc::now().to_rfc3339();
+    let result_value = reason
+        .as_ref()
+        .map(|r| format!("cancelled: {}", r))
+        .unwrap_or_else(|| "cancelled".to_string());
+
+    sqlx::query(
+        "UPDATE scheduled_operations SET result = ?, cancelled_at = ? WHERE id = ?",
+    )
+    .bind(&result_value)
+    .bind(&now)
+    .bind(&operation_id)
+    .execute(&state.db_pool)
+    .await
+    .map_err(|e| {
+        error!(
+            "Failed to cancel scheduled operation {} in database: {}",
+            operation_id, e
+        );
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: "Failed to cancel scheduled operation".to_string(),
+                details: Some(e.to_string()),
+            }),
+        )
+    })?;
+
     Ok(Json(ControlOperationResponse {
         success: true,
         message: format!("Operation {} cancelled", operation_id),
         operation_id: Some(operation_id),
-        timestamp: chrono::Utc::now().to_rfc3339(),
+        timestamp: now,
     }))
 }
 

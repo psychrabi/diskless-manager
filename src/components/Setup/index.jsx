@@ -81,7 +81,7 @@ const Setup = () => {
     } finally {
       setChecking(false);
     }
-  }, [fetchDependencies, fetchConfig]);
+  }, [fetchDependencies, fetchConfig, fetchServiceConfig]);
 
   useEffect(() => {
     checkAll();

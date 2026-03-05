@@ -17,7 +17,7 @@ const Logs = () => {
     if (!services || services.length === 0) {
       fetchServices();
     }
-  }, []);
+  }, [fetchServices, services]);
 
   useEffect(() => {
     if (logUnit) {

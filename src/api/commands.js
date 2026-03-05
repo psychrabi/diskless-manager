@@ -792,6 +792,7 @@ export async function remoteDesktopClient(clientId, credentials = {}) {
 export async function cancelScheduledOperation(operationId) {
   return apiRequest(`/api/operations/${operationId}/cancel`, {
     method: "POST",
+    body: JSON.stringify({}),
   });
 }
 

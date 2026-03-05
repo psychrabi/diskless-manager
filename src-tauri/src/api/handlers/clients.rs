@@ -13,6 +13,7 @@ use crate::core::client::{
     BootLogEntry, Client, ClientManager, CreateClientRequest, UpdateClientRequest,
 };
 use crate::state::AppState;
+use crate::validation::{validate_ip_address, validate_mac_address};
 use crate::zfs::{get_writeback_or_default_dataset, zfs_clone, zfs_destroy, zfs_exists};
 
 // Helper function to get master OS
@@ -70,6 +71,10 @@ pub async fn create_client(
     State(state): State<AppState>,
     Json(mut request): Json<CreateClientRequest>,
 ) -> Result<Json<Client>, StatusCode> {
+    if validate_ip_address(&request.ip).is_err() || validate_mac_address(&request.mac).is_err() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
     let settings = state.settings.read().await;
 
     info!("Creating client: {:?}", request);
@@ -177,6 +182,28 @@ pub async fn update_client(
     Json(mut request): Json<UpdateClientRequest>,
 ) -> Result<Json<Client>, (StatusCode, Json<ErrorResponse>)> {
     info!("Updating client: {:?}", request);
+
+    if let Some(ip) = &request.ip {
+        if validate_ip_address(ip).is_err() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: "Invalid IPv4 address".to_string(),
+                }),
+            ));
+        }
+    }
+
+    if let Some(mac) = &request.mac {
+        if validate_mac_address(mac).is_err() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: "Invalid MAC address".to_string(),
+                }),
+            ));
+        }
+    }
 
     let manager = ClientManager::new(state.db_pool.clone());
     // Get existing client to determine the name for iSCSI details

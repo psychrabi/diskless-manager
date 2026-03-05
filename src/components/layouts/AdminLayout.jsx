@@ -33,7 +33,7 @@ const AdminLayout = () => {
 
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [fetchData]);
 
   // Restore path on mount if we are at root and have a saved path
   useEffect(() => {

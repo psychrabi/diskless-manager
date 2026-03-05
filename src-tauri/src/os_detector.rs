@@ -116,6 +116,7 @@ impl Default for OsDetector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Utc;
 
     #[test]
     fn test_os_type_display() {
@@ -151,11 +152,13 @@ mod tests {
             mac: "00:11:22:33:44:55".to_string(),
             ip: "192.168.1.100".to_string(),
             master: "linux-master".to_string(),
+            enabled: true,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
             snapshot: None,
             block_store: None,
             target_iqn: None,
             writeback: None,
-            created_at: None,
             last_modified: None,
             block_device: None,
             status: Some("Online".to_string()),
@@ -190,11 +193,13 @@ mod tests {
             mac: "00:11:22:33:44:55".to_string(),
             ip: "192.168.1.100".to_string(),
             master: "master".to_string(),
+            enabled: true,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
             snapshot: None,
             block_store: None,
             target_iqn: None,
             writeback: None,
-            created_at: None,
             last_modified: None,
             block_device: None,
             status: Some("Online".to_string()),

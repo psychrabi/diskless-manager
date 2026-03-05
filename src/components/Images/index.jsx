@@ -32,7 +32,7 @@ export default function Images() {
 
   useEffect(() => {
     fetchImages();
-  }, []);
+  }, [fetchImages]);
 
   function formatDate(dateStr) {
     return new Date(dateStr).toLocaleDateString();

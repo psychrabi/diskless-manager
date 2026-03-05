@@ -6,6 +6,7 @@ use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation}
 use log::{info, warn};
 use sqlx::SqlitePool;
 use std::env;
+use uuid::Uuid;
 
 use crate::types::{AuthError, Claims, LoginRequest, LoginResponse, UserResponse};
 
@@ -17,15 +18,18 @@ lazy_static::lazy_static! {
         env::var("JWT_SECRET")
             .unwrap_or_else(|_| {
                 eprintln!("WARNING: JWT_SECRET environment variable not set!");
-                eprintln!("Using fallback secret for development only.");
+                eprintln!("Generating an ephemeral secret for this process.");
                 eprintln!("For production, set JWT_SECRET environment variable with a secure random string.");
-                // Fallback for development only - generates a warning
-                "d939af3c6a5b136c954e48de599dd57dd987032a5e9e32ae6caa9369087cfecb".to_string()
+                Uuid::new_v4().to_string()
             })
             .into_bytes()
     };
     static ref SECRET_ENCODING_KEY: EncodingKey = EncodingKey::from_secret(&SECRET_KEY);
     static ref SECRET_DECODING_KEY: DecodingKey = DecodingKey::from_secret(&SECRET_KEY);
+}
+
+pub fn jwt_secret() -> &'static [u8] {
+    &SECRET_KEY
 }
 
 /// Fetch user from database by username

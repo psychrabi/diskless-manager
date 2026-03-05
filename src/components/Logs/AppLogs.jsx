@@ -1,7 +1,7 @@
 import { useToastStore } from "@/store/useToastStore";
 import { getLogs, clearLogs } from "@/api/commands";
 import { BrushCleaning, Loader, RefreshCw } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Button, Card } from "@/components/ui";
 
 export default function AppLogs() {
@@ -9,7 +9,7 @@ export default function AppLogs() {
   const [loading, setLoading] = useState(false);
   const { success, error } = useToastStore();
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const resp = await getLogs();
@@ -24,7 +24,7 @@ export default function AppLogs() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [error]);
 
   async function handleClearLogs() {
     setLoading(true);
@@ -40,7 +40,7 @@ export default function AppLogs() {
 
   useEffect(() => {
     load();
-  }, []);
+  }, [load]);
 
   return (
     <Card

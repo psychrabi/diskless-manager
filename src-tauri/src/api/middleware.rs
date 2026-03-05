@@ -104,13 +104,9 @@ pub async fn require_auth(
                     .map(|s| s.to_string())
                     .unwrap_or_else(|_| token.to_string());
                 
-                let secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| {
-                    "default_secret_key".to_string()
-                });
-
                 match decode::<Claims>(
                     &decoded_token,
-                    &DecodingKey::from_secret(secret.as_ref()),
+                    &DecodingKey::from_secret(crate::auth::jwt_secret()),
                     &Validation::new(Algorithm::HS256),
                 ) {
                     Ok(_) => {
@@ -143,18 +139,9 @@ pub async fn require_auth(
         None => return Err(StatusCode::UNAUTHORIZED),
     };
 
-    let secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| {
-        eprintln!("WARNING: JWT_SECRET environment variable not set!");
-        eprintln!("Using fallback secret for development only.");
-        eprintln!(
-            "For production, set JWT_SECRET environment variable with a secure random string."
-        );
-        "default_secret_key".to_string()
-    });
-
     let token_data = decode::<Claims>(
         token,
-        &DecodingKey::from_secret(secret.as_ref()),
+        &DecodingKey::from_secret(crate::auth::jwt_secret()),
         &Validation::new(Algorithm::HS256),
     )
     .map_err(|_| StatusCode::UNAUTHORIZED)?;

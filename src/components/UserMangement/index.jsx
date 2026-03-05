@@ -2,7 +2,7 @@ import { Button, Card } from '@/components/ui';
 import { useUserManagement } from '@/hooks/useUserManagement';
 import { useToastStore } from '@/store/useToastStore';
 import { Key, Pencil, Plus, Trash2, Users } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import { useConfirm } from "@/contexts/confirmDialog";
 import ChangePasswordModal from './ChangePasswordModal';
@@ -20,18 +20,21 @@ export default function UserManagement() {
   const { success, error } = useToastStore();
   const { confirm } = useConfirm();
 
-  const loadUsers = async () => {
+  const loadUsers = useCallback(async () => {
     try {
       const data = await listUsers();
       setUsers(data);
     } catch (err) {
       error('Load Users', err.message || 'Failed to load users');
     }
-  };
+  }, [error, listUsers]);
 
   useEffect(() => {
-    loadUsers();
-  }, []);
+    const timer = setTimeout(() => {
+      void loadUsers();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [loadUsers]);
 
   const handleCreateUser = () => {
     setShowCreateModal(true);
@@ -58,7 +61,7 @@ export default function UserManagement() {
     try {
       await deleteUser(user.id);
       success('Delete User', `User "${user.username}" deleted successfully`);
-      loadUsers();
+      void loadUsers();
     } catch (err) {
       error('Delete User', err.message || 'Failed to delete user');
     }
@@ -69,7 +72,7 @@ export default function UserManagement() {
     setShowEditModal(false);
     setShowPasswordModal(false);
     setSelectedUser(null);
-    loadUsers();
+    void loadUsers();
   };
 
   return (

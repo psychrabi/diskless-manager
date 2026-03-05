@@ -60,7 +60,7 @@ const InitialSetup = () => {
           new_password: data.password
         });
         console.log("Password updated successfully");
-      } catch (passwordError) {
+      } catch {
         // Password might already be changed, try with the new password as old
         console.log("Default password failed, password might already be set");
         try {
@@ -68,7 +68,7 @@ const InitialSetup = () => {
             old_password: data.password,
             new_password: data.password
           });
-        } catch (secondError) {
+        } catch {
           // Ignore - password is likely already set correctly
           console.log("Password already set, proceeding to login");
         }

@@ -7,11 +7,10 @@ import { Activity, Disc, Laptop, MemoryStick, Server, Settings, TrendingUp } fro
 
 
 export default function MetricsCard() {
-	const { serverStatus, ramUsage, loading } = useAppStore(
+	const { serverStatus, ramUsage } = useAppStore(
 		useShallow((state) => ({
 			serverStatus: state.serverStatus,
 			ramUsage: state.ramUsage,
-			loading: state.loading,
 		})),
 	);
 

@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/Table";
 import { useToastStore } from "@/store/useToastStore";
 import { ChevronLeft, ChevronRight, Filter, Search, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useAppStore } from "../../store/useAppStore";
 
 const AuditLogViewer = ({ isOpen, onClose }) => {
@@ -33,14 +33,7 @@ const AuditLogViewer = ({ isOpen, onClose }) => {
     end_date: "",
   });
 
-  // Fetch logs when modal opens or filters change
-  useEffect(() => {
-    if (isOpen) {
-      fetchLogs();
-    }
-  }, [isOpen, filters]);
-
-  const fetchLogs = async () => {
+  const fetchLogs = useCallback(async () => {
     try {
       setLoading(true);
       const response = await getAuditLogs(filters);
@@ -52,7 +45,14 @@ const AuditLogViewer = ({ isOpen, onClose }) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [error, filters]);
+
+  // Fetch logs when modal opens or filters change
+  useEffect(() => {
+    if (isOpen) {
+      fetchLogs();
+    }
+  }, [isOpen, fetchLogs]);
 
   const handleFilterChange = (field, value) => {
     setFilters((prev) => ({

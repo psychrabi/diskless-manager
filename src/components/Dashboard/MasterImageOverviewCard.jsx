@@ -1,7 +1,7 @@
 import { useToastStore } from "@/store/useToastStore";
 import { getDefaultImageOverview } from "@/api/commands";
 import { HardDrive, RefreshCw } from "lucide-react"; // Add Refresh icon
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Button, Card } from "@/components/ui"; // Assume Button component
 
 const MasterImageOverviewCard = () => {
@@ -10,7 +10,7 @@ const MasterImageOverviewCard = () => {
   const [error, setError] = useState("");
   const { error: showError } = useToastStore();
 
-  const fetchMasterImageOverview = async (showErrorToast = true) => {
+  const fetchMasterImageOverview = useCallback(async (showErrorToast = true) => {
     setError("");
     setLoading(true);
     try {
@@ -42,11 +42,11 @@ const MasterImageOverviewCard = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [showError]);
 
   useEffect(() => {
     fetchMasterImageOverview();
-  }, []); // Run once on mount
+  }, [fetchMasterImageOverview]); // Run once on mount
 
   const handleRetry = () => fetchMasterImageOverview(false); // No duplicate toast
 

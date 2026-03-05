@@ -2,7 +2,9 @@ import { useEffect, useState, useRef } from "react";
 
 export const useMetricsWebSocket = () => {
   const [metrics, setMetrics] = useState(null);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(() =>
+    localStorage.getItem("authToken") ? "" : "Not authenticated"
+  );
   const [isConnected, setIsConnected] = useState(false);
   const wsRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
@@ -11,7 +13,6 @@ export const useMetricsWebSocket = () => {
     // Get auth token
     const token = localStorage.getItem("authToken");
     if (!token) {
-      setError("Not authenticated");
       return;
     }
 

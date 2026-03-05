@@ -1,6 +1,7 @@
 use axum::{extract::State, http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::net::IpAddr;
 use std::process::Command;
 
 use crate::state::AppState;
@@ -176,31 +177,16 @@ pub async fn get_client_io_metrics(
 
 /// Get I/O speed for a client by querying network interface stats
 async fn get_client_io_speed(client_ip: &str) -> Result<(f64, f64), Box<dyn std::error::Error>> {
-    // Use ss command to get socket statistics for the client IP
-    let output = tokio::task::spawn_blocking({
-        let ip = client_ip.to_string();
-        move || {
-            Command::new("bash")
-                .args(&["-c", &format!(
-                    "ss -tan | grep {} | grep ESTAB | wc -l",
-                    ip
-                )])
-                .output()
-        }
-    })
-    .await;
+    if client_ip.parse::<IpAddr>().is_err() {
+        return Ok((0.0, 0.0));
+    }
 
-    match output {
-        Ok(Ok(output)) if output.status.success() => {
-            let content = String::from_utf8_lossy(&output.stdout);
-            if let Ok(conn_count) = content.trim().parse::<f64>() {
-                // Estimate bandwidth based on active connections
-                // Assume ~5 MB/s per active connection for iSCSI
-                let estimated_speed = (conn_count * 5.0).min(1000.0); // Cap at 1000 MB/s
-                return Ok((estimated_speed, estimated_speed));
-            }
-        }
-        _ => {}
+    let conn_count = count_established_connections(client_ip).await?;
+    if conn_count > 0.0 {
+        // Estimate bandwidth based on active connections
+        // Assume ~5 MB/s per active connection for iSCSI
+        let estimated_speed = (conn_count * 5.0).min(1000.0); // Cap at 1000 MB/s
+        return Ok((estimated_speed, estimated_speed));
     }
 
     // Fallback: try to get network interface stats
@@ -209,6 +195,10 @@ async fn get_client_io_speed(client_ip: &str) -> Result<(f64, f64), Box<dyn std:
 
 /// Get network I/O speed for a client using network interface stats
 async fn get_network_io_speed(client_ip: &str) -> Result<(f64, f64), Box<dyn std::error::Error>> {
+    if client_ip.parse::<IpAddr>().is_err() {
+        return Ok((0.0, 0.0));
+    }
+
     // Try to use iftop if available (requires root)
     let iftop_check = tokio::task::spawn_blocking(|| {
         Command::new("which")
@@ -220,29 +210,25 @@ async fn get_network_io_speed(client_ip: &str) -> Result<(f64, f64), Box<dyn std
     if let Ok(Ok(output)) = iftop_check {
         if output.status.success() {
             // iftop is available, try to use it
-            let iftop_output = tokio::task::spawn_blocking({
-                let ip = client_ip.to_string();
-                move || {
-                    Command::new("bash")
-                        .args(&["-c", &format!(
-                            "timeout 2 iftop -n -b -i eth0 2>/dev/null | grep {} | head -1",
-                            ip
-                        )])
-                        .output()
-                }
+            let iftop_output = tokio::task::spawn_blocking(|| {
+                Command::new("timeout")
+                    .args(["2", "iftop", "-n", "-b", "-i", "eth0"])
+                    .output()
             })
             .await;
 
             if let Ok(Ok(output)) = iftop_output {
                 if output.status.success() {
                     let content = String::from_utf8_lossy(&output.stdout);
-                    // Parse iftop output for bandwidth
-                    let parts: Vec<&str> = content.split_whitespace().collect();
-                    if parts.len() >= 3 {
-                        // Try to parse bandwidth values
-                        if let Some(bandwidth_str) = parts.get(2) {
-                            if let Ok(bandwidth) = parse_bandwidth(bandwidth_str) {
-                                return Ok((bandwidth, bandwidth));
+                    if let Some(line) = content.lines().find(|line| line.contains(client_ip)) {
+                        // Parse iftop output for bandwidth
+                        let parts: Vec<&str> = line.split_whitespace().collect();
+                        if parts.len() >= 3 {
+                            // Try to parse bandwidth values
+                            if let Some(bandwidth_str) = parts.get(2) {
+                                if let Ok(bandwidth) = parse_bandwidth(bandwidth_str) {
+                                    return Ok((bandwidth, bandwidth));
+                                }
                             }
                         }
                     }
@@ -252,31 +238,36 @@ async fn get_network_io_speed(client_ip: &str) -> Result<(f64, f64), Box<dyn std
     }
 
     // Fallback: return estimated values based on connection count
-    let output = tokio::task::spawn_blocking({
-        let ip = client_ip.to_string();
-        move || {
-            Command::new("bash")
-                .args(&["-c", &format!(
-                    "ss -tan | grep {} | grep ESTAB | wc -l",
-                    ip
-                )])
-                .output()
-        }
-    })
-    .await;
+    let conn_count = count_established_connections(client_ip).await?;
+    if conn_count > 0.0 {
+        // Estimate: ~3 MB/s per active connection
+        let estimated_speed = (conn_count * 3.0).min(1000.0); // Cap at 1000 MB/s
+        Ok((estimated_speed, estimated_speed))
+    } else {
+        Ok((0.0, 0.0))
+    }
+}
+
+async fn count_established_connections(
+    client_ip: &str,
+) -> Result<f64, Box<dyn std::error::Error>> {
+    if client_ip.parse::<IpAddr>().is_err() {
+        return Ok(0.0);
+    }
+
+    let ip = client_ip.to_string();
+    let output = tokio::task::spawn_blocking(|| Command::new("ss").args(["-tan"]).output()).await;
 
     match output {
         Ok(Ok(output)) if output.status.success() => {
             let content = String::from_utf8_lossy(&output.stdout);
-            if let Ok(conn_count) = content.trim().parse::<f64>() {
-                // Estimate: ~3 MB/s per active connection
-                let estimated_speed = (conn_count * 3.0).min(1000.0); // Cap at 1000 MB/s
-                Ok((estimated_speed, estimated_speed))
-            } else {
-                Ok((0.0, 0.0))
-            }
+            let conn_count = content
+                .lines()
+                .filter(|line| line.contains("ESTAB") && line.contains(&ip))
+                .count() as f64;
+            Ok(conn_count)
         }
-        _ => Ok((0.0, 0.0))
+        _ => Ok(0.0),
     }
 }
 

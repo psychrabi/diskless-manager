@@ -1,6 +1,5 @@
-import React, { createContext, useContext, useEffect, useState, useRef } from "react";
-
-const MetricsContext = createContext(null);
+import React, { useEffect, useRef, useState } from "react";
+import { MetricsContext } from "./metricsContext";
 
 export const MetricsProvider = ({ children }) => {
   const [metrics, setMetrics] = useState(null);
@@ -9,18 +8,35 @@ export const MetricsProvider = ({ children }) => {
   const wsRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
   const reconnectAttemptsRef = useRef(0);
-  const hasInitializedRef = useRef(false);
   const maxReconnectAttempts = 10;
 
   useEffect(() => {
-    // Only initialize once, even with StrictMode
-    if (hasInitializedRef.current) {
-      console.log("WebSocket already initialized, skipping");
-      return;
-    }
-    hasInitializedRef.current = true;
+    let unmounted = false;
+
+    const closeWebSocket = () => {
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
+
+      if (
+        wsRef.current &&
+        (wsRef.current.readyState === WebSocket.OPEN ||
+          wsRef.current.readyState === WebSocket.CONNECTING)
+      ) {
+        wsRef.current.onclose = null;
+        wsRef.current.close();
+      }
+
+      wsRef.current = null;
+      setIsConnected(false);
+    };
 
     const connectWebSocket = () => {
+      if (unmounted) {
+        return;
+      }
+
       // Get auth token
       const token = localStorage.getItem("authToken");
       if (!token) {
@@ -46,6 +62,9 @@ export const MetricsProvider = ({ children }) => {
         const ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
+          if (unmounted) {
+            return;
+          }
           console.log("Global WebSocket connected successfully");
           setIsConnected(true);
           setError("");
@@ -62,12 +81,19 @@ export const MetricsProvider = ({ children }) => {
         };
 
         ws.onerror = (err) => {
+          if (unmounted) {
+            return;
+          }
           console.error("Global WebSocket error:", err);
           setError("WebSocket connection error");
           setIsConnected(false);
         };
 
         ws.onclose = () => {
+          if (unmounted) {
+            return;
+          }
+
           console.log("Global WebSocket disconnected");
           setIsConnected(false);
 
@@ -94,13 +120,29 @@ export const MetricsProvider = ({ children }) => {
       }
     };
 
+    const handleAuthLogout = () => {
+      reconnectAttemptsRef.current = 0;
+      closeWebSocket();
+      setMetrics(null);
+      setError("Not authenticated");
+    };
+
+    const handleAuthLogin = () => {
+      reconnectAttemptsRef.current = 0;
+      closeWebSocket();
+      setError("");
+      connectWebSocket();
+    };
+
+    window.addEventListener("auth:logout", handleAuthLogout);
+    window.addEventListener("auth:login", handleAuthLogin);
     connectWebSocket();
 
     return () => {
-      // Cleanup: only clear the timeout, don't close the WebSocket
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-      }
+      unmounted = true;
+      window.removeEventListener("auth:logout", handleAuthLogout);
+      window.removeEventListener("auth:login", handleAuthLogin);
+      closeWebSocket();
     };
   }, []);
 
@@ -109,12 +151,4 @@ export const MetricsProvider = ({ children }) => {
       {children}
     </MetricsContext.Provider>
   );
-};
-
-export const useMetrics = () => {
-  const context = useContext(MetricsContext);
-  if (!context) {
-    throw new Error("useMetrics must be used within MetricsProvider");
-  }
-  return context;
 };
