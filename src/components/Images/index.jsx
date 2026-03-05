@@ -1,17 +1,22 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 
-import {
-  importImage,
-  deleteImage,
-  createSnapshot,
-} from "@/api/commands";
-import { useToastStore } from "@/store/useToastStore";
-import { Modal } from "@/components/ui";
-import CreateImageForm from "./CreateImageForm";
+import { createSnapshot, deleteImage, importImage } from "@/api/commands";
 import { useConfirm } from "@/contexts/confirmDialog";
+import { useToastStore } from "@/store/useToastStore";
 import { useAppStore } from "@/store/useAppStore";
 import CreateCloneForm from "./CreateCloneForm";
+import CreateImageForm from "./CreateImageForm";
+import ImageTable from "./ImageTable";
+import ImagesEmptyState from "./ImagesEmptyState";
+import ImportImageModal from "./ImportImageModal";
+
+const INITIAL_IMPORT_FORM = {
+  name: "",
+  source_path: "",
+  os_type: "linux",
+  description: "",
+};
 
 export default function Images() {
   const { images, fetchImages } = useAppStore();
@@ -20,40 +25,33 @@ export default function Images() {
   const [showCloneModal, setShowCloneModal] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [selectedImage, setSelectedImage] = useState(null);
+  const [importForm, setImportForm] = useState(INITIAL_IMPORT_FORM);
   const { success, error } = useToastStore();
   const confirm = useConfirm();
-
-  const [importForm, setImportForm] = useState({
-    name: "",
-    source_path: "",
-    os_type: "linux",
-    description: "",
-  });
 
   useEffect(() => {
     fetchImages();
   }, [fetchImages]);
 
-  function formatDate(dateStr) {
+  const formatDate = useCallback((dateStr) => {
     return new Date(dateStr).toLocaleDateString();
-  }
+  }, []);
 
-  function openImportModal() {
-    setImportForm({
-      name: "",
-      source_path: "",
-      os_type: "linux",
-      description: "",
-    });
+  const updateImportField = useCallback((field, value) => {
+    setImportForm((prev) => ({ ...prev, [field]: value }));
+  }, []);
+
+  const openImportModal = useCallback(() => {
+    setImportForm(INITIAL_IMPORT_FORM);
     setShowImportModal(true);
-  }
+  }, []);
 
-  function openCloneModal(image) {
+  const openCloneModal = useCallback((image) => {
     setSelectedImage(image);
     setShowCloneModal(true);
-  }
+  }, []);
 
-  async function selectFile() {
+  const selectFile = useCallback(async () => {
     try {
       const selected = await open({
         multiple: false,
@@ -65,15 +63,16 @@ export default function Images() {
           { name: "All Files", extensions: ["*"] },
         ],
       });
+
       if (selected && typeof selected === "string") {
-        setImportForm({ ...importForm, source_path: selected });
+        setImportForm((prev) => ({ ...prev, source_path: selected }));
       }
     } catch (e) {
       error(`Failed to open file dialog: ${e}`);
     }
-  }
+  }, [error]);
 
-  async function handleImport() {
+  const handleImport = useCallback(async () => {
     setSubmitting(true);
     try {
       const request = {
@@ -86,10 +85,7 @@ export default function Images() {
       }
 
       await importImage(request);
-      success(
-        "Image Management",
-        `Image "${importForm.name}" imported successfully`
-      );
+      success("Image Management", `Image "${importForm.name}" imported successfully`);
       setShowImportModal(false);
       await fetchImages();
     } catch (e) {
@@ -97,47 +93,50 @@ export default function Images() {
     } finally {
       setSubmitting(false);
     }
-  }
+  }, [error, fetchImages, importForm.description, importForm.name, importForm.os_type, importForm.source_path, success]);
 
-  async function handleSnapshot(image) {
-    const snapshotName = prompt(
-      "Enter snapshot name:",
-      `${image.name}-snapshot`
-    );
-    if (!snapshotName) return;
+  const handleSnapshot = useCallback(
+    async (image) => {
+      const snapshotName = prompt("Enter snapshot name:", `${image.name}-snapshot`);
+      if (!snapshotName) return;
 
-    try {
-      await createSnapshot(image.id, snapshotName);
-      success("Image Management", `Snapshot "${snapshotName}" created`);
-      await fetchImages();
-    } catch (e) {
-      error("Image Management", `Failed to create snapshot: ${e}`);
-    }
-  }
+      try {
+        await createSnapshot(image.id, snapshotName);
+        success("Image Management", `Snapshot "${snapshotName}" created`);
+        await fetchImages();
+      } catch (e) {
+        error("Image Management", `Failed to create snapshot: ${e}`);
+      }
+    },
+    [error, fetchImages, success]
+  );
 
-  async function handleDelete(image) {
-    confirm({
-      title: "Delete Image",
-      description: `Are you sure you want to delete image "${image.name}"? This action cannot be undone and might affect clones.`,
-      confirmText: "Delete Image",
-      cancelText: "Cancel",
-      confirmVariant: "success",
-      size: "2xl",
-    })
-      .then(async (ok) => {
+  const handleDelete = useCallback(
+    async (image) => {
+      try {
+        const ok = await confirm({
+          title: "Delete Image",
+          description: `Are you sure you want to delete image "${image.name}"? This action cannot be undone and might affect clones.`,
+          confirmText: "Delete Image",
+          cancelText: "Cancel",
+          confirmVariant: "success",
+          size: "2xl",
+        });
+
         if (!ok) return;
+
         await deleteImage(image.id);
         success("Image Management", `Image "${image.name}" deleted`);
         await fetchImages();
-      })
-      .catch((err) => {
-        console.error("Confirmation dialog error:", err);
-      });
-  }
+      } catch (err) {
+        console.error("Image deletion flow error:", err);
+      }
+    },
+    [confirm, fetchImages, success]
+  );
 
   return (
     <div className="p-6 space-y-8">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-extrabold text-base-content tracking-tight">
@@ -190,261 +189,35 @@ export default function Images() {
       </div>
 
       {images.length === 0 ? (
-        <div className="card bg-base-100 shadow-xl border border-base-200/50">
-          <div className="card-body items-center text-center p-12">
-            <div className="w-20 h-20 bg-base-200 rounded-full flex items-center justify-center text-4xl mb-4">
-              💿
-            </div>
-            <h2 className="card-title text-2xl mb-2">No Images Available</h2>
-            <p className="text-base-content/60 max-w-md mb-6">
-              Upload or create your first boot image to get started.
-            </p>
-            <div className="flex gap-4">
-              <button
-                className="btn btn-info text-white"
-                onClick={openImportModal}
-              >
-                Import Image
-              </button>
-              <button
-                className="btn btn-primary"
-                onClick={() => setShowCreateModal(true)}
-              >
-                Add Image
-              </button>
-            </div>
-          </div>
-        </div>
+        <ImagesEmptyState
+          onImport={openImportModal}
+          onCreate={() => setShowCreateModal(true)}
+        />
       ) : (
-        <div className="card bg-base-100 shadow-xl border border-base-200/50 overflow-visible">
-          <div className="overflow-x-auto rounded-xl">
-            <table className="table table-zebra w-full">
-              <thead className="bg-base-200/50 text-base-content/70">
-                <tr>
-                  <th>Name</th>
-                  <th>OS Type</th>
-                  <th>Size (GB)</th>
-                  <th>Format</th>
-                  <th>Created</th>
-                  <th className="text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {images.map((image) => (
-                  <tr key={image.id} className="hover">
-                    <td className="font-bold">{image.name}</td>
-                    <td>
-                      <div className="badge badge-outline gap-2 capitalize">
-                        {image.os_type}
-                      </div>
-                    </td>
-                    <td className="font-mono opacity-70">{image.size_gb} GB</td>
-                    <td className="uppercase text-xs font-bold opacity-60">
-                      {image.format}
-                    </td>
-                    <td className="opacity-70">
-                      {formatDate(image.created_at)}
-                    </td>
-                    <td>
-                      <div className="flex items-center justify-end gap-2">
-                        <button
-                          className="btn btn-square btn-sm btn-ghost text-base-content/70 hover:text-primary hover:bg-primary/10"
-                          onClick={() => openCloneModal(image)}
-                          title="Clone"
-                        >
-                          <svg
-                            className="w-4 h-4"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth="2"
-                              d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
-                            />
-                          </svg>
-                        </button>
-                        <button
-                          className="btn btn-square btn-sm btn-ghost text-base-content/70 hover:text-warning hover:bg-warning/10"
-                          onClick={() => handleSnapshot(image)}
-                          title="Snapshot"
-                        >
-                          <svg
-                            className="w-4 h-4"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth="2"
-                              d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"
-                            />
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth="2"
-                              d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"
-                            />
-                          </svg>
-                        </button>
-                        <button
-                          className="btn btn-square btn-sm btn-ghost text-error/70 hover:text-error hover:bg-error/10"
-                          onClick={() => handleDelete(image)}
-                          title="Delete"
-                        >
-                          <svg
-                            className="w-4 h-4"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth="2"
-                              d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                            />
-                          </svg>
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        <ImageTable
+          images={images}
+          formatDate={formatDate}
+          onClone={openCloneModal}
+          onSnapshot={handleSnapshot}
+          onDelete={handleDelete}
+        />
       )}
 
-      {/* Create Image Modal */}
       <CreateImageForm
         show={showCreateModal}
         onClose={() => setShowCreateModal(false)}
       />
 
-      {/* Import Image Modal */}
-      <Modal
-        title="Import Image"
+      <ImportImageModal
         show={showImportModal}
         onClose={() => setShowImportModal(false)}
-      >
-        <form
-          className="space-y-4"
-          onSubmit={(e) => {
-            e.preventDefault();
-            handleImport();
-          }}
-        >
-          <fieldset className="fieldset">
-            <div className="label">
-              <span className="label-text">
-                Name <span className="text-error">*</span>
-              </span>
-            </div>
-            <input
-              id="import-name"
-              type="text"
-              value={importForm.name}
-              onChange={(e) =>
-                setImportForm({ ...importForm, name: e.target.value })
-              }
-              className="input input-bordered w-full"
-              placeholder="imported-image"
-              required
-            />
-          </fieldset>
+        form={importForm}
+        onChange={updateImportField}
+        onBrowse={selectFile}
+        onSubmit={handleImport}
+        submitting={submitting}
+      />
 
-          <fieldset className="fieldset">
-            <div className="label">
-              <span className="label-text">
-                Source File <span className="text-error">*</span>
-              </span>
-            </div>
-            <div className="join w-full">
-              <input
-                id="import-source"
-                type="text"
-                value={importForm.source_path}
-                onChange={(e) =>
-                  setImportForm({
-                    ...importForm,
-                    source_path: e.target.value,
-                  })
-                }
-                className="input input-bordered join-item w-full"
-                placeholder="/path/to/image"
-                required
-              />
-              <button
-                type="button"
-                className="btn btn-neutral join-item"
-                onClick={selectFile}
-              >
-                Browse
-              </button>
-            </div>
-          </fieldset>
-
-          <fieldset className="fieldset">
-            <div className="label">
-              <span className="label-text">Operating System</span>
-            </div>
-            <select
-              id="import-os"
-              value={importForm.os_type}
-              onChange={(e) =>
-                setImportForm({ ...importForm, os_type: e.target.value })
-              }
-              className="select select-bordered w-full"
-            >
-              <option value="linux">Linux</option>
-              <option value="windows">Windows</option>
-            </select>
-          </fieldset>
-
-          <fieldset className="fieldset">
-            <div className="label">
-              <span className="label-text">Description</span>
-            </div>
-            <textarea
-              id="import-desc"
-              value={importForm.description}
-              onChange={(e) =>
-                setImportForm({ ...importForm, description: e.target.value })
-              }
-              className="textarea textarea-bordered h-24 w-full"
-              placeholder="Optional description..."
-            ></textarea>
-          </fieldset>
-
-          <div className="flex justify-end gap-3 pt-4 mt-2 border-t border-base-200">
-            <button
-              type="button"
-              className="btn btn-ghost"
-              onClick={() => setShowImportModal(false)}
-              disabled={submitting}
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              className="btn btn-primary"
-              disabled={submitting}
-            >
-              {submitting && (
-                <span className="loading loading-spinner loading-sm"></span>
-              )}
-              Import Image
-            </button>
-          </div>
-        </form>
-      </Modal>
-
-      {/* Clone Image Modal */}
       <CreateCloneForm
         show={showCloneModal}
         onClose={() => setShowCloneModal(false)}

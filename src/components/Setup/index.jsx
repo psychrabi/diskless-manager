@@ -18,7 +18,7 @@ import {
   Package,
   Share2,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useShallow } from "zustand/shallow";
 import { useAppStore } from "../../store/useAppStore";
@@ -30,6 +30,54 @@ import HTTPStep from "./HTTPStep";
 import SambaStep from "./SambaStep";
 import StorageStep from "./StorageStep";
 import TFTPStep from "./TFTPStep";
+
+const getInitialStep = ({
+  allServicesInstalled,
+  poolExists,
+  hasDhcp,
+  hasTftp,
+  hasHttp,
+  hasSamba,
+  hasBootScript,
+}) => {
+  if (
+    allServicesInstalled &&
+    poolExists &&
+    hasDhcp &&
+    hasTftp &&
+    hasHttp &&
+    hasSamba &&
+    hasBootScript
+  ) {
+    return 8;
+  }
+  if (
+    allServicesInstalled &&
+    poolExists &&
+    hasDhcp &&
+    hasTftp &&
+    hasHttp &&
+    hasSamba
+  ) {
+    return 7;
+  }
+  if (allServicesInstalled && poolExists && hasDhcp && hasTftp && hasHttp) {
+    return 6;
+  }
+  if (allServicesInstalled && poolExists && hasDhcp && hasTftp) {
+    return 5;
+  }
+  if (allServicesInstalled && poolExists && hasDhcp) {
+    return 4;
+  }
+  if (allServicesInstalled && poolExists) {
+    return 3;
+  }
+  if (allServicesInstalled) {
+    return 2;
+  }
+  return 1;
+};
 
 const Setup = () => {
   const navigate = useNavigate();
@@ -43,9 +91,15 @@ const Setup = () => {
   const { error, success, info } = useToastStore();
   const { updateDhcp, updateTftp, updateHttp } = useSettings();
   const { handleConfigSave, fetchServiceConfig } = useServiceManager();
-  
+
   // Extract pool name from config
-  const poolName = appConfig?.settings?.zpool_name || appConfig?.settings?.zfsPool || "zroot";
+  const settings = appConfig?.settings ?? {};
+  const poolName = settings.zpool_name || settings.zfsPool || "zroot";
+  const hasDhcp = Boolean(settings.dhcp);
+  const hasTftp = Boolean(settings.tftp);
+  const hasHttp = Boolean(settings.http);
+  const hasSamba = Boolean(settings.samba);
+  const hasBootScript = Boolean(bootScriptContent);
 
   const { dependencies, fetchDependencies } = useAppStore(
     useShallow((state) => ({
@@ -57,15 +111,15 @@ const Setup = () => {
   const checkAll = useCallback(async () => {
     setChecking(true);
     try {
-      const d = await listDisks();
-      setDisks(d);
-
-      const exists = await checkZfsPoolExists();
+      const [detectedDisks, exists] = await Promise.all([
+        listDisks(),
+        checkZfsPoolExists(),
+      ]);
+      setDisks(detectedDisks);
       setPoolExists(exists);
 
-      await fetchDependencies();
-      await fetchConfig();
-      
+      await Promise.all([fetchDependencies(), fetchConfig()]);
+
       // Check if boot script exists - call directly without adding to dependencies
       try {
         const bootConfig = await fetchServiceConfig("tftp-autoexec");
@@ -92,32 +146,26 @@ const Setup = () => {
 
   // Determine the first incomplete step
   useEffect(() => {
-    if (allServicesInstalled && poolExists && appConfig?.settings?.dhcp && appConfig?.settings?.tftp && appConfig?.settings?.http && appConfig?.settings?.samba && bootScriptContent) {
-      // All steps complete, show finished
-      setActiveStep(8);
-    } else if (allServicesInstalled && poolExists && appConfig?.settings?.dhcp && appConfig?.settings?.tftp && appConfig?.settings?.http && appConfig?.settings?.samba) {
-      // Boot script not saved
-      setActiveStep(7);
-    } else if (allServicesInstalled && poolExists && appConfig?.settings?.dhcp && appConfig?.settings?.tftp && appConfig?.settings?.http) {
-      // Samba not configured
-      setActiveStep(6);
-    } else if (allServicesInstalled && poolExists && appConfig?.settings?.dhcp && appConfig?.settings?.tftp) {
-      // HTTP not configured
-      setActiveStep(5);
-    } else if (allServicesInstalled && poolExists && appConfig?.settings?.dhcp) {
-      // TFTP not configured
-      setActiveStep(4);
-    } else if (allServicesInstalled && poolExists) {
-      // DHCP not configured
-      setActiveStep(3);
-    } else if (allServicesInstalled) {
-      // Storage not configured
-      setActiveStep(2);
-    } else {
-      // Dependencies not installed
-      setActiveStep(1);
-    }
-  }, [allServicesInstalled, poolExists, appConfig?.settings?.dhcp, appConfig?.settings?.tftp, appConfig?.settings?.http, appConfig?.settings?.samba, bootScriptContent]);
+    setActiveStep(
+      getInitialStep({
+        allServicesInstalled,
+        poolExists,
+        hasDhcp,
+        hasTftp,
+        hasHttp,
+        hasSamba,
+        hasBootScript,
+      })
+    );
+  }, [
+    allServicesInstalled,
+    poolExists,
+    hasDhcp,
+    hasTftp,
+    hasHttp,
+    hasSamba,
+    hasBootScript,
+  ]);
 
   // Auto-progress logic - only advance if we are on the current step
   // const prevInstalled = useRef(allServicesInstalled);
@@ -150,23 +198,51 @@ const Setup = () => {
     }
   };
 
-  const handleDhcpSubmit = async (data) => {
-    const ok = await updateDhcp(data);
-    if (ok) setActiveStep(4);
-    success("Setup - DHCP", "DHCP configuration saved successfully");
-  };
+  const handleSubmitAndAdvance = useCallback(
+    async (submit, data, nextStep, title, message) => {
+      const ok = await submit(data);
+      if (!ok) return;
+      setActiveStep(nextStep);
+      success(title, message);
+    },
+    [success]
+  );
 
-  const handleTftpSubmit = async (data) => {
-    const ok = await updateTftp(data);
-    if (ok) setActiveStep(5);
-    success("Setup - TFTP", "TFTP configuration saved successfully");
-  };
+  const handleDhcpSubmit = useCallback(
+    async (data) =>
+      handleSubmitAndAdvance(
+        updateDhcp,
+        data,
+        4,
+        "Setup - DHCP",
+        "DHCP configuration saved successfully"
+      ),
+    [handleSubmitAndAdvance, updateDhcp]
+  );
 
-  const handleHttpSubmit = async (data) => {
-    const ok = await updateHttp(data);
-    if (ok) setActiveStep(6);
-    success("Setup - HTTP", "HTTP configuration saved successfully");
-  };
+  const handleTftpSubmit = useCallback(
+    async (data) =>
+      handleSubmitAndAdvance(
+        updateTftp,
+        data,
+        5,
+        "Setup - TFTP",
+        "TFTP configuration saved successfully"
+      ),
+    [handleSubmitAndAdvance, updateTftp]
+  );
+
+  const handleHttpSubmit = useCallback(
+    async (data) =>
+      handleSubmitAndAdvance(
+        updateHttp,
+        data,
+        6,
+        "Setup - HTTP",
+        "HTTP configuration saved successfully"
+      ),
+    [handleSubmitAndAdvance, updateHttp]
+  );
 
   const handleSambaSubmit = async (shares) => {
     try {
@@ -190,77 +266,76 @@ const Setup = () => {
     }
   };
 
-  const steps = [
-    {
-      id: 1,
-      title: "Dependencies",
-      icon: Package,
-      status: allServicesInstalled ? "complete" : "current",
-    },
-    {
-      id: 2,
-      title: "Storage",
-      icon: Database,
-      status: poolExists
-        ? "complete"
-        : allServicesInstalled
-        ? "current"
-        : "upcoming",
-    },
-    {
-      id: 3,
-      title: "DHCP",
-      icon: Network,
-      status: appConfig?.settings?.dhcp
-        ? "complete"
-        : activeStep === 3
-        ? "current"
-        : "upcoming",
-    },
-    {
-      id: 4,
-      title: "TFTP",
-      icon: Network,
-      status: appConfig?.settings?.tftp
-        ? "complete"
-        : activeStep === 4
-        ? "current"
-        : "upcoming",
-    },
-    {
-      id: 5,
-      title: "HTTP",
-      icon: Globe,
-      status: appConfig?.settings?.http
-        ? "complete"
-        : activeStep === 5
-        ? "current"
-        : "upcoming",
-    },
-    {
-      id: 6,
-      title: "Samba",
-      icon: Share2,
-      status: appConfig?.settings?.samba
-        ? "complete"
-        : activeStep === 6
-        ? "current"
-        : "upcoming",
-    },
-    {
-      id: 7,
-      title: "Boot",
-      icon: Code,
-      status:
-        activeStep > 7 ? "complete" : activeStep === 7 ? "current" : "upcoming",
-    },
-    {
-      id: 8,
-      title: "Finished",
-      icon: CheckCircle,
-      status: activeStep === 8 ? "current" : "upcoming",
-    },
-  ];
+  const steps = useMemo(
+    () => [
+      {
+        id: 1,
+        title: "Dependencies",
+        icon: Package,
+        status: allServicesInstalled ? "complete" : "current",
+      },
+      {
+        id: 2,
+        title: "Storage",
+        icon: Database,
+        status: poolExists
+          ? "complete"
+          : allServicesInstalled
+          ? "current"
+          : "upcoming",
+      },
+      {
+        id: 3,
+        title: "DHCP",
+        icon: Network,
+        status: hasDhcp ? "complete" : activeStep === 3 ? "current" : "upcoming",
+      },
+      {
+        id: 4,
+        title: "TFTP",
+        icon: Network,
+        status: hasTftp ? "complete" : activeStep === 4 ? "current" : "upcoming",
+      },
+      {
+        id: 5,
+        title: "HTTP",
+        icon: Globe,
+        status: hasHttp ? "complete" : activeStep === 5 ? "current" : "upcoming",
+      },
+      {
+        id: 6,
+        title: "Samba",
+        icon: Share2,
+        status: hasSamba ? "complete" : activeStep === 6 ? "current" : "upcoming",
+      },
+      {
+        id: 7,
+        title: "Boot",
+        icon: Code,
+        status:
+          activeStep > 7
+            ? "complete"
+            : activeStep === 7
+            ? "current"
+            : "upcoming",
+      },
+      {
+        id: 8,
+        title: "Finished",
+        icon: CheckCircle,
+        status: activeStep === 8 ? "current" : "upcoming",
+      },
+    ],
+    [
+      activeStep,
+      allServicesInstalled,
+      poolExists,
+      hasDhcp,
+      hasTftp,
+      hasHttp,
+      hasSamba,
+    ]
+  );
 
   return (
     <div className="max-w-3xl min-w-3xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">

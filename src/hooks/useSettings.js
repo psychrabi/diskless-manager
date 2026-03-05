@@ -8,221 +8,134 @@ export const useSettings = () => {
   const { error, success } = useToastStore();
   const fetchConfig = useAppStore((state) => state.fetchConfig);
 
+  const withLoading = useCallback(async (task) => {
+    setLoading(true);
+    try {
+      return await task();
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const updateSettingsSection = useCallback(
+    async ({
+      section,
+      config,
+      toastTitle,
+      successMessage,
+      serviceName,
+      getErrorMessage = (err) => err?.message || String(err),
+    }) =>
+      withLoading(async () => {
+        try {
+          const currentSettings = await api.getSettings();
+          const updatedSettings = {
+            ...currentSettings,
+            [section]: {
+              ...config,
+            },
+          };
+
+          await api.saveSettings(updatedSettings);
+
+          if (serviceName) {
+            await api.configureService(serviceName);
+            await api.restartService(serviceName);
+          }
+
+          await fetchConfig();
+          success(toastTitle, successMessage);
+          return true;
+        } catch (err) {
+          error(toastTitle, getErrorMessage(err));
+          return false;
+        }
+      }),
+    [error, fetchConfig, success, withLoading]
+  );
+
   const readConfig = useCallback(async () => {
     try {
       return await api.readConfig();
-    } catch (error) {
-      console.error("Failed to load config:", error);
+    } catch (err) {
+      console.error("Failed to load config:", err);
       return null;
     }
   }, []);
 
   const updateDhcp = useCallback(
-    async (config) => {
-      setLoading(true);
-      try {
-        // First, get the current settings
-        const currentSettings = await api.getSettings();
-
-        // Update the DHCP settings
-        const updatedSettings = {
-          ...currentSettings,
-          dhcp: {
-            ...config,
-          },
-        };
-
-        // Save the updated settings
-        await api.saveSettings(updatedSettings);
-
-        // Configure the DHCP service using the new settings
-        await api.configureService("dhcp");
-        await api.restartService("dhcp");
-        await fetchConfig();
-        success("DHCP Settings", "DHCP configuration saved successfully");
-        return true;
-      } catch (err) {
-        console.log(err);
-        error(
-          "DHCP Settings",
-          "Failed to configure DHCP server: " + (err.message ?? err)
-        );
-        return false;
-      } finally {
-        setLoading(false);
-      }
-    },
-    [success, error, fetchConfig]
+    (config) =>
+      updateSettingsSection({
+        section: "dhcp",
+        config,
+        toastTitle: "DHCP Settings",
+        successMessage: "DHCP configuration saved successfully",
+        serviceName: "dhcp",
+        getErrorMessage: (err) =>
+          `Failed to configure DHCP server: ${err?.message ?? err}`,
+      }),
+    [updateSettingsSection]
   );
 
   const updateTftp = useCallback(
-    async (tftpConfig) => {
-      setLoading(true);
-      try {
-        // First, get the current settings
-        const currentSettings = await api.getSettings();
-
-        // Update the TFTP settings
-        const updatedSettings = {
-          ...currentSettings,
-          tftp: {
-            ...tftpConfig,
-          },
-        };
-
-        // Save the updated settings
-        await api.saveSettings(updatedSettings);
-
-        // Configure the TFTP service using the new settings
-        await api.configureService("tftp");
-        await api.restartService("tftp");
-        await fetchConfig();
-
-        success("TFTP Settings", "TFTP configuration saved successfully");
-        return true;
-      } catch (err) {
-        error("TFTP Settings", err.message || String(err));
-        return false;
-      } finally {
-        setLoading(false);
-      }
-    },
-    [success, error, fetchConfig]
+    (tftpConfig) =>
+      updateSettingsSection({
+        section: "tftp",
+        config: tftpConfig,
+        toastTitle: "TFTP Settings",
+        successMessage: "TFTP configuration saved successfully",
+        serviceName: "tftp",
+      }),
+    [updateSettingsSection]
   );
 
   const updateHttp = useCallback(
-    async (httpConfig) => {
-      setLoading(true);
-      try {
-        // First, get the current settings
-        const currentSettings = await api.getSettings();
-
-        // Update the HTTP settings
-        const updatedSettings = {
-          ...currentSettings,
-          http: {
-            ...httpConfig,
-          },
-        };
-
-        // Save the updated settings
-        await api.saveSettings(updatedSettings);
-
-        // Configure the HTTP service using the new settings
-        await api.configureService("http");
-        await api.restartService("http");
-        await fetchConfig();
-
-        success("HTTP Settings", "HTTP configuration saved successfully");
-        return true;
-      } catch (err) {
-        error(
-          "HTTP Settings",
-          err.message || err || "Failed to configure HTTP server"
-        );
-        return false;
-      } finally {
-        setLoading(false);
-      }
-    },
-    [error, success, fetchConfig]
+    (httpConfig) =>
+      updateSettingsSection({
+        section: "http",
+        config: httpConfig,
+        toastTitle: "HTTP Settings",
+        successMessage: "HTTP configuration saved successfully",
+        serviceName: "http",
+        getErrorMessage: (err) =>
+          err?.message || err || "Failed to configure HTTP server",
+      }),
+    [updateSettingsSection]
   );
   const updateIscsi = useCallback(
-    async (iscsiConfig) => {
-      setLoading(true);
-      try {
-        // First, get the current settings
-        const currentSettings = await api.getSettings();
-
-        // Update the ISCSI settings
-        const updatedSettings = {
-          ...currentSettings,
-          iscsi: {
-            ...iscsiConfig,
-          },
-        };
-
-        // Save the updated settings
-        await api.saveSettings(updatedSettings);
-
-        // Configure the ISCSI service using the new settings
-        await api.configureService("iscsi");
-        await api.restartService("iscsi");
-        await fetchConfig();
-
-        success("ISCSI Settings", "ISCSI configuration saved successfully");
-        return true;
-      } catch (err) {
-        error(
-          "ISCSI Settings",
-          err.message || err || "Failed to configure ISCSI server"
-        );
-        return false;
-      } finally {
-        setLoading(false);
-      }
-    },
-    [error, success, fetchConfig]
+    (iscsiConfig) =>
+      updateSettingsSection({
+        section: "iscsi",
+        config: iscsiConfig,
+        toastTitle: "ISCSI Settings",
+        successMessage: "ISCSI configuration saved successfully",
+        serviceName: "iscsi",
+        getErrorMessage: (err) =>
+          err?.message || err || "Failed to configure ISCSI server",
+      }),
+    [updateSettingsSection]
   );
 
   const updateSamba = useCallback(
-    async (sambaConfig) => {
-      console.log(sambaConfig);
-      setLoading(true);
-      try {
-        // First, get the current settings
-        const currentSettings = await api.getSettings();
-
-        // Update the Samba settings
-        const updatedSettings = {
-          ...currentSettings,
-          samba: {
-            ...sambaConfig,
-          },
-        };
-
-        // Save the updated settings
-        await api.saveSettings(updatedSettings);
-
-        // Configure the Samba service using the new settings
-        await api.configureService("samba");
-        await api.restartService("samba");
-        await fetchConfig();
-
-        success("Samba Settings", "Samba configuration saved successfully");
-        return true;
-      } catch (err) {
-        error("Samba Settings", err.message || String(err));
-        return false;
-      } finally {
-        setLoading(false);
-      }
-    },
-    [success, error, fetchConfig]
+    (sambaConfig) =>
+      updateSettingsSection({
+        section: "samba",
+        config: sambaConfig,
+        toastTitle: "Samba Settings",
+        successMessage: "Samba configuration saved successfully",
+        serviceName: "samba",
+      }),
+    [updateSettingsSection]
   );
   const updateServer = useCallback(
-    async (serverConfig) => {
-      setLoading(true);
-      try {
-        const currentSettings = await api.getSettings();
-        const updatedSettings = {
-          ...currentSettings,
-          server: {
-            ...serverConfig,
-          },
-        };
-        await api.saveSettings(updatedSettings);
-        await fetchConfig();
-        success("Server Settings", "Server configuration saved successfully");
-        return true;
-      } catch (err) {
-        error("Server Settings", err.message || String(err));
-        return false;
-      } finally {
-        setLoading(false);
-      }
-    },
-    [success, error, fetchConfig]
+    (serverConfig) =>
+      updateSettingsSection({
+        section: "server",
+        config: serverConfig,
+        toastTitle: "Server Settings",
+        successMessage: "Server configuration saved successfully",
+      }),
+    [updateSettingsSection]
   );
 
   const fetchInterfaces = useCallback(async () => {
@@ -251,37 +164,34 @@ export const useSettings = () => {
     }
   }, [error]);
   const applyNetworkSettings = useCallback(async () => {
-    setLoading(true);
-    try {
-      const response = await api.applyNetworkSettings({});
-      success("Network Applied", response);
-      return true;
-    } catch (err) {
-      error("Network Apply Failed", err.message || String(err));
-      return false;
-    } finally {
-      setLoading(false);
-    }
-  }, [success, error]);
-
-  const updatePassword = useCallback(
-    async (oldPassword, newPassword) => {
-      setLoading(true);
+    return withLoading(async () => {
       try {
-        const response = await api.updateAdminPassword({
-          old_password: oldPassword,
-          new_password: newPassword
-        });
-        if (response) success("Admin Password", response.message || response);
+        const response = await api.applyNetworkSettings({});
+        success("Network Applied", response);
         return true;
       } catch (err) {
-        error("Admin Password", err.message || "An unknown error occurred");
+        error("Network Apply Failed", err.message || String(err));
         return false;
-      } finally {
-        setLoading(false);
       }
-    },
-    [error, success]
+    });
+  }, [error, success, withLoading]);
+
+  const updatePassword = useCallback(
+    (oldPassword, newPassword) =>
+      withLoading(async () => {
+        try {
+          const response = await api.updateAdminPassword({
+            old_password: oldPassword,
+            new_password: newPassword,
+          });
+          if (response) success("Admin Password", response.message || response);
+          return true;
+        } catch (err) {
+          error("Admin Password", err.message || "An unknown error occurred");
+          return false;
+        }
+      }),
+    [error, success, withLoading]
   );
 
   const getLicenseInfo = useCallback(async () => {
@@ -294,23 +204,21 @@ export const useSettings = () => {
   }, [error]);
 
   const activateLicense = useCallback(
-    async (key) => {
-      setLoading(true);
-      try {
-        const resp = await api.activateLicense(key);
-        success(
-          "License Activated",
-          resp?.message || "License activated successfully"
-        );
-        return true;
-      } catch (err) {
-        error("License Activation Failed", err?.message || String(err));
-        return false;
-      } finally {
-        setLoading(false);
-      }
-    },
-    [success, error]
+    (key) =>
+      withLoading(async () => {
+        try {
+          const resp = await api.activateLicense(key);
+          success(
+            "License Activated",
+            resp?.message || "License activated successfully"
+          );
+          return true;
+        } catch (err) {
+          error("License Activation Failed", err?.message || String(err));
+          return false;
+        }
+      }),
+    [error, success, withLoading]
   );
 
   return {
