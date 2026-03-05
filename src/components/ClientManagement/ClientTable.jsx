@@ -1,61 +1,26 @@
-import { Clock, Monitor, MoveDown, MoveUp } from "lucide-react";
 import React, { useEffect, useMemo } from "react";
 import { TableVirtuoso } from "react-virtuoso";
 import { useAppStore } from "../../store/useAppStore";
 import { useMetrics } from "@/contexts/useMetrics";
-import { TableCell, TableHead } from "@/components/ui";
-import { formatUptime } from "@/utils/formatUptime";
-import ControlActionButtons from "./ControlActionButtons";
+import ClientTableEmptyState from "./ClientTableEmptyState";
+import ClientTableHeader from "./ClientTableHeader";
+import ClientTableRow from "./ClientTableRow";
 
-const ClientStatusBadge = React.memo(({ status }) => {
-  const currentStatus = status || "Offline";
-  const isOnline = currentStatus === "Online";
-  const isLeased = currentStatus === "Leased";
-  const badgeClass = isOnline
-    ? "text-success"
-    : isLeased
-      ? "text-warning"
-      : "text-neutral";
-  return (
-    <Monitor className={`inline mr-2 h-4 w-4 ${badgeClass}`} />  
-  );
-});
+const syncClientStatuses = (clients, metricsMap) => {
+  let hasChanges = false;
 
-const ClientModeBadge = React.memo(({ client }) => {
-  // Check if using master directly (no snapshot)
-  const isUsingMasterDirectly = !client.snapshot || client.snapshot === "";
-  
-  if (isUsingMasterDirectly) {
-    return (
-      <span
-        className="status status-warning status-lg"
-        title={`Super Client : ${client.master}`}
-      >
-      </span>
-    );
-  }
+  const updatedClients = clients.map((client) => {
+    const nextStatus = metricsMap[client.ip]?.status;
+    if (!nextStatus || nextStatus === client.status) {
+      return client;
+    }
 
-  // Using a snapshot - check writeback mode
-  if (client.keep_writeback === false) {
-    return (
-      <span
-        className="status status-secondary status-lg"
-        title={`Non-Persistent`}
-      >
-      
-      </span>
-    );
-  }
+    hasChanges = true;
+    return { ...client, status: nextStatus };
+  });
 
-  return (
-    <span
-      className="status status-info status-lg"
-      title={`Persistent: ${client.block_store}`}
-    >
-      
-    </span>
-  );
-});
+  return hasChanges ? updatedClients : clients;
+};
 
 // Define Virtuoso components outside to prevent remounting
 const VirtuosoTableComponents = {
@@ -101,156 +66,31 @@ const ClientTable = ({ handleClientContextMenu }) => {
     return map;
   }, [metrics]);
 
-  // Build a map of client IP to metrics for quick lookup and update client statuses
   useEffect(() => {
-    if (metrics?.clients) {
-      // Update client statuses from metrics
-      const updatedClients = clients.map((client) => {
-        const metric = metricsMap[client.ip];
-        if (metric && client.status !== metric.status) {
-          return { ...client, status: metric.status };
-        }
-        return client;
-      });
+    if (!metrics?.clients) return;
 
-      // Only update if there are actual changes
-      if (JSON.stringify(updatedClients) !== JSON.stringify(clients)) {
-        setClients(updatedClients);
-      }
+    const updatedClients = syncClientStatuses(clients, metricsMap);
+    if (updatedClients !== clients) {
+      setClients(updatedClients);
     }
   }, [clients, metrics?.clients, metricsMap, setClients]);
-
-  const getClientMetrics = (clientIp) => {
-    return metricsMap[clientIp] || null;
-  };
 
   return (
     <div className="bg-base-100 rounded-lg h-[calc(100vh-27.5rem)] w-full border border-base-200">
       {clients.length === 0 ? (
-        <div className="p-4">
-          <table className="table w-full">
-            <thead>
-              <tr className="border-b border-base-200">
-                <TableHead >Name</TableHead>
-                <TableHead className="hidden md:table-cell">
-                  MAC Address
-                </TableHead>
-                <TableHead>IP Address</TableHead>
-                    <TableHead className="hidden md:table-cell">Read <span className="hidden">(MB/s)</span></TableHead>
-                <TableHead className="hidden md:table-cell" >Write (MB/s)</TableHead>
-                <TableHead className="hidden md:table-cell">Image</TableHead>
-                <TableHead className="hidden 2xl:table-cell">
-                  Restore Point
-                </TableHead>
-                <TableHead className="hidden 2xl:table-cell">
-                  Boot disk
-                </TableHead>
-                
-                <TableHead className="hidden md:table-cell">Mode</TableHead>
-                <TableHead className="hidden md:table-cell">Uptime</TableHead>
-                <TableHead className="text-center">Actions</TableHead>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td
-                  colSpan="8"
-                  className="text-center py-4 text-base-content/60"
-                >
-                  No clients configured.
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+        <ClientTableEmptyState />
       ) : (
         <TableVirtuoso
           data={clients}
           context={{ handleClientContextMenu }}
           components={VirtuosoTableComponents}
-          fixedHeaderContent={() => (
-            <tr className="bg-base-100 border-b border-base-200 shadow-sm z-10 w-full text-center">
-              <TableHead className="bg-base-100 w-30">Name</TableHead>
-              <TableHead className="hidden md:table-cell bg-base-100 w-40">
-                MAC Address
-              </TableHead>
-              <TableHead className="bg-base-100 w-36">IP Address</TableHead>
-                    <TableHead className="bg-base-100 hidden lg:table-cell w-20">Read <span className="hidden">(MB/s)</span></TableHead>
-                    <TableHead className="bg-base-100 hidden lg:table-cell w-20">Write <span className="hidden">(MB/s)</span></TableHead>
-              <TableHead className="hidden 2xl:table-cell bg-base-100">
-                Image
-              </TableHead>
-              <TableHead className="hidden 2xl:table-cell bg-base-100">
-                Restore Point
-              </TableHead>
-              <TableHead className="hidden 2xl:table-cell bg-base-100">
-                Boot disk
-              </TableHead>
-              
-              <TableHead className="bg-base-100 lg:table-cell">Mode</TableHead>
-              <TableHead className="hidden lg:table-cell bg-base-100">Uptime</TableHead>
-              <TableHead className="bg-base-100 text-center">Actions</TableHead>
-            </tr>
-          )}
+          fixedHeaderContent={() => <ClientTableHeader fixed />}
           itemContent={(_, client) => {
-            const clientMetrics = getClientMetrics(client.ip);
             return (
-              <>
-                <TableCell className="font-bold font-mono">
-                  <ClientStatusBadge status={client.status} />
-                  {client.name}
-                </TableCell>
-                <TableCell className="hidden md:table-cell text-xs font-mono">
-                  {client.mac}
-                </TableCell>
-                <TableCell className="font-mono text-xs text-center">{client.ip}</TableCell>
-                    <TableCell className="hidden lg:table-cell font-mono ">
-                  {clientMetrics ? (
-                    <span className="flex items-center justify-center gap-1">
-                      <MoveUp className="w-3 h-3 text-info" />
-                      {clientMetrics.read_speed_mbps.toFixed(2)}
-                    </span>
-                  ) : (
-                    <span className="text-base-content/40">-</span>
-                  )}
-                </TableCell>
-                <TableCell className="hidden lg:table-cell font-mono">
-                  {clientMetrics ? (
-                    <span className="flex items-center justify-center gap-1">
-                      <MoveDown className="w-3 h-3 text-warning" />
-                      {clientMetrics.write_speed_mbps.toFixed(2)}
-                    </span>
-                  ) : (
-                    <span className="text-base-content/40">-</span>
-                  )}
-                </TableCell>
-                <TableCell className="hidden xl:table-cell text-xs font-mono break-all text-center">
-                  {client.master}
-                </TableCell>
-                <TableCell className="hidden 2xl:table-cell text-xs font-mono break-all text-center">
-                  {client.snapshot ?? "-"}
-                </TableCell>
-                <TableCell className="hidden 2xl:table-cell text-xs font-mono break-all text-center">
-                  {client.block_store}
-                </TableCell>
-              
-                <TableCell className="text-center">
-                  <ClientModeBadge client={client} />
-                </TableCell>
-                <TableCell className="hidden lg:table-cell text-xs font-mono text-center">
-                  {clientMetrics ? (
-                    <span className="flex items-center gap-1">
-                      <Clock className="w-3 h-3 text-secondary" />
-                      {formatUptime(clientMetrics.uptime_seconds)}
-                    </span>
-                  ) : (
-                    <span className="text-base-content/40">-</span>
-                  )}
-                </TableCell>
-                <TableCell className="">
-                  <ControlActionButtons client={client} onActionComplete={() => {}} />
-                </TableCell>
-              </>
+              <ClientTableRow
+                client={client}
+                clientMetrics={metricsMap[client.ip] || null}
+              />
             );
           }}
         />

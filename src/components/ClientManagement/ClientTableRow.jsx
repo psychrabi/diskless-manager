@@ -1,0 +1,124 @@
+import { TableCell } from "@/components/ui";
+import { formatUptime } from "@/utils/formatUptime";
+import { Clock, Monitor, MoveDown, MoveUp } from "lucide-react";
+import React from "react";
+import ControlActionButtons from "./ControlActionButtons";
+
+const ClientStatusBadge = React.memo(({ status }) => {
+  const currentStatus = status || "Offline";
+  const isOnline = currentStatus === "Online";
+  const isLeased = currentStatus === "Leased";
+  const badgeClass = isOnline
+    ? "text-success"
+    : isLeased
+      ? "text-warning"
+      : "text-neutral";
+
+  return <Monitor className={`inline mr-2 h-4 w-4 ${badgeClass}`} />;
+});
+
+const ClientModeBadge = React.memo(({ client }) => {
+  const isUsingMasterDirectly = !client.snapshot;
+
+  if (isUsingMasterDirectly) {
+    return (
+      <span
+        className="status status-warning status-lg"
+        title={`Super Client : ${client.master}`}
+      ></span>
+    );
+  }
+
+  if (client.keep_writeback === false) {
+    return (
+      <span
+        className="status status-secondary status-lg"
+        title="Non-Persistent"
+      ></span>
+    );
+  }
+
+  return (
+    <span
+      className="status status-info status-lg"
+      title={`Persistent: ${client.block_store}`}
+    ></span>
+  );
+});
+
+const SpeedCell = ({ metricValue, icon, iconClassName }) => {
+  if (metricValue == null) {
+    return <span className="text-base-content/40">-</span>;
+  }
+
+  return (
+    <span className="flex items-center justify-center gap-1">
+      {React.createElement(icon, {
+        className: `w-3 h-3 ${iconClassName}`,
+      })}
+      {metricValue.toFixed(2)}
+    </span>
+  );
+};
+
+const UptimeCell = ({ uptimeSeconds }) => {
+  if (uptimeSeconds == null) {
+    return <span className="text-base-content/40">-</span>;
+  }
+
+  return (
+    <span className="flex items-center gap-1">
+      <Clock className="w-3 h-3 text-secondary" />
+      {formatUptime(uptimeSeconds)}
+    </span>
+  );
+};
+
+const ClientTableRow = ({ client, clientMetrics }) => {
+  return (
+    <>
+      <TableCell className="font-bold font-mono">
+        <ClientStatusBadge status={client.status} />
+        {client.name}
+      </TableCell>
+      <TableCell className="hidden md:table-cell text-xs font-mono">
+        {client.mac}
+      </TableCell>
+      <TableCell className="font-mono text-xs text-center">{client.ip}</TableCell>
+      <TableCell className="hidden lg:table-cell font-mono">
+        <SpeedCell
+          metricValue={clientMetrics?.read_speed_mbps}
+          icon={MoveUp}
+          iconClassName="text-info"
+        />
+      </TableCell>
+      <TableCell className="hidden lg:table-cell font-mono">
+        <SpeedCell
+          metricValue={clientMetrics?.write_speed_mbps}
+          icon={MoveDown}
+          iconClassName="text-warning"
+        />
+      </TableCell>
+      <TableCell className="hidden xl:table-cell text-xs font-mono break-all text-center">
+        {client.master}
+      </TableCell>
+      <TableCell className="hidden 2xl:table-cell text-xs font-mono break-all text-center">
+        {client.snapshot ?? "-"}
+      </TableCell>
+      <TableCell className="hidden 2xl:table-cell text-xs font-mono break-all text-center">
+        {client.block_store}
+      </TableCell>
+      <TableCell className="text-center">
+        <ClientModeBadge client={client} />
+      </TableCell>
+      <TableCell className="hidden lg:table-cell text-xs font-mono text-center">
+        <UptimeCell uptimeSeconds={clientMetrics?.uptime_seconds} />
+      </TableCell>
+      <TableCell>
+        <ControlActionButtons client={client} onActionComplete={() => {}} />
+      </TableCell>
+    </>
+  );
+};
+
+export default ClientTableRow;

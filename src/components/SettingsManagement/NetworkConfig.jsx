@@ -5,7 +5,43 @@ import { serverSchema } from "@/schema";
 import { useSettings } from "@/hooks/useSettings";
 import { useAppStore } from "@/store/useAppStore";
 import { Card, Button, Input } from "@/components/ui";
-import { Monitor, RefreshCcw, Shield, Globe, Network } from "lucide-react";
+import { RefreshCcw, Shield, Globe, Network } from "lucide-react";
+import NetworkInterfaceSelector from "./NetworkInterfaceSelector";
+
+const DEFAULT_FORM_VALUES = {
+  interface: [],
+  ip_address: "",
+  netmask: "255.255.255.0",
+  gateway: "",
+  dns: "8.8.8.8, 8.8.4.4",
+  hostname: "",
+  domain: "",
+};
+
+const formatServerSettingsForForm = (settings) => {
+  if (!settings) return DEFAULT_FORM_VALUES;
+
+  return {
+    ...DEFAULT_FORM_VALUES,
+    ...settings,
+    interface: Array.isArray(settings.interface)
+      ? settings.interface
+      : settings.interface
+      ? [settings.interface]
+      : [],
+    dns: Array.isArray(settings.dns)
+      ? settings.dns.join(", ")
+      : settings.dns || DEFAULT_FORM_VALUES.dns,
+  };
+};
+
+const toServerPayload = (data) => ({
+  ...data,
+  dns: (data.dns || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean),
+});
 
 export default function NetworkConfig() {
   const { fetchInterfaces, detectNetwork, applyNetworkSettings, updateServer } =
@@ -23,15 +59,7 @@ export default function NetworkConfig() {
     reset,
   } = useForm({
     resolver: zodResolver(serverSchema),
-    defaultValues: {
-      interface: [],
-      ip_address: "",
-      netmask: "255.255.255.0",
-      gateway: "",
-      dns: "8.8.8.8, 8.8.4.4",
-      hostname: "",
-      domain: "",
-    },
+    defaultValues: DEFAULT_FORM_VALUES,
   });
 
   const selectedInterfaces = watch("interface");
@@ -54,50 +82,40 @@ export default function NetworkConfig() {
   }, [loadData]);
 
   useEffect(() => {
-    if (appConfig?.settings?.server) {
-      // Transform the array of DNS IPs into a comma-separated string for the form
-      const serverSettings = { ...appConfig.settings.server };
-      if (Array.isArray(serverSettings.dns)) {
-        serverSettings.dns = serverSettings.dns.join(", ");
-      }
-      reset(serverSettings);
-    }
+    reset(formatServerSettingsForForm(appConfig?.settings?.server));
   }, [appConfig, reset]);
 
   const onAutoPopulate = useCallback(async () => {
     const data = await detectNetwork();
-    if (data) {
-      if (data.hostname)
-        setValue("hostname", data.hostname, { shouldValidate: true });
-      if (data.domain)
-        setValue("domain", data.domain, { shouldValidate: true });
-      if (data.primary_ip)
-        setValue("ip_address", data.primary_ip, { shouldValidate: true });
-      if (data.primary_mask)
-        setValue("netmask", data.primary_mask, { shouldValidate: true });
-      if (data.gateway)
-        setValue("gateway", data.gateway, { shouldValidate: true });
-      if (data.dns && data.dns.length > 0) {
-        // Transform array to string
-        setValue("dns", data.dns.join(", "), { shouldValidate: true });
+    if (!data) return;
+
+    const fieldMap = {
+      hostname: "hostname",
+      domain: "domain",
+      primary_ip: "ip_address",
+      primary_mask: "netmask",
+      gateway: "gateway",
+    };
+
+    Object.entries(fieldMap).forEach(([sourceField, targetField]) => {
+      if (data[sourceField]) {
+        setValue(targetField, data[sourceField], { shouldValidate: true });
       }
-      if (data.primary_interface) {
-        setValue("interface", [data.primary_interface], {
-          shouldValidate: true,
-        });
-      }
+    });
+
+    if (data.dns?.length) {
+      setValue("dns", data.dns.join(", "), { shouldValidate: true });
+    }
+
+    if (data.primary_interface) {
+      setValue("interface", [data.primary_interface], {
+        shouldValidate: true,
+      });
     }
   }, [detectNetwork, setValue]);
 
   const onSubmit = async (data) => {
-    // Transform comma-separated string back to array of IPs for the backend
-    const payload = {
-      ...data,
-      dns: data.dns
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean),
-    };
+    const payload = toServerPayload(data);
 
     const success = await updateServer(payload);
     if (success) {
@@ -122,78 +140,21 @@ export default function NetworkConfig() {
   };
 
   return (
-    <Card title="Server Network Configuration" icon={Network} className="xl:col-span-2">
+    <Card
+      title="Server Network Configuration"
+      icon={Network}
+      className="xl:col-span-2"
+    >
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-2">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {/* Left Column: Interface & Identification */}
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <label className="text-sm font-semibold text-base-content/70 uppercase tracking-tight flex items-center gap-2">
-                <Network size={14} /> Network Interfaces
-              </label>
-              <button
-                type="button"
-                onClick={loadData}
-                className="btn btn-ghost btn-xs gap-1 opacity-70 hover:opacity-100"
-                disabled={loadingInterfaces}
-              >
-                <RefreshCcw
-                  size={12}
-                  className={loadingInterfaces ? "animate-spin" : ""}
-                />
-                Refresh
-              </button>
-            </div>
-            <div className="border border-base-300 rounded-xl bg-base-200/30 overflow-hidden">
-              <div className="max-h-[200px] overflow-y-auto p-2 space-y-1">
-                {loadingInterfaces ? (
-                  <div className="flex flex-col items-center justify-center py-8 gap-2 opacity-50">
-                    <span className="loading loading-spinner loading-sm"></span>
-                    <span className="text-xs">Detecting interfaces...</span>
-                  </div>
-                ) : interfaces.length === 0 ? (
-                  <div className="py-8 text-center text-sm text-error/70 italic">
-                    No active network interfaces detected.
-                  </div>
-                ) : (
-                  interfaces.map((iface) => {
-                    const isSelected = selectedInterfaces?.includes(iface);
-                    return (
-                      <label
-                        key={iface}
-                        className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition-all border ${isSelected
-                          ? "bg-primary/10 border-primary/30 text-primary shadow-sm"
-                          : "bg-base-100 border-transparent hover:border-base-300 hover:bg-base-200"
-                          }`}
-                      >
-                        <div className="flex items-center gap-3">
-                          <input
-                            type="checkbox"
-                            className="checkbox checkbox-primary checkbox-sm rounded"
-                            checked={isSelected}
-                            onChange={() => handleInterfaceToggle(iface)}
-                          />
-                          <span className="font-mono text-sm font-bold">
-                            {iface}
-                          </span>
-                        </div>
-                        {isSelected && (
-                          <span className="badge badge-primary badge-xs py-2 px-2 font-bold uppercase tracking-widest text-[10px]">
-                            Active
-                          </span>
-                        )}
-                      </label>
-                    );
-                  })
-                )}
-              </div>
-            </div>
-            {errors.interface && (
-              <p className="text-xs text-error font-medium flex items-center gap-1 mt-1">
-                <span>⚠️</span> {errors.interface.message}
-              </p>
-            )}
-          </div>
+          <NetworkInterfaceSelector
+            loading={loadingInterfaces}
+            interfaces={interfaces}
+            selectedInterfaces={selectedInterfaces}
+            onRefresh={loadData}
+            onToggle={handleInterfaceToggle}
+            errorMessage={errors.interface?.message}
+          />
 
           {/* Right Column: Addressing */}
           <div className="">
@@ -297,7 +258,7 @@ export default function NetworkConfig() {
             <Button
               variant="ghost"
               type="button"
-              onClick={() => reset(appConfig?.settings?.server)}
+              onClick={() => reset(formatServerSettingsForForm(appConfig?.settings?.server))}
               disabled={isSubmitting}
             >
               Reset

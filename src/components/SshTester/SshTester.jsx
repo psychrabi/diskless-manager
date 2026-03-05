@@ -1,98 +1,145 @@
-import React, { useState } from 'react';
-import * as api from '../../api/commands';
+import { useMemo, useState } from "react";
+import * as api from "../../api/commands";
+
+const DEFAULT_USERNAME = "Administrator";
+
+const INITIAL_CONNECTION_FORM = {
+  host: "",
+  username: DEFAULT_USERNAME,
+  port: 22,
+};
+
+const INITIAL_COMMAND_FORM = {
+  host: "",
+  username: DEFAULT_USERNAME,
+  command: 'echo "Hello from Windows SSH"',
+};
+
+const QUICK_COMMANDS = [
+  { label: "List C: Drive", command: "dir C:\\" },
+  { label: "Network Config", command: "ipconfig /all" },
+  { label: "System Info", command: "systeminfo" },
+  { label: "Top Processes", command: "Get-Process | Select-Object -First 10" },
+  {
+    label: "Running Services",
+    command:
+      'Get-Service | Where-Object {$_.Status -eq "Running"} | Select-Object -First 10',
+  },
+];
+
+const buildApiErrorResult = (error) => ({
+  success: false,
+  message: `Error: ${error?.message || error}`,
+  duration_ms: 0,
+  command_output: null,
+});
+
+const ResultAlert = ({ title, result, outputTitle }) => {
+  if (!result) return null;
+
+  return (
+    <div className={`alert ${result.success ? "alert-success" : "alert-error"} mt-4`}>
+      <div className="w-full">
+        <h3 className="font-bold">{title}</h3>
+        <p>{result.message}</p>
+        <p className="text-sm opacity-70">Duration: {result.duration_ms}ms</p>
+        {result.command_output && (
+          <div className="mt-2">
+            {outputTitle && <h4 className="font-semibold">{outputTitle}</h4>}
+            <pre className="text-xs bg-base-200 p-3 rounded overflow-x-auto whitespace-pre-wrap">
+              {result.command_output}
+            </pre>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
 
 const SshTester = () => {
-  const [connectionForm, setConnectionForm] = useState({
-    host: '',
-    username: 'Administrator', // Default for Windows
-    port: 22
-  });
-  
-  const [commandForm, setCommandForm] = useState({
-    host: '',
-    username: 'Administrator',
-    command: 'echo "Hello from Windows SSH"'
-  });
-  
+  const [connectionForm, setConnectionForm] = useState(INITIAL_CONNECTION_FORM);
+  const [commandForm, setCommandForm] = useState(INITIAL_COMMAND_FORM);
   const [testResult, setTestResult] = useState(null);
   const [commandResult, setCommandResult] = useState(null);
   const [systemInfo, setSystemInfo] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  const testConnection = async () => {
+  const canUseConnectionActions = useMemo(
+    () => Boolean(connectionForm.host && connectionForm.username && !loading),
+    [connectionForm.host, connectionForm.username, loading]
+  );
+
+  const canExecuteCommand = useMemo(
+    () =>
+      Boolean(
+        commandForm.host && commandForm.username && commandForm.command && !loading
+      ),
+    [commandForm.command, commandForm.host, commandForm.username, loading]
+  );
+
+  const runWithLoading = async ({ before, action, onSuccess, onError }) => {
     setLoading(true);
-    setTestResult(null);
-    
+    if (before) before();
+
     try {
-      const result = await api.testSshConnection(
-        connectionForm.host,
-        connectionForm.username,
-        connectionForm.port
-      );
-      setTestResult(result);
+      const result = await action();
+      onSuccess(result);
     } catch (error) {
-      setTestResult({
-        success: false,
-        message: `Error: ${error.message || error}`,
-        duration_ms: 0,
-        command_output: null
-      });
+      onError(error);
     } finally {
       setLoading(false);
     }
+  };
+
+  const testConnection = async () => {
+    await runWithLoading({
+      before: () => setTestResult(null),
+      action: () =>
+        api.testSshConnection(
+          connectionForm.host,
+          connectionForm.username,
+          connectionForm.port
+        ),
+      onSuccess: (result) => setTestResult(result),
+      onError: (error) => setTestResult(buildApiErrorResult(error)),
+    });
   };
 
   const executeCommand = async () => {
-    setLoading(true);
-    setCommandResult(null);
-    
-    try {
-      const result = await api.executeSshCommand(
-        commandForm.host,
-        commandForm.username,
-        commandForm.command
-      );
-      setCommandResult(result);
-    } catch (error) {
-      setCommandResult({
-        success: false,
-        message: `Error: ${error.message || error}`,
-        duration_ms: 0,
-        command_output: null
-      });
-    } finally {
-      setLoading(false);
-    }
+    await runWithLoading({
+      before: () => setCommandResult(null),
+      action: () =>
+        api.executeSshCommand(
+          commandForm.host,
+          commandForm.username,
+          commandForm.command
+        ),
+      onSuccess: (result) => setCommandResult(result),
+      onError: (error) => setCommandResult(buildApiErrorResult(error)),
+    });
   };
 
   const getSystemInfo = async () => {
-    setLoading(true);
-    setSystemInfo(null);
-    
-    try {
-      const result = await api.getWindowsSystemInfo(
-        connectionForm.host,
-        connectionForm.username
-      );
-      setSystemInfo(result);
-    } catch (error) {
-      setSystemInfo({
-        error: `Error: ${error.message || error}`
-      });
-    } finally {
-      setLoading(false);
-    }
+    await runWithLoading({
+      before: () => setSystemInfo(null),
+      action: () =>
+        api.getWindowsSystemInfo(connectionForm.host, connectionForm.username),
+      onSuccess: (result) => setSystemInfo(result),
+      onError: (error) =>
+        setSystemInfo({
+          error: `Error: ${error?.message || error}`,
+        }),
+    });
   };
 
   return (
     <div className="p-6 max-w-4xl mx-auto">
       <h1 className="text-2xl font-bold mb-6">SSH Connection Tester</h1>
-      
-      {/* Connection Test Section */}
+
       <div className="card bg-base-100 shadow-xl mb-6">
         <div className="card-body">
           <h2 className="card-title">Test SSH Connection</h2>
-          
+
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="form-control">
               <label className="label">
@@ -103,23 +150,30 @@ const SshTester = () => {
                 placeholder="192.168.1.100"
                 className="input input-bordered"
                 value={connectionForm.host}
-                onChange={(e) => setConnectionForm({...connectionForm, host: e.target.value})}
+                onChange={(e) =>
+                  setConnectionForm({ ...connectionForm, host: e.target.value })
+                }
               />
             </div>
-            
+
             <div className="form-control">
               <label className="label">
                 <span className="label-text">Username</span>
               </label>
               <input
                 type="text"
-                placeholder="Administrator"
+                placeholder={DEFAULT_USERNAME}
                 className="input input-bordered"
                 value={connectionForm.username}
-                onChange={(e) => setConnectionForm({...connectionForm, username: e.target.value})}
+                onChange={(e) =>
+                  setConnectionForm({
+                    ...connectionForm,
+                    username: e.target.value,
+                  })
+                }
               />
             </div>
-            
+
             <div className="form-control">
               <label className="label">
                 <span className="label-text">Port</span>
@@ -129,51 +183,42 @@ const SshTester = () => {
                 placeholder="22"
                 className="input input-bordered"
                 value={connectionForm.port}
-                onChange={(e) => setConnectionForm({...connectionForm, port: parseInt(e.target.value)})}
+                onChange={(e) =>
+                  setConnectionForm({
+                    ...connectionForm,
+                    port: Number.parseInt(e.target.value, 10) || 22,
+                  })
+                }
               />
             </div>
           </div>
-          
+
           <div className="card-actions justify-end mt-4">
-            <button 
-              className={`btn btn-primary ${loading ? 'loading' : ''}`}
+            <button
+              className={`btn btn-primary ${loading ? "loading" : ""}`}
               onClick={testConnection}
-              disabled={!connectionForm.host || !connectionForm.username || loading}
+              disabled={!canUseConnectionActions}
             >
               Test Connection
             </button>
-            <button 
-              className={`btn btn-secondary ${loading ? 'loading' : ''}`}
+            <button
+              className={`btn btn-secondary ${loading ? "loading" : ""}`}
               onClick={getSystemInfo}
-              disabled={!connectionForm.host || !connectionForm.username || loading}
+              disabled={!canUseConnectionActions}
             >
               Get System Info
             </button>
           </div>
-          
-          {testResult && (
-            <div className={`alert ${testResult.success ? 'alert-success' : 'alert-error'} mt-4`}>
-              <div>
-                <h3 className="font-bold">Connection Test Result</h3>
-                <p>{testResult.message}</p>
-                <p className="text-sm opacity-70">Duration: {testResult.duration_ms}ms</p>
-                {testResult.command_output && (
-                  <pre className="text-xs mt-2 bg-base-200 p-2 rounded">
-                    {testResult.command_output}
-                  </pre>
-                )}
-              </div>
-            </div>
-          )}
+
+          <ResultAlert title="Connection Test Result" result={testResult} />
         </div>
       </div>
 
-      {/* System Info Section */}
       {systemInfo && (
         <div className="card bg-base-100 shadow-xl mb-6">
           <div className="card-body">
             <h2 className="card-title">Windows System Information</h2>
-            
+
             {systemInfo.error ? (
               <div className="alert alert-error">
                 <p>{systemInfo.error}</p>
@@ -182,7 +227,9 @@ const SshTester = () => {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="stat">
                   <div className="stat-title">Computer Name</div>
-                  <div className="stat-value text-lg">{systemInfo.computer_name}</div>
+                  <div className="stat-value text-lg">
+                    {systemInfo.computer_name}
+                  </div>
                 </div>
                 <div className="stat">
                   <div className="stat-title">OS Version</div>
@@ -190,7 +237,9 @@ const SshTester = () => {
                 </div>
                 <div className="stat">
                   <div className="stat-title">Architecture</div>
-                  <div className="stat-value text-lg">{systemInfo.architecture}</div>
+                  <div className="stat-value text-lg">
+                    {systemInfo.architecture}
+                  </div>
                 </div>
                 <div className="stat">
                   <div className="stat-title">Total Memory</div>
@@ -198,7 +247,9 @@ const SshTester = () => {
                 </div>
                 <div className="stat">
                   <div className="stat-title">Available Memory</div>
-                  <div className="stat-value text-lg">{systemInfo.available_memory}</div>
+                  <div className="stat-value text-lg">
+                    {systemInfo.available_memory}
+                  </div>
                 </div>
                 <div className="stat">
                   <div className="stat-title">CPU</div>
@@ -210,11 +261,10 @@ const SshTester = () => {
         </div>
       )}
 
-      {/* Command Execution Section */}
       <div className="card bg-base-100 shadow-xl">
         <div className="card-body">
           <h2 className="card-title">Execute SSH Command</h2>
-          
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="form-control">
               <label className="label">
@@ -225,24 +275,31 @@ const SshTester = () => {
                 placeholder="192.168.1.100"
                 className="input input-bordered"
                 value={commandForm.host}
-                onChange={(e) => setCommandForm({...commandForm, host: e.target.value})}
+                onChange={(e) =>
+                  setCommandForm({ ...commandForm, host: e.target.value })
+                }
               />
             </div>
-            
+
             <div className="form-control">
               <label className="label">
                 <span className="label-text">Username</span>
               </label>
               <input
                 type="text"
-                placeholder="Administrator"
+                placeholder={DEFAULT_USERNAME}
                 className="input input-bordered"
                 value={commandForm.username}
-                onChange={(e) => setCommandForm({...commandForm, username: e.target.value})}
+                onChange={(e) =>
+                  setCommandForm({
+                    ...commandForm,
+                    username: e.target.value,
+                  })
+                }
               />
             </div>
           </div>
-          
+
           <div className="form-control">
             <label className="label">
               <span className="label-text">Command</span>
@@ -251,78 +308,53 @@ const SshTester = () => {
               className="textarea textarea-bordered h-24"
               placeholder="Enter command to execute..."
               value={commandForm.command}
-              onChange={(e) => setCommandForm({...commandForm, command: e.target.value})}
+              onChange={(e) =>
+                setCommandForm({ ...commandForm, command: e.target.value })
+              }
             />
             <div className="label">
-              <span className="label-text-alt">Examples: dir, ipconfig, systeminfo, Get-Process</span>
+              <span className="label-text-alt">
+                Examples: dir, ipconfig, systeminfo, Get-Process
+              </span>
             </div>
           </div>
-          
+
           <div className="card-actions justify-end">
-            <button 
-              className={`btn btn-primary ${loading ? 'loading' : ''}`}
+            <button
+              className={`btn btn-primary ${loading ? "loading" : ""}`}
               onClick={executeCommand}
-              disabled={!commandForm.host || !commandForm.username || !commandForm.command || loading}
+              disabled={!canExecuteCommand}
             >
               Execute Command
             </button>
           </div>
-          
-          {commandResult && (
-            <div className={`alert ${commandResult.success ? 'alert-success' : 'alert-error'} mt-4`}>
-              <div className="w-full">
-                <h3 className="font-bold">Command Execution Result</h3>
-                <p>{commandResult.message}</p>
-                <p className="text-sm opacity-70">Duration: {commandResult.duration_ms}ms</p>
-                {commandResult.command_output && (
-                  <div className="mt-2">
-                    <h4 className="font-semibold">Output:</h4>
-                    <pre className="text-xs bg-base-200 p-3 rounded overflow-x-auto whitespace-pre-wrap">
-                      {commandResult.command_output}
-                    </pre>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
+
+          <ResultAlert
+            title="Command Execution Result"
+            result={commandResult}
+            outputTitle="Output:"
+          />
         </div>
       </div>
 
-      {/* Quick Commands */}
       <div className="card bg-base-100 shadow-xl mt-6">
         <div className="card-body">
           <h2 className="card-title">Quick Commands</h2>
           <div className="flex flex-wrap gap-2">
-            <button 
-              className="btn btn-sm btn-outline"
-              onClick={() => setCommandForm({...commandForm, command: 'dir C:\\'})}
-            >
-              List C: Drive
-            </button>
-            <button 
-              className="btn btn-sm btn-outline"
-              onClick={() => setCommandForm({...commandForm, command: 'ipconfig /all'})}
-            >
-              Network Config
-            </button>
-            <button 
-              className="btn btn-sm btn-outline"
-              onClick={() => setCommandForm({...commandForm, command: 'systeminfo'})}
-            >
-              System Info
-            </button>
-            <button 
-              className="btn btn-sm btn-outline"
-              onClick={() => setCommandForm({...commandForm, command: 'Get-Process | Select-Object -First 10'})}
-            >
-              Top Processes
-            </button>
-            <button 
-              className="btn btn-sm btn-outline"
-              onClick={() => setCommandForm({...commandForm, command: 'Get-Service | Where-Object {$_.Status -eq "Running"} | Select-Object -First 10'})}
-            >
-              Running Services
-            </button>
+            {QUICK_COMMANDS.map((entry) => (
+              <button
+                key={entry.label}
+                className="btn btn-sm btn-outline"
+                onClick={() =>
+                  setCommandForm({
+                    ...commandForm,
+                    command: entry.command,
+                  })
+                }
+              >
+                {entry.label}
+              </button>
+            ))}
           </div>
         </div>
       </div>
