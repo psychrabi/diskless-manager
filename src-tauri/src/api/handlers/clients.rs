@@ -855,8 +855,8 @@ pub async fn update_client(
         // we should clear the snapshot in the database to indicate no snapshot is used
         request.snapshot = None;
 
-        // Use master image as block store
-        let master_dataset = &existing_client.master; // Use the master dataset name directly
+        // Use master image as block store (prefer new master from request)
+        let master_dataset = request.master.as_deref().unwrap_or(&existing_client.master);
         let block_store_path = format!("/dev/zvol/{}", master_dataset);
         request.block_store = Some(block_store_path);
         info!(

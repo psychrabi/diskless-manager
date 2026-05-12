@@ -1,3 +1,4 @@
+import { useCallback } from "react";
 import * as api from "@/api/commands";
 import { useAppStore } from "../store/useAppStore";
 import { useToastStore } from "../store/useToastStore";
@@ -7,7 +8,7 @@ export const useServiceManager = () => {
   // Fetch services is still needed for actions
   const fetchServices = useAppStore((state) => state.fetchServices);
 
-  const fetchServiceConfig = async (serviceKey) => {
+  const fetchServiceConfig = useCallback(async (serviceKey) => {
     try {
       const configData = await api.getServiceConfig(serviceKey);
 
@@ -16,7 +17,7 @@ export const useServiceManager = () => {
       error(`Error loading configuration: \n${err.message} `);
       return { text: "", path: "" };
     }
-  };
+  }, [error]);
 
   const handleConfigSave = async (serviceKey, content) => {
     try {

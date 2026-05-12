@@ -445,6 +445,49 @@ pub async fn delete_snapshot(
     Ok(())
 }
 
+pub async fn set_default_image(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    log::info!("Received set-default request for image '{}'", id);
+
+    // Clear is_default on all images, then set it on the target
+    sqlx::query("UPDATE images SET is_default = 0")
+        .execute(&state.db_pool)
+        .await
+        .map_err(|e| {
+            log::error!("Failed to clear default image flags: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    // Find image by id or name and set as default
+    let result = sqlx::query("UPDATE images SET is_default = 1 WHERE id = ? OR name = ?")
+        .bind(&id)
+        .bind(&id)
+        .execute(&state.db_pool)
+        .await
+        .map_err(|e| {
+            log::error!("Failed to set default image '{}': {}", id, e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    if result.rows_affected() == 0 {
+        log::error!("Image '{}' not found", id);
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    // Also persist to app_config for backward compatibility
+    let _ = sqlx::query("INSERT OR REPLACE INTO app_config (key, value) VALUES ('default_master', ?)")
+        .bind(&id)
+        .execute(&state.db_pool)
+        .await;
+
+    log::info!("Successfully set '{}' as default image", id);
+    Ok(Json(serde_json::json!({
+        "message": format!("Image '{}' set as default successfully", id)
+    })))
+}
+
 pub async fn rollback_snapshot(
     State(state): State<AppState>,
     Path((master_name, snapshot_name)): Path<(String, String)>,

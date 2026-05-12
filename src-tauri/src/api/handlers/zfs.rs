@@ -188,26 +188,51 @@ pub async fn create_dataset(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let dataset_name = format!("{}/{}", request.zpool, request.name);
 
-    let mut cmd = Command::new("zfs");
-    cmd.args(&["create"]);
+    // zfs create requires root
+    let mut cmd = Command::new("sudo");
+    cmd.args(&["-n", "zfs", "create"]);
 
-    // Add size quota if provided
     if let Some(size) = request.size {
-        cmd.args(&["-o", &format!("quota={}", size)]);
+        let size = size.trim();
+        if !size.is_empty() {
+            cmd.args(&["-o", &format!("quota={}", size)]);
+        }
     }
 
     cmd.arg(&dataset_name);
 
     match cmd.output() {
-        Ok(output) if output.status.success() => Ok(Json(serde_json::json!({
-            "success": true,
-            "message": format!("Dataset {} created successfully", dataset_name)
-        }))),
+        Ok(output) if output.status.success() => {
+            // Set the org.diskless:type property so list_datasets can find it
+            let _ = Command::new("sudo")
+                .args(&[
+                    "-n", "zfs", "set",
+                    &format!("org.diskless:type={}", request.usage_type),
+                    &dataset_name,
+                ])
+                .output();
+
+            // Enable compression for image datasets
+            if request.usage_type == "image" {
+                let _ = Command::new("sudo")
+                    .args(&["-n", "zfs", "set", "compression=lz4", &dataset_name])
+                    .output();
+            }
+
+            Ok(Json(serde_json::json!({
+                "success": true,
+                "message": format!("Dataset {} created successfully", dataset_name)
+            })))
+        }
         Ok(output) => {
-            let _error = String::from_utf8_lossy(&output.stderr);
+            let error = String::from_utf8_lossy(&output.stderr);
+            tracing::error!("Failed to create dataset {}: {}", dataset_name, error);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+        Err(e) => {
+            tracing::error!("Failed to execute zfs create for {}: {}", dataset_name, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
     }
 }
 
@@ -215,8 +240,8 @@ pub async fn delete_dataset(
     Path(dataset): Path<String>,
     Json(request): Json<DeleteDatasetRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let mut cmd = Command::new("zfs");
-    cmd.args(&["destroy"]);
+    let mut cmd = Command::new("sudo");
+    cmd.args(&["-n", "zfs", "destroy"]);
 
     if request.recursive {
         cmd.arg("-r");
@@ -229,7 +254,14 @@ pub async fn delete_dataset(
             "success": true,
             "message": format!("Dataset {} deleted successfully", dataset)
         }))),
-        Ok(_output) => Err(StatusCode::INTERNAL_SERVER_ERROR),
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+        Ok(output) => {
+            let error = String::from_utf8_lossy(&output.stderr);
+            tracing::error!("Failed to delete dataset {}: {}", dataset, error);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+        Err(e) => {
+            tracing::error!("Failed to execute zfs destroy for {}: {}", dataset, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
     }
 }

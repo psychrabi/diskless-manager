@@ -3,9 +3,19 @@ use axum::{
     http::StatusCode,
     Json,
 };
+use serde_json::Value;
 
-use crate::services::ServiceManager;
+use crate::services::{write_with_sudo_tee, ServiceManager};
 use crate::state::AppState;
+
+const SERVICE_CONFIG_FILES: &[(&str, &str)] = &[
+    ("dhcp", "/etc/dhcp/dhcpd.conf"),
+    ("dhcp-clients", "/etc/dhcp/clients.conf"),
+    ("tftp-autoexec", "/srv/tftp/autoexec.ipxe"),
+    ("tftp", "/etc/default/tftpd-hpa"),
+    ("http", "/etc/apache2/sites-available/diskless-server.conf"),
+    ("samba", "/etc/samba/smb.conf"),
+];
 
 pub async fn list_services(
     State(state): State<AppState>,
@@ -222,12 +232,48 @@ pub async fn get_service_config(
 pub async fn configure_service(
     State(state): State<AppState>,
     Path(name): Path<String>,
+    body: String,
 ) -> Result<Json<String>, StatusCode> {
+    // If the body contains JSON with a "content" field, write raw content.
+    // Otherwise, regenerate the config from the current settings.
+    let raw_content = serde_json::from_str::<Value>(&body)
+        .ok()
+        .and_then(|v| v.get("content").and_then(|c| c.as_str()).map(String::from));
+
+    if let Some(content) = raw_content {
+        let config_path = SERVICE_CONFIG_FILES
+            .iter()
+            .find_map(|&(k, p)| if k == name.as_str() { Some(p) } else { None })
+            .ok_or_else(|| {
+                log::error!("Unknown service for config save: {}", name);
+                StatusCode::NOT_FOUND
+            })?;
+
+        write_with_sudo_tee(config_path, &content).await.map_err(|e| {
+            log::error!("Failed to write config for {}: {}", name, e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+        log::info!("Raw configuration saved for service: {}", name);
+    } else {
+        // Regenerate config from current settings (settings page flow)
+        let settings = state.settings.read().await;
+        let service_manager = ServiceManager::new(settings.clone(), state.db_pool.clone());
+        service_manager
+            .generate_service_config(&name)
+            .await
+            .map_err(|e| {
+                log::error!("Failed to generate config for {}: {}", name, e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
+        log::info!("Configuration regenerated from settings for service: {}", name);
+    }
+
+    // Reload the service to pick up new config
     let settings = state.settings.read().await;
     let service_manager = ServiceManager::new(settings.clone(), state.db_pool.clone());
-    service_manager
-        .generate_service_config(&name)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let _ = service_manager.reload(&name).await;
+
     Ok(Json(format!("Service {} configured successfully", name)))
 }

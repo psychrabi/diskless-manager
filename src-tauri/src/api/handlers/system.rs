@@ -98,19 +98,33 @@ pub async fn check_dependencies(
 }
 
 pub async fn clear_cache() -> Result<Json<serde_json::Value>, StatusCode> {
-    // Clear RAM cache by dropping caches
-    match std::process::Command::new("sync").output() {
-        Ok(_) => {
-            // Try to clear caches
-            let _ = std::process::Command::new("sh")
-                .arg("-c")
-                .arg("echo 3 > /proc/sys/vm/drop_caches")
-                .output();
-            Ok(Json(
-                serde_json::json!({ "message": "Cache cleared successfully" }),
-            ))
-        }
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    // Flush filesystem buffers
+    let _ = Command::new("sync").output();
+
+    // Write 3 to drop_caches via sudo tee (requires root)
+    let mut child = Command::new("sudo")
+        .args(["-n", "tee", "/proc/sys/vm/drop_caches"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(b"3\n");
+    }
+
+    let status = child.wait().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if status.success() {
+        Ok(Json(
+            serde_json::json!({ "message": "Cache cleared successfully" }),
+        ))
+    } else {
+        Err(StatusCode::INTERNAL_SERVER_ERROR)
     }
 }
 
