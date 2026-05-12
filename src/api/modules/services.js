@@ -60,14 +60,20 @@ export async function getServiceConfig(serviceName) {
 }
 
 export async function saveServiceConfig(serviceName, config) {
-  return apiRequest(`/api/services/${encodeURIComponent(serviceName)}/configure`, {
-    method: "POST",
-    body: JSON.stringify(config),
-  });
+  return apiRequest(
+    `/api/services/${encodeURIComponent(serviceName)}/configure`,
+    {
+      method: "POST",
+      body: JSON.stringify(config),
+    },
+  );
 }
 
 export async function configureService(serviceName) {
-  return apiRequest(`/api/services/${encodeURIComponent(serviceName)}/configure`, {
-    method: "POST",
-  });
+  return apiRequest(
+    `/api/services/${encodeURIComponent(serviceName)}/configure`,
+    {
+      method: "POST",
+    },
+  );
 }

@@ -26,12 +26,12 @@ impl HttpService {
 <VirtualHost {server_ip}:{port}>
     ServerName {hostname}
     DocumentRoot {root_dir}
-    
+
     <Directory {root_dir}>
         Options Indexes FollowSymLinks
         AllowOverride None
         Require all granted
-        
+
         # Enable directory listing for easier debugging
         Options +Indexes
         IndexOptions FancyIndexing

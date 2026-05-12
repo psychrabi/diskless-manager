@@ -12,34 +12,31 @@ use crate::api::handlers::{
     },
     config::get_config,
     control::{
-        cancel_operation, get_audit_logs, get_scheduled_operations, remote_desktop_client, reboot_client, shutdown_client,
+        cancel_operation, get_audit_logs, get_scheduled_operations, reboot_client,
+        remote_desktop_client, shutdown_client,
     },
-    dashboard::{get_client_overview, get_default_image, get_client_io_metrics},
+    dashboard::{get_client_io_metrics, get_client_overview, get_default_image},
     disks::{create_pool, list_disks, pool_exists, rename_disk},
     images::{
-        clone_image, create_image, create_snapshot, delete_image, delete_snapshot, get_image, get_image_info,
-        import_image, list_images, list_masters, rename_image, resize_image, rollback_snapshot, update_image,
-        verify_image, get_snapshots,
+        clone_image, create_image, create_snapshot, delete_image, delete_snapshot, get_image,
+        get_image_info, get_snapshots, import_image, list_images, list_masters, rename_image,
+        resize_image, rollback_snapshot, update_image, verify_image,
     },
-    license::{get_license_info_handler, activate_license_handler},
+    license::{activate_license_handler, get_license_info_handler},
     logs::{clear_logs, get_logs},
     services::{
         configure_service, get_service_config, get_service_status, list_services,
         restart_all_services, restart_service, start_all_services, start_service,
         stop_all_services, stop_service,
     },
-    ssh::{
-        execute_ssh_command, get_windows_system_info, test_ssh_connection,
-    },
+    ssh::{execute_ssh_command, get_windows_system_info, test_ssh_connection},
     system::{
         apply_network_settings, check_dependencies, clear_cache, detect_server_network,
         get_interface_ip, get_network_interfaces, get_ram_usage, get_server_status, get_settings,
         get_system_info, get_zfs_arcstat, initialize_server, save_settings,
         setup_privileged_access,
     },
-    users::{
-        create_user, delete_user, get_user, list_users, update_user, update_user_password,
-    },
+    users::{create_user, delete_user, get_user, list_users, update_user, update_user_password},
     ws::ws_metrics_handler,
     zfs::{create_dataset, delete_dataset, get_zpool_stats, list_datasets, list_zpools},
 };
@@ -50,7 +47,7 @@ use tower_http::trace::TraceLayer;
 pub fn create_app(state: crate::state::AppState) -> Router {
     // CORS layer must be applied first (outermost) to handle preflight requests
     let cors = cors_layer();
-    
+
     // Public routes (no auth middleware)
     let public_router = Router::new()
         .route("/health", get(|| async { "OK" }))
@@ -58,16 +55,21 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route("/api/auth/validate", post(validate_auth_token))
         .route("/api/auth/admin/password", put(update_admin_password))
         .route("/api/auth/admin/exists", get(check_admin_exists))
-        .route("/api/system/dependencies", get(check_dependencies))
         .route("/api/license/info", get(get_license_info_handler))
         .route("/api/disks/pool/exists", get(pool_exists))
+        .route("/api/disks", get(list_disks))
+        .route("/api/system/dependencies", get(check_dependencies))
+        .route("/api/config", get(get_config))
         .with_state(state.clone());
 
     // WebSocket routes (with custom auth handling)
     let ws_router = Router::new()
         .route("/ws/metrics", axum::routing::get(ws_metrics_handler))
         .with_state(state.clone())
-        .layer(axum::middleware::from_fn_with_state(state.clone(), require_auth));
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            require_auth,
+        ));
 
     // Protected API routes (with auth middleware)
     let api_router = Router::new()
@@ -84,8 +86,14 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         // Control operation routes (auth required)
         .route("/api/clients/{id}/shutdown", post(shutdown_client))
         .route("/api/clients/{id}/reboot", post(reboot_client))
-        .route("/api/clients/{id}/remote-desktop", post(remote_desktop_client))
-        .route("/api/operations/{operation_id}/cancel", post(cancel_operation))
+        .route(
+            "/api/clients/{id}/remote-desktop",
+            post(remote_desktop_client),
+        )
+        .route(
+            "/api/operations/{operation_id}/cancel",
+            post(cancel_operation),
+        )
         .route("/api/audit-logs", get(get_audit_logs))
         .route("/api/scheduled-operations", get(get_scheduled_operations))
         // Image routes (auth required)
@@ -98,9 +106,18 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route("/api/images/{id}/rename", put(rename_image))
         .route("/api/images/import", post(import_image))
         .route("/api/images/{id}/clone", post(clone_image))
-        .route("/api/images/{id}/snapshots", post(create_snapshot).get(get_snapshots))
-        .route("/api/images/{id}/snapshots/{snapshot_name}", delete(delete_snapshot))
-        .route("/api/images/{id}/snapshots/{snapshot_name}/rollback", post(rollback_snapshot))
+        .route(
+            "/api/images/{id}/snapshots",
+            post(create_snapshot).get(get_snapshots),
+        )
+        .route(
+            "/api/images/{id}/snapshots/{snapshot_name}",
+            delete(delete_snapshot),
+        )
+        .route(
+            "/api/images/{id}/snapshots/{snapshot_name}/rollback",
+            post(rollback_snapshot),
+        )
         .route("/api/images/{id}/info", get(get_image_info))
         .route("/api/images/{id}/resize", post(resize_image))
         .route("/api/images/{id}/verify", post(verify_image))
@@ -138,7 +155,6 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route("/api/system/ram-usage", get(get_ram_usage))
         .route("/api/system/zfs-arcstat", get(get_zfs_arcstat))
         // Disk routes (auth required)
-        .route("/api/disks", get(list_disks))
         .route("/api/disks/{name}/rename", put(rename_disk))
         .route("/api/disks/pool", post(create_pool))
         // ZFS routes (auth required)
@@ -146,12 +162,13 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route("/api/zfs/pools/stats", get(get_zpool_stats))
         .route("/api/zfs/datasets", get(list_datasets).post(create_dataset))
         .route("/api/zfs/datasets/{dataset}", delete(delete_dataset))
-        // Config routes (auth required)
-        .route("/api/config", get(get_config))
         // Dashboard routes (auth required)
         .route("/api/dashboard/default-image", get(get_default_image))
         .route("/api/dashboard/clients", get(get_client_overview))
-        .route("/api/dashboard/clients/io-metrics", get(get_client_io_metrics))
+        .route(
+            "/api/dashboard/clients/io-metrics",
+            get(get_client_io_metrics),
+        )
         // Logs routes (auth required)
         .route("/api/logs", get(get_logs).delete(clear_logs))
         // License routes (auth required)
@@ -168,7 +185,10 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route("/api/ssh/execute-command", post(execute_ssh_command))
         .route("/api/ssh/system-info", post(get_windows_system_info))
         .with_state(state.clone())
-        .layer(axum::middleware::from_fn_with_state(state.clone(), require_auth));
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            require_auth,
+        ));
 
     // Combine all routers
     Router::new()
@@ -179,4 +199,3 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .layer(TraceLayer::new_for_http())
         .layer(ConcurrencyLimitLayer::new(100))
 }
-

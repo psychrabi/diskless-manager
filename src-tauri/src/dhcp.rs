@@ -1,5 +1,5 @@
 use crate::{
-    cmd::{get_server_ip, run_command, run_command_output},
+    cmd::{get_server_ip, run_command},
     DHCP_CLIENTS_PATH,
 };
 use log::{error, info};

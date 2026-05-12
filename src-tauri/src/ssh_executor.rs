@@ -46,6 +46,7 @@ impl Default for SshConfig {
 
 /// SSH connection pool entry
 struct PooledConnection {
+    #[allow(dead_code)]
     session: Session,
     last_used: std::time::Instant,
 }
@@ -106,10 +107,12 @@ impl SshExecutor {
             }
         }
 
-        error!("SSH command failed after {} retries on {}", self.config.max_retries + 1, host);
-        Err(last_error.unwrap_or_else(|| {
-            AppError::SshConnection("Unknown SSH error".to_string())
-        }))
+        error!(
+            "SSH command failed after {} retries on {}",
+            self.config.max_retries + 1,
+            host
+        );
+        Err(last_error.unwrap_or_else(|| AppError::SshConnection("Unknown SSH error".to_string())))
     }
 
     /// Execute a command on a remote host
@@ -192,11 +195,10 @@ impl SshExecutor {
     async fn create_connection(&self, host: &str) -> Result<Session, AppError> {
         debug!("Creating new SSH connection to {}", host);
 
-        let tcp = TcpStream::connect(format!("{}:22", host))
-            .map_err(|e| {
-                error!("Failed to connect to SSH server at {}: {}", host, e);
-                AppError::SshConnection(format!("Failed to connect to {}: {}", host, e))
-            })?;
+        let tcp = TcpStream::connect(format!("{}:22", host)).map_err(|e| {
+            error!("Failed to connect to SSH server at {}: {}", host, e);
+            AppError::SshConnection(format!("Failed to connect to {}: {}", host, e))
+        })?;
 
         tcp.set_read_timeout(Some(Duration::from_secs(self.config.connection_timeout)))
             .map_err(|e| {
@@ -210,11 +212,10 @@ impl SshExecutor {
                 AppError::SshConnection(format!("Failed to set write timeout: {}", e))
             })?;
 
-        let mut session = Session::new()
-            .map_err(|e| {
-                error!("Failed to create SSH session: {}", e);
-                AppError::SshConnection(format!("Failed to create SSH session: {}", e))
-            })?;
+        let mut session = Session::new().map_err(|e| {
+            error!("Failed to create SSH session: {}", e);
+            AppError::SshConnection(format!("Failed to create SSH session: {}", e))
+        })?;
 
         session.set_tcp_stream(tcp);
 
@@ -231,15 +232,19 @@ impl SshExecutor {
 
         // Authenticate with public key (no password)
         // For diskless clients, we use key-based auth
-        session
-            .userauth_agent(&self.config.username)
-            .map_err(|e| {
-                error!("SSH authentication failed for user {} on {}: {}", self.config.username, host, e);
-                AppError::SshAuth(format!("SSH authentication failed: {}", e))
-            })?;
+        session.userauth_agent(&self.config.username).map_err(|e| {
+            error!(
+                "SSH authentication failed for user {} on {}: {}",
+                self.config.username, host, e
+            );
+            AppError::SshAuth(format!("SSH authentication failed: {}", e))
+        })?;
 
         if !session.authenticated() {
-            error!("SSH authentication not successful for {} on {}", self.config.username, host);
+            error!(
+                "SSH authentication not successful for {} on {}",
+                self.config.username, host
+            );
             return Err(AppError::SshAuth(
                 "SSH authentication not successful".to_string(),
             ));
@@ -299,10 +304,7 @@ impl SshExecutor {
         let exit_code = channel.exit_status().unwrap_or(-1);
 
         if exit_code != 0 {
-            warn!(
-                "SSH command exited with code {}: {}",
-                exit_code, stderr
-            );
+            warn!("SSH command exited with code {}: {}", exit_code, stderr);
         }
 
         Ok(CommandResult {

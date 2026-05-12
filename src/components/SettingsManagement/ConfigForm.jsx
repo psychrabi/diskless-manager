@@ -1,5 +1,4 @@
 import { useSettings } from "@/hooks/useSettings";
-import { dhcpSchema } from "@/schema";
 import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -7,12 +6,20 @@ import { Network } from "lucide-react";
 import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { Button, Card } from "@/components/ui";
-import DHCPForm from "./Forms/DHCPForm";
 
-export default function DHCPConfigForm() {
+const UPDATE_MAP = {
+  dhcp: "updateDhcp",
+  tftp: "updateTftp",
+  http: "updateHttp",
+  samba: "updateSamba",
+  iscsi: "updateIscsi",
+};
+
+const ConfigForm = ({ schema, section, title, FormComponent }) => {
   const { info } = useToastStore();
-  const { updateDhcp } = useSettings();
+  const settings = useSettings();
   const config = useAppStore((state) => state.appConfig);
+  const updateFn = settings[UPDATE_MAP[section]];
 
   const {
     register,
@@ -20,31 +27,32 @@ export default function DHCPConfigForm() {
     formState: { errors, isSubmitting },
     reset,
   } = useForm({
-    resolver: zodResolver(dhcpSchema),
-    defaultValues: config?.settings?.dhcp || {},
+    resolver: zodResolver(schema),
+    defaultValues: config?.settings?.[section] || {},
   });
 
-  // Load saved config when config from store changes
   useEffect(() => {
-    if (config?.settings?.dhcp) {
-      reset(config.settings.dhcp);
+    if (config?.settings?.[section]) {
+      reset(config.settings[section]);
     } else {
       reset({});
     }
-  }, [config, reset]);
+  }, [config, section, reset]);
 
   const onSubmit = async (data) => {
-    info(`Updating DHCP Configurations`);
-    await updateDhcp(data);
+    info(`Updating ${title} Configurations`);
+    await updateFn(data);
   };
 
+  const sectionKey = section.charAt(0).toUpperCase() + section.slice(1);
+
   return (
-    <Card title="DHCP Server Configuration" icon={Network} className="xl:col-span-2">
+    <Card title={`${title} Configuration`} icon={Network} className="xl:col-span-2">
       <form onSubmit={handleSubmit(onSubmit)}>
-        <DHCPForm
+        <FormComponent
           register={register}
           errors={errors}
-          config={config?.settings?.dhcp}
+          config={config?.settings?.[section]}
         />
         <Button
           variant="primary"
@@ -52,9 +60,11 @@ export default function DHCPConfigForm() {
           className="mt-4"
           loading={isSubmitting}
         >
-          {isSubmitting ? "Saving..." : "Save DHCP Settings"}
+          {isSubmitting ? "Saving..." : `Save ${sectionKey} Settings`}
         </Button>
       </form>
     </Card>
   );
-}
+};
+
+export default ConfigForm;

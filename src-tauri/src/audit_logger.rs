@@ -163,20 +163,23 @@ impl AuditLogger {
             query.push_str(&format!(" OFFSET {}", offset));
         }
 
-        let mut query_builder = sqlx::query_as::<_, (
-            String,
-            String,
-            String,
-            String,
-            String,
-            String,
-            String,
-            Option<i32>,
-            String,
-            String,
-            Option<String>,
-            String,
-        )>(&query);
+        let mut query_builder = sqlx::query_as::<
+            _,
+            (
+                String,
+                String,
+                String,
+                String,
+                String,
+                String,
+                String,
+                Option<i32>,
+                String,
+                String,
+                Option<String>,
+                String,
+            ),
+        >(&query);
 
         for param in params {
             query_builder = query_builder.bind(param);

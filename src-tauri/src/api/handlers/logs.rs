@@ -1,8 +1,4 @@
-use axum::{
-    extract::Query,
-    http::StatusCode,
-    Json,
-};
+use axum::{extract::Query, http::StatusCode, Json};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -12,10 +8,12 @@ pub struct LogsQuery {
     lines: Option<u32>,
 }
 
-pub async fn get_logs(Query(params): Query<LogsQuery>) -> Result<Json<serde_json::Value>, StatusCode> {
+pub async fn get_logs(
+    Query(params): Query<LogsQuery>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
     let unit = params.unit.as_deref();
     let lines = params.lines.unwrap_or(50);
-    
+
     let logs = if let Some(unit) = unit {
         // Fetch logs for a specific systemd unit
         match crate::cmd::read_service_logs(unit, lines) {
@@ -26,7 +24,7 @@ pub async fn get_logs(Query(params): Query<LogsQuery>) -> Result<Json<serde_json
         // Fetch app logs
         crate::cmd::read_logs()
     };
-    
+
     Ok(Json(json!({ "text": logs })))
 }
 

@@ -85,7 +85,6 @@ pub async fn write_config(pool: &sqlx::SqlitePool, config: &AppConfig) -> Result
     Ok(())
 }
 
-
 pub async fn read_config(state: State<'_, AppState>) -> Result<AppConfig, String> {
     read_config_db(&state.db_pool).await
 }
@@ -172,11 +171,13 @@ pub async fn read_config_db(pool: &sqlx::SqlitePool) -> Result<AppConfig, String
             ip: c.ip,
             master: c.master.unwrap_or_default(),
             enabled: true, // Default to enabled
-            created_at: c.created_at
+            created_at: c
+                .created_at
                 .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
                 .map(|dt| dt.with_timezone(&chrono::Utc))
                 .unwrap_or_else(chrono::Utc::now),
-            updated_at: c.last_modified
+            updated_at: c
+                .last_modified
                 .as_ref()
                 .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                 .map(|dt| dt.with_timezone(&chrono::Utc))
@@ -200,7 +201,7 @@ pub async fn read_config_db(pool: &sqlx::SqlitePool) -> Result<AppConfig, String
     Ok(config)
 }
 
-
+#[allow(dead_code)]
 pub async fn save_config(state: State<'_, AppState>, pool_name: String) -> Result<(), String> {
     let mut cfg = get_config();
     // Ensure settings is an object

@@ -42,10 +42,7 @@ pub struct ErrorResponse {
 
 impl IntoResponse for ErrorResponse {
     fn into_response(self) -> Response {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(self),
-        ).into_response()
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(self)).into_response()
     }
 }
 
@@ -207,7 +204,14 @@ pub async fn update_client(
 
     let manager = ClientManager::new(state.db_pool.clone());
     // Get existing client to determine the name for iSCSI details
-    let existing_client = manager.get(&id).await.map_err(|_| (StatusCode::NOT_FOUND, Json(ErrorResponse { error: "Client not found".to_string() })))?;
+    let existing_client = manager.get(&id).await.map_err(|_| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "Client not found".to_string(),
+            }),
+        )
+    })?;
 
     // Handle action-based requests (wake, reboot, shutdown, etc.)
     if let Some(action) = &request.action {
@@ -216,92 +220,109 @@ pub async fn update_client(
                 // Send WOL packet to wake the client
                 use std::process::Command;
                 let mac = &existing_client.mac;
-                
-                info!("Attempting to send WOL packet to client {} ({})", existing_client.name, mac);
-                
+
+                info!(
+                    "Attempting to send WOL packet to client {} ({})",
+                    existing_client.name, mac
+                );
+
                 // Try wakeonlan first
-                let result = Command::new("wakeonlan")
-                    .arg(mac)
-                    .output();
+                let result = Command::new("wakeonlan").arg(mac).output();
 
                 match result {
                     Ok(output) => {
                         let stdout = String::from_utf8_lossy(&output.stdout);
                         let stderr = String::from_utf8_lossy(&output.stderr);
-                        
+
                         if output.status.success() {
                             info!("Successfully sent WOL packet using wakeonlan to client {} ({}). Output: {}", existing_client.name, mac, stdout);
                             return Ok(Json(existing_client));
                         } else {
-                            error!("wakeonlan failed for client {} ({}). Status: {:?}, Stderr: {}", existing_client.name, mac, output.status, stderr);
-                            
+                            error!(
+                                "wakeonlan failed for client {} ({}). Status: {:?}, Stderr: {}",
+                                existing_client.name, mac, output.status, stderr
+                            );
+
                             // Try etherwake as fallback
-                            let result2 = Command::new("etherwake")
-                                .arg("-b")
-                                .arg(mac)
-                                .output();
-                            
+                            let result2 = Command::new("etherwake").arg("-b").arg(mac).output();
+
                             match result2 {
                                 Ok(output2) => {
                                     let stdout2 = String::from_utf8_lossy(&output2.stdout);
                                     let stderr2 = String::from_utf8_lossy(&output2.stderr);
-                                    
+
                                     if output2.status.success() {
                                         info!("Successfully sent WOL packet using etherwake to client {} ({}). Output: {}", existing_client.name, mac, stdout2);
                                         return Ok(Json(existing_client));
                                     } else {
-                                        let error_msg = format!("etherwake failed for client {} ({}): {}", existing_client.name, mac, stderr2);
+                                        let error_msg = format!(
+                                            "etherwake failed for client {} ({}): {}",
+                                            existing_client.name, mac, stderr2
+                                        );
                                         error!("{}", error_msg);
                                         return Err((
                                             StatusCode::INTERNAL_SERVER_ERROR,
                                             Json(ErrorResponse { error: error_msg }),
-                                        ).into());
+                                        )
+                                            .into());
                                     }
                                 }
                                 Err(e) => {
-                                    let error_msg = format!("Failed to execute etherwake for client {} ({}): {}", existing_client.name, mac, e);
+                                    let error_msg = format!(
+                                        "Failed to execute etherwake for client {} ({}): {}",
+                                        existing_client.name, mac, e
+                                    );
                                     error!("{}", error_msg);
                                     return Err((
                                         StatusCode::INTERNAL_SERVER_ERROR,
                                         Json(ErrorResponse { error: error_msg }),
-                                    ).into());
+                                    )
+                                        .into());
                                 }
                             }
                         }
                     }
                     Err(e) => {
-                        error!("wakeonlan command not found or failed: {}. Trying etherwake...", e);
-                        
+                        error!(
+                            "wakeonlan command not found or failed: {}. Trying etherwake...",
+                            e
+                        );
+
                         // Try etherwake directly
-                        let result2 = Command::new("etherwake")
-                            .arg("-b")
-                            .arg(mac)
-                            .output();
-                        
+                        let result2 = Command::new("etherwake").arg("-b").arg(mac).output();
+
                         match result2 {
                             Ok(output2) => {
                                 let stdout2 = String::from_utf8_lossy(&output2.stdout);
                                 let stderr2 = String::from_utf8_lossy(&output2.stderr);
-                                
+
                                 if output2.status.success() {
                                     info!("Successfully sent WOL packet using etherwake to client {} ({}). Output: {}", existing_client.name, mac, stdout2);
                                     return Ok(Json(existing_client));
                                 } else {
-                                    let error_msg = format!("etherwake failed for client {} ({}): {}", existing_client.name, mac, stderr2);
+                                    let error_msg = format!(
+                                        "etherwake failed for client {} ({}): {}",
+                                        existing_client.name, mac, stderr2
+                                    );
                                     error!("{}", error_msg);
                                     return Err((
                                         StatusCode::INTERNAL_SERVER_ERROR,
                                         Json(ErrorResponse { error: error_msg }),
-                                    ).into());
+                                    )
+                                        .into());
                                 }
                             }
                             Err(e) => {
-                                let error_msg = format!("Failed to execute etherwake for client {} ({}): {}", existing_client.name, mac, e);
+                                let error_msg = format!(
+                                    "Failed to execute etherwake for client {} ({}): {}",
+                                    existing_client.name, mac, e
+                                );
                                 error!("{}", error_msg);
                                 return Err((
                                     StatusCode::INTERNAL_SERVER_ERROR,
                                     Json(ErrorResponse { error: error_msg }),
-                                ).into());
+                                )
+                                    .into());
                             }
                         }
                     }
@@ -312,44 +333,83 @@ pub async fn update_client(
                 if ip.is_empty() {
                     let error_msg = format!("IP address not found for '{}'", existing_client.name);
                     error!("{}", error_msg);
-                    return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: error_msg })));
+                    return Err((
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ErrorResponse { error: error_msg }),
+                    ));
                 }
 
-                let master_os = get_master_os(&existing_client.master).unwrap_or_default().to_lowercase();
-                
+                let master_os = get_master_os(&existing_client.master)
+                    .unwrap_or_default()
+                    .to_lowercase();
+
                 if master_os.contains("linux") {
                     // Linux: SSH reboot
                     let output = Command::new("ssh")
                         .args(&[
-                            "-o", "StrictHostKeyChecking=no",
-                            "-o", "ConnectTimeout=5",
+                            "-o",
+                            "StrictHostKeyChecking=no",
+                            "-o",
+                            "ConnectTimeout=5",
                             &format!("root@{}", ip),
                             "reboot",
                         ])
                         .output()
-                        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: format!("Failed to execute SSH: {}", e) })))?;
+                        .map_err(|e| {
+                            (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(ErrorResponse {
+                                    error: format!("Failed to execute SSH: {}", e),
+                                }),
+                            )
+                        })?;
 
                     if !output.status.success() {
-                        let error_msg = format!("Failed to reboot Linux client (SSH): {}", String::from_utf8_lossy(&output.stderr));
+                        let error_msg = format!(
+                            "Failed to reboot Linux client (SSH): {}",
+                            String::from_utf8_lossy(&output.stderr)
+                        );
                         error!("{}", error_msg);
-                        return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: error_msg })));
+                        return Err((
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(ErrorResponse { error: error_msg }),
+                        ));
                     }
                 } else {
                     // Windows: NET RPC
                     let output = Command::new("net")
                         .args(&[
-                            "rpc", "shutdown", "-r",
-                            "-I", ip,
-                            "-U", "diskless%1",
-                            "-f", "-t", "0",
+                            "rpc",
+                            "shutdown",
+                            "-r",
+                            "-I",
+                            ip,
+                            "-U",
+                            "diskless%1",
+                            "-f",
+                            "-t",
+                            "0",
                         ])
                         .output()
-                        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: format!("Failed to execute net rpc: {}", e) })))?;
+                        .map_err(|e| {
+                            (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(ErrorResponse {
+                                    error: format!("Failed to execute net rpc: {}", e),
+                                }),
+                            )
+                        })?;
 
                     if !output.status.success() {
-                        let error_msg = format!("Failed to reboot client: {}", String::from_utf8_lossy(&output.stderr));
+                        let error_msg = format!(
+                            "Failed to reboot client: {}",
+                            String::from_utf8_lossy(&output.stderr)
+                        );
                         error!("{}", error_msg);
-                        return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: error_msg })));
+                        return Err((
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(ErrorResponse { error: error_msg }),
+                        ));
                     }
                 }
 
@@ -361,44 +421,82 @@ pub async fn update_client(
                 if ip.is_empty() {
                     let error_msg = format!("IP address not found for '{}'", existing_client.name);
                     error!("{}", error_msg);
-                    return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: error_msg })));
+                    return Err((
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ErrorResponse { error: error_msg }),
+                    ));
                 }
 
-                let master_os = get_master_os(&existing_client.master).unwrap_or_default().to_lowercase();
-                
+                let master_os = get_master_os(&existing_client.master)
+                    .unwrap_or_default()
+                    .to_lowercase();
+
                 if master_os.contains("linux") {
                     // Linux: SSH poweroff
                     let output = Command::new("ssh")
                         .args(&[
-                            "-o", "StrictHostKeyChecking=no",
-                            "-o", "ConnectTimeout=5",
+                            "-o",
+                            "StrictHostKeyChecking=no",
+                            "-o",
+                            "ConnectTimeout=5",
                             &format!("root@{}", ip),
                             "poweroff",
                         ])
                         .output()
-                        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: format!("Failed to execute SSH: {}", e) })))?;
+                        .map_err(|e| {
+                            (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(ErrorResponse {
+                                    error: format!("Failed to execute SSH: {}", e),
+                                }),
+                            )
+                        })?;
 
                     if !output.status.success() {
-                        let error_msg = format!("Failed to shutdown Linux client (SSH): {}", String::from_utf8_lossy(&output.stderr));
+                        let error_msg = format!(
+                            "Failed to shutdown Linux client (SSH): {}",
+                            String::from_utf8_lossy(&output.stderr)
+                        );
                         error!("{}", error_msg);
-                        return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: error_msg })));
+                        return Err((
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(ErrorResponse { error: error_msg }),
+                        ));
                     }
                 } else {
                     // Windows: NET RPC
                     let output = Command::new("net")
                         .args(&[
-                          "rpc", "shutdown",
-                            "-I", ip,
-                            "-U", "diskless%1",
-                            "-f", "-t", "0",
+                            "rpc",
+                            "shutdown",
+                            "-I",
+                            ip,
+                            "-U",
+                            "diskless%1",
+                            "-f",
+                            "-t",
+                            "0",
                         ])
                         .output()
-                        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: format!("Failed to execute net rpc: {}", e) })))?;
+                        .map_err(|e| {
+                            (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(ErrorResponse {
+                                    error: format!("Failed to execute net rpc: {}", e),
+                                }),
+                            )
+                        })?;
 
                     if !output.status.success() {
-                        let error_msg = format!("Failed to shutdown client: {}", String::from_utf8_lossy(&output.stderr));
+                        let error_msg = format!(
+                            "Failed to shutdown client: {}",
+                            String::from_utf8_lossy(&output.stderr)
+                        );
                         error!("{}", error_msg);
-                        return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: error_msg })));
+                        return Err((
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(ErrorResponse { error: error_msg }),
+                        ));
                     }
                 }
 
@@ -414,9 +512,14 @@ pub async fn update_client(
                 // Handle super mode toggle
                 if let Some(make_super) = request.make_super {
                     let mut client = existing_client.clone();
-                    client.mode = if make_super { Some("super".to_string()) } else { None };
+                    client.mode = if make_super {
+                        Some("super".to_string())
+                    } else {
+                        None
+                    };
                     client.updated_at = Utc::now();
-                    client.last_modified = Some(client.updated_at.format("%Y-%m-%d %H:%M:%S").to_string());
+                    client.last_modified =
+                        Some(client.updated_at.format("%Y-%m-%d %H:%M:%S").to_string());
 
                     sqlx::query(
                         r#"
@@ -431,7 +534,14 @@ pub async fn update_client(
                     .bind(&client.id)
                     .execute(&state.db_pool)
                     .await
-                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: format!("Failed to update client mode: {}", e) })))?;
+                    .map_err(|e| {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(ErrorResponse {
+                                error: format!("Failed to update client mode: {}", e),
+                            }),
+                        )
+                    })?;
 
                     info!("Client '{}' super mode set to: {}", client.name, make_super);
                     return Ok(Json(client));
@@ -440,27 +550,38 @@ pub async fn update_client(
             "reset" => {
                 // Reset writeback - destroy and recreate the client's ZFS clone
                 info!("Reset writeback for client: {}", existing_client.name);
-                
+
                 let clone_dataset = get_writeback_or_default_dataset(&existing_client.name);
-                
+
                 // Only proceed if the client has a snapshot to clone from
                 if let Some(snapshot) = &existing_client.snapshot {
                     // First, remove the iSCSI target if it exists to free up the dataset
                     if existing_client.target_iqn.is_some() {
                         let settings = state.settings.read().await;
                         let iscsi_service = crate::services::IscsiService::new(settings.clone());
-                        
-                        info!("Removing iSCSI target for client '{}' before reset", existing_client.name);
+
+                        info!(
+                            "Removing iSCSI target for client '{}' before reset",
+                            existing_client.name
+                        );
                         if let Err(e) = iscsi_service.remove_target(&existing_client.name).await {
-                            log::warn!("Failed to remove iSCSI target for client '{}': {}", existing_client.name, e);
+                            log::warn!(
+                                "Failed to remove iSCSI target for client '{}': {}",
+                                existing_client.name,
+                                e
+                            );
                             // Continue anyway - the target might not exist or be in an inconsistent state
                         }
                     }
-                    
+
                     // Destroy existing clone if it exists
                     if zfs_exists(&clone_dataset) {
                         if let Err(e) = zfs_destroy(&clone_dataset) {
-                            log::warn!("Failed to destroy existing clone for client '{}': {}", existing_client.name, e);
+                            log::warn!(
+                                "Failed to destroy existing clone for client '{}': {}",
+                                existing_client.name,
+                                e
+                            );
                             return Err((
                                 StatusCode::INTERNAL_SERVER_ERROR,
                                 Json(ErrorResponse {
@@ -470,64 +591,93 @@ pub async fn update_client(
                         }
                         info!("Destroyed existing writeback clone: {}", clone_dataset);
                     }
-                    
+
                     // Recreate the clone from the snapshot
                     if let Err(e) = zfs_clone(snapshot, &clone_dataset) {
-                        log::error!("Failed to recreate writeback clone for client '{}': {}", existing_client.name, e);
+                        log::error!(
+                            "Failed to recreate writeback clone for client '{}': {}",
+                            existing_client.name,
+                            e
+                        );
                         return Err((
                             StatusCode::INTERNAL_SERVER_ERROR,
                             Json(ErrorResponse {
-                                error: format!("Failed to recreate writeback clone: {}", e)
-                            })
+                                error: format!("Failed to recreate writeback clone: {}", e),
+                            }),
                         ));
                     }
-                    
+
                     // Recreate the iSCSI target if it existed
                     if existing_client.target_iqn.is_some() {
                         let settings = state.settings.read().await;
                         let iscsi_service = crate::services::IscsiService::new(settings.clone());
-                        
-                        info!("Recreating iSCSI target for client '{}' after reset", existing_client.name);
+
+                        info!(
+                            "Recreating iSCSI target for client '{}' after reset",
+                            existing_client.name
+                        );
                         if let Err(e) = iscsi_service.create_target(&existing_client).await {
-                            log::warn!("Failed to recreate iSCSI target for client '{}': {}", existing_client.name, e);
+                            log::warn!(
+                                "Failed to recreate iSCSI target for client '{}': {}",
+                                existing_client.name,
+                                e
+                            );
                             // Don't fail the entire operation - the clone was successfully created
                         }
                     }
-                    
-                    info!("Successfully reset writeback for client '{}': recreated clone from {}", existing_client.name, snapshot);
+
+                    info!(
+                        "Successfully reset writeback for client '{}': recreated clone from {}",
+                        existing_client.name, snapshot
+                    );
                     return Ok(Json(existing_client));
                 } else {
-                    log::warn!("Cannot reset writeback for client '{}': no snapshot configured", existing_client.name);
+                    log::warn!(
+                        "Cannot reset writeback for client '{}': no snapshot configured",
+                        existing_client.name
+                    );
                     return Err((
                         StatusCode::BAD_REQUEST,
                         Json(ErrorResponse {
-                            error: "Cannot reset writeback: client has no snapshot configured".to_string()
-                        })
+                            error: "Cannot reset writeback: client has no snapshot configured"
+                                .to_string(),
+                        }),
                     ));
                 }
             }
             "reset_clean" => {
                 // Reset to clean state - destroy clone and recreate from master image directly
                 info!("Reset to clean state for client: {}", existing_client.name);
-                
+
                 let clone_dataset = get_writeback_or_default_dataset(&existing_client.name);
-                
+
                 // First, remove the iSCSI target if it exists to free up the dataset
                 if existing_client.target_iqn.is_some() {
                     let settings = state.settings.read().await;
                     let iscsi_service = crate::services::IscsiService::new(settings.clone());
-                    
-                    info!("Removing iSCSI target for client '{}' before clean reset", existing_client.name);
+
+                    info!(
+                        "Removing iSCSI target for client '{}' before clean reset",
+                        existing_client.name
+                    );
                     if let Err(e) = iscsi_service.remove_target(&existing_client.name).await {
-                        log::warn!("Failed to remove iSCSI target for client '{}': {}", existing_client.name, e);
+                        log::warn!(
+                            "Failed to remove iSCSI target for client '{}': {}",
+                            existing_client.name,
+                            e
+                        );
                         // Continue anyway - the target might not exist or be in an inconsistent state
                     }
                 }
-                
+
                 // Destroy existing clone if it exists
                 if zfs_exists(&clone_dataset) {
                     if let Err(e) = zfs_destroy(&clone_dataset) {
-                        log::warn!("Failed to destroy existing clone for client '{}': {}", existing_client.name, e);
+                        log::warn!(
+                            "Failed to destroy existing clone for client '{}': {}",
+                            existing_client.name,
+                            e
+                        );
                         return Err((
                             StatusCode::INTERNAL_SERVER_ERROR,
                             Json(ErrorResponse {
@@ -535,9 +685,12 @@ pub async fn update_client(
                             })
                         ));
                     }
-                    info!("Destroyed existing clone for clean reset: {}", clone_dataset);
+                    info!(
+                        "Destroyed existing clone for clean reset: {}",
+                        clone_dataset
+                    );
                 }
-                
+
                 // For clean reset, recreate from the base snapshot or master
                 let source = if let Some(snapshot) = &existing_client.snapshot {
                     snapshot.clone()
@@ -545,31 +698,45 @@ pub async fn update_client(
                     // If no snapshot, try to use the master directly
                     existing_client.master.clone()
                 };
-                
+
                 // Recreate the clone
                 if let Err(e) = zfs_clone(&source, &clone_dataset) {
-                    log::error!("Failed to recreate clean clone for client '{}': {}", existing_client.name, e);
+                    log::error!(
+                        "Failed to recreate clean clone for client '{}': {}",
+                        existing_client.name,
+                        e
+                    );
                     return Err((
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(ErrorResponse {
-                            error: format!("Failed to recreate clean clone: {}", e)
-                        })
+                            error: format!("Failed to recreate clean clone: {}", e),
+                        }),
                     ));
                 }
-                
+
                 // Recreate the iSCSI target if it existed
                 if existing_client.target_iqn.is_some() {
                     let settings = state.settings.read().await;
                     let iscsi_service = crate::services::IscsiService::new(settings.clone());
-                    
-                    info!("Recreating iSCSI target for client '{}' after clean reset", existing_client.name);
+
+                    info!(
+                        "Recreating iSCSI target for client '{}' after clean reset",
+                        existing_client.name
+                    );
                     if let Err(e) = iscsi_service.create_target(&existing_client).await {
-                        log::warn!("Failed to recreate iSCSI target for client '{}': {}", existing_client.name, e);
+                        log::warn!(
+                            "Failed to recreate iSCSI target for client '{}': {}",
+                            existing_client.name,
+                            e
+                        );
                         // Don't fail the entire operation - the clone was successfully created
                     }
                 }
-                
-                info!("Successfully reset client '{}' to clean state: recreated clone from {}", existing_client.name, source);
+
+                info!(
+                    "Successfully reset client '{}' to clean state: recreated clone from {}",
+                    existing_client.name, source
+                );
                 return Ok(Json(existing_client));
             }
             _ => {
@@ -629,9 +796,15 @@ pub async fn update_client(
         // Check if a clone already exists and destroy it first
         if zfs_exists(&clone_dataset) {
             if let Err(e) = zfs_destroy(&clone_dataset) {
-                let error_msg = format!("Failed to destroy existing ZFS clone for client '{}': {}", client_name, e);
+                let error_msg = format!(
+                    "Failed to destroy existing ZFS clone for client '{}': {}",
+                    client_name, e
+                );
                 error!("{}", error_msg);
-                return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: error_msg })));
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse { error: error_msg }),
+                ));
             }
             info!(
                 "Successfully destroyed existing ZFS clone for client '{}' before creating new one",
@@ -643,9 +816,15 @@ pub async fn update_client(
         request.block_store = Some(block_store_path);
         // Create the ZFS clone from the snapshot
         if let Err(e) = zfs_clone(snapshot, &clone_dataset) {
-            let error_msg = format!("Failed to create ZFS clone for client '{}': {}", client_name, e);
+            let error_msg = format!(
+                "Failed to create ZFS clone for client '{}': {}",
+                client_name, e
+            );
             error!("{}", error_msg);
-            return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: error_msg })));
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse { error: error_msg }),
+            ));
         }
         info!(
             "Successfully created ZFS clone for client '{}' from snapshot '{}'",
@@ -656,9 +835,15 @@ pub async fn update_client(
         let clone_dataset = get_writeback_or_default_dataset(client_name);
         if zfs_exists(&clone_dataset) {
             if let Err(e) = zfs_destroy(&clone_dataset) {
-                let error_msg = format!("Failed to destroy ZFS clone for client '{}': {}", client_name, e);
+                let error_msg = format!(
+                    "Failed to destroy ZFS clone for client '{}': {}",
+                    client_name, e
+                );
                 error!("{}", error_msg);
-                return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: error_msg })));
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse { error: error_msg }),
+                ));
             }
             info!(
                 "Successfully destroyed ZFS clone for client '{}' after snapshot removal",
@@ -682,10 +867,14 @@ pub async fn update_client(
 
     let manager = ClientManager::new(state.db_pool.clone());
     info!("Updating client in database: {:?}", request);
-    let client = manager
-        .update(&id, request)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: format!("Failed to update client: {}", e) })))?;
+    let client = manager.update(&id, request).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Failed to update client: {}", e),
+            }),
+        )
+    })?;
 
     info!("Updated client: {}", client.name);
 
@@ -725,8 +914,11 @@ pub async fn delete_client(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<(), StatusCode> {
-    tracing::info!("DELETE CLIENT CALLED - Starting deletion for client: {}", id);
-    
+    tracing::info!(
+        "DELETE CLIENT CALLED - Starting deletion for client: {}",
+        id
+    );
+
     // Get the client first to access its iSCSI details
     let manager = ClientManager::new(state.db_pool.clone());
     let client = manager.get(&id).await.map_err(|_| StatusCode::NOT_FOUND)?;
@@ -776,14 +968,11 @@ pub async fn delete_client(
 
     // Delete the client from the database
     tracing::info!("DELETE CLIENT - About to delete from database: {}", id);
-    manager
-        .delete(&id)
-        .await
-        .map_err(|e| {
-            tracing::error!("DELETE CLIENT - Database deletion failed: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-    
+    manager.delete(&id).await.map_err(|e| {
+        tracing::error!("DELETE CLIENT - Database deletion failed: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
     tracing::info!("DELETE CLIENT - Successfully deleted from database: {}", id);
 
     // Refresh client IPs cache

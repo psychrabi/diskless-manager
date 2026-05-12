@@ -85,7 +85,7 @@ export async function deleteSnapshot(masterName, snapshotName) {
     `/api/images/${encodeURIComponent(masterName)}/snapshots/${encodeURIComponent(snapshotName)}`,
     {
       method: "DELETE",
-    }
+    },
   );
 }
 
@@ -94,12 +94,15 @@ export async function rollbackImageSnapshot(masterName, snapshotName) {
     `/api/images/${encodeURIComponent(masterName)}/snapshots/${encodeURIComponent(snapshotName)}/rollback`,
     {
       method: "POST",
-    }
+    },
   );
 }
 
 export async function setDefaultImage(masterName) {
-  return apiRequest(`/api/images/${encodeURIComponent(masterName)}/set-default`, {
-    method: "POST",
-  });
+  return apiRequest(
+    `/api/images/${encodeURIComponent(masterName)}/set-default`,
+    {
+      method: "POST",
+    },
+  );
 }

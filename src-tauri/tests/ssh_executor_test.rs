@@ -3,8 +3,14 @@ use app_lib::ssh_executor::{CommandResult, SshConfig, SshExecutor};
 #[test]
 fn test_ssh_config_default_values() {
     let config = SshConfig::default();
-    assert_eq!(config.connection_timeout, 5, "Connection timeout should be 5 seconds");
-    assert_eq!(config.command_timeout, 30, "Command timeout should be 30 seconds");
+    assert_eq!(
+        config.connection_timeout, 5,
+        "Connection timeout should be 5 seconds"
+    );
+    assert_eq!(
+        config.command_timeout, 30,
+        "Command timeout should be 30 seconds"
+    );
     assert_eq!(config.username, "root", "Default username should be root");
     assert!(
         config.disable_host_key_verification,
@@ -163,18 +169,27 @@ fn test_command_result_with_multiline_output() {
 #[test]
 fn test_ssh_config_with_different_usernames() {
     let configs = vec![
-        ("root", SshConfig {
-            username: "root".to_string(),
-            ..Default::default()
-        }),
-        ("admin", SshConfig {
-            username: "admin".to_string(),
-            ..Default::default()
-        }),
-        ("ubuntu", SshConfig {
-            username: "ubuntu".to_string(),
-            ..Default::default()
-        }),
+        (
+            "root",
+            SshConfig {
+                username: "root".to_string(),
+                ..Default::default()
+            },
+        ),
+        (
+            "admin",
+            SshConfig {
+                username: "admin".to_string(),
+                ..Default::default()
+            },
+        ),
+        (
+            "ubuntu",
+            SshConfig {
+                username: "ubuntu".to_string(),
+                ..Default::default()
+            },
+        ),
     ];
 
     for (expected_user, config) in configs {
@@ -185,11 +200,11 @@ fn test_ssh_config_with_different_usernames() {
 #[test]
 fn test_ssh_executor_pool_operations() {
     let executor = SshExecutor::new();
-    
+
     // Clear pool should work without errors
     executor.clear_pool();
     executor.clear_pool(); // Should be idempotent
-    
+
     // Verify executor is still usable after pool clear
     assert_eq!(executor.config.connection_timeout, 5);
 }

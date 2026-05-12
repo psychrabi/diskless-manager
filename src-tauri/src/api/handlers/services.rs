@@ -150,9 +150,7 @@ pub async fn restart_service(
     Ok(Json(response))
 }
 
-pub async fn start_all_services(
-    State(state): State<AppState>,
-) -> Result<Json<String>, StatusCode> {
+pub async fn start_all_services(State(state): State<AppState>) -> Result<Json<String>, StatusCode> {
     let settings = state.settings.read().await;
     let service_manager = ServiceManager::new(settings.clone(), state.db_pool.clone());
     service_manager
@@ -162,9 +160,7 @@ pub async fn start_all_services(
     Ok(Json("All services started successfully".to_string()))
 }
 
-pub async fn stop_all_services(
-    State(state): State<AppState>,
-) -> Result<Json<String>, StatusCode> {
+pub async fn stop_all_services(State(state): State<AppState>) -> Result<Json<String>, StatusCode> {
     let settings = state.settings.read().await;
     let service_manager = ServiceManager::new(settings.clone(), state.db_pool.clone());
     service_manager
@@ -200,11 +196,15 @@ pub async fn get_service_config(
     if name == "tftp-autoexec" {
         match fs::read_to_string("/srv/tftp/autoexec.ipxe") {
             Ok(content) => {
-                return Ok(Json(json!({ "text": content, "path": "/srv/tftp/autoexec.ipxe" })));
+                return Ok(Json(
+                    json!({ "text": content, "path": "/srv/tftp/autoexec.ipxe" }),
+                ));
             }
             Err(_) => {
                 // File doesn't exist yet, return empty content
-                return Ok(Json(json!({ "text": "", "path": "/srv/tftp/autoexec.ipxe" })));
+                return Ok(Json(
+                    json!({ "text": "", "path": "/srv/tftp/autoexec.ipxe" }),
+                ));
             }
         }
     }

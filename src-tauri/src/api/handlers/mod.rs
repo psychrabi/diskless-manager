@@ -11,5 +11,5 @@ pub mod services;
 pub mod ssh;
 pub mod system;
 pub mod users;
-pub mod zfs;
 pub mod ws;
+pub mod zfs;

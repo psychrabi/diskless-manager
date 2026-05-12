@@ -41,9 +41,7 @@ pub struct ErrorResponse {
 
 impl From<AuthError> for ErrorResponse {
     fn from(err: AuthError) -> Self {
-        ErrorResponse {
-            error: err.message,
-        }
+        ErrorResponse { error: err.message }
     }
 }
 
@@ -64,11 +62,11 @@ fn extract_token(headers: &axum::http::HeaderMap) -> Result<String, StatusCode> 
 /// Validate token and ensure user is admin
 fn validate_admin_token(token: &str) -> Result<(), StatusCode> {
     let claims = validate_token(token).map_err(|_| StatusCode::UNAUTHORIZED)?;
-    
+
     if claims.role != "admin" {
         return Err(StatusCode::FORBIDDEN);
     }
-    
+
     Ok(())
 }
 
@@ -245,7 +243,10 @@ pub async fn create_user(
         )
     })?;
 
-    info!("user created: {} (role: {})", request.username, request.role);
+    info!(
+        "user created: {} (role: {})",
+        request.username, request.role
+    );
 
     Ok((
         StatusCode::CREATED,

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::state::AppState;
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -32,9 +34,9 @@ pub async fn list_versions(
         ),
     >(
         r#"
-        SELECT id, base_name, version, image_id, changelog, is_latest, is_stable, created_at 
-        FROM image_versions 
-        WHERE base_name = ? 
+        SELECT id, base_name, version, image_id, changelog, is_latest, is_stable, created_at
+        FROM image_versions
+        WHERE base_name = ?
         ORDER BY created_at DESC
         "#,
     )

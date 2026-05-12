@@ -27,11 +27,6 @@ const ContextMenu = lazy(() =>
 const Loading = lazy(() =>
   import("./Loading.jsx").then((module) => ({ default: module.Loading })),
 );
-const Notification = lazy(() =>
-  import("./Notification.jsx").then((module) => ({
-    default: module.Notification,
-  })),
-);
 const Error = lazy(() =>
   import("./Error.jsx").then((module) => ({ default: module.Error })),
 );
@@ -61,7 +56,6 @@ export {
   Loading,
   LoadingSkeleton,
   Modal,
-  Notification,
   Select,
   StatusBadge,
   TableSkeleton,

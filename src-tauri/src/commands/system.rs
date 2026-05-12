@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::core::config::Settings;
 use crate::core::service::ServiceManager;
 use crate::ssh_executor::{SshConfig, SshExecutor};
@@ -46,7 +48,6 @@ pub struct NetworkDetection {
     pub hostname: String,
     pub domain: String,
 }
-
 
 pub async fn get_system_info() -> Result<SystemInfo, String> {
     let hostname = hostname::get()
@@ -121,7 +122,6 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
-
 pub async fn get_server_status(state: State<'_, AppState>) -> Result<ServerStatus, String> {
     let service_manager = ServiceManager::new();
     let services = service_manager.list_services();
@@ -145,7 +145,6 @@ pub async fn get_server_status(state: State<'_, AppState>) -> Result<ServerStatu
         images_count: images_count.0 as u32,
     })
 }
-
 
 pub async fn initialize_server(state: State<'_, AppState>) -> Result<String, String> {
     let settings = state.settings.read().await;
@@ -171,7 +170,6 @@ pub async fn initialize_server(state: State<'_, AppState>) -> Result<String, Str
     Ok("Server initialized successfully".to_string())
 }
 
-
 pub async fn check_dependencies() -> Result<Vec<DependencyStatus>, String> {
     let dependencies = vec![
         ("qemu-img", "qemu-utils"),
@@ -184,8 +182,7 @@ pub async fn check_dependencies() -> Result<Vec<DependencyStatus>, String> {
         ("wakeonlan", "wakeonlan"),
         ("zfs", "zfsutils-linux"),
         ("xfreerdp3", "freerdp3-x11"),
-        ("iftop", "iftop")
-        
+        ("iftop", "iftop"),
     ];
 
     let mut handles = Vec::new();
@@ -227,12 +224,10 @@ pub async fn check_dependencies() -> Result<Vec<DependencyStatus>, String> {
     Ok(statuses)
 }
 
-
 pub async fn get_settings(state: State<'_, AppState>) -> Result<Settings, String> {
     let settings = state.settings.read().await;
     Ok(settings.clone())
 }
-
 
 pub async fn save_settings(state: State<'_, AppState>, settings: Settings) -> Result<(), String> {
     // Update the in-memory settings
@@ -332,11 +327,9 @@ pub async fn get_network_interfaces() -> Result<Vec<String>, String> {
     Ok(crate::utils::network::list_interfaces())
 }
 
-
 pub async fn get_interface_ip(interface: String) -> Result<Option<String>, String> {
     Ok(crate::utils::network::get_interface_ip(&interface))
 }
-
 
 pub async fn detect_server_network() -> Result<NetworkDetection, String> {
     let interfaces_names = crate::utils::network::list_interfaces();
@@ -380,7 +373,6 @@ pub async fn detect_server_network() -> Result<NetworkDetection, String> {
         domain,
     })
 }
-
 
 pub async fn apply_network_settings(state: State<'_, AppState>) -> Result<String, String> {
     let mut settings = state.settings.read().await.clone();
@@ -500,7 +492,7 @@ pub async fn apply_network_settings(state: State<'_, AppState>) -> Result<String
 /// Test SSH connectivity to a remote host
 pub async fn test_ssh_connection(request: SshTestRequest) -> Result<SshTestResult, String> {
     let start_time = std::time::Instant::now();
-    
+
     // Create SSH config for Windows
     let config = SshConfig {
         connection_timeout: 10,
@@ -509,14 +501,17 @@ pub async fn test_ssh_connection(request: SshTestRequest) -> Result<SshTestResul
         disable_host_key_verification: true,
         max_retries: 1,
     };
-    
+
     let executor = SshExecutor::with_config(config);
-    
+
     // Test basic connectivity first
     match executor.check_connectivity(&request.host).await {
         Ok(true) => {
             // Try a simple command to verify it works
-            match executor.execute_command(&request.host, "echo 'SSH connection successful'").await {
+            match executor
+                .execute_command(&request.host, "echo 'SSH connection successful'")
+                .await
+            {
                 Ok(result) => {
                     let duration_ms = start_time.elapsed().as_millis() as u64;
                     Ok(SshTestResult {
@@ -565,7 +560,7 @@ pub async fn execute_ssh_command(
     command: String,
 ) -> Result<SshTestResult, String> {
     let start_time = std::time::Instant::now();
-    
+
     // Create SSH config for Windows
     let config = SshConfig {
         connection_timeout: 10,
@@ -574,9 +569,9 @@ pub async fn execute_ssh_command(
         disable_host_key_verification: true,
         max_retries: 1,
     };
-    
+
     let executor = SshExecutor::with_config(config);
-    
+
     match executor.execute_command(&host, &command).await {
         Ok(result) => {
             let duration_ms = start_time.elapsed().as_millis() as u64;
@@ -588,7 +583,10 @@ pub async fn execute_ssh_command(
                     format!("Command failed with exit code {}", result.exit_code)
                 },
                 duration_ms,
-                command_output: Some(format!("STDOUT:\n{}\nSTDERR:\n{}", result.stdout, result.stderr)),
+                command_output: Some(format!(
+                    "STDOUT:\n{}\nSTDERR:\n{}",
+                    result.stdout, result.stderr
+                )),
             })
         }
         Err(e) => {
@@ -602,7 +600,6 @@ pub async fn execute_ssh_command(
         }
     }
 }
-
 
 #[derive(Debug, Clone, Serialize)]
 pub struct WindowsSystemInfo {
@@ -626,9 +623,9 @@ pub async fn get_windows_system_info(
         disable_host_key_verification: true,
         max_retries: 1,
     };
-    
+
     let executor = SshExecutor::with_config(config);
-    
+
     // PowerShell command to get system info
     let ps_command = r#"
         $info = Get-ComputerInfo
@@ -639,9 +636,9 @@ pub async fn get_windows_system_info(
         Write-Output "AVAILABLE_MEMORY:$([math]::Round($info.AvailablePhysicalMemory/1GB, 2)) GB"
         Write-Output "CPU_INFO:$($info.CsProcessors[0].Name)"
     "#;
-    
+
     let command = format!("powershell.exe -Command \"{}\"", ps_command);
-    
+
     match executor.execute_command(&host, &command).await {
         Ok(result) if result.exit_code == 0 => {
             let mut info = WindowsSystemInfo {
@@ -652,7 +649,7 @@ pub async fn get_windows_system_info(
                 available_memory: "Unknown".to_string(),
                 cpu_info: "Unknown".to_string(),
             };
-            
+
             // Parse the output
             for line in result.stdout.lines() {
                 if let Some((key, value)) = line.split_once(':') {
@@ -667,10 +664,13 @@ pub async fn get_windows_system_info(
                     }
                 }
             }
-            
+
             Ok(info)
         }
-        Ok(result) => Err(format!("Command failed with exit code {}: {}", result.exit_code, result.stderr)),
+        Ok(result) => Err(format!(
+            "Command failed with exit code {}: {}",
+            result.exit_code, result.stderr
+        )),
         Err(e) => Err(format!("SSH execution failed: {}", e)),
     }
 }

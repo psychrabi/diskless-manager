@@ -9,8 +9,6 @@ use crate::{
 
 
 pub fn list_block_devices() -> Result<Vec<String>, AppError> {
-    // Use lsblk to list all block devices (disks only, not partitions)
-    // Filter for disks (TYPE=disk) and exclude devices that are already part of a zpool
     let out = run_command_output_no_sudo(&[
         "lsblk",
         "-d",
@@ -30,6 +28,7 @@ pub fn list_block_devices() -> Result<Vec<String>, AppError> {
 }
 
 
+#[allow(dead_code)]
 pub fn list_zpools() -> Result<Vec<String>, AppError> {
     // Get fresh data
     let out = run_command_output_no_sudo(&["zpool", "list", "-H", "-o", "name"])
@@ -44,6 +43,7 @@ pub fn list_zpools() -> Result<Vec<String>, AppError> {
 }
 
 
+#[allow(dead_code)]
 pub fn list_datasets(zpool: &str) -> Result<Vec<DatasetInfo>, AppError> {
     // Get fresh data
     // Get all datasets with their properties in one command
@@ -128,6 +128,7 @@ pub fn list_datasets(zpool: &str) -> Result<Vec<DatasetInfo>, AppError> {
 }
 
 
+#[allow(dead_code)]
 pub fn create_zfs_dataset(req: CreateDatasetRequest) -> Result<String, AppError> {
     // Validate inputs
     validate_pool_name(&req.zpool)?;
@@ -218,6 +219,7 @@ pub fn create_zfs_dataset(req: CreateDatasetRequest) -> Result<String, AppError>
 
 // New: delete dataset (recursive)
 
+#[allow(dead_code)]
 pub fn delete_zfs_dataset(dataset: &str, recursive: bool) -> Result<String, AppError> {
     if dataset.trim().is_empty() {
         return Err(AppError::Validation("dataset is required".into()));

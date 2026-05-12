@@ -138,7 +138,7 @@ impl SambaService {
    security = user
    map to guest = Bad User
    dns proxy = no
-   
+
    # Logging
    log file = /var/log/samba/log.%m
    max log size = 1000

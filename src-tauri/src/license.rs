@@ -46,7 +46,7 @@ pub fn verify_license_remote(key: &str) -> Result<LicenseVerifyResponse, String>
     Ok(body)
 }
 
-
+#[allow(dead_code)]
 pub async fn activate_license(state: State<'_, AppState>, key: &str) -> Result<String, AuthError> {
     if key.trim().is_empty() {
         return Err(AuthError {
@@ -135,6 +135,7 @@ pub async fn activate_license(state: State<'_, AppState>, key: &str) -> Result<S
     }
 }
 
+#[allow(dead_code)]
 pub fn ensure_license_valid() -> Result<(), AuthError> {
     let cfg = config::get_config();
     let settings = cfg.settings.as_object().ok_or_else(|| AuthError {
@@ -210,15 +211,18 @@ pub async fn activate_license_http(state: AppState, key: &str) -> Result<String,
         // set trial license
         settings.insert(
             "license_key".to_string(),
-            serde_json::to_value("trial").map_err(|e| format!("failed to serialize license key: {}", e))?,
+            serde_json::to_value("trial")
+                .map_err(|e| format!("failed to serialize license key: {}", e))?,
         );
         settings.insert(
             "license_status".to_string(),
-            serde_json::to_value("valid").map_err(|e| format!("failed to serialize license status: {}", e))?,
+            serde_json::to_value("valid")
+                .map_err(|e| format!("failed to serialize license status: {}", e))?,
         );
         settings.insert(
             "license_expires".to_string(),
-            serde_json::to_value("2027-10-12").map_err(|e| format!("failed to serialize expires: {}", e))?,
+            serde_json::to_value("2027-10-12")
+                .map_err(|e| format!("failed to serialize expires: {}", e))?,
         );
         cfg.settings = serde_json::Value::Object(settings);
         config::write_config(&state.db_pool, &cfg)
@@ -228,8 +232,7 @@ pub async fn activate_license_http(state: AppState, key: &str) -> Result<String,
         Ok("Trial License activated".to_string())
     } else {
         // verify with remote
-        let res: LicenseVerifyResponse =
-            verify_license_remote(key).map_err(|e| e)?;
+        let res: LicenseVerifyResponse = verify_license_remote(key).map_err(|e| e)?;
         if !res.valid {
             return Err(res
                 .message
@@ -243,16 +246,19 @@ pub async fn activate_license_http(state: AppState, key: &str) -> Result<String,
         let mut settings = cfg.settings.as_object().cloned().unwrap_or_default();
         settings.insert(
             "license_key".to_string(),
-            serde_json::to_value(key).map_err(|e| format!("failed to serialize license key: {}", e))?,
+            serde_json::to_value(key)
+                .map_err(|e| format!("failed to serialize license key: {}", e))?,
         );
         settings.insert(
             "license_status".to_string(),
-            serde_json::to_value("valid").map_err(|e| format!("failed to serialize license status: {}", e))?,
+            serde_json::to_value("valid")
+                .map_err(|e| format!("failed to serialize license status: {}", e))?,
         );
         if let Some(expires) = res.expires_at {
             settings.insert(
                 "license_expires".to_string(),
-                serde_json::to_value(expires).map_err(|e| format!("failed to serialize expires: {}", e))?,
+                serde_json::to_value(expires)
+                    .map_err(|e| format!("failed to serialize expires: {}", e))?,
             );
         }
         cfg.settings = serde_json::Value::Object(settings);

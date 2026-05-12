@@ -155,8 +155,8 @@ impl ImageManager {
             ),
         >(
             r#"
-            SELECT id, name, os_type, size_gb, path, format, status, description, parent_id, checksum, created_at, updated_at 
-            FROM images 
+            SELECT id, name, os_type, size_gb, path, format, status, description, parent_id, checksum, created_at, updated_at
+            FROM images
             ORDER BY name
             "#,
         )
@@ -224,8 +224,8 @@ impl ImageManager {
             ),
         >(
             r#"
-            SELECT id, name, os_type, size_gb, path, format, status, description, parent_id, checksum, created_at, updated_at 
-            FROM images 
+            SELECT id, name, os_type, size_gb, path, format, status, description, parent_id, checksum, created_at, updated_at
+            FROM images
             WHERE id = ? OR name = ?
             "#,
         )
@@ -310,7 +310,7 @@ impl ImageManager {
 
         sqlx::query(
             r#"
-            INSERT INTO images (id, name, os_type, size_gb, path, format, status, description, parent_id, checksum, created_at, updated_at) 
+            INSERT INTO images (id, name, os_type, size_gb, path, format, status, description, parent_id, checksum, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
@@ -386,7 +386,7 @@ impl ImageManager {
 
         sqlx::query(
             r#"
-            INSERT INTO images (id, name, os_type, size_gb, path, format, status, description, parent_id, checksum, created_at, updated_at) 
+            INSERT INTO images (id, name, os_type, size_gb, path, format, status, description, parent_id, checksum, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
@@ -479,7 +479,7 @@ impl ImageManager {
 
         sqlx::query(
             r#"
-            INSERT INTO images (id, name, os_type, size_gb, path, format, status, description, parent_id, checksum, created_at, updated_at) 
+            INSERT INTO images (id, name, os_type, size_gb, path, format, status, description, parent_id, checksum, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
@@ -549,7 +549,7 @@ impl ImageManager {
 
         sqlx::query(
             r#"
-            INSERT INTO images (id, name, os_type, size_gb, path, format, status, description, parent_id, checksum, created_at, updated_at) 
+            INSERT INTO images (id, name, os_type, size_gb, path, format, status, description, parent_id, checksum, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )

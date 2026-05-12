@@ -20,11 +20,11 @@ export async function clearRamCache() {
   return apiRequest("/api/system/cache/clear", { method: "POST" });
 }
 
-export async function getSystemSettings() {
+export async function getSettings() {
   return apiRequest("/api/system/settings");
 }
 
-export async function saveSystemSettings(settings) {
+export async function saveSettings(settings) {
   return apiRequest("/api/system/settings", {
     method: "PUT",
     body: JSON.stringify(settings),
@@ -35,17 +35,6 @@ export async function setupPrivilegedAccess(config) {
   return apiRequest("/api/system/privileged-access", {
     method: "POST",
     body: JSON.stringify(config),
-  });
-}
-
-export async function getSettings() {
-  return apiRequest("/api/system/settings");
-}
-
-export async function saveSettings(settings) {
-  return apiRequest("/api/system/settings", {
-    method: "PUT",
-    body: JSON.stringify(settings),
   });
 }
 

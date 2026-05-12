@@ -1,7 +1,7 @@
+use axum::extract::State;
 use axum::Json;
 use log::info;
 use serde::{Deserialize, Serialize};
-use axum::extract::State;
 
 use crate::license::get_license_info;
 use crate::state::AppState;
@@ -23,7 +23,8 @@ pub struct ActivateLicenseResponse {
     pub message: String,
 }
 
-pub async fn get_license_info_handler() -> Result<Json<LicenseInfoResponse>, axum::http::StatusCode> {
+pub async fn get_license_info_handler() -> Result<Json<LicenseInfoResponse>, axum::http::StatusCode>
+{
     match get_license_info() {
         Ok(info) => {
             info!("license info retrieved");
@@ -51,10 +52,7 @@ pub async fn activate_license_handler(
         }
         Err(e) => {
             info!("failed to activate license: {}", e);
-            Err((
-                axum::http::StatusCode::BAD_REQUEST,
-                e,
-            ))
+            Err((axum::http::StatusCode::BAD_REQUEST, e))
         }
     }
 }

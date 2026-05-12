@@ -4,7 +4,7 @@ use std::time::Duration;
 
 // ============================================================================
 // Property 23: SSH Connection Timeout
-// For any SSH connection attempt, if the connection does not establish within 
+// For any SSH connection attempt, if the connection does not establish within
 // 5 seconds, it should timeout.
 // Validates: Requirements 5.1
 // ============================================================================
@@ -39,11 +39,11 @@ proptest! {
             connection_timeout: timeout,
             ..Default::default()
         };
-        
+
         // Connection timeout should always be positive and reasonable
         assert!(config.connection_timeout > 0, "Connection timeout must be positive");
         assert!(config.connection_timeout <= 60, "Connection timeout should be reasonable");
-        
+
         // For default config, must be exactly 5 seconds
         let default_config = SshConfig::default();
         assert_eq!(default_config.connection_timeout, 5);
@@ -52,7 +52,7 @@ proptest! {
 
 // ============================================================================
 // Property 24: SSH Command Timeout
-// For any SSH command execution, if the command does not complete within 
+// For any SSH command execution, if the command does not complete within
 // 30 seconds, it should timeout.
 // Validates: Requirements 5.2
 // ============================================================================
@@ -87,11 +87,11 @@ proptest! {
             command_timeout: timeout,
             ..Default::default()
         };
-        
+
         // Command timeout should always be positive and reasonable
         assert!(config.command_timeout > 0, "Command timeout must be positive");
         assert!(config.command_timeout <= 300, "Command timeout should be reasonable");
-        
+
         // For default config, must be exactly 30 seconds
         let default_config = SshConfig::default();
         assert_eq!(default_config.command_timeout, 30);
@@ -111,7 +111,7 @@ fn test_property_24_command_timeout_greater_than_connection_timeout() {
 
 // ============================================================================
 // Property 27: SSH Retry Logic
-// For any failed SSH connection, the system should retry once before 
+// For any failed SSH connection, the system should retry once before
 // reporting failure.
 // Validates: Requirements 5.5
 // ============================================================================
@@ -146,10 +146,10 @@ proptest! {
             max_retries,
             ..Default::default()
         };
-        
+
         // Max retries should be reasonable (not too high)
         assert!(config.max_retries < 10, "Max retries should be reasonable");
-        
+
         // For default config, must be exactly 1
         let default_config = SshConfig::default();
         assert_eq!(default_config.max_retries, 1);
@@ -172,7 +172,7 @@ fn test_property_27_retry_logic_means_two_total_attempts() {
 
 // ============================================================================
 // Property 28: SSH Audit Logging
-// For any SSH connection attempt, the attempt should be logged for audit 
+// For any SSH connection attempt, the attempt should be logged for audit
 // purposes.
 // Validates: Requirements 5.6
 // ============================================================================
@@ -216,9 +216,9 @@ proptest! {
             command_timeout: cmd_timeout,
             ..Default::default()
         };
-        
+
         let executor = SshExecutor::with_config(config);
-        
+
         // Executor should be created successfully with logging infrastructure
         assert_eq!(executor.config.connection_timeout, conn_timeout);
         assert_eq!(executor.config.command_timeout, cmd_timeout);
@@ -398,19 +398,19 @@ proptest! {
 #[test]
 fn test_property_default_ssh_config_reasonable() {
     let config = SshConfig::default();
-    
+
     // Connection timeout should be reasonable (5 seconds)
     assert!(config.connection_timeout >= 1 && config.connection_timeout <= 60);
-    
+
     // Command timeout should be reasonable (30 seconds)
     assert!(config.command_timeout >= 1 && config.command_timeout <= 300);
-    
+
     // Username should be root
     assert_eq!(config.username, "root");
-    
+
     // Host key verification should be disabled for diskless clients
     assert!(config.disable_host_key_verification);
-    
+
     // Max retries should be 1
     assert_eq!(config.max_retries, 1);
 }
@@ -419,12 +419,12 @@ fn test_property_default_ssh_config_reasonable() {
 #[test]
 fn test_property_ssh_executor_pool_idempotent() {
     let executor = SshExecutor::new();
-    
+
     // Clear pool multiple times should not cause errors
     executor.clear_pool();
     executor.clear_pool();
     executor.clear_pool();
-    
+
     // Executor should still be usable
     assert_eq!(executor.config.connection_timeout, 5);
 }

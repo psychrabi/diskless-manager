@@ -25,9 +25,7 @@ pub struct PoolExistsRequest {
     pub pool_name: Option<String>,
 }
 
-pub async fn list_disks(
-    State(_state): State<AppState>,
-) -> Result<Json<Vec<String>>, StatusCode> {
+pub async fn list_disks(State(_state): State<AppState>) -> Result<Json<Vec<String>>, StatusCode> {
     match crate::disks::list_block_devices() {
         Ok(devices) => Ok(Json(devices)),
         Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
@@ -59,7 +57,7 @@ pub async fn create_pool(
 ) -> Result<Json<DatasetOperationResponse>, StatusCode> {
     // Call the underlying zpool creation logic without the Tauri State wrapper
     use std::process::Command;
-    
+
     let output = Command::new("zpool")
         .args(&["create", &request.name, &format!("/dev/{}", request.disk)])
         .output();
@@ -77,12 +75,10 @@ pub async fn create_pool(
     }
 }
 
-pub async fn pool_exists(
-    State(_state): State<AppState>,
-) -> Result<Json<bool>, StatusCode> {
+pub async fn pool_exists(State(_state): State<AppState>) -> Result<Json<bool>, StatusCode> {
     // Check if any ZFS pool exists (typically "diskless" or "rpool")
     use std::process::Command;
-    
+
     let output = Command::new("zpool")
         .args(&["list", "-H", "-o", "name"])
         .output();

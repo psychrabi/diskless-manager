@@ -29,6 +29,7 @@ impl NfsService {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub async fn add_export(&self, path: &str, options: &str) -> anyhow::Result<()> {
         // Read the existing exports file
         let content = std::fs::read_to_string("/etc/exports").unwrap_or_default();

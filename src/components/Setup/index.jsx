@@ -115,6 +115,7 @@ const Setup = () => {
         listDisks(),
         checkZfsPoolExists(),
       ]);
+      console.log("Detected disks:", detectedDisks);
       setDisks(detectedDisks);
       setPoolExists(exists);
 

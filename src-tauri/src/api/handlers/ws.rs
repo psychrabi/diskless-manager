@@ -1,14 +1,17 @@
 use axum::{
-    extract::{ws::{WebSocket, WebSocketUpgrade}, State},
+    extract::{
+        ws::{WebSocket, WebSocketUpgrade},
+        State,
+    },
     response::IntoResponse,
 };
 use futures::{sink::SinkExt, stream::StreamExt};
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
-use tokio::time::interval;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
+use tokio::time::interval;
 
 use crate::state::AppState;
 
@@ -47,7 +50,7 @@ async fn handle_metrics_socket(socket: WebSocket, state: AppState) {
     let (mut sender, mut receiver) = socket.split();
     let state_clone = state.clone();
     let mut interval = interval(Duration::from_secs(1));
-    
+
     loop {
         tokio::select! {
             // Send metrics every 1 second
@@ -71,7 +74,7 @@ async fn handle_metrics_socket(socket: WebSocket, state: AppState) {
                     }
                 }
             }
-            
+
             // Handle incoming messages
             msg = receiver.next() => {
                 match msg {
@@ -102,7 +105,7 @@ async fn handle_metrics_socket(socket: WebSocket, state: AppState) {
 async fn fetch_metrics(state: &AppState) -> Result<MetricsUpdate, String> {
     // Get cached client IPs
     let client_ips = state.client_ips.read().await;
-    
+
     if client_ips.is_empty() {
         log::debug!("No clients in cache, returning empty metrics");
         return Ok(MetricsUpdate {
@@ -110,7 +113,7 @@ async fn fetch_metrics(state: &AppState) -> Result<MetricsUpdate, String> {
             timestamp: chrono::Utc::now().timestamp(),
         });
     }
-    
+
     let mut clients = Vec::new();
     let mut online_times = CLIENT_ONLINE_TIMES.lock().await;
     let now = chrono::Utc::now().timestamp();
@@ -136,12 +139,7 @@ async fn fetch_metrics(state: &AppState) -> Result<MetricsUpdate, String> {
 
         // Get I/O metrics with timeout
         let (read_speed, write_speed) = if is_online {
-            match tokio::time::timeout(
-                Duration::from_secs(3),
-                get_client_io_speed(ip),
-            )
-            .await
-            {
+            match tokio::time::timeout(Duration::from_secs(3), get_client_io_speed(ip)).await {
                 Ok(Ok((read, write))) => (read, write),
                 _ => (0.0, 0.0),
             }
@@ -168,22 +166,22 @@ async fn fetch_metrics(state: &AppState) -> Result<MetricsUpdate, String> {
 async fn get_client_io_speed(client_ip: &str) -> Result<(f64, f64), String> {
     // Take first measurement
     let (recv1, sent1) = get_socket_bytes_for_client(client_ip).await?;
-    
+
     // Wait 1 second for measurement interval
     tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
-    
+
     // Take second measurement
     let (recv2, sent2) = get_socket_bytes_for_client(client_ip).await?;
-    
+
     // Calculate throughput (bytes per second = MB/s)
     // recv = bytes received by server (client writing to server) = write speed
     // sent = bytes sent by server (client reading from server) = read speed
     let write_delta = recv2.saturating_sub(recv1);
     let read_delta = sent2.saturating_sub(sent1);
-    
+
     let read_speed = (read_delta as f64) / (1024.0 * 1024.0);
     let write_speed = (write_delta as f64) / (1024.0 * 1024.0);
-    
+
     Ok((read_speed, write_speed))
 }
 
@@ -191,7 +189,7 @@ async fn get_client_io_speed(client_ip: &str) -> Result<(f64, f64), String> {
 async fn get_socket_bytes_for_client(client_ip: &str) -> Result<(u64, u64), String> {
     // Get the network interface used to reach this client
     let interface = get_client_interface(client_ip).await?;
-    
+
     // Read /proc/net/dev to get interface statistics
     let output = tokio::task::spawn_blocking(move || {
         std::process::Command::new("cat")
@@ -202,13 +200,13 @@ async fn get_socket_bytes_for_client(client_ip: &str) -> Result<(u64, u64), Stri
     .map_err(|e| e.to_string())?;
 
     let output = output.map_err(|e| e.to_string())?;
-    
+
     if !output.status.success() {
         return Ok((0, 0));
     }
 
     let content = String::from_utf8_lossy(&output.stdout);
-    
+
     // Parse /proc/net/dev to find the interface
     // Format: interface: bytes_recv packets_recv errors_recv drop_recv ... bytes_sent packets_sent ...
     for line in content.lines() {
@@ -247,7 +245,7 @@ async fn get_client_interface(client_ip: &str) -> Result<String, String> {
     .map_err(|e| e.to_string())?;
 
     let output = output.map_err(|e| e.to_string())?;
-    
+
     if output.status.success() {
         let content = String::from_utf8_lossy(&output.stdout);
         let parts: Vec<&str> = content.split_whitespace().collect();

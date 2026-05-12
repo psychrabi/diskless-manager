@@ -1,4 +1,4 @@
-import UserManagement from "@/components/UserMangement";
+import UserManagement from "@/components/UserManagement";
 import PublicRoute from "@/components/Authentication/PublicRoute";
 import PublicLayout from "@/components/layouts/PublicLayout";
 import { lazy } from "react";
@@ -7,7 +7,6 @@ import { createHashRouter } from "react-router-dom";
 const Adminlayout = lazy(() => import("@/components/layouts/AdminLayout"));
 const ClientManagement = lazy(() => import("@/components/ClientManagement"));
 const ImageManagement = lazy(() => import("@/components/ImageManagement"));
-const Images = lazy(() => import("@/components/Images"));
 const Dashboard = lazy(() => import("@/components/Dashboard"));
 const Setup = lazy(() => import("@/components/Setup"));
 const SettingManagement = lazy(() => import("@/components/SettingsManagement"));
@@ -15,7 +14,7 @@ const ServiceManagement = lazy(() => import("@/components/ServiceManagement"));
 const DisksManagement = lazy(() => import("@/components/DisksManagement"));
 const LicenseManagement = lazy(() => import("@/components/LicenseManagement"));
 const ApplicationSettings = lazy(() =>
-  import("@/components/ApplicationMangement")
+  import("@/components/ApplicationManagement")
 );
 const Logs = lazy(() => import("@/components/Logs"));
 const SshTester = lazy(() => import("@/components/SshTester/SshTester"));
@@ -63,10 +62,6 @@ export const router = createHashRouter([
         path: "/disks",
         element: <DisksManagement />,
       },
-      // {
-      //   path: "/images",
-      //   element: <Images />,
-      // },
       {
         path: "/images",
         element: <ImageManagement />,

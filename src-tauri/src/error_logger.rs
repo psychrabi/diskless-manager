@@ -68,16 +68,19 @@ impl ErrorLogger {
 
     /// Get recent errors
     pub async fn get_recent_errors(&self, limit: i64) -> anyhow::Result<Vec<ErrorLogEntry>> {
-        let rows = sqlx::query_as::<_, (
-            String,
-            Option<String>,
-            String,
-            String,
-            String,
-            Option<String>,
-            Option<String>,
-            String,
-        )>(
+        let rows = sqlx::query_as::<
+            _,
+            (
+                String,
+                Option<String>,
+                String,
+                String,
+                String,
+                Option<String>,
+                Option<String>,
+                String,
+            ),
+        >(
             r#"
             SELECT id, client_id, operation_type, error_type,
                    error_message, error_code, stack_trace, timestamp
@@ -122,16 +125,19 @@ impl ErrorLogger {
 
     /// Get errors for a specific client
     pub async fn get_client_errors(&self, client_id: &str) -> anyhow::Result<Vec<ErrorLogEntry>> {
-        let rows = sqlx::query_as::<_, (
-            String,
-            Option<String>,
-            String,
-            String,
-            String,
-            Option<String>,
-            Option<String>,
-            String,
-        )>(
+        let rows = sqlx::query_as::<
+            _,
+            (
+                String,
+                Option<String>,
+                String,
+                String,
+                String,
+                Option<String>,
+                Option<String>,
+                String,
+            ),
+        >(
             r#"
             SELECT id, client_id, operation_type, error_type,
                    error_message, error_code, stack_trace, timestamp
@@ -179,16 +185,19 @@ impl ErrorLogger {
         &self,
         operation_type: &str,
     ) -> anyhow::Result<Vec<ErrorLogEntry>> {
-        let rows = sqlx::query_as::<_, (
-            String,
-            Option<String>,
-            String,
-            String,
-            String,
-            Option<String>,
-            Option<String>,
-            String,
-        )>(
+        let rows = sqlx::query_as::<
+            _,
+            (
+                String,
+                Option<String>,
+                String,
+                String,
+                String,
+                Option<String>,
+                Option<String>,
+                String,
+            ),
+        >(
             r#"
             SELECT id, client_id, operation_type, error_type,
                    error_message, error_code, stack_trace, timestamp

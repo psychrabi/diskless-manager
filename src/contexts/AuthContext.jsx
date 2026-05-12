@@ -1,6 +1,7 @@
 import { useToastStore } from "@/store/useToastStore";
 import { useCallback, useEffect, useState } from "react";
-import { setAuthToken, validateAuthToken } from "@/api/commands";
+import { setAuthToken } from "@/api/client";
+import { validateAuthToken } from "@/api/commands";
 import { AuthContext } from "./auth";
 
 const AUTH_TOKEN_KEY = "authToken";

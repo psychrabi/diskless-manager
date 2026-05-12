@@ -32,7 +32,11 @@ export default function AdminPasswordForm() {
   };
 
   return (
-    <Card title="Admin password" subtitle="Change admin password" icon={LockKeyhole}>
+    <Card
+      title="Admin password"
+      subtitle="Change admin password"
+      icon={LockKeyhole}
+    >
       <form onSubmit={handleSubmit(onSubmit)}>
         <div className="space-y-4">
           <Input

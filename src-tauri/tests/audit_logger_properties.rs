@@ -1,6 +1,4 @@
-use app_lib::audit_logger::{
-    AuditLogFilter, AuditLogger, ControlOperation, OperationResult,
-};
+use app_lib::audit_logger::{AuditLogFilter, AuditLogger, ControlOperation, OperationResult};
 use app_lib::error_logger::{ControlError, ErrorLogger};
 use chrono::Utc;
 use proptest::prelude::*;
@@ -63,7 +61,7 @@ async fn create_test_db() -> SqlitePool {
 
 // ============================================================================
 // Property 22: Control Operation Logging
-// For any control operation, the audit log should contain the client name, 
+// For any control operation, the audit log should contain the client name,
 // IP, OS type, and operation type.
 // Validates: Requirements 4.6, 8.1
 // ============================================================================
@@ -159,12 +157,15 @@ async fn test_property_22_operation_logging_failed() {
     assert_eq!(logs.len(), 1, "Should have one log entry");
     let entry = &logs[0];
     assert_eq!(entry.result, "failed");
-    assert_eq!(entry.result_message, Some("SSH connection timeout".to_string()));
+    assert_eq!(
+        entry.result_message,
+        Some("SSH connection timeout".to_string())
+    );
 }
 
 // ============================================================================
 // Property 29: Control Operation Result Logging
-// For any control operation completion, the result (success or failure) 
+// For any control operation completion, the result (success or failure)
 // should be logged with details.
 // Validates: Requirements 8.2
 // ============================================================================
@@ -225,7 +226,7 @@ async fn test_property_29_result_logging_all_states() {
 
 // ============================================================================
 // Property 30: Error Details Logging
-// For any failed control operation, the error message and error code 
+// For any failed control operation, the error message and error code
 // should be logged.
 // Validates: Requirements 8.3
 // ============================================================================
@@ -261,14 +262,20 @@ async fn test_property_30_error_logging() {
     assert_eq!(errors.len(), 1, "Should have one error entry");
     let entry = &errors[0];
     assert_eq!(entry.error_type, "timeout");
-    assert_eq!(entry.error_message, "SSH connection timeout after 5 seconds");
+    assert_eq!(
+        entry.error_message,
+        "SSH connection timeout after 5 seconds"
+    );
     assert_eq!(entry.error_code, Some("SSH_TIMEOUT".to_string()));
-    assert_eq!(entry.stack_trace, Some("at ssh_executor.rs:123".to_string()));
+    assert_eq!(
+        entry.stack_trace,
+        Some("at ssh_executor.rs:123".to_string())
+    );
 }
 
 // ============================================================================
 // Property 31: Audit Log Querying
-// For any audit log query with filters (client, operation type, date range), 
+// For any audit log query with filters (client, operation type, date range),
 // the system should return matching log entries.
 // Validates: Requirements 8.5
 // ============================================================================
@@ -425,12 +432,38 @@ async fn test_prop_operation_logging_preserves_data_sample() {
     let logger = AuditLogger::new(Arc::new(pool));
 
     let test_cases = vec![
-        ("client-1", "test-client-1", "192.168.1.100", "linux", "shutdown", "graceful", 0u32),
-        ("client-2", "test-client-2", "192.168.1.101", "windows", "reboot", "force", 5u32),
-        ("client-3", "test-client-3", "192.168.1.102", "linux", "remote", "graceful", 10u32),
+        (
+            "client-1",
+            "test-client-1",
+            "192.168.1.100",
+            "linux",
+            "shutdown",
+            "graceful",
+            0u32,
+        ),
+        (
+            "client-2",
+            "test-client-2",
+            "192.168.1.101",
+            "windows",
+            "reboot",
+            "force",
+            5u32,
+        ),
+        (
+            "client-3",
+            "test-client-3",
+            "192.168.1.102",
+            "linux",
+            "remote",
+            "graceful",
+            10u32,
+        ),
     ];
 
-    for (client_id, client_name, client_ip, os_type, operation_type, operation_mode, delay) in test_cases {
+    for (client_id, client_name, client_ip, os_type, operation_type, operation_mode, delay) in
+        test_cases
+    {
         let operation = ControlOperation {
             client_id: client_id.to_string(),
             client_name: client_name.to_string(),
@@ -483,9 +516,24 @@ async fn test_prop_error_logging_preserves_data_sample() {
     let error_logger = ErrorLogger::new(Arc::new(pool));
 
     let test_cases = vec![
-        ("shutdown", "timeout", "SSH connection timeout", "SSH_TIMEOUT"),
-        ("reboot", "connection_failed", "Failed to connect to client", "CONN_FAILED"),
-        ("remote", "command_failed", "Command execution failed", "CMD_FAILED"),
+        (
+            "shutdown",
+            "timeout",
+            "SSH connection timeout",
+            "SSH_TIMEOUT",
+        ),
+        (
+            "reboot",
+            "connection_failed",
+            "Failed to connect to client",
+            "CONN_FAILED",
+        ),
+        (
+            "remote",
+            "command_failed",
+            "Command execution failed",
+            "CMD_FAILED",
+        ),
     ];
 
     for (operation_type, error_type, error_message, error_code) in test_cases {

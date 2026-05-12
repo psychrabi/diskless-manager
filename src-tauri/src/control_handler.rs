@@ -1,9 +1,9 @@
 use crate::command_builder::CommandBuilder;
+use crate::core::client::Client;
 use crate::error::AppError;
 use crate::os_detector::OsDetector;
 use crate::remote_desktop_launcher::{RemoteDesktopLauncher, RemoteDesktopResponse};
 use crate::ssh_executor::SshExecutor;
-use crate::core::client::Client;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -103,7 +103,10 @@ impl ControlHandler {
         let command = match CommandBuilder::build_shutdown_command(os_type, force, delay_minutes) {
             Ok(cmd) => cmd,
             Err(e) => {
-                error!("Failed to build shutdown command for {}: {}", client.name, e);
+                error!(
+                    "Failed to build shutdown command for {}: {}",
+                    client.name, e
+                );
                 let response = ControlResponse {
                     success: false,
                     message: format!("Failed to build shutdown command: {}", e),
@@ -129,7 +132,11 @@ impl ControlHandler {
         };
 
         // Execute shutdown command
-        match self.ssh_executor.execute_with_retry(&client.ip, &command).await {
+        match self
+            .ssh_executor
+            .execute_with_retry(&client.ip, &command)
+            .await
+        {
             Ok(result) => {
                 if result.exit_code == 0 {
                     info!(
@@ -193,7 +200,10 @@ impl ControlHandler {
                 }
             }
             Err(e) => {
-                error!("SSH execution failed for shutdown on {}: {}", client.name, e);
+                error!(
+                    "SSH execution failed for shutdown on {}: {}",
+                    client.name, e
+                );
                 let error_msg = e.to_string();
                 let response = ControlResponse {
                     success: false,
@@ -278,7 +288,11 @@ impl ControlHandler {
         };
 
         // Execute reboot command
-        match self.ssh_executor.execute_with_retry(&client.ip, &command).await {
+        match self
+            .ssh_executor
+            .execute_with_retry(&client.ip, &command)
+            .await
+        {
             Ok(result) => {
                 if result.exit_code == 0 {
                     info!(
@@ -287,10 +301,7 @@ impl ControlHandler {
                     );
                     let response = ControlResponse {
                         success: true,
-                        message: format!(
-                            "Reboot command sent to {} ({})",
-                            client.name, client.ip
-                        ),
+                        message: format!("Reboot command sent to {} ({})", client.name, client.ip),
                         operation_id: Some(operation_id.clone()),
                         timestamp: Utc::now().to_rfc3339(),
                     };
@@ -413,6 +424,7 @@ impl ControlHandler {
         }
     }
 }
+#[allow(unused_imports)]
 mod tests {
     use super::*;
 

@@ -388,6 +388,7 @@ host {name} {{
     }
 }
 
+#[allow(dead_code)]
 fn calculate_network(ip: &str, netmask: &str) -> anyhow::Result<String> {
     let ip_parts: Vec<u8> = ip
         .split('.')

@@ -1,15 +1,11 @@
-use axum::{
-    extract::State,
-    http::StatusCode,
-    Json,
-};
+use axum::{extract::State, http::StatusCode, Json};
 use log::info;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     auth::{authenticate_user, validate_token},
-    types::{LoginRequest, LoginResponse},
     state::AppState,
+    types::{LoginRequest, LoginResponse},
 };
 
 pub async fn login(
@@ -102,8 +98,8 @@ pub async fn update_admin_password(
     }
 
     // Hash new password
-    let hashed = hash(&request.new_password, DEFAULT_COST)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let hashed =
+        hash(&request.new_password, DEFAULT_COST).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // Update password in database
     let now = Utc::now().to_rfc3339();
@@ -132,7 +128,9 @@ pub struct AdminExistsResponse {
     pub exists: bool,
 }
 
-pub async fn check_admin_exists(State(state): State<AppState>) -> Result<Json<AdminExistsResponse>, StatusCode> {
+pub async fn check_admin_exists(
+    State(state): State<AppState>,
+) -> Result<Json<AdminExistsResponse>, StatusCode> {
     // Check if any admin user exists in the database
     let count: i64 = sqlx::query_scalar(
         r#"

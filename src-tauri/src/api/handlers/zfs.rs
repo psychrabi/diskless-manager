@@ -116,7 +116,7 @@ pub async fn list_datasets(
     match output {
         Ok(output) if output.status.success() => {
             let content = String::from_utf8_lossy(&output.stdout);
-            let mut datasets: Vec<Dataset> = content
+            let datasets: Vec<Dataset> = content
                 .lines()
                 .filter(|l| !l.is_empty())
                 .filter_map(|line| {

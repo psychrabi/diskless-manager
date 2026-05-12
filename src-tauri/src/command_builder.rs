@@ -21,7 +21,7 @@ impl std::fmt::Display for OperationType {
 }
 
 /// Command builder for generating OS-specific control commands
-/// 
+///
 /// This builder generates appropriate shutdown and reboot commands based on the
 /// target operating system. It supports both graceful and force operations, as well
 /// as scheduled operations with delay parameters.
@@ -29,12 +29,12 @@ pub struct CommandBuilder;
 
 impl CommandBuilder {
     /// Build a shutdown command for the specified OS
-    /// 
+    ///
     /// # Arguments
     /// * `os_type` - The target operating system
     /// * `force` - If true, use force shutdown; if false, use graceful shutdown
     /// * `delay_minutes` - Optional delay in minutes before shutdown
-    /// 
+    ///
     /// # Returns
     /// The appropriate shutdown command for the OS
     pub fn build_shutdown_command(
@@ -57,20 +57,17 @@ impl CommandBuilder {
             }
         };
 
-        info!(
-            "Built shutdown command for {:?}: {}",
-            os_type, command
-        );
+        info!("Built shutdown command for {:?}: {}", os_type, command);
         Ok(command)
     }
 
     /// Build a reboot command for the specified OS
-    /// 
+    ///
     /// # Arguments
     /// * `os_type` - The target operating system
     /// * `force` - If true, use force reboot; if false, use graceful reboot
     /// * `delay_minutes` - Optional delay in minutes before reboot
-    /// 
+    ///
     /// # Returns
     /// The appropriate reboot command for the OS
     pub fn build_reboot_command(
@@ -93,15 +90,12 @@ impl CommandBuilder {
             }
         };
 
-        info!(
-            "Built reboot command for {:?}: {}",
-            os_type, command
-        );
+        info!("Built reboot command for {:?}: {}", os_type, command);
         Ok(command)
     }
 
     /// Build a Linux shutdown command
-    /// 
+    ///
     /// Graceful: `shutdown -h now` (allows processes to terminate)
     /// Force: `poweroff` (immediate shutdown)
     /// Scheduled: `shutdown -h +<minutes>` (shutdown after delay)
@@ -133,7 +127,7 @@ impl CommandBuilder {
     }
 
     /// Build a Linux reboot command
-    /// 
+    ///
     /// Graceful: `reboot` (allows processes to terminate)
     /// Force: `reboot -f` (immediate reboot)
     /// Scheduled: `shutdown -r +<minutes>` (reboot after delay)
@@ -165,42 +159,50 @@ impl CommandBuilder {
     }
 
     /// Build a Windows shutdown command
-    /// 
+    ///
     /// Uses `shutdown` command with appropriate flags
     fn build_windows_shutdown(force: bool, delay_minutes: Option<u32>) -> Result<String, AppError> {
         let force_flag = if force { "/f" } else { "" };
         let delay_seconds = delay_minutes.unwrap_or(0) * 60;
 
         let command = if delay_seconds > 0 {
-            format!("shutdown /s /t {} {}", delay_seconds, force_flag).trim().to_string()
+            format!("shutdown /s /t {} {}", delay_seconds, force_flag)
+                .trim()
+                .to_string()
         } else {
-            format!("shutdown /s /t 0 {}", force_flag).trim().to_string()
+            format!("shutdown /s /t 0 {}", force_flag)
+                .trim()
+                .to_string()
         };
 
         Ok(command)
     }
 
     /// Build a Windows reboot command
-    /// 
+    ///
     /// Uses `shutdown` command with reboot flag
     fn build_windows_reboot(force: bool, delay_minutes: Option<u32>) -> Result<String, AppError> {
         let force_flag = if force { "/f" } else { "" };
         let delay_seconds = delay_minutes.unwrap_or(0) * 60;
 
         let command = if delay_seconds > 0 {
-            format!("shutdown /r /t {} {}", delay_seconds, force_flag).trim().to_string()
+            format!("shutdown /r /t {} {}", delay_seconds, force_flag)
+                .trim()
+                .to_string()
         } else {
-            format!("shutdown /r /t 0 {}", force_flag).trim().to_string()
+            format!("shutdown /r /t 0 {}", force_flag)
+                .trim()
+                .to_string()
         };
 
         Ok(command)
     }
 
     /// Build a cancel command for a scheduled operation
-    /// 
+    ///
     /// # Arguments
     /// * `os_type` - The target operating system
-    /// 
+    ///
     /// # Returns
     /// The appropriate cancel command for the OS
     pub fn build_cancel_command(os_type: OsType) -> Result<String, AppError> {
@@ -378,7 +380,8 @@ mod tests {
 
     #[test]
     fn test_windows_large_delay_value() {
-        let cmd = CommandBuilder::build_shutdown_command(OsType::Windows, false, Some(1440)).unwrap();
+        let cmd =
+            CommandBuilder::build_shutdown_command(OsType::Windows, false, Some(1440)).unwrap();
         assert_eq!(cmd, "shutdown /s /t 86400");
     }
 }

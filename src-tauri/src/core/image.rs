@@ -97,7 +97,7 @@ pub struct Image {
     pub format: ImageFormat,
     pub status: String,
     pub description: Option<String>,
-    pub parent_id: Option<String>,    
+    pub parent_id: Option<String>,
     pub checksum: Option<String>,
     pub is_default: bool,
     pub created_at: DateTime<Utc>,
@@ -140,7 +140,9 @@ pub struct ImageInfo {
 
 pub struct ImageManager {
     pool: SqlitePool,
+    #[allow(dead_code)]
     images_dir: PathBuf,
+    #[allow(dead_code)]
     snapshots_dir: PathBuf,
 }
 
@@ -158,7 +160,7 @@ impl ImageManager {
     async fn insert_image(&self, image: &Image) -> anyhow::Result<()> {
         sqlx::query(
             r#"
-            INSERT INTO images (id, name, os_type, size_gb, path, format, status, description, parent_id, checksum, is_default, created_at, updated_at) 
+            INSERT INTO images (id, name, os_type, size_gb, path, format, status, description, parent_id, checksum, is_default, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
@@ -177,7 +179,7 @@ impl ImageManager {
         .bind(image.updated_at.to_rfc3339())
         .execute(&self.pool)
         .await?;
-        
+
         Ok(())
     }
 
@@ -201,8 +203,8 @@ impl ImageManager {
             ),
         >(
             r#"
-            SELECT id, name, os_type, size_gb, path, format, status, description, parent_id, checksum, is_default, created_at, updated_at 
-            FROM images 
+            SELECT id, name, os_type, size_gb, path, format, status, description, parent_id, checksum, is_default, created_at, updated_at
+            FROM images
             ORDER BY name
             "#,
         )
@@ -230,31 +232,51 @@ impl ImageManager {
                     let os_type_parsed = match os_type.parse() {
                         Ok(v) => v,
                         Err(e) => {
-                            log::warn!("Failed to parse os_type '{}' for image '{}': {}", os_type, name, e);
+                            log::warn!(
+                                "Failed to parse os_type '{}' for image '{}': {}",
+                                os_type,
+                                name,
+                                e
+                            );
                             return None;
                         }
                     };
-                    
+
                     let format_parsed = match format.parse() {
                         Ok(v) => v,
                         Err(e) => {
-                            log::warn!("Failed to parse format '{}' for image '{}': {}", format, name, e);
+                            log::warn!(
+                                "Failed to parse format '{}' for image '{}': {}",
+                                format,
+                                name,
+                                e
+                            );
                             return None;
                         }
                     };
-                    
+
                     let created_at_parsed = match DateTime::parse_from_rfc3339(&created_at) {
                         Ok(v) => v.with_timezone(&Utc),
                         Err(e) => {
-                            log::warn!("Failed to parse created_at '{}' for image '{}': {}", created_at, name, e);
+                            log::warn!(
+                                "Failed to parse created_at '{}' for image '{}': {}",
+                                created_at,
+                                name,
+                                e
+                            );
                             return None;
                         }
                     };
-                    
+
                     let updated_at_parsed = match DateTime::parse_from_rfc3339(&updated_at) {
                         Ok(v) => v.with_timezone(&Utc),
                         Err(e) => {
-                            log::warn!("Failed to parse updated_at '{}' for image '{}': {}", updated_at, name, e);
+                            log::warn!(
+                                "Failed to parse updated_at '{}' for image '{}': {}",
+                                updated_at,
+                                name,
+                                e
+                            );
                             return None;
                         }
                     };
@@ -301,8 +323,8 @@ impl ImageManager {
             ),
         >(
             r#"
-            SELECT id, name, os_type, size_gb, path, format, status, description, parent_id, checksum, is_default, created_at, updated_at 
-            FROM images 
+            SELECT id, name, os_type, size_gb, path, format, status, description, parent_id, checksum, is_default, created_at, updated_at
+            FROM images
             WHERE id = ? OR name = ?
             "#,
         )
@@ -593,7 +615,7 @@ impl ImageManager {
         // Update the database record
         sqlx::query(
             r#"
-            UPDATE images 
+            UPDATE images
             SET name = ?, os_type = ?, status = ?, description = ?, path = ?, is_default = ?, updated_at = ?
             WHERE id = ?
             "#,
@@ -805,7 +827,10 @@ impl ImageManager {
             // This is a snapshot - need to construct full snapshot path
             let parent = self.get(parent_id).await?;
             let snapshot_full_name = format!("{}@{}", parent.name, image.name);
-            info!("Deleting snapshot with full ZFS path: {}", snapshot_full_name);
+            info!(
+                "Deleting snapshot with full ZFS path: {}",
+                snapshot_full_name
+            );
             snapshot_full_name
         } else {
             // This is a regular image/dataset
@@ -817,7 +842,10 @@ impl ImageManager {
             info!("ZFS dataset/snapshot '{}' exists, destroying it", zfs_name);
             zfs_destroy(&zfs_name)?;
         } else {
-            info!("ZFS dataset/snapshot '{}' does not exist, skipping ZFS deletion", zfs_name);
+            info!(
+                "ZFS dataset/snapshot '{}' does not exist, skipping ZFS deletion",
+                zfs_name
+            );
         }
 
         // Delete from database
@@ -1129,7 +1157,7 @@ impl ImageManager {
         // Update the database record
         sqlx::query(
             r#"
-            UPDATE images 
+            UPDATE images
             SET name = ?, path = ?, updated_at = ?
             WHERE id = ?
             "#,

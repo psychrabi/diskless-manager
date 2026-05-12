@@ -254,7 +254,7 @@ pub fn get_server_ip() -> String {
     "192.168.1.200".to_string()
 }
 
-
+#[allow(dead_code)]
 pub fn list_disks() -> Result<Vec<Disk>, AppError> {
     let output = Command::new("lsblk")
         .args(["-dn", "-o", "NAME,SIZE,TYPE"])
@@ -281,6 +281,7 @@ pub fn list_disks() -> Result<Vec<Disk>, AppError> {
 
 /// Get current RAM usage statistics
 
+#[allow(dead_code)]
 pub fn get_ram_usage() -> Result<RamUsage, AppError> {
     let output = Command::new("free")
         .arg("-h")
@@ -319,6 +320,7 @@ pub fn get_ram_usage() -> Result<RamUsage, AppError> {
 
 /// Clear RAM cache (sync and drop caches)
 
+#[allow(dead_code)]
 pub async fn clear_ram_cache() -> Result<serde_json::Value, AppError> {
     // Run sync using sudo -n
     run_command_async(["sync"]).await?;
@@ -352,7 +354,7 @@ pub async fn clear_ram_cache() -> Result<serde_json::Value, AppError> {
     Ok(serde_json::json!({ "message": "RAM cache cleared successfully" }))
 }
 
-
+#[allow(dead_code)]
 pub fn get_service_logs(service_name: String, lines: Option<u32>) -> Result<String, AppError> {
     let service = match service_name.as_str() {
         "http" => "apache2",
@@ -386,8 +388,7 @@ pub fn read_logs() -> String {
 
 /// Read logs for a specific systemd unit
 pub fn read_service_logs(unit: &str, lines: u32) -> Result<String, AppError> {
-
-       let service = match unit {
+    let service = match unit {
         "http" => "apache2",
         "samba" => "smbd",
         "tftp" => "tftpd-hpa",

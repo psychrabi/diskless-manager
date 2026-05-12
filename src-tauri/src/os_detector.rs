@@ -1,5 +1,5 @@
-use crate::error::AppError;
 use crate::core::client::Client;
+use crate::error::AppError;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
@@ -36,7 +36,7 @@ impl std::str::FromStr for OsType {
 }
 
 /// OS detector that retrieves OS type from master image metadata
-/// 
+///
 /// This detector uses the OS type stored in the master image assigned to a client,
 /// avoiding the need for runtime detection. The OS type is set when the master image
 /// is created and is cached in the image metadata.
@@ -44,35 +44,36 @@ pub struct OsDetector;
 
 impl OsDetector {
     /// Get OS type for a client from its assigned master image
-    /// 
+    ///
     /// # Arguments
     /// * `client` - The client to get OS type for
     /// * `master_os` - The OS type from the master image (e.g., "linux", "windows")
-    /// 
+    ///
     /// # Returns
     /// The OS type of the client based on its master image
     pub fn get_os_type(client: &Client, master_os: Option<&str>) -> OsType {
         debug!("Getting OS type for client {}", client.name);
 
         match master_os {
-            Some(os_str) => {
-                match os_str.to_lowercase().as_str() {
-                    "linux" => {
-                        info!("Client {} has Linux master image", client.name);
-                        OsType::Linux
-                    }
-                    "windows" => {
-                        info!("Client {} has Windows master image", client.name);
-                        OsType::Windows
-                    }
-                    _ => {
-                        warn!("Client {} has unknown OS type: {}", client.name, os_str);
-                        OsType::Unknown
-                    }
+            Some(os_str) => match os_str.to_lowercase().as_str() {
+                "linux" => {
+                    info!("Client {} has Linux master image", client.name);
+                    OsType::Linux
                 }
-            }
+                "windows" => {
+                    info!("Client {} has Windows master image", client.name);
+                    OsType::Windows
+                }
+                _ => {
+                    warn!("Client {} has unknown OS type: {}", client.name, os_str);
+                    OsType::Unknown
+                }
+            },
             None => {
-                warn!("Client {} has no master image OS type specified", client.name);
+                warn!(
+                    "Client {} has no master image OS type specified",
+                    client.name
+                );
                 OsType::Unknown
             }
         }
@@ -88,7 +89,7 @@ impl OsDetector {
     }
 
     /// Determine OS type with fallback logic
-    /// 
+    ///
     /// If the master image OS type is unknown, attempts fallback to Windows
     /// (for backward compatibility with existing Windows clients)
     pub fn get_os_type_with_fallback(client: &Client, master_os: Option<&str>) -> OsType {
@@ -169,20 +170,35 @@ mod tests {
         };
 
         // Test Linux OS type
-        assert_eq!(OsDetector::get_os_type(&client, Some("linux")), OsType::Linux);
+        assert_eq!(
+            OsDetector::get_os_type(&client, Some("linux")),
+            OsType::Linux
+        );
 
         // Test Windows OS type
-        assert_eq!(OsDetector::get_os_type(&client, Some("windows")), OsType::Windows);
+        assert_eq!(
+            OsDetector::get_os_type(&client, Some("windows")),
+            OsType::Windows
+        );
 
         // Test Unknown OS type
-        assert_eq!(OsDetector::get_os_type(&client, Some("unknown")), OsType::Unknown);
+        assert_eq!(
+            OsDetector::get_os_type(&client, Some("unknown")),
+            OsType::Unknown
+        );
 
         // Test None OS type
         assert_eq!(OsDetector::get_os_type(&client, None), OsType::Unknown);
 
         // Test case insensitivity
-        assert_eq!(OsDetector::get_os_type(&client, Some("LINUX")), OsType::Linux);
-        assert_eq!(OsDetector::get_os_type(&client, Some("Windows")), OsType::Windows);
+        assert_eq!(
+            OsDetector::get_os_type(&client, Some("LINUX")),
+            OsType::Linux
+        );
+        assert_eq!(
+            OsDetector::get_os_type(&client, Some("Windows")),
+            OsType::Windows
+        );
     }
 
     #[test]

@@ -142,6 +142,7 @@ pub fn validate_token(token: &str) -> Result<Claims, AuthError> {
 
 // Tauri command for login
 
+#[allow(dead_code)]
 pub async fn login(
     state: tauri::State<'_, crate::state::AppState>,
     request: LoginRequest,
@@ -172,12 +173,14 @@ pub async fn login(
 
 // Tauri command for token validation
 
+#[allow(dead_code)]
 pub fn validate_auth_token(token: &str) -> Result<Claims, AuthError> {
     validate_token(token)
 }
 
 // Tauri command for updating admin password
 
+#[allow(dead_code)]
 pub async fn update_admin_password(
     state: tauri::State<'_, crate::state::AppState>,
     token: &str,

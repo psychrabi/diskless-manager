@@ -215,7 +215,7 @@ impl ClientManager {
         .bind(client.updated_at.to_rfc3339())
         .execute(pool)
         .await?;
-        
+
         Ok(())
     }
 
@@ -372,7 +372,7 @@ impl ClientManager {
 
         // Delete all related records first (foreign key constraints)
         // Order matters - delete child records before parent
-        
+
         // Delete boot logs
         sqlx::query("DELETE FROM boot_logs WHERE client_id = ?")
             .bind(&client.id)
@@ -431,10 +431,10 @@ impl ClientManager {
             ),
         >(
             r#"
-            SELECT id, client_id, image_id, boot_time, success, duration_ms, message 
-            FROM boot_logs 
-            WHERE client_id = ? 
-            ORDER BY boot_time DESC 
+            SELECT id, client_id, image_id, boot_time, success, duration_ms, message
+            FROM boot_logs
+            WHERE client_id = ?
+            ORDER BY boot_time DESC
             LIMIT ?
             "#,
         )

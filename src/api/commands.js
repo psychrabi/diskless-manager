@@ -1,5 +1,3 @@
-export { setAuthToken } from "./client";
-
 export * from "./modules/auth";
 export * from "./modules/system";
 export * from "./modules/services";

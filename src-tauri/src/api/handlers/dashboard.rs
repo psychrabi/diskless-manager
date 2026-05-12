@@ -40,7 +40,7 @@ pub async fn get_default_image(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     // Query the database for the default image
     match sqlx::query_as::<_, (String, String)>(
-        "SELECT name, path FROM images WHERE is_default = 1 LIMIT 1"
+        "SELECT name, path FROM images WHERE is_default = 1 LIMIT 1",
     )
     .fetch_optional(&state.db_pool)
     .await
@@ -55,7 +55,7 @@ pub async fn get_default_image(
                 Ok(output) if output.status.success() => {
                     let content = String::from_utf8_lossy(&output.stdout);
                     let lines: Vec<&str> = content.lines().collect();
-                    
+
                     if lines.len() >= 2 {
                         Ok(Json(json!({
                             "name": name,
@@ -71,32 +71,26 @@ pub async fn get_default_image(
                         })))
                     }
                 }
-                _ => {
-                    Ok(Json(json!({
-                        "name": name,
-                        "creation_date": null,
-                        "clones": null,
-                        "message": "ZFS dataset not accessible"
-                    })))
-                }
+                _ => Ok(Json(json!({
+                    "name": name,
+                    "creation_date": null,
+                    "clones": null,
+                    "message": "ZFS dataset not accessible"
+                }))),
             }
         }
-        Ok(None) => {
-            Ok(Json(json!({
-                "name": null,
-                "creation_date": null,
-                "clones": null,
-                "message": "No default image set"
-            })))
-        }
-        Err(_) => {
-            Ok(Json(json!({
-                "name": null,
-                "creation_date": null,
-                "clones": null,
-                "message": "Database error"
-            })))
-        }
+        Ok(None) => Ok(Json(json!({
+            "name": null,
+            "creation_date": null,
+            "clones": null,
+            "message": "No default image set"
+        }))),
+        Err(_) => Ok(Json(json!({
+            "name": null,
+            "creation_date": null,
+            "clones": null,
+            "message": "Database error"
+        }))),
     }
 }
 
@@ -127,26 +121,28 @@ pub async fn get_client_io_metrics(
 ) -> Result<Json<ClientIOMetricsResponse>, StatusCode> {
     // Query all clients with their basic info
     match sqlx::query_as::<_, (String, String, String)>(
-        "SELECT id, name, ip FROM clients ORDER BY name"
+        "SELECT id, name, ip FROM clients ORDER BY name",
     )
     .fetch_all(&state.db_pool)
     .await
     {
         Ok(rows) => {
             let mut clients = Vec::new();
-            
+
             for (id, name, ip) in rows {
                 // Determine status in real-time by pinging (quick operation)
                 let status = crate::utils::network::get_client_status_realtime(ip.clone());
                 let is_online = status == "Online";
-                
+
                 // For online clients, get I/O metrics asynchronously without blocking
                 let (read_speed, write_speed) = if is_online {
                     // Use timeout to prevent hanging - get metrics with a 2 second timeout
                     match tokio::time::timeout(
                         std::time::Duration::from_secs(2),
-                        get_client_io_speed(&ip)
-                    ).await {
+                        get_client_io_speed(&ip),
+                    )
+                    .await
+                    {
                         Ok(Ok((read, write))) => (read, write),
                         _ => (0.0, 0.0), // Timeout or error - return 0.0
                     }
@@ -200,12 +196,8 @@ async fn get_network_io_speed(client_ip: &str) -> Result<(f64, f64), Box<dyn std
     }
 
     // Try to use iftop if available (requires root)
-    let iftop_check = tokio::task::spawn_blocking(|| {
-        Command::new("which")
-            .arg("iftop")
-            .output()
-    })
-    .await;
+    let iftop_check =
+        tokio::task::spawn_blocking(|| Command::new("which").arg("iftop").output()).await;
 
     if let Ok(Ok(output)) = iftop_check {
         if output.status.success() {
@@ -248,9 +240,7 @@ async fn get_network_io_speed(client_ip: &str) -> Result<(f64, f64), Box<dyn std
     }
 }
 
-async fn count_established_connections(
-    client_ip: &str,
-) -> Result<f64, Box<dyn std::error::Error>> {
+async fn count_established_connections(client_ip: &str) -> Result<f64, Box<dyn std::error::Error>> {
     if client_ip.parse::<IpAddr>().is_err() {
         return Ok(0.0);
     }
@@ -274,7 +264,7 @@ async fn count_established_connections(
 /// Parse bandwidth string like "1.23Mb" or "456Kb" to MB/s
 fn parse_bandwidth(bandwidth_str: &str) -> Result<f64, Box<dyn std::error::Error>> {
     let bandwidth_str = bandwidth_str.trim();
-    
+
     if bandwidth_str.ends_with("Mb") {
         let value = bandwidth_str.trim_end_matches("Mb").parse::<f64>()?;
         Ok(value) // Already in Mb/s

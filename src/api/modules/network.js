@@ -6,7 +6,7 @@ export async function getNetworkInterfaces() {
 
 export async function getInterfaceIp(interfaceName) {
   return apiRequest(
-    `/api/system/network/interfaces/${encodeURIComponent(interfaceName)}/ip`
+    `/api/system/network/interfaces/${encodeURIComponent(interfaceName)}/ip`,
   );
 }
 

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! User management commands
 use crate::types::{AuthError, User, UserResponse};
 use bcrypt::{hash, DEFAULT_COST};
@@ -109,7 +111,10 @@ pub async fn create_user(
         message: format!("Failed to create user: {}", e),
     })?;
 
-    info!("user created: {} (role: {})", request.username, request.role);
+    info!(
+        "user created: {} (role: {})",
+        request.username, request.role
+    );
 
     Ok(UserResponse {
         id,

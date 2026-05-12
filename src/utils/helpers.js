@@ -11,16 +11,4 @@ export const formatDate = (dateString) => {
   return date.toLocaleString();
 };
 
-export const validateMacAddress = (mac) => {
-  const regex = /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/;
-  return regex.test(mac);
-};
 
-export const validateIpAddress = (ip) => {
-  const regex = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/;
-  return regex.test(ip);
-};
-
-export const getSnapshotNameFromPath = (path) => {
-  return path.split("@").pop();
-};

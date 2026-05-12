@@ -1,7 +1,7 @@
+use crate::core::client::Client;
 use crate::error::AppError;
 use crate::os_detector::OsType;
 use crate::ssh_executor::SshExecutor;
-use crate::core::client::Client;
 use serde::{Deserialize, Serialize};
 use std::process::Command;
 use std::sync::Arc;
@@ -80,75 +80,69 @@ impl RemoteDesktopLauncher {
         // Try protocols in order of preference
         for protocol in available_protocols {
             match protocol {
-                RemoteDesktopProtocol::VNC => {
-                    match self.launch_vnc(&client.ip) {
-                        Ok(_) => {
-                            info!(
-                                "VNC client launched for client {} ({})",
+                RemoteDesktopProtocol::VNC => match self.launch_vnc(&client.ip) {
+                    Ok(_) => {
+                        info!(
+                            "VNC client launched for client {} ({})",
+                            client.name, client.ip
+                        );
+                        return Ok(RemoteDesktopResponse {
+                            success: true,
+                            protocol_used: "VNC".to_string(),
+                            message: format!(
+                                "VNC client launched for {} ({})",
                                 client.name, client.ip
-                            );
-                            return Ok(RemoteDesktopResponse {
-                                success: true,
-                                protocol_used: "VNC".to_string(),
-                                message: format!(
-                                    "VNC client launched for {} ({})",
-                                    client.name, client.ip
-                                ),
-                                timestamp: chrono::Utc::now().to_rfc3339(),
-                            });
-                        }
-                        Err(e) => {
-                            warn!("Failed to launch VNC for {}: {}", client.ip, e);
-                            continue;
-                        }
+                            ),
+                            timestamp: chrono::Utc::now().to_rfc3339(),
+                        });
                     }
-                }
-                RemoteDesktopProtocol::RDP => {
-                    match self.launch_rdp(&client.ip) {
-                        Ok(_) => {
-                            info!(
-                                "RDP client launched for client {} ({})",
+                    Err(e) => {
+                        warn!("Failed to launch VNC for {}: {}", client.ip, e);
+                        continue;
+                    }
+                },
+                RemoteDesktopProtocol::RDP => match self.launch_rdp(&client.ip) {
+                    Ok(_) => {
+                        info!(
+                            "RDP client launched for client {} ({})",
+                            client.name, client.ip
+                        );
+                        return Ok(RemoteDesktopResponse {
+                            success: true,
+                            protocol_used: "RDP".to_string(),
+                            message: format!(
+                                "RDP client launched for {} ({})",
                                 client.name, client.ip
-                            );
-                            return Ok(RemoteDesktopResponse {
-                                success: true,
-                                protocol_used: "RDP".to_string(),
-                                message: format!(
-                                    "RDP client launched for {} ({})",
-                                    client.name, client.ip
-                                ),
-                                timestamp: chrono::Utc::now().to_rfc3339(),
-                            });
-                        }
-                        Err(e) => {
-                            warn!("Failed to launch RDP for {}: {}", client.ip, e);
-                            continue;
-                        }
+                            ),
+                            timestamp: chrono::Utc::now().to_rfc3339(),
+                        });
                     }
-                }
-                RemoteDesktopProtocol::SSH => {
-                    match self.launch_ssh_terminal(&client.ip) {
-                        Ok(_) => {
-                            info!(
-                                "SSH terminal launched for client {} ({})",
+                    Err(e) => {
+                        warn!("Failed to launch RDP for {}: {}", client.ip, e);
+                        continue;
+                    }
+                },
+                RemoteDesktopProtocol::SSH => match self.launch_ssh_terminal(&client.ip) {
+                    Ok(_) => {
+                        info!(
+                            "SSH terminal launched for client {} ({})",
+                            client.name, client.ip
+                        );
+                        return Ok(RemoteDesktopResponse {
+                            success: true,
+                            protocol_used: "SSH".to_string(),
+                            message: format!(
+                                "SSH terminal launched for {} ({})",
                                 client.name, client.ip
-                            );
-                            return Ok(RemoteDesktopResponse {
-                                success: true,
-                                protocol_used: "SSH".to_string(),
-                                message: format!(
-                                    "SSH terminal launched for {} ({})",
-                                    client.name, client.ip
-                                ),
-                                timestamp: chrono::Utc::now().to_rfc3339(),
-                            });
-                        }
-                        Err(e) => {
-                            warn!("Failed to launch SSH terminal for {}: {}", client.ip, e);
-                            continue;
-                        }
+                            ),
+                            timestamp: chrono::Utc::now().to_rfc3339(),
+                        });
                     }
-                }
+                    Err(e) => {
+                        warn!("Failed to launch SSH terminal for {}: {}", client.ip, e);
+                        continue;
+                    }
+                },
             }
         }
 
@@ -218,7 +212,10 @@ impl RemoteDesktopLauncher {
             }
             OsType::Unknown => {
                 // For unknown OS, try all protocols
-                debug!("Unknown OS type for client {}, trying all protocols", client_ip);
+                debug!(
+                    "Unknown OS type for client {}, trying all protocols",
+                    client_ip
+                );
                 if self.check_vnc_available(client_ip).await {
                     protocols.push(RemoteDesktopProtocol::VNC);
                 }
@@ -231,10 +228,7 @@ impl RemoteDesktopLauncher {
             }
         }
 
-        info!(
-            "Available protocols for {}: {:?}",
-            client_ip, protocols
-        );
+        info!("Available protocols for {}: {:?}", client_ip, protocols);
 
         Ok(protocols)
     }
@@ -306,7 +300,10 @@ impl RemoteDesktopLauncher {
                 .spawn()
             {
                 Ok(_) => {
-                    info!("VNC client {} launched successfully for {}", client, client_ip);
+                    info!(
+                        "VNC client {} launched successfully for {}",
+                        client, client_ip
+                    );
                     return Ok(());
                 }
                 Err(e) => {
@@ -330,12 +327,12 @@ impl RemoteDesktopLauncher {
         let rdp_clients = vec!["rdesktop", "xfreerdp", "krdc", "remmina"];
 
         for client in rdp_clients {
-            match Command::new(client)
-                .arg(client_ip)
-                .spawn()
-            {
+            match Command::new(client).arg(client_ip).spawn() {
                 Ok(_) => {
-                    info!("RDP client {} launched successfully for {}", client, client_ip);
+                    info!(
+                        "RDP client {} launched successfully for {}",
+                        client, client_ip
+                    );
                     return Ok(());
                 }
                 Err(e) => {
@@ -377,12 +374,12 @@ impl RemoteDesktopLauncher {
                 })
                 .collect();
 
-            match Command::new(terminal)
-                .args(&replaced_args)
-                .spawn()
-            {
+            match Command::new(terminal).args(&replaced_args).spawn() {
                 Ok(_) => {
-                    info!("SSH terminal {} launched successfully for {}", terminal, client_ip);
+                    info!(
+                        "SSH terminal {} launched successfully for {}",
+                        terminal, client_ip
+                    );
                     return Ok(());
                 }
                 Err(e) => {

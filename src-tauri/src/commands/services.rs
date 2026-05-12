@@ -1,4 +1,5 @@
-use crate::cmd::run_command_output;
+#![allow(dead_code)]
+
 use crate::error::AppError;
 use crate::services::ServiceManager;
 use crate::state::AppState;
@@ -24,7 +25,6 @@ fn convert_service_status(
         uptime: None, // Not available in new architecture
     }
 }
-
 
 pub async fn list_services(
     state: State<'_, AppState>,
@@ -96,7 +96,6 @@ pub async fn list_services(
     Ok(services)
 }
 
-
 pub async fn get_service_status(
     state: State<'_, AppState>,
     name: String,
@@ -111,7 +110,6 @@ pub async fn get_service_status(
     Ok(convert_service_status(&name, status))
 }
 
-
 pub async fn start_service(state: State<'_, AppState>, name: String) -> Result<String, String> {
     let settings = state.settings.read().await;
     let service_manager = ServiceManager::new(settings.clone(), state.db_pool.clone());
@@ -121,7 +119,6 @@ pub async fn start_service(state: State<'_, AppState>, name: String) -> Result<S
         .map_err(|e| e.to_string())?;
     Ok(format!("Service {} started", name))
 }
-
 
 pub async fn stop_service(state: State<'_, AppState>, name: String) -> Result<String, String> {
     let settings = state.settings.read().await;
@@ -133,7 +130,6 @@ pub async fn stop_service(state: State<'_, AppState>, name: String) -> Result<St
     Ok(format!("Service {} stopped", name))
 }
 
-
 pub async fn restart_service(state: State<'_, AppState>, name: String) -> Result<String, String> {
     let settings = state.settings.read().await;
     let service_manager = ServiceManager::new(settings.clone(), state.db_pool.clone());
@@ -143,7 +139,6 @@ pub async fn restart_service(state: State<'_, AppState>, name: String) -> Result
         .map_err(|e| e.to_string())?;
     Ok(format!("Service {} restarted", name))
 }
-
 
 pub async fn get_service_config(
     state: State<'_, AppState>,
@@ -175,7 +170,6 @@ pub async fn get_service_config(
     }
 }
 
-
 pub async fn configure_service(
     state: State<'_, AppState>,
     service_name: String,
@@ -190,7 +184,6 @@ pub async fn configure_service(
     Ok(format!("Service {} configured successfully", service_name))
 }
 
-
 pub async fn start_all_services(state: State<'_, AppState>) -> Result<String, String> {
     let settings = state.settings.read().await;
     let service_manager = ServiceManager::new(settings.clone(), state.db_pool.clone());
@@ -201,7 +194,6 @@ pub async fn start_all_services(state: State<'_, AppState>) -> Result<String, St
     Ok("All services started successfully".to_string())
 }
 
-
 pub async fn stop_all_services(state: State<'_, AppState>) -> Result<String, String> {
     let settings = state.settings.read().await;
     let service_manager = ServiceManager::new(settings.clone(), state.db_pool.clone());
@@ -211,7 +203,6 @@ pub async fn stop_all_services(state: State<'_, AppState>) -> Result<String, Str
         .map_err(|e| e.to_string())?;
     Ok("All services stopped successfully".to_string())
 }
-
 
 pub async fn restart_all_services(state: State<'_, AppState>) -> Result<String, String> {
     let settings = state.settings.read().await;

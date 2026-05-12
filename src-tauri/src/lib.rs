@@ -11,15 +11,15 @@ mod middleware;
 mod service;
 pub mod types;
 
-pub mod validation;
-mod zfs;
-pub mod ssh_executor;
-pub mod os_detector;
+pub mod audit_logger;
 pub mod command_builder;
 pub mod control_handler;
-pub mod remote_desktop_launcher;
-pub mod audit_logger;
 pub mod error_logger;
+pub mod os_detector;
+pub mod remote_desktop_launcher;
+pub mod ssh_executor;
+pub mod validation;
+mod zfs;
 
 mod cmd;
 mod commands;
@@ -31,17 +31,18 @@ pub mod utils;
 pub mod api;
 
 use log::info;
-use std::path::PathBuf;
 
 use tauri::Manager;
 
 use state::AppState;
 
 // Legacy constants for backward compatibility - prefer using AppConfig
+#[allow(dead_code)]
 const DHCP_CONFIG_PATH: &str = "/etc/dhcp/dhcpd.conf";
 const DHCP_CLIENTS_PATH: &str = "/etc/dhcp/clients.conf";
 pub const TFTP_AUTOEXEC_PATH: &str = "/srv/tftp/autoexec.ipxe";
 
+#[allow(dead_code)]
 fn setup_logging() -> Result<(), Box<dyn std::error::Error>> {
     // Get the log file path
     let mut log_dir = dirs::config_dir()

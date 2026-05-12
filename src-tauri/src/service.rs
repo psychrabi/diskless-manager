@@ -14,6 +14,7 @@ use tauri::State;
 use crate::middleware::validate_auth;
 
 // Helper: Write content to path using sudo tee (async)
+#[allow(dead_code)]
 async fn write_with_sudo_tee(path: &str, content: &str) -> Result<(), AppError> {
     let mut child = AsyncCommand::new("sudo")
         .arg("-n")
@@ -50,7 +51,7 @@ async fn write_with_sudo_tee(path: &str, content: &str) -> Result<(), AppError> 
     }
 }
 
-
+#[allow(dead_code)]
 pub async fn install_service(service: String, token: String) -> Result<(), AppError> {
     validate_auth(&token)?;
 
@@ -66,7 +67,7 @@ pub async fn install_service(service: String, token: String) -> Result<(), AppEr
     }
 }
 
-
+#[allow(dead_code)]
 pub async fn save_service_config(
     token: String,
     service_key: String,
@@ -97,7 +98,7 @@ pub async fn save_service_config(
     write_with_sudo_tee(path, &content).await
 }
 
-
+#[allow(dead_code)]
 pub async fn configure_dhcp_server(
     state: State<'_, AppState>,
     token: String,
@@ -249,7 +250,7 @@ include "/etc/dhcp/clients.conf";
     Ok("DHCP server configured successfully".to_string())
 }
 
-
+#[allow(dead_code)]
 pub async fn configure_tftp_server(
     state: State<'_, AppState>,
     token: String,
@@ -294,7 +295,7 @@ pub async fn configure_tftp_server(
     Ok("TFTP server configured successfully".to_string())
 }
 
-
+#[allow(dead_code)]
 pub async fn configure_apache_server(
     state: State<'_, AppState>,
     token: String,
@@ -340,7 +341,7 @@ pub async fn configure_apache_server(
     Ok("Apache server configured successfully".to_string())
 }
 
-
+#[allow(dead_code)]
 pub async fn configure_samba_server(
     state: State<'_, AppState>,
     token: String,
@@ -389,7 +390,7 @@ pub async fn configure_samba_server(
     Ok("Samba server configured successfully".to_string())
 }
 
-
+#[allow(dead_code)]
 pub async fn configure_nfs_server(
     state: State<'_, AppState>,
     token: String,

@@ -289,13 +289,17 @@ impl AppState {
             .execute(pool)
             .await?;
 
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_control_ops_client ON control_operations(client_id)")
-            .execute(pool)
-            .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_control_ops_client ON control_operations(client_id)",
+        )
+        .execute(pool)
+        .await?;
 
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_control_ops_timestamp ON control_operations(timestamp)")
-            .execute(pool)
-            .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_control_ops_timestamp ON control_operations(timestamp)",
+        )
+        .execute(pool)
+        .await?;
 
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_error_logs_client ON error_logs(client_id)")
             .execute(pool)

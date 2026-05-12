@@ -168,16 +168,16 @@ pub async fn shutdown_client(
         ));
     }
 
-     let master_os = get_master_os(&client.master).unwrap_or_default().to_lowercase();
-    let mut success = true;
-    let mut message = String::new();
-
-    if master_os.contains("linux") {
-        // Linux: SSH poweroff
+    let master_os = get_master_os(&client.master)
+        .unwrap_or_default()
+        .to_lowercase();
+    let (success, message) = if master_os.contains("linux") {
         let output = Command::new("ssh")
             .args(&[
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "ConnectTimeout=5",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "ConnectTimeout=5",
                 &format!("root@{}", ip),
                 "poweroff",
             ])
@@ -194,20 +194,29 @@ pub async fn shutdown_client(
             })?;
 
         if !output.status.success() {
-            success = false;
-            message = format!("Failed to shutdown Linux client (SSH): {}", String::from_utf8_lossy(&output.stderr));
-            error!("{}", message);
+            let msg = format!(
+                "Failed to shutdown Linux client (SSH): {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            error!("{}", msg);
+            (false, msg)
         } else {
-            message = format!("Shutdown command sent to {} ({})", client.name, ip);
-            info!("{}", message);
+            let msg = format!("Shutdown command sent to {} ({})", client.name, ip);
+            info!("{}", msg);
+            (true, msg)
         }
     } else {
-         let output = Command::new("net")
+        let output = Command::new("net")
             .args(&[
-                "rpc", "shutdown",
-                "-I", ip,
-                "-U", "diskless%1",
-                "-f", "-t", "0",
+                "rpc",
+                "shutdown",
+                "-I",
+                ip,
+                "-U",
+                "diskless%1",
+                "-f",
+                "-t",
+                "0",
             ])
             .output()
             .map_err(|e| {
@@ -222,14 +231,18 @@ pub async fn shutdown_client(
             })?;
 
         if !output.status.success() {
-            success = false;
-            message = format!("Failed to shutdown Windows client: {}", String::from_utf8_lossy(&output.stderr));
-            error!("{}", message);
+            let msg = format!(
+                "Failed to shutdown Windows client: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            error!("{}", msg);
+            (false, msg)
         } else {
-            message = format!("Shutdown command sent to {} ({})", client.name, ip);
-            info!("{}", message);
+            let msg = format!("Shutdown command sent to {} ({})", client.name, ip);
+            info!("{}", msg);
+            (true, msg)
         }
-    }
+    };
 
     // Log the operation
     let audit_logger = AuditLogger::new(Arc::new(state.db_pool.clone()));
@@ -302,16 +315,16 @@ pub async fn reboot_client(
         ));
     }
 
-    let master_os = get_master_os(&client.master).unwrap_or_default().to_lowercase();
-    let mut success = true;
-    let mut message = String::new();
-
-    if master_os.contains("linux") {
-        // Linux: SSH reboot
+    let master_os = get_master_os(&client.master)
+        .unwrap_or_default()
+        .to_lowercase();
+    let (success, message) = if master_os.contains("linux") {
         let output = Command::new("ssh")
             .args(&[
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "ConnectTimeout=5",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "ConnectTimeout=5",
                 &format!("root@{}", ip),
                 "reboot",
             ])
@@ -328,20 +341,30 @@ pub async fn reboot_client(
             })?;
 
         if !output.status.success() {
-            success = false;
-            message = format!("Failed to reboot Linux client (SSH): {}", String::from_utf8_lossy(&output.stderr));
-            error!("{}", message);
+            let msg = format!(
+                "Failed to reboot Linux client (SSH): {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            error!("{}", msg);
+            (false, msg)
         } else {
-            message = format!("Reboot command sent to {} ({})", client.name, ip);
-            info!("{}", message);
+            let msg = format!("Reboot command sent to {} ({})", client.name, ip);
+            info!("{}", msg);
+            (true, msg)
         }
     } else {
-         let output = Command::new("net")
+        let output = Command::new("net")
             .args(&[
-                "rpc", "shutdown", "-r",
-                "-I", ip,
-                "-U", "diskless%1",
-                "-f", "-t", "0",
+                "rpc",
+                "shutdown",
+                "-r",
+                "-I",
+                ip,
+                "-U",
+                "diskless%1",
+                "-f",
+                "-t",
+                "0",
             ])
             .output()
             .map_err(|e| {
@@ -356,14 +379,18 @@ pub async fn reboot_client(
             })?;
 
         if !output.status.success() {
-            success = false;
-            message = format!("Failed to reboot Windows client (SSH): {}", String::from_utf8_lossy(&output.stderr));
-            error!("{}", message);
+            let msg = format!(
+                "Failed to reboot Windows client (SSH): {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            error!("{}", msg);
+            (false, msg)
         } else {
-            message = format!("Reboot command sent to {} ({})", client.name, ip);
-            info!("{}", message);
+            let msg = format!("Reboot command sent to {} ({})", client.name, ip);
+            info!("{}", msg);
+            (true, msg)
         }
-    }
+    };
 
     // Log the operation
     let audit_logger = AuditLogger::new(Arc::new(state.db_pool.clone()));
@@ -397,6 +424,7 @@ pub async fn reboot_client(
 }
 
 /// Handle remote desktop request for a client
+#[allow(unused_assignments)]
 pub async fn remote_desktop_client(
     State(state): State<AppState>,
     Path(client_id): Path<String>,
@@ -430,11 +458,15 @@ pub async fn remote_desktop_client(
         ));
     }
 
-    let username = request.username.unwrap_or_else(|| "Administrator".to_string());
+    let username = request
+        .username
+        .unwrap_or_else(|| "Administrator".to_string());
     let password = request.password.unwrap_or_else(|| "1".to_string());
     let client_name = client.name.clone();
 
-    let master_os = get_master_os(&client.master).unwrap_or_default().to_lowercase();
+    let master_os = get_master_os(&client.master)
+        .unwrap_or_default()
+        .to_lowercase();
     let protocol_used: String;
     let mut success = true;
     let mut message = String::new();
@@ -442,7 +474,7 @@ pub async fn remote_desktop_client(
     if master_os.contains("windows") {
         // Windows: Launch RDP client
         protocol_used = "RDP".to_string();
-        
+
         // Try to launch xfreerdp with proper display handling
         let mut xfreerdp_cmd = Command::new("xfreerdp3");
         xfreerdp_cmd
@@ -472,7 +504,7 @@ pub async fn remote_desktop_client(
         let result = xfreerdp_cmd.spawn();
 
         match result {
-            Ok(mut child) => {
+            Ok(child) => {
                 // Spawn a thread to wait for the process and log any errors
                 std::thread::spawn(move || {
                     if let Ok(output) = child.wait_with_output() {
@@ -491,23 +523,31 @@ pub async fn remote_desktop_client(
                     }
                 });
                 success = true;
-                message = format!("RDP connection initiated to {} ({}). The RDP window should open shortly.", client_name, ip);
+                message = format!(
+                    "RDP connection initiated to {} ({}). The RDP window should open shortly.",
+                    client_name, ip
+                );
                 info!("{}", message);
             }
             Err(e) => {
                 error!("Failed to launch xfreerdp: {}", e);
-                
+
                 // Fallback to rdesktop with NLA/CredSSP bypass
                 let mut rdesktop_cmd = Command::new("rdesktop");
                 rdesktop_cmd
                     .args(&[
                         ip.as_str(),
-                        "-u", username.as_str(),
-                        "-p", password.as_str(),
-                        "-x", "m",
-                        "-a", "32",
-                        "-N",  // Disable encryption
-                        "-V", "1.2",  // TLS version 1.2
+                        "-u",
+                        username.as_str(),
+                        "-p",
+                        password.as_str(),
+                        "-x",
+                        "m",
+                        "-a",
+                        "32",
+                        "-N", // Disable encryption
+                        "-V",
+                        "1.2", // TLS version 1.2
                         "-E",  // Disable encryption from client to server
                     ])
                     .stdin(Stdio::null())
@@ -520,7 +560,7 @@ pub async fn remote_desktop_client(
                 }
 
                 match rdesktop_cmd.spawn() {
-                    Ok(mut child) => {
+                    Ok(child) => {
                         let ip_clone = ip.clone();
                         // Spawn a thread to wait for the process and log any errors
                         std::thread::spawn(move || {
@@ -528,7 +568,7 @@ pub async fn remote_desktop_client(
                                 if !output.status.success() {
                                     let stderr = String::from_utf8_lossy(&output.stderr);
                                     let stdout = String::from_utf8_lossy(&output.stdout);
-                                    
+
                                     if stderr.contains("CredSSP") || stdout.contains("CredSSP") {
                                         error!("RDP connection failed: CredSSP/NLA is required by the Windows client. To fix this, on the Windows client run: gpedit.msc > Computer Configuration > Administrative Templates > System > Credentials Delegation > Allow delegating fresh credentials with NTLM-only server authentication > Enable and set to 'true'");
                                     } else if !stderr.is_empty() {
@@ -548,7 +588,10 @@ pub async fn remote_desktop_client(
                     }
                     Err(e) => {
                         success = false;
-                        message = format!("Failed to launch RDP client: {}. Make sure rdesktop is installed.", e);
+                        message = format!(
+                            "Failed to launch RDP client: {}. Make sure rdesktop is installed.",
+                            e
+                        );
                         error!("{}", message);
                     }
                 }
@@ -557,7 +600,7 @@ pub async fn remote_desktop_client(
     } else {
         // Linux: Launch VNC client
         protocol_used = "VNC".to_string();
-        
+
         // Try to launch VNC client (vncviewer or vinagre)
         let mut vncviewer_cmd = Command::new("vncviewer");
         vncviewer_cmd
@@ -574,7 +617,7 @@ pub async fn remote_desktop_client(
         let result = vncviewer_cmd.spawn();
 
         match result {
-            Ok(mut child) => {
+            Ok(child) => {
                 let ip_clone = ip.clone();
                 // Spawn a thread to wait for the process and log any errors
                 std::thread::spawn(move || {
@@ -596,12 +639,15 @@ pub async fn remote_desktop_client(
                     }
                 });
                 success = true;
-                message = format!("VNC connection initiated to {} ({}). The VNC window should open shortly.", client_name, ip);
+                message = format!(
+                    "VNC connection initiated to {} ({}). The VNC window should open shortly.",
+                    client_name, ip
+                );
                 info!("{}", message);
             }
             Err(e) => {
                 error!("Failed to launch vncviewer: {}", e);
-                
+
                 // Fallback to vinagre
                 let mut vinagre_cmd = Command::new("vinagre");
                 vinagre_cmd
@@ -616,7 +662,7 @@ pub async fn remote_desktop_client(
                 }
 
                 match vinagre_cmd.spawn() {
-                    Ok(mut child) => {
+                    Ok(child) => {
                         let ip_clone = ip.clone();
                         // Spawn a thread to wait for the process and log any errors
                         std::thread::spawn(move || {
@@ -624,7 +670,9 @@ pub async fn remote_desktop_client(
                                 if !output.status.success() {
                                     let stderr = String::from_utf8_lossy(&output.stderr);
                                     let stdout = String::from_utf8_lossy(&output.stdout);
-                                    if stderr.contains("Connection refused") || stderr.contains("refused") {
+                                    if stderr.contains("Connection refused")
+                                        || stderr.contains("refused")
+                                    {
                                         error!("VNC connection refused for {}. Make sure VNC server is running on the client.", ip_clone);
                                     } else if !stderr.is_empty() {
                                         error!("vinagre error: {}", stderr);
@@ -702,7 +750,10 @@ pub async fn cancel_operation(
     .fetch_optional(&state.db_pool)
     .await
     .map_err(|e| {
-        error!("Failed to query scheduled operation {}: {}", operation_id, e);
+        error!(
+            "Failed to query scheduled operation {}: {}",
+            operation_id, e
+        );
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
@@ -744,27 +795,25 @@ pub async fn cancel_operation(
         .map(|r| format!("cancelled: {}", r))
         .unwrap_or_else(|| "cancelled".to_string());
 
-    sqlx::query(
-        "UPDATE scheduled_operations SET result = ?, cancelled_at = ? WHERE id = ?",
-    )
-    .bind(&result_value)
-    .bind(&now)
-    .bind(&operation_id)
-    .execute(&state.db_pool)
-    .await
-    .map_err(|e| {
-        error!(
-            "Failed to cancel scheduled operation {} in database: {}",
-            operation_id, e
-        );
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: "Failed to cancel scheduled operation".to_string(),
-                details: Some(e.to_string()),
-            }),
-        )
-    })?;
+    sqlx::query("UPDATE scheduled_operations SET result = ?, cancelled_at = ? WHERE id = ?")
+        .bind(&result_value)
+        .bind(&now)
+        .bind(&operation_id)
+        .execute(&state.db_pool)
+        .await
+        .map_err(|e| {
+            error!(
+                "Failed to cancel scheduled operation {} in database: {}",
+                operation_id, e
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: "Failed to cancel scheduled operation".to_string(),
+                    details: Some(e.to_string()),
+                }),
+            )
+        })?;
 
     Ok(Json(ControlOperationResponse {
         success: true,
@@ -817,25 +866,36 @@ pub async fn get_scheduled_operations(
     // Query scheduled operations from database
     let sql = "SELECT id, client_id, operation_type, operation_mode, scheduled_time, created_at, result FROM scheduled_operations WHERE (result IS NULL OR result = 'pending') ORDER BY scheduled_time ASC";
 
-    let rows = sqlx::query_as::<_, (String, String, String, String, String, String, Option<String>)>(sql)
-        .fetch_all(&state.db_pool)
-        .await
-        .map_err(|e| {
-            error!("Failed to query scheduled operations: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: "Failed to query scheduled operations".to_string(),
-                    details: Some(e.to_string()),
-                }),
-            )
-        })?;
+    let rows = sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            Option<String>,
+        ),
+    >(sql)
+    .fetch_all(&state.db_pool)
+    .await
+    .map_err(|e| {
+        error!("Failed to query scheduled operations: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: "Failed to query scheduled operations".to_string(),
+                details: Some(e.to_string()),
+            }),
+        )
+    })?;
 
     // Filter results based on query parameters
     let mut operations: Vec<ScheduledOperation> = rows
         .into_iter()
-        .map(|(id, client_id, operation_type, operation_mode, scheduled_time, created_at, result)| {
-            ScheduledOperation {
+        .map(
+            |(
                 id,
                 client_id,
                 operation_type,
@@ -843,8 +903,18 @@ pub async fn get_scheduled_operations(
                 scheduled_time,
                 created_at,
                 result,
-            }
-        })
+            )| {
+                ScheduledOperation {
+                    id,
+                    client_id,
+                    operation_type,
+                    operation_mode,
+                    scheduled_time,
+                    created_at,
+                    result,
+                }
+            },
+        )
         .collect();
 
     // Apply client_id filter if provided
@@ -860,7 +930,7 @@ pub async fn get_scheduled_operations(
     // Apply limit and offset
     let offset = query.offset.unwrap_or(0) as usize;
     let limit = query.limit.unwrap_or(100) as usize;
-    
+
     let total = operations.len();
     operations = operations.into_iter().skip(offset).take(limit).collect();
 

@@ -81,13 +81,15 @@ pub async fn require_auth(
 
     // Skip auth for public endpoints
     if path == "/health"
-        || path == "/api/auth/login" 
+        || path == "/api/auth/login"
         || path == "/api/auth/validate"
         || path == "/api/auth/admin/exists"
         || path == "/api/auth/admin/password"
         || path == "/api/system/dependencies"
         || path == "/api/license/info"
-        || path == "/api/disks/pool/exists" {
+        || path == "/api/disks/pool/exists"
+        || path == "/api/config"
+    {
         return Ok(next.run(request).await);
     }
 
@@ -103,7 +105,7 @@ pub async fn require_auth(
                 let decoded_token = urlencoding::decode(token)
                     .map(|s| s.to_string())
                     .unwrap_or_else(|_| token.to_string());
-                
+
                 match decode::<Claims>(
                     &decoded_token,
                     &DecodingKey::from_secret(crate::auth::jwt_secret()),

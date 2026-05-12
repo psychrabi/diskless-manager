@@ -1,15 +1,9 @@
-use axum::{
-    extract::State,
-    http::StatusCode,
-    Json,
-};
+use axum::{extract::State, http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 
 use crate::commands::system::{
-    execute_ssh_command as execute_ssh_cmd,
-    get_windows_system_info as get_windows_info,
-    test_ssh_connection as test_ssh_conn,
-    SshTestRequest, SshTestResult, WindowsSystemInfo,
+    execute_ssh_command as execute_ssh_cmd, get_windows_system_info as get_windows_info,
+    test_ssh_connection as test_ssh_conn, SshTestRequest, SshTestResult, WindowsSystemInfo,
 };
 use crate::state::AppState;
 

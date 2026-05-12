@@ -12,28 +12,40 @@ use app_lib::os_detector::OsType;
 fn test_property_6_linux_reboot_command_execution_graceful() {
     // For graceful reboot, the command should be "reboot"
     let cmd = CommandBuilder::build_reboot_command(OsType::Linux, false, None).unwrap();
-    assert_eq!(cmd, "reboot", "Graceful Linux reboot should use 'reboot' command");
+    assert_eq!(
+        cmd, "reboot",
+        "Graceful Linux reboot should use 'reboot' command"
+    );
 }
 
 #[test]
 fn test_property_6_linux_reboot_command_execution_force() {
     // For force reboot, the command should be "reboot -f"
     let cmd = CommandBuilder::build_reboot_command(OsType::Linux, true, None).unwrap();
-    assert_eq!(cmd, "reboot -f", "Force Linux reboot should use 'reboot -f' command");
+    assert_eq!(
+        cmd, "reboot -f",
+        "Force Linux reboot should use 'reboot -f' command"
+    );
 }
 
 #[test]
 fn test_property_6_windows_reboot_command_execution_graceful() {
     // For Windows graceful reboot, the command should be "shutdown /r /t 0"
     let cmd = CommandBuilder::build_reboot_command(OsType::Windows, false, None).unwrap();
-    assert_eq!(cmd, "shutdown /r /t 0", "Graceful Windows reboot should use 'shutdown /r /t 0'");
+    assert_eq!(
+        cmd, "shutdown /r /t 0",
+        "Graceful Windows reboot should use 'shutdown /r /t 0'"
+    );
 }
 
 #[test]
 fn test_property_6_windows_reboot_command_execution_force() {
     // For Windows force reboot, the command should be "shutdown /r /t 0 /f"
     let cmd = CommandBuilder::build_reboot_command(OsType::Windows, true, None).unwrap();
-    assert_eq!(cmd, "shutdown /r /t 0 /f", "Force Windows reboot should use 'shutdown /r /t 0 /f'");
+    assert_eq!(
+        cmd, "shutdown /r /t 0 /f",
+        "Force Windows reboot should use 'shutdown /r /t 0 /f'"
+    );
 }
 
 // ============================================================================
@@ -49,7 +61,10 @@ fn test_property_7_reboot_timeout_enforcement_linux() {
     // The SSH executor will enforce the 30-second timeout
     let cmd = CommandBuilder::build_reboot_command(OsType::Linux, false, None).unwrap();
     assert!(!cmd.is_empty(), "Reboot command should not be empty");
-    assert!(cmd.contains("reboot"), "Linux reboot command should contain 'reboot'");
+    assert!(
+        cmd.contains("reboot"),
+        "Linux reboot command should contain 'reboot'"
+    );
 }
 
 #[test]
@@ -58,7 +73,10 @@ fn test_property_7_reboot_timeout_enforcement_windows() {
     // The SSH executor will enforce the 30-second timeout
     let cmd = CommandBuilder::build_reboot_command(OsType::Windows, false, None).unwrap();
     assert!(!cmd.is_empty(), "Reboot command should not be empty");
-    assert!(cmd.contains("shutdown"), "Windows reboot command should contain 'shutdown'");
+    assert!(
+        cmd.contains("shutdown"),
+        "Windows reboot command should contain 'shutdown'"
+    );
 }
 
 // ============================================================================
@@ -73,7 +91,7 @@ fn test_property_8_reboot_error_logging_invalid_os() {
     // For unknown OS type, the command builder should return an error
     let result = CommandBuilder::build_reboot_command(OsType::Unknown, false, None);
     assert!(result.is_err(), "Unknown OS type should result in error");
-    
+
     let error = result.unwrap_err();
     let error_msg = error.to_string();
     assert!(
@@ -87,7 +105,7 @@ fn test_property_8_reboot_error_logging_contains_details() {
     // Error messages should be descriptive
     let result = CommandBuilder::build_reboot_command(OsType::Unknown, false, None);
     assert!(result.is_err());
-    
+
     let error = result.unwrap_err();
     let error_msg = error.to_string();
     assert!(!error_msg.is_empty(), "Error message should not be empty");
@@ -105,7 +123,7 @@ fn test_property_9_reboot_success_response_linux_graceful() {
     // Graceful reboot should generate a valid command
     let cmd = CommandBuilder::build_reboot_command(OsType::Linux, false, None).unwrap();
     assert_eq!(cmd, "reboot");
-    
+
     // The command should be executable (non-empty, valid syntax)
     assert!(!cmd.is_empty());
     assert!(cmd.len() < 256, "Command should be reasonably short");
@@ -116,7 +134,7 @@ fn test_property_9_reboot_success_response_linux_force() {
     // Force reboot should generate a valid command
     let cmd = CommandBuilder::build_reboot_command(OsType::Linux, true, None).unwrap();
     assert_eq!(cmd, "reboot -f");
-    
+
     // The command should be executable
     assert!(!cmd.is_empty());
     assert!(cmd.len() < 256, "Command should be reasonably short");
@@ -127,7 +145,7 @@ fn test_property_9_reboot_success_response_windows_graceful() {
     // Graceful Windows reboot should generate a valid command
     let cmd = CommandBuilder::build_reboot_command(OsType::Windows, false, None).unwrap();
     assert_eq!(cmd, "shutdown /r /t 0");
-    
+
     // The command should be executable
     assert!(!cmd.is_empty());
     assert!(cmd.len() < 256, "Command should be reasonably short");
@@ -138,7 +156,7 @@ fn test_property_9_reboot_success_response_windows_force() {
     // Force Windows reboot should generate a valid command
     let cmd = CommandBuilder::build_reboot_command(OsType::Windows, true, None).unwrap();
     assert_eq!(cmd, "shutdown /r /t 0 /f");
-    
+
     // The command should be executable
     assert!(!cmd.is_empty());
     assert!(cmd.len() < 256, "Command should be reasonably short");
@@ -154,37 +172,55 @@ fn test_property_9_reboot_success_response_windows_force() {
 #[test]
 fn test_property_10_scheduled_reboot_linux_with_delay() {
     let cmd = CommandBuilder::build_reboot_command(OsType::Linux, false, Some(5)).unwrap();
-    assert_eq!(cmd, "shutdown -r +5", "Scheduled reboot should include delay");
+    assert_eq!(
+        cmd, "shutdown -r +5",
+        "Scheduled reboot should include delay"
+    );
 }
 
 #[test]
 fn test_property_10_scheduled_reboot_linux_force_with_delay() {
     let cmd = CommandBuilder::build_reboot_command(OsType::Linux, true, Some(5)).unwrap();
-    assert_eq!(cmd, "shutdown -r -F +5", "Scheduled force reboot should include delay with -F flag");
+    assert_eq!(
+        cmd, "shutdown -r -F +5",
+        "Scheduled force reboot should include delay with -F flag"
+    );
 }
 
 #[test]
 fn test_property_10_scheduled_reboot_windows_with_delay() {
     let cmd = CommandBuilder::build_reboot_command(OsType::Windows, false, Some(5)).unwrap();
-    assert_eq!(cmd, "shutdown /r /t 300", "Windows scheduled reboot should convert minutes to seconds");
+    assert_eq!(
+        cmd, "shutdown /r /t 300",
+        "Windows scheduled reboot should convert minutes to seconds"
+    );
 }
 
 #[test]
 fn test_property_10_scheduled_reboot_windows_force_with_delay() {
     let cmd = CommandBuilder::build_reboot_command(OsType::Windows, true, Some(5)).unwrap();
-    assert_eq!(cmd, "shutdown /r /t 300 /f", "Windows scheduled force reboot should include /f flag");
+    assert_eq!(
+        cmd, "shutdown /r /t 300 /f",
+        "Windows scheduled force reboot should include /f flag"
+    );
 }
 
 #[test]
 fn test_property_10_scheduled_reboot_zero_delay_linux() {
     let cmd = CommandBuilder::build_reboot_command(OsType::Linux, false, Some(0)).unwrap();
-    assert_eq!(cmd, "reboot", "Zero delay should be treated as immediate reboot");
+    assert_eq!(
+        cmd, "reboot",
+        "Zero delay should be treated as immediate reboot"
+    );
 }
 
 #[test]
 fn test_property_10_scheduled_reboot_zero_delay_windows() {
     let cmd = CommandBuilder::build_reboot_command(OsType::Windows, false, Some(0)).unwrap();
-    assert_eq!(cmd, "shutdown /r /t 0", "Windows zero delay should use /t 0");
+    assert_eq!(
+        cmd, "shutdown /r /t 0",
+        "Windows zero delay should use /t 0"
+    );
 }
 
 #[test]
@@ -197,7 +233,10 @@ fn test_property_10_scheduled_reboot_large_delay_linux() {
 fn test_property_10_scheduled_reboot_large_delay_windows() {
     let cmd = CommandBuilder::build_reboot_command(OsType::Windows, false, Some(1440)).unwrap();
     // 1440 minutes = 86400 seconds
-    assert_eq!(cmd, "shutdown /r /t 86400", "Windows large delay should convert correctly");
+    assert_eq!(
+        cmd, "shutdown /r /t 86400",
+        "Windows large delay should convert correctly"
+    );
 }
 
 // ============================================================================
@@ -215,7 +254,10 @@ fn test_property_32_graceful_reboot_linux() {
 #[test]
 fn test_property_32_graceful_reboot_windows() {
     let cmd = CommandBuilder::build_reboot_command(OsType::Windows, false, None).unwrap();
-    assert_eq!(cmd, "shutdown /r /t 0", "Graceful Windows reboot should use 'shutdown /r /t 0'");
+    assert_eq!(
+        cmd, "shutdown /r /t 0",
+        "Graceful Windows reboot should use 'shutdown /r /t 0'"
+    );
 }
 
 #[test]
@@ -223,7 +265,10 @@ fn test_property_32_graceful_reboot_invariant_linux() {
     // Graceful reboot should always produce the same command for Linux
     let cmd1 = CommandBuilder::build_reboot_command(OsType::Linux, false, None).unwrap();
     let cmd2 = CommandBuilder::build_reboot_command(OsType::Linux, false, None).unwrap();
-    assert_eq!(cmd1, cmd2, "Graceful reboot command should be deterministic");
+    assert_eq!(
+        cmd1, cmd2,
+        "Graceful reboot command should be deterministic"
+    );
 }
 
 #[test]
@@ -231,7 +276,10 @@ fn test_property_32_graceful_reboot_invariant_windows() {
     // Graceful reboot should always produce the same command for Windows
     let cmd1 = CommandBuilder::build_reboot_command(OsType::Windows, false, None).unwrap();
     let cmd2 = CommandBuilder::build_reboot_command(OsType::Windows, false, None).unwrap();
-    assert_eq!(cmd1, cmd2, "Graceful reboot command should be deterministic");
+    assert_eq!(
+        cmd1, cmd2,
+        "Graceful reboot command should be deterministic"
+    );
 }
 
 // ============================================================================
@@ -249,7 +297,10 @@ fn test_property_33_force_reboot_linux() {
 #[test]
 fn test_property_33_force_reboot_windows() {
     let cmd = CommandBuilder::build_reboot_command(OsType::Windows, true, None).unwrap();
-    assert_eq!(cmd, "shutdown /r /t 0 /f", "Force Windows reboot should use 'shutdown /r /t 0 /f'");
+    assert_eq!(
+        cmd, "shutdown /r /t 0 /f",
+        "Force Windows reboot should use 'shutdown /r /t 0 /f'"
+    );
 }
 
 #[test]

@@ -21,7 +21,11 @@ export default function PrivilegeManagementForm() {
   };
 
   return (
-    <Card title="Privilege Management" subtitle="Authorize application to perform administrative tasks" icon={ShieldCheck}>
+    <Card
+      title="Privilege Management"
+      subtitle="Authorize application to perform administrative tasks"
+      icon={ShieldCheck}
+    >
       <div className="space-y-4">
         <p className="text-sm text-base-content/60">
           Authorize the application to perform administrative tasks (service

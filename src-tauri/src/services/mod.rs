@@ -23,6 +23,7 @@ use tokio::process::Command;
 pub struct ServiceStatus {
     pub running: bool,
     pub pid: Option<u32>,
+    #[allow(dead_code)]
     pub message: String,
 }
 
@@ -120,6 +121,7 @@ impl ServiceManager {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub async fn status_all(&self) -> anyhow::Result<HashMap<String, ServiceStatus>> {
         let mut statuses = HashMap::new();
         statuses.insert("dhcp".to_string(), self.dhcp.status().await?);
@@ -179,6 +181,7 @@ impl ServiceManager {
         }
     }
 
+    #[allow(dead_code)]
     pub async fn regenerate_dhcp_config(&self) -> anyhow::Result<()> {
         self.dhcp.generate_config().await?;
         self.dhcp.reload().await

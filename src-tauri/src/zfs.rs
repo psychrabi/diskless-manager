@@ -1,5 +1,7 @@
 //! ZFS-related logic for dataset, snapshot, and pool management.
 
+#![allow(dead_code)]
+
 use chrono::Local;
 
 use log::info;
@@ -242,7 +244,6 @@ fn ensure_parent_dataset(parent: &str, prop: &str, prop_val: &str) -> Result<(),
     Ok(())
 }
 
-
 pub async fn create_image(
     state: tauri::State<'_, crate::state::AppState>,
     request: CreateImageRequest,
@@ -398,7 +399,6 @@ pub async fn create_image(
     }))
 }
 
-
 pub async fn create_game_disk(
     state: State<'_, AppState>,
     token: String,
@@ -433,7 +433,6 @@ pub async fn create_game_disk(
         }
     }))
 }
-
 
 pub async fn get_images(
     state: tauri::State<'_, crate::state::AppState>,
@@ -694,7 +693,6 @@ pub async fn delete_image_config(pool: &sqlx::SqlitePool, master_name: &str) -> 
     true // Nothing deleted, but success
 }
 
-
 pub async fn delete_image(
     state: State<'_, AppState>,
     token: String,
@@ -708,7 +706,6 @@ pub async fn delete_image(
 }
 
 // Create a ZFS snapshot
-
 
 pub async fn create_snapshot(
     state: State<'_, AppState>,
@@ -786,7 +783,6 @@ pub async fn create_snapshot(
     }))
 }
 
-
 pub async fn delete_snapshot(
     state: State<'_, AppState>,
     token: String,
@@ -804,7 +800,6 @@ pub async fn delete_snapshot(
     eprintln!("=== delete_snapshot END: {:?}", result);
     result
 }
-
 
 pub fn get_zpool_list() -> Vec<ZpoolInfo> {
     let mut pools = vec![];
@@ -828,7 +823,6 @@ pub fn get_zpool_list() -> Vec<ZpoolInfo> {
 
     pools
 }
-
 
 pub async fn zfs_pool_exists(
     state: State<'_, AppState>,
@@ -860,7 +854,6 @@ pub async fn zfs_pool_exists(
     }
 }
 
-
 pub async fn create_zfs_pool(
     state: State<'_, AppState>,
     req: CreateZpoolRequest,
@@ -885,7 +878,6 @@ pub async fn create_zfs_pool(
     Ok(())
 }
 
-
 pub async fn set_default_image(
     state: State<'_, AppState>,
     token: String,
@@ -902,7 +894,6 @@ pub async fn set_default_image(
         .map_err(AppError::Config)?;
     Ok(json!({"message": "Successfully set default image"}))
 }
-
 
 pub async fn rollback_image_snapshot(
     state: State<'_, AppState>,
@@ -949,7 +940,6 @@ pub async fn rollback_image_snapshot(
     }))
 }
 
-
 pub async fn get_zfs_arcstat() -> Result<ArcstatInfo, AppError> {
     use std::fs;
     let arcstat_path = "/proc/spl/kstat/zfs/arcstats";
@@ -976,7 +966,6 @@ pub async fn get_zfs_arcstat() -> Result<ArcstatInfo, AppError> {
     };
     Ok(ArcstatInfo { size, hit_percent })
 }
-
 
 pub async fn get_default_image_overview(
     state: State<'_, AppState>,
@@ -1045,7 +1034,6 @@ pub async fn get_default_image_overview(
 
     Ok(overview)
 }
-
 
 pub async fn rename_image(
     state: State<'_, AppState>,

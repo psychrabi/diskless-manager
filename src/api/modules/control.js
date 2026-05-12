@@ -40,7 +40,8 @@ export async function cancelScheduledOperation(operationId) {
 export async function getAuditLogs(filters = {}) {
   const params = new URLSearchParams();
   if (filters.client_id) params.append("client_id", filters.client_id);
-  if (filters.operation_type) params.append("operation_type", filters.operation_type);
+  if (filters.operation_type)
+    params.append("operation_type", filters.operation_type);
   if (filters.start_date) params.append("start_date", filters.start_date);
   if (filters.end_date) params.append("end_date", filters.end_date);
 

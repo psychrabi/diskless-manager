@@ -1,5 +1,5 @@
 @import "tailwindcss";
-@plugin "daisyui";
+@plugin "/node_modules/daisyui/index.js";
 
 /* Professional Typography Scale */
 @layer utilities {
