@@ -17,11 +17,13 @@ import {
   Network,
   Package,
   Share2,
+  Shield,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useShallow } from "zustand/shallow";
 import { useAppStore } from "../../store/useAppStore";
+import AuthorizeStep from "./AuthorizeStep";
 import BootScriptStep from "./BootScriptStep";
 import DependencyStep from "./DependencyStep";
 import DHCPStep from "./DHCPStep";
@@ -32,6 +34,7 @@ import StorageStep from "./StorageStep";
 import TFTPStep from "./TFTPStep";
 
 const getInitialStep = ({
+  privilegedAccessGranted,
   allServicesInstalled,
   poolExists,
   hasDhcp,
@@ -40,6 +43,7 @@ const getInitialStep = ({
   hasSamba,
   hasBootScript,
 }) => {
+  if (!privilegedAccessGranted) return 1;
   if (
     allServicesInstalled &&
     poolExists &&
@@ -49,7 +53,7 @@ const getInitialStep = ({
     hasSamba &&
     hasBootScript
   ) {
-    return 8;
+    return 9;
   }
   if (
     allServicesInstalled &&
@@ -59,24 +63,24 @@ const getInitialStep = ({
     hasHttp &&
     hasSamba
   ) {
-    return 7;
+    return 8;
   }
   if (allServicesInstalled && poolExists && hasDhcp && hasTftp && hasHttp) {
-    return 6;
+    return 7;
   }
   if (allServicesInstalled && poolExists && hasDhcp && hasTftp) {
-    return 5;
+    return 6;
   }
   if (allServicesInstalled && poolExists && hasDhcp) {
-    return 4;
+    return 5;
   }
   if (allServicesInstalled && poolExists) {
-    return 3;
+    return 4;
   }
   if (allServicesInstalled) {
-    return 2;
+    return 3;
   }
-  return 1;
+  return 2;
 };
 
 const Setup = () => {
@@ -87,6 +91,7 @@ const Setup = () => {
   const [activeStep, setActiveStep] = useState(1);
   const [checking, setChecking] = useState(false);
   const [bootScriptContent, setBootScriptContent] = useState(null);
+  const [privilegedAccessGranted, setPrivilegedAccessGranted] = useState(false);
   const { appConfig, fetchConfig } = useAppStore();
   const { error, success, info } = useToastStore();
   const { updateDhcp, updateTftp, updateHttp } = useSettings();
@@ -149,6 +154,7 @@ const Setup = () => {
   useEffect(() => {
     setActiveStep(
       getInitialStep({
+        privilegedAccessGranted,
         allServicesInstalled,
         poolExists,
         hasDhcp,
@@ -159,6 +165,7 @@ const Setup = () => {
       })
     );
   }, [
+    privilegedAccessGranted,
     allServicesInstalled,
     poolExists,
     hasDhcp,
@@ -214,7 +221,7 @@ const Setup = () => {
       handleSubmitAndAdvance(
         updateDhcp,
         data,
-        4,
+        5,
         "Setup - DHCP",
         "DHCP configuration saved successfully"
       ),
@@ -226,7 +233,7 @@ const Setup = () => {
       handleSubmitAndAdvance(
         updateTftp,
         data,
-        5,
+        6,
         "Setup - TFTP",
         "TFTP configuration saved successfully"
       ),
@@ -238,7 +245,7 @@ const Setup = () => {
       handleSubmitAndAdvance(
         updateHttp,
         data,
-        6,
+        7,
         "Setup - HTTP",
         "HTTP configuration saved successfully"
       ),
@@ -249,18 +256,23 @@ const Setup = () => {
     try {
       await configureSambaServer(shares);
       success("Setup - Samba", "Samba configuration saved successfully");
-      setActiveStep(7);
+      setActiveStep(8);
     } catch (e) {
       error("Setup Wizard", `Failed to configure Samba: ${e}`);
     }
   };
+
+  const handleAuthorized = useCallback(() => {
+    setPrivilegedAccessGranted(true);
+    setActiveStep(2);
+  }, []);
 
   const handleBootScriptSubmit = async (content) => {
     info(`Updating Boot Script`);
     try {
       await handleConfigSave("tftp-autoexec", content);
       setBootScriptContent(content);
-      setActiveStep(8);
+      setActiveStep(9);
       success("Setup - Boot Script", "Boot Script saved successfully");
     } catch (e) {
       error("Setup Wizard", `Failed to update boot script: ${e}`);
@@ -271,64 +283,75 @@ const Setup = () => {
     () => [
       {
         id: 1,
-        title: "Dependencies",
-        icon: Package,
-        status: allServicesInstalled ? "complete" : "current",
+        title: "Authorize",
+        icon: Shield,
+        status: privilegedAccessGranted ? "complete" : "current",
       },
       {
         id: 2,
-        title: "Storage",
-        icon: Database,
-        status: poolExists
+        title: "Dependencies",
+        icon: Package,
+        status: allServicesInstalled
           ? "complete"
-          : allServicesInstalled
+          : activeStep === 2
           ? "current"
           : "upcoming",
       },
       {
         id: 3,
-        title: "DHCP",
-        icon: Network,
-        status: hasDhcp ? "complete" : activeStep === 3 ? "current" : "upcoming",
+        title: "Storage",
+        icon: Database,
+        status: poolExists
+          ? "complete"
+          : activeStep === 3
+          ? "current"
+          : "upcoming",
       },
       {
         id: 4,
-        title: "TFTP",
+        title: "DHCP",
         icon: Network,
-        status: hasTftp ? "complete" : activeStep === 4 ? "current" : "upcoming",
+        status: hasDhcp ? "complete" : activeStep === 4 ? "current" : "upcoming",
       },
       {
         id: 5,
-        title: "HTTP",
-        icon: Globe,
-        status: hasHttp ? "complete" : activeStep === 5 ? "current" : "upcoming",
+        title: "TFTP",
+        icon: Network,
+        status: hasTftp ? "complete" : activeStep === 5 ? "current" : "upcoming",
       },
       {
         id: 6,
-        title: "Samba",
-        icon: Share2,
-        status: hasSamba ? "complete" : activeStep === 6 ? "current" : "upcoming",
+        title: "HTTP",
+        icon: Globe,
+        status: hasHttp ? "complete" : activeStep === 6 ? "current" : "upcoming",
       },
       {
         id: 7,
+        title: "Samba",
+        icon: Share2,
+        status: hasSamba ? "complete" : activeStep === 7 ? "current" : "upcoming",
+      },
+      {
+        id: 8,
         title: "Boot",
         icon: Code,
         status:
-          activeStep > 7
+          activeStep > 8
             ? "complete"
-            : activeStep === 7
+            : activeStep === 8
             ? "current"
             : "upcoming",
       },
       {
-        id: 8,
+        id: 9,
         title: "Finished",
         icon: CheckCircle,
-        status: activeStep === 8 ? "current" : "upcoming",
+        status: activeStep === 9 ? "current" : "upcoming",
       },
     ],
     [
       activeStep,
+      privilegedAccessGranted,
       allServicesInstalled,
       poolExists,
       hasDhcp,
@@ -385,6 +408,10 @@ const Setup = () => {
 
       <div className="min-h-[calc(100vh-32rem)]">
         {activeStep === 1 && (
+          <AuthorizeStep onAuthorized={handleAuthorized} />
+        )}
+
+        {activeStep === 2 && (
           <DependencyStep
             dependencies={dependencies}
             checking={checking}
@@ -394,7 +421,7 @@ const Setup = () => {
           />
         )}
 
-        {activeStep === 2 && (
+        {activeStep === 3 && (
           <StorageStep
             disks={disks}
             poolExists={poolExists}
@@ -403,49 +430,49 @@ const Setup = () => {
           />
         )}
 
-        {activeStep === 3 && (
+        {activeStep === 4 && (
           <DHCPStep
             onSubmit={handleDhcpSubmit}
             initialConfig={appConfig?.settings?.dhcp}
           />
         )}
 
-        {activeStep === 4 && (
+        {activeStep === 5 && (
           <TFTPStep
             onSubmit={handleTftpSubmit}
             initialConfig={appConfig?.settings?.tftp}
           />
         )}
 
-        {activeStep === 5 && (
+        {activeStep === 6 && (
           <HTTPStep
             onSubmit={handleHttpSubmit}
             initialConfig={appConfig?.settings?.http}
           />
         )}
 
-        {activeStep === 6 && (
+        {activeStep === 7 && (
           <SambaStep
             onSubmit={handleSambaSubmit}
             initialConfig={appConfig?.settings?.samba?.[0]}
           />
         )}
 
-        {activeStep === 7 && (
+        {activeStep === 8 && (
           <BootScriptStep onSubmit={handleBootScriptSubmit} />
         )}
 
-        {activeStep === 8 && (
+        {activeStep === 9 && (
           <FinishedStep
             onNavigateHome={() => {
-              setActiveStep(8);
+              setActiveStep(9);
               navigate("/");
             }}
           />
         )}
       </div>
 
-      {activeStep < 8 ? (
+      {activeStep < 9 ? (
         <div className="flex justify-between items-center text-xs text-base-content/40">
           <span>
             Status: {checking ? "Refreshing..." : "Configuration in progress"}

@@ -423,7 +423,7 @@ mod tests {
     #[test]
     fn test_remote_desktop_launcher_creation() {
         let ssh_executor = Arc::new(SshExecutor::new());
-        let launcher = RemoteDesktopLauncher::new(ssh_executor);
+        RemoteDesktopLauncher::new(ssh_executor);
         // Just verify it can be created
         assert!(true);
     }
