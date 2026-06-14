@@ -42,7 +42,12 @@ const navSections = [
   {
     label: "Configuration",
     items: [
-      { id: "settings", to: "/settings", label: "System Settings", icon: Settings },
+      {
+        id: "settings",
+        to: "/settings",
+        label: "System Settings",
+        icon: Settings,
+      },
       {
         id: "application-settings",
         to: "/application-settings",
@@ -56,7 +61,12 @@ const navSections = [
     label: "Management",
     items: [
       { id: "users", to: "/users", label: "Users", icon: Users2 },
-      { id: "ssh-tester", to: "/ssh-tester", label: "SSH Tester", icon: Terminal },
+      {
+        id: "ssh-tester",
+        to: "/ssh-tester",
+        label: "SSH Tester",
+        icon: Terminal,
+      },
       { id: "logs", to: "/logs", label: "Logs", icon: File },
     ],
   },
@@ -93,9 +103,9 @@ const Sidebar = ({
     <aside
       className={cn(
         "fixed inset-y-0 left-0 z-40 flex h-full flex-col bg-base-100/95 backdrop-blur-sm text-base-content border-r border-base-200/50 transform transition-[width,transform] duration-300 ease-in-out overflow-hidden",
-        "lg:static lg:translate-x-0 lg:flex-shrink-0",
+        "lg:static lg:translate-x-0 lg:shrink-0",
         isOpen ? "translate-x-0" : "-translate-x-full",
-        isCollapsed ? "w-20" : "w-64"
+        isCollapsed ? "w-20" : "w-64",
       )}
       role="navigation"
       aria-label="Main navigation"
@@ -104,10 +114,10 @@ const Sidebar = ({
       <div
         className={cn(
           "flex h-16 items-center border-b border-base-200/30 bg-base-100/50",
-          isCollapsed ? "justify-center px-2" : "px-6 gap-3"
+          isCollapsed ? "justify-center px-2" : "px-6 gap-3",
         )}
       >
-        <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center flex-shrink-0">
+        <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center shrink-0">
           <Shield className="h-5 w-5 text-primary-content" />
         </div>
         {!isCollapsed && (
@@ -144,7 +154,7 @@ const Sidebar = ({
                         isActive
                           ? "bg-primary text-primary-content shadow-sm"
                           : "text-base-content/70 hover:text-base-content hover:bg-base-200/50",
-                        isCollapsed ? "justify-center" : ""
+                        isCollapsed ? "justify-center" : "",
                       )
                     }
                     onClick={() => {
@@ -153,7 +163,12 @@ const Sidebar = ({
                     }}
                     title={isCollapsed ? item.label : undefined}
                   >
-                    <Icon className={cn("flex-shrink-0", isCollapsed ? "h-5 w-5" : "h-4 w-4")} />
+                    <Icon
+                      className={cn(
+                        "shrink-0",
+                        isCollapsed ? "h-5 w-5" : "h-4 w-4",
+                      )}
+                    />
                     {!isCollapsed && (
                       <span className="truncate">{item.label}</span>
                     )}
@@ -180,7 +195,7 @@ const Sidebar = ({
           onClick={onToggleCollapse}
           className={cn(
             "w-full justify-start gap-3 text-base-content/70 hover:text-base-content",
-            isCollapsed ? "justify-center" : ""
+            isCollapsed ? "justify-center" : "",
           )}
           title={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
         >
@@ -204,7 +219,7 @@ const Sidebar = ({
           }}
           className={cn(
             "w-full justify-start gap-3 text-base-content/70 hover:text-base-content",
-            isCollapsed ? "justify-center" : ""
+            isCollapsed ? "justify-center" : "",
           )}
           title={isCollapsed ? "License" : undefined}
         >
@@ -219,7 +234,7 @@ const Sidebar = ({
           onClick={handleExit}
           className={cn(
             "w-full justify-start gap-3 text-error/70 hover:text-error hover:bg-error/10",
-            isCollapsed ? "justify-center" : ""
+            isCollapsed ? "justify-center" : "",
           )}
           title={isCollapsed ? "Exit application" : undefined}
         >

@@ -1,15 +1,15 @@
 import {
+  HardDrive,
   History,
   Play,
   Power,
   RefreshCw,
   ScreenShare,
-  Trash2,
-  ShieldAlert,
   Settings,
-  HardDrive,
+  ShieldAlert,
+  Trash2,
 } from "lucide-react";
-import { useRef, useLayoutEffect, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { useOnClickOutside } from "../../hooks/useOnClickOutside";
 
 const MenuItem = ({
@@ -46,10 +46,11 @@ const MenuItem = ({
         className={`w-full text-left flex items-center gap-3 px-3 py-2 text-sm transition-all duration-200 ${variants[variant]} ${className}`}
       >
         <Icon
-          className={`w-4 h-4 flex-shrink-0 ${variant === "destructive"
+          className={`w-4 h-4 shrink-0 ${
+            variant === "destructive"
               ? "group-hover:scale-110 transition-transform"
               : ""
-            }`}
+          }`}
         />
         <span>{label}</span>
       </button>
@@ -103,7 +104,7 @@ export const ContextMenu = ({
     <div
       ref={menuRef}
       style={{ top: coords.y, left: coords.x }}
-      className="fixed z-[60] bg-base-100/80 backdrop-blur-md rounded-xl shadow-2xl min-w-[220px] border border-white/10 overflow-hidden animate-in fade-in zoom-in duration-150"
+      className="fixed z-60 bg-base-100/80 backdrop-blur-md rounded-xl shadow-2xl min-w-55 border border-white/10 overflow-hidden animate-in fade-in zoom-in duration-150"
     >
       <div className="p-4 bg-base-300 border-b border-white/5">
         <p className="text-xs font-bold uppercase tracking-widest text-primary mb-2">

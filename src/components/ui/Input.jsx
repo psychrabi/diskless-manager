@@ -50,9 +50,9 @@ export const Input = ({
           error ? `${id}-error` : helperText ? `${id}-helper` : undefined
         }
         className={`
-          ${variantClasses[variant]} 
+          ${variantClasses[variant]}
           ${sizeClasses[size]}
-          ${error ? "!border-error focus:!border-error focus:!ring-error/20" : ""}
+          ${error ? "border-error! focus:border-error! focus:ring-error/20!" : ""}
           ${disabled ? "opacity-50 cursor-not-allowed" : ""}
         `}
       />

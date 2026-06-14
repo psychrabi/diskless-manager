@@ -1,6 +1,4 @@
-import {
-  ChevronRight,
-} from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useSetupWizard } from "@/hooks/useSetupWizard";
 import AuthorizeStep from "./AuthorizeStep";
@@ -17,17 +15,31 @@ const Setup = () => {
   const navigate = useNavigate();
   const wizard = useSetupWizard();
   const {
-    activeStep, setActiveStep, checking, installing, disks, poolExists,
-    poolName, dependencies, steps,
-    appConfig, checkAll, handleCreatePool, handleInstallService,
-    handleDhcpSubmit, handleTftpSubmit, handleHttpSubmit, handleSambaSubmit,
-    handleAuthorized, handleBootScriptSubmit,
+    activeStep,
+    setActiveStep,
+    checking,
+    installing,
+    disks,
+    poolExists,
+    poolName,
+    dependencies,
+    steps,
+    appConfig,
+    checkAll,
+    handleCreatePool,
+    handleInstallService,
+    handleDhcpSubmit,
+    handleTftpSubmit,
+    handleHttpSubmit,
+    handleSambaSubmit,
+    handleAuthorized,
+    handleBootScriptSubmit,
   } = wizard;
 
   return (
     <div className="max-w-3xl min-w-3xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div className="text-center space-y-2">
-        <h1 className="text-4xl font-black tracking-tight bg-gradient-to-r from-primary to-secondary bg-clip-text text-transparent">
+        <h1 className="text-4xl font-black tracking-tight bg-linear-to-r from-primary to-secondary bg-clip-text text-transparent">
           System Setup
         </h1>
         <p className="text-base-content/60 text-lg">
@@ -48,8 +60,8 @@ const Setup = () => {
                 step.status === "complete"
                   ? "bg-success border-success text-success-content scale-110 group-hover:bg-success/80"
                   : step.status === "current" || activeStep === step.id
-                  ? "bg-primary border-primary text-primary-content scale-110 shadow-lg shadow-primary/20"
-                  : "bg-base-100 border-base-300 text-base-content/40 group-hover:border-primary/50"
+                    ? "bg-primary border-primary text-primary-content scale-110 shadow-lg shadow-primary/20"
+                    : "bg-base-100 border-base-300 text-base-content/40 group-hover:border-primary/50"
               }`}
             >
               <step.icon size={20} />
@@ -59,8 +71,8 @@ const Setup = () => {
                 activeStep === step.id
                   ? "text-primary"
                   : step.status === "upcoming"
-                  ? "text-base-content/40"
-                  : "text-base-content"
+                    ? "text-base-content/40"
+                    : "text-base-content"
               }`}
             >
               {step.title}
@@ -70,9 +82,7 @@ const Setup = () => {
       </div>
 
       <div className="min-h-[calc(100vh-32rem)]">
-        {activeStep === 1 && (
-          <AuthorizeStep onAuthorized={handleAuthorized} />
-        )}
+        {activeStep === 1 && <AuthorizeStep onAuthorized={handleAuthorized} />}
 
         {activeStep === 2 && (
           <DependencyStep
@@ -138,7 +148,8 @@ const Setup = () => {
       {activeStep < 9 ? (
         <div className="flex justify-between items-center text-xs text-base-content/40">
           <span>
-            Status: {checking ? "Refreshing\u2026" : "Configuration in progress"}
+            Status:{" "}
+            {checking ? "Refreshing\u2026" : "Configuration in progress"}
           </span>
           <span
             className="flex items-center gap-1 cursor-pointer hover:text-primary transition-colors"

@@ -33,7 +33,7 @@ export const Card = ({
           <div className="flex justify-between items-center flex-col md:flex-row">
             <div className="flex items-center min-w-0 flex-1 mb-5">
               {icon && (
-                <div className="flex-shrink-0 mr-4">
+                <div className="shrink-0 mr-4">
                   <div className="p-2 w-12 h-12 bg-primary/10 rounded-lg flex items-center justify-center">
                     {createElement(icon, {
                       className: "h-10 w-10 text-primary",
@@ -42,7 +42,9 @@ export const Card = ({
                 </div>
               )}
               <div className="flex flex-col min-w-0 flex-1">
-                <h3 className={`text-heading-lg font-semibold text-base-content mb-1 ${titleClassName}`}>
+                <h3
+                  className={`text-heading-lg font-semibold text-base-content mb-1 ${titleClassName}`}
+                >
                   {title}
                 </h3>
                 {subtitle && (
@@ -53,16 +55,14 @@ export const Card = ({
               </div>
             </div>
             {actions && (
-              <div className="flex items-center gap-2 ml-4 flex-shrink-0">
+              <div className="flex items-center gap-2 ml-4 shrink-0">
                 {actions}
               </div>
             )}
           </div>
         </div>
       )}
-      <div className={`card-body-professional ${bodyClass}`}>
-        {children}
-      </div>
+      <div className={`card-body-professional ${bodyClass}`}>{children}</div>
     </div>
   );
 };

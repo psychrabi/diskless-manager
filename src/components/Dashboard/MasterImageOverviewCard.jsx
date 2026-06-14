@@ -10,39 +10,40 @@ const MasterImageOverviewCard = () => {
   const [error, setError] = useState("");
   const { error: showError } = useToastStore();
 
-  const fetchMasterImageOverview = useCallback(async (showErrorToast = true) => {
-    setError("");
-    setLoading(true);
-    try {
-      const data = await getDefaultImageOverview();
-      setOverview(data);
-    } catch (err) {
-      console.error(err);
-      let errorMsg = err || "An unknown error occurred";
-      // Map specific errors
-      if (
-        errorMsg.includes("not set in config") ||
-        errorMsg.includes("please set a new one")
-      ) {
-        errorMsg = "Set a default image first.";
-      } else if (errorMsg.includes("deleted or not present")) {
-        errorMsg = "Master image is deleted or not present.";
+  const fetchMasterImageOverview = useCallback(
+    async (showErrorToast = true) => {
+      setError("");
+      setLoading(true);
+      try {
+        const data = await getDefaultImageOverview();
+        setOverview(data);
+      } catch (err) {
+        console.error(err);
+        let errorMsg = err || "An unknown error occurred";
+        // Map specific errors
+        if (
+          errorMsg.includes("not set in config") ||
+          errorMsg.includes("please set a new one")
+        ) {
+          errorMsg = "Set a default image first.";
+        } else if (errorMsg.includes("deleted or not present")) {
+          errorMsg = "Master image is deleted or not present.";
+        }
+        const errorText =
+          typeof errorMsg === "string"
+            ? errorMsg
+            : errorMsg?.message || String(errorMsg);
+        setError(errorText);
+        if (showErrorToast) {
+          showError(`Failed to load master image overview: ${errorText}`);
+        }
+        setOverview(null);
+      } finally {
+        setLoading(false);
       }
-      const errorText =
-        typeof errorMsg === "string"
-          ? errorMsg
-          : errorMsg?.message || String(errorMsg);
-      setError(errorText);
-      if (showErrorToast) {
-        showError(
-          `Failed to load master image overview: ${errorText}`,
-        );
-      }
-      setOverview(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [showError]);
+    },
+    [showError],
+  );
 
   useEffect(() => {
     fetchMasterImageOverview();

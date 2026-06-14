@@ -1,4 +1,13 @@
-import { Folder, FolderOpen, FolderOpenDot, Globe, Network, RefreshCw, Save, Settings } from "lucide-react";
+import {
+  Folder,
+  FolderOpen,
+  FolderOpenDot,
+  Globe,
+  Network,
+  RefreshCw,
+  Save,
+  Settings,
+} from "lucide-react";
 import { useShallow } from "zustand/shallow";
 import { useAppStore } from "../../store/useAppStore";
 import { Button, Card, StatusBadge } from "@/components/ui";
@@ -57,7 +66,7 @@ export default function ServicesStatus() {
                 className="flex items-center justify-between p-3 bg-base-200/50 rounded-xl hover:bg-base-200 transition-colors"
               >
                 <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-9 h-9 bg-base-300/50 rounded-lg flex items-center justify-center flex-shrink-0">
+                  <div className="w-9 h-9 bg-base-300/50 rounded-lg flex items-center justify-center shrink-0">
                     <Icon className="w-4 h-4 text-base-content/70" />
                   </div>
                   <div className="min-w-0">

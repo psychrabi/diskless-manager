@@ -19,7 +19,7 @@ export default function Toast({ toast }) {
 
   return (
     <div
-      className={`flex items-start gap-3 px-4 py-3 rounded-lg shadow-lg min-w-[300px] max-w-lg animate-in slide-in-from-right fade-in duration-200 ${
+      className={`flex items-start gap-3 px-4 py-3 rounded-lg shadow-lg min-w-75 max-w-lg animate-in slide-in-from-right fade-in duration-200 ${
         typeStyles[toast.type]
       }`}
     >
