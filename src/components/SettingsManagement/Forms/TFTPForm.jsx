@@ -19,18 +19,22 @@ const TFTPForm = ({ register, errors, config }) => {
         register={register("server_ip")}
         error={errors.server_ip?.message}
         placeholder="0.0.0.0"
+        autoComplete="off"
       />
       <Input
         label="TFTP Server Port"
         register={register("port")}
         error={errors.port?.message}
         placeholder="69"
+        autoComplete="off"
+        inputMode="numeric"
       />
       <Input
         label="TFTP Options"
         register={register("options")}
         error={errors.options?.message}
         placeholder="--secure"
+        autoComplete="off"
       />
 
       <Input
@@ -38,6 +42,7 @@ const TFTPForm = ({ register, errors, config }) => {
         register={register("root_dir")}
         error={errors.root_dir?.message}
         placeholder="/srv/tftp"
+        autoComplete="off"
       />
     </div>
   );

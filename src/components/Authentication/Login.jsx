@@ -1,3 +1,4 @@
+import { Shield } from "lucide-react";
 import { Button, Card, Input } from "@/components/ui";
 import { useAuth } from "@/contexts/auth";
 import { useToastStore } from "@/store/useToastStore";
@@ -7,7 +8,6 @@ import { useNavigate } from "react-router-dom";
 import { z } from "zod";
 import { login } from "@/api/modules/auth";
 
-// Define validation schema
 const loginSchema = z.object({
   username: z.string().min(1, "Username is required"),
   password: z.string().min(6, "Password must be at least 6 characters"),
@@ -35,7 +35,6 @@ const Login = () => {
     try {
       const response = await login(data.username, data.password);
 
-      // Set auth context immediately so ProtectedRoute sees it
       setAuth(response.user, response.token);
       success("Authentication", "You have successfully logged in");
       localStorage.removeItem("last_path");
@@ -43,25 +42,27 @@ const Login = () => {
     } catch (e) {
       const errorMessage = e instanceof Error ? e.message : "An unknown error occurred";
       error("Login Failed", errorMessage);
-      reset({ password: "" }); // Clear password field on error
+      reset({ password: "" });
     }
   };
 
   return (
-    <Card className="w-[24rem]">
-      <div className="text-center mb-6">
-        <h1 className="text-2xl font-bold text-primary">Diskless Manager</h1>
-        <p className="text-base-content/70 mt-2">Sign in to Diskless Manager</p>
+    <Card className="w-full max-w-md animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <div className="text-center mb-8">
+        <div className="w-16 h-16 bg-primary rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-primary/20">
+          <Shield className="h-8 w-8 text-primary-content" />
+        </div>
+        <h1 className="text-2xl font-bold text-base-content">Diskless Manager</h1>
+        <p className="text-base-content/60 mt-1">Sign in to manage your boot server</p>
       </div>
 
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+      <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
         <Input
           id="username"
           type="text"
           label="Username"
           register={register("username")}
           placeholder="Enter your username"
-          className="w-full"
           error={errors.username?.message}
         />
         <Input
@@ -70,7 +71,6 @@ const Login = () => {
           label="Password"
           register={register("password")}
           placeholder="Enter your password"
-          className="w-full"
           error={errors.password?.message}
         />
         <Button
@@ -78,8 +78,9 @@ const Login = () => {
           disabled={isSubmitting}
           className="w-full"
           variant="primary"
+          size="lg"
         >
-          {isSubmitting ? "Signing in..." : "Sign in"}
+          {isSubmitting ? "Signing in\u2026" : "Sign in"}
         </Button>
       </form>
     </Card>

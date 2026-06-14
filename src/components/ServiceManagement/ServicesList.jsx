@@ -13,7 +13,7 @@ const ServicesList = ({ onViewConfig }) => {
   );
 
   return services?.length === 0 ? (
-    <div className="text-sm text-muted">No services available</div>
+    <div className="text-sm text-base-content/50">No services available</div>
   ) : (
     services?.map((service) => (
       <ServiceCard

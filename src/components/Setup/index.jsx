@@ -138,7 +138,7 @@ const Setup = () => {
       {activeStep < 9 ? (
         <div className="flex justify-between items-center text-xs text-base-content/40">
           <span>
-            Status: {checking ? "Refreshing..." : "Configuration in progress"}
+            Status: {checking ? "Refreshing\u2026" : "Configuration in progress"}
           </span>
           <span
             className="flex items-center gap-1 cursor-pointer hover:text-primary transition-colors"

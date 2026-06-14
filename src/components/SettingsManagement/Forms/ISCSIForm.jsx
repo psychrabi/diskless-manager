@@ -19,12 +19,15 @@ const ISCSIForm = ({ register, errors, config }) => {
           register={register("target_prefix")}
           error={errors.target_prefix?.message}
           placeholder="iqn.2024-01.com.example"
+          autoComplete="off"
         />
         <Input
           label="Portal Port"
           register={register("portal_port")}
           error={errors.portal_port?.message}
           placeholder="3260"
+          autoComplete="off"
+          inputMode="numeric"
         />
       </div>
       <Input
@@ -33,6 +36,7 @@ const ISCSIForm = ({ register, errors, config }) => {
         register={register("targets_dir")}
         error={errors.targets_dir?.message}
         placeholder="/var/lib/iscsi-targets"
+        autoComplete="off"
       />
     </div>
   );

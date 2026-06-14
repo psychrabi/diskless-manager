@@ -36,8 +36,7 @@ const ImageManagement = () => {
   return (
     <Card
       title="Image Management"
-      subtitle="Manage diskless boot images and their snapshots
-"
+      subtitle="Manage diskless boot images and their snapshots"
       className="bg-base-300"
       icon={HardDrive}
       actions={

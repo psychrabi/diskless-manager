@@ -53,36 +53,38 @@ const MasterImageOverviewCard = () => {
   return (
     <Card title="Default Image Overview" icon={HardDrive}>
       {loading ? (
-        <div className="flex items-center justify-center py-4">
-          <div>Loading...</div>
+        <div className="space-y-3" aria-hidden="true">
+          <div className="h-5 bg-base-200 rounded animate-pulse w-3/4" />
+          <div className="h-5 bg-base-200 rounded animate-pulse w-1/2" />
+          <div className="h-5 bg-base-200 rounded animate-pulse w-2/3" />
         </div>
       ) : error ? (
         <div className="text-center py-4 space-y-2">
-          <div className="text-red-500">{error}</div>
+          <div className="text-error">{error}</div>
           <Button onClick={handleRetry} variant="outline" size="sm">
             <RefreshCw className="w-4 h-4 mr-2" />
             Retry
           </Button>
         </div>
       ) : overview ? (
-        <ul className="space-y-2">
-          <li className="flex justify-between">
+        <div className="space-y-2">
+          <div className="flex justify-between">
             <span className="font-semibold">Name:</span>
-            {overview.name}
-          </li>
-          <li className="flex justify-between">
+            <span className="text-right">{overview.name}</span>
+          </div>
+          <div className="flex justify-between">
             <span className="font-semibold">Created:</span>
-            {overview.creation_date}
-          </li>
+            <span className="text-right">{overview.creation_date}</span>
+          </div>
           {overview.clones && overview.clones !== "-" && (
-            <li className="flex justify-between">
+            <div className="flex justify-between">
               <span className="font-semibold">Clones:</span>
-              {overview.clones}
-            </li>
+              <span className="text-right">{overview.clones}</span>
+            </div>
           )}
-        </ul>
+        </div>
       ) : (
-        <div className="text-red-500 text-center py-4">
+        <div className="text-error text-center py-4">
           Set a default image first.
         </div>
       )}

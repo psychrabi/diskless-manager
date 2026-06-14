@@ -110,13 +110,12 @@ const AdminLayout = () => {
 
       {/* Backdrop on small screens */}
       <Activity mode={isSidebarOpen ? "visible" : "hidden"}>
-        <div
-          className="fixed inset-0 z-30 bg-black/50 lg:hidden"
+        <button
+          type="button"
+          className="fixed inset-0 z-30 bg-black/50 lg:hidden cursor-default"
           onClick={() => setIsSidebarOpen(false)}
           aria-label="Close sidebar"
-          role="button"
-          tabIndex={0}
-          onKeyDown={(e) => e.key === "Enter" && setIsSidebarOpen(false)}
+          tabIndex={-1}
         />
       </Activity>
 
@@ -138,7 +137,7 @@ const AdminLayout = () => {
                 aria-live="polite"
               >
                 <Loading className="w-10 h-10 text-primary" />
-                <span className="sr-only">Loading...</span>
+                <span className="sr-only">Loading\u2026</span>
               </div>
             )}
             {error && <Error error={error} />}

@@ -1,66 +1,58 @@
-import { RefreshCw } from "lucide-react";
+import { Monitor, RefreshCw } from "lucide-react";
 import { useAppStore } from "../../store/useAppStore";
 import { Card, Button } from "@/components/ui";
 import { clearRamCache } from "@/api/modules/system";
 
+const InfoRow = ({ label, value, className = "" }) => (
+  <div className={`flex justify-between items-center py-2.5 border-b border-base-200/50 last:border-0 ${className}`}>
+    <span className="text-sm text-base-content/60">{label}</span>
+    <span className="text-sm font-medium text-base-content text-right ml-4">{value}</span>
+  </div>
+);
+
 const ServerInfoCard = () => {
   const serverInfo = useAppStore((state) => state.serverInfo);
 
-  return (
-    <div>
-      {serverInfo ? (
-        <Card title="System Information" actions={<Button
-          onClick={clearRamCache}
-          variant="primary"
-          className="w-full btn-xs"
-        >
-          Clear Cache
-        </Button>}>
+  if (!serverInfo) {
+    return (
+      <Card title="System Information" icon={Monitor}>
+        <div className="space-y-3" aria-hidden="true">
+          <div className="h-5 bg-base-200 rounded animate-pulse w-full" />
+          <div className="h-5 bg-base-200 rounded animate-pulse w-5/6" />
+          <div className="h-5 bg-base-200 rounded animate-pulse w-4/5" />
+          <div className="h-5 bg-base-200 rounded animate-pulse w-3/4" />
+          <div className="h-5 bg-base-200 rounded animate-pulse w-2/3" />
+          <div className="h-5 bg-base-200 rounded animate-pulse w-5/6" />
+        </div>
+      </Card>
+    );
+  }
 
-          {serverInfo ? (
-            <div className="space-y-1">
-              <div className="flex justify-between border-b border-base-200 pb-2">
-                <span className="text-base-content/70">Hostname</span>
-                <span className="font-medium">{serverInfo.hostname}</span>
-              </div>
-              <div className="flex justify-between border-b border-base-200 pb-2">
-                <span className="text-base-content/70">Operating System</span>
-                <span className="font-medium">{serverInfo.os}</span>
-              </div>
-              <div className="flex justify-between border-b border-base-200 pb-2">
-                <span className="text-base-content/70">Kernel</span>
-                <span className="font-medium text-sm">
-                  {serverInfo.kernel}
-                </span>
-              </div>
-              <div className="flex justify-between border-b border-base-200 pb-2">
-                <span className="text-base-content/70">Uptime</span>
-                <span className="font-medium">{serverInfo.uptime}</span>
-              </div>
-              <div className="flex justify-between border-b border-base-200 pb-2">
-                <span className="text-base-content/70">CPU Cores</span>
-                <span className="font-medium">{serverInfo.cpu_count}</span>
-              </div>
-              <div className="flex justify-between border-b border-base-200 pb-2">
-                <span className="text-base-content/70">Total Memory</span>
-                <span className="font-medium">{serverInfo.memory_total}</span>
-              </div>
-            </div>
-          ) : (
-            <div className="flex flex-col items-center justify-center h-48 text-base-content/50">
-              <span className="loading loading-dots loading-md mb-2"></span>
-              <p>System information unavailable</p>
-            </div>
-          )}
-        </Card>
-      ) : (
-        <Card title="Server Info" icon={RefreshCw}>
-          <div className="text-center py-4 text-gray-500">
-            Loading server info...
-          </div>
-        </Card>
-      )}
-    </div>
+  return (
+    <Card
+      title="System Information"
+      icon={Monitor}
+      actions={
+        <Button
+          onClick={clearRamCache}
+          variant="ghost"
+          size="sm"
+          title="Clear RAM cache"
+        >
+          <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
+          Clear Cache
+        </Button>
+      }
+    >
+      <div>
+        <InfoRow label="Hostname" value={serverInfo.hostname} />
+        <InfoRow label="Operating System" value={serverInfo.os} />
+        <InfoRow label="Kernel" value={serverInfo.kernel} />
+        <InfoRow label="Uptime" value={serverInfo.uptime} />
+        <InfoRow label="CPU Cores" value={serverInfo.cpu_count} />
+        <InfoRow label="Total Memory" value={serverInfo.memory_total} />
+      </div>
+    </Card>
   );
 };
 

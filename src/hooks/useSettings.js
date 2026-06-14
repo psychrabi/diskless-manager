@@ -1,25 +1,18 @@
 import { getSettings, saveSettings } from "@/api/modules/system";
 import { configureService, restartService } from "@/api/modules/services";
-import { readConfig as readConfigApi } from "@/api/modules/config";
-import { getNetworkInterfaces, getInterfaceIp as getInterfaceIpApi, detectServerNetwork, applyNetworkSettings as applyNetworkSettingsApi } from "@/api/modules/network";
+import { getNetworkInterfaces, detectServerNetwork, applyNetworkSettings as applyNetworkSettingsApi } from "@/api/modules/network";
 import { updateAdminPassword } from "@/api/modules/auth";
-import { getLicenseInfo as getLicenseInfoApi, activateLicense as activateLicenseApi } from "@/api/modules/license";
+import { activateLicense as activateLicenseApi } from "@/api/modules/license";
 import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
-import { useCallback, useState } from "react";
+import { useCallback } from "react";
 
 export const useSettings = () => {
-  const [loading, setLoading] = useState(false);
   const { error, success } = useToastStore();
   const fetchConfig = useAppStore((state) => state.fetchConfig);
 
   const withLoading = useCallback(async (task) => {
-    setLoading(true);
-    try {
-      return await task();
-    } finally {
-      setLoading(false);
-    }
+    return await task();
   }, []);
 
   const updateSettingsSection = useCallback(
@@ -58,15 +51,6 @@ export const useSettings = () => {
       }),
     [error, fetchConfig, success, withLoading]
   );
-
-  const readConfig = useCallback(async () => {
-    try {
-      return await readConfigApi();
-    } catch (err) {
-      console.error("Failed to load config:", err);
-      return null;
-    }
-  }, []);
 
   const updateDhcp = useCallback(
     (config) =>
@@ -152,14 +136,6 @@ export const useSettings = () => {
     }
   }, [error]);
 
-  const getInterfaceIp = useCallback(async (iface) => {
-    try {
-      return await getInterfaceIpApi(iface);
-    } catch (err) {
-      console.error("Failed to fetch interface IP:", err);
-      return null;
-    }
-  }, []);
   const detectNetwork = useCallback(async () => {
     try {
       return await detectServerNetwork();
@@ -199,15 +175,6 @@ export const useSettings = () => {
     [error, success, withLoading]
   );
 
-  const getLicenseInfo = useCallback(async () => {
-    try {
-      return await getLicenseInfoApi();
-    } catch (err) {
-      error("License Info", err?.message || String(err));
-      return null;
-    }
-  }, [error]);
-
   const activateLicense = useCallback(
     (key) =>
       withLoading(async () => {
@@ -227,8 +194,6 @@ export const useSettings = () => {
   );
 
   return {
-    loading,
-    readConfig,
     updateDhcp,
     updateTftp,
     updateHttp,
@@ -236,11 +201,9 @@ export const useSettings = () => {
     updateSamba,
     updateServer,
     fetchInterfaces,
-    getInterfaceIp,
     detectNetwork,
     applyNetworkSettings,
     updatePassword,
-    getLicenseInfo,
     activateLicense,
   };
 };

@@ -96,11 +96,6 @@ const DiskTable = ({ datasets, onRefresh }) => {
           ))}
         </TableBody>
       </Table>
-      {datasets.length === 0 && (
-        <p className="text-center py-4 text-base-content/60">
-          No datasets available.
-        </p>
-      )}
       {isRenameModalOpen && selectedDisk && (
         <RenameDiskModal
           openRenameModal={isRenameModalOpen}

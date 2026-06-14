@@ -60,7 +60,7 @@ const ConfigForm = ({ schema, section, title, FormComponent }) => {
           className="mt-4"
           loading={isSubmitting}
         >
-          {isSubmitting ? "Saving..." : `Save ${sectionKey} Settings`}
+          {isSubmitting ? "Saving\u2026" : `Save ${sectionKey} Settings`}
         </Button>
       </form>
     </Card>

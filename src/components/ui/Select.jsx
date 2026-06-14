@@ -8,6 +8,8 @@ export const Select = ({
   className = "",
   required = false,
   disabled = false,
+  error,
+  helperText,
 }) => {
   const { onChange: regOnChange, ...regRest } = register || {};
 
@@ -22,12 +24,26 @@ export const Select = ({
           if (regOnChange) regOnChange(e);
           if (onChange) onChange(e);
         }}
-        className="select w-full"
+        className={`select w-full ${error ? "select-error" : ""}`}
         required={required}
         disabled={disabled}
+        aria-invalid={!!error}
+        aria-describedby={
+          error ? `${id}-error` : helperText ? `${id}-helper` : undefined
+        }
       >
         {children}
       </select>
+      {error && (
+        <span id={`${id}-error`} role="alert" className="form-error">
+          {error}
+        </span>
+      )}
+      {helperText && !error && (
+        <span id={`${id}-helper`} className="form-helper">
+          {helperText}
+        </span>
+      )}
     </fieldset>
   );
 };

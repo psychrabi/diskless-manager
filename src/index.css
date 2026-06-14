@@ -1,6 +1,28 @@
 @import "tailwindcss";
 @plugin "/node_modules/daisyui/index.js";
 
+@layer base {
+  html {
+    color-scheme: light;
+  }
+
+  html.dark {
+    color-scheme: dark;
+  }
+}
+
+/* Respect reduced motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 /* Professional Typography Scale */
 @layer utilities {
   .text-display-lg {
@@ -40,7 +62,7 @@
   .card-professional {
     @apply bg-base-100 border border-base-200/50 shadow-lg rounded-xl;
     backdrop-filter: blur(8px);
-    transition: all 0.2s ease-in-out;
+    transition: box-shadow 0.2s ease-in-out, border-color 0.2s ease-in-out;
   }
 
   .card-header-professional {
@@ -124,7 +146,7 @@
   }
 
   .table-professional th {
-    @apply text-lg font-semibold text-base-content/80 py-4;
+    @apply text-sm font-semibold text-base-content/80 py-4;
   }
 
   .table-professional td {

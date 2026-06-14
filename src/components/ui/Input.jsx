@@ -12,6 +12,8 @@ export const Input = ({
   helperText,
   size = "md",
   variant = "default",
+  autoComplete,
+  inputMode,
 }) => {
   const sizeClasses = {
     sm: "input-sm",
@@ -41,6 +43,8 @@ export const Input = ({
         title={title}
         required={required}
         disabled={disabled}
+        autoComplete={autoComplete}
+        inputMode={inputMode}
         aria-invalid={!!error}
         aria-describedby={
           error ? `${id}-error` : helperText ? `${id}-helper` : undefined

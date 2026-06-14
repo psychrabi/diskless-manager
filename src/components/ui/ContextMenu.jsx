@@ -30,17 +30,29 @@ const MenuItem = ({
       "hover:bg-error text-error hover:text-white transition-all group",
   };
 
+  const handleKeyDown = (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      onClick?.(e);
+    }
+  };
+
   return (
-    <li>
-      <a onClick={onClick} className={`${variants[variant]} ${className}`}>
+    <li role="none">
+      <button
+        type="button"
+        onClick={onClick}
+        onKeyDown={handleKeyDown}
+        className={`w-full text-left flex items-center gap-3 px-3 py-2 text-sm transition-all duration-200 ${variants[variant]} ${className}`}
+      >
         <Icon
-          className={`w-4 h-4 ${variant === "destructive"
+          className={`w-4 h-4 flex-shrink-0 ${variant === "destructive"
               ? "group-hover:scale-110 transition-transform"
               : ""
             }`}
         />
         <span>{label}</span>
-      </a>
+      </button>
     </li>
   );
 };
@@ -103,7 +115,7 @@ export const ContextMenu = ({
         </p>
       </div>
 
-      <ul className="menu w-full p-0">
+      <ul className="menu w-full p-0" role="menu">
         <SectionHeader label="Control" />
         {!isOnline && (
           <MenuItem

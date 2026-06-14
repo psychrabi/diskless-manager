@@ -20,12 +20,15 @@ const HTTPForm = ({ register, errors, config }) => {
           register={register("server_ip")}
           error={errors.server_ip?.message}
           placeholder="*"
+          autoComplete="off"
         />
         <Input
           label="Server Port"
           register={register("port")}
           error={errors.port?.message}
           placeholder="80"
+          autoComplete="off"
+          inputMode="numeric"
         />
       </div>
       <Input
@@ -34,6 +37,7 @@ const HTTPForm = ({ register, errors, config }) => {
         register={register("root_dir")}
         error={errors.root_dir?.message}
         placeholder="/srv/http"
+        autoComplete="off"
       />
     </div>
   );

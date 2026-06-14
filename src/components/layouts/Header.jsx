@@ -33,10 +33,10 @@ const Header = ({ onToggleSidebar }) => {
             </div>
             <div>
               <h1 className="text-heading-md font-bold text-base-content">
-                Diskless Boot Server
+                Diskless Manager
               </h1>
               <p className="text-body-sm text-base-content/60 hidden sm:block">
-                Administrator Dashboard
+                Boot Server Control Panel
               </p>
             </div>
           </div>

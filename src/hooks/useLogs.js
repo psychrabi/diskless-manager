@@ -4,18 +4,15 @@ import { useCallback, useState } from "react";
 
 export const useLogs = () => {
   const [logs, setLogs] = useState(null);
-  const [loading, setLoading] = useState(false);
   const { error } = useToastStore();
 
   const fetchLogs = useCallback(
     async (unit, lines = 50) => {
       if (!unit) return;
-      setLoading(true);
       try {
         console.log("Fetching logs for unit:", unit, "lines:", lines);
         const response = await getLogs(unit, lines);
         console.log("Logs response:", response);
-        // Extract the text from the response object
         const logText = response?.text || response || "";
         console.log("Extracted log text:", logText);
         setLogs(logText);
@@ -26,8 +23,6 @@ export const useLogs = () => {
             err?.message || String(err) || "Unknown error"
           }`
         );
-      } finally {
-        setLoading(false);
       }
     },
     [error]
@@ -35,7 +30,6 @@ export const useLogs = () => {
 
   return {
     logs,
-    loading,
     fetchLogs,
   };
 };

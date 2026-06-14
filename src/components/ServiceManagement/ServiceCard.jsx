@@ -13,7 +13,25 @@ import {
   StopCircle,
 } from "lucide-react";
 import { useState } from "react";
-import { Button, Card } from "@/components/ui";
+import { Button, Card, StatusBadge } from "@/components/ui";
+
+const serviceIcons = {
+  dhcp: Network,
+  tftp: FolderOpen,
+  iscsi: Save,
+  nfs: FolderOpenDot,
+  samba: Folder,
+  http: Globe,
+};
+
+const serviceDescriptions = {
+  dhcp: "Provides IP addresses and PXE boot parameters to network clients.",
+  tftp: "Serves boot files (bootloader, kernel, initrd) via TFTP protocol.",
+  iscsi: "iSCSI Target (LIO) — serves disk images as network block devices via LIO/ConfigFS.",
+  nfs: "Network File System server for sharing filesystems.",
+  samba: "Samba file server for Windows-compatible network file sharing.",
+  http: "Apache2 HTTP server for serving boot files and iPXE scripts.",
+};
 
 export default function ServiceCard({
   onViewConfig,
@@ -25,87 +43,41 @@ export default function ServiceCard({
   const { success, error: showError } = useToastStore();
   const [loadingAction, setLoadingAction] = useState(null);
 
-  function getServiceIcon(name) {
-    const icons = {
-      "dhcp": Network,
-      "tftp": FolderOpen,
-      "iscsi": Save,
-      "nfs": FolderOpenDot,
-      "samba": Folder,
-      "http": Globe,
-    };
-    return icons[name] || Settings;
-  }
-
-  function getServiceDescription(name) {
-    const descriptions = {
-      "dhcp":
-        "Provides IP addresses and PXE boot parameters to network clients.",
-      "tftp":
-        "Serves boot files (bootloader, kernel, initrd) via TFTP protocol.",
-      'iscsi':
-        "iSCSI Target (LIO) - serves disk images as network block devices via LIO/ConfigFS.",
-      "nfs":
-        "Network File System server for sharing filesystems.",
-      "samba": "Samba file server for Windows-compatible network file sharing.",
-      "http": "Apache2 HTTP server for serving boot files and iPXE scripts.",
-    };
-    return descriptions[name] || "System service";
-  }
-
   const handleAction = async (action, fn) => {
     setLoadingAction(action);
-    const labels = {
-      start: "started",
-      stop: "stopped",
-      restart: "restarted",
-    };
+    const labels = { start: "started", stop: "stopped", restart: "restarted" };
     try {
       await fn(service.name);
-      success(
-        `${service.display_name} ${labels[action] || action} successfully`
-      );
+      success(`${service.display_name} ${labels[action] || action} successfully`);
     } catch (e) {
-      showError(
-        `Failed to ${action} ${service.display_name}: ${e.message || e}`
-      );
+      showError(`Failed to ${action} ${service.display_name}: ${e.message || e}`);
     } finally {
       setLoadingAction(null);
     }
   };
 
+  const Icon = serviceIcons[service.name] || Settings;
+
   return (
-    <Card
-      icon={getServiceIcon(service.name)}
-      title={service.display_name}
-      subtitle={service.name}
-      key={service.name}
-      actions={
-        <div
-          className={`badge rounded-full hidden xl:block ${service.running ? "badge-success" : "badge-error"
-            } gap-2`}
-        >
-          {service.running ? "Running" : "Stopped"}
-        </div>
-      }
-    >
-      <p className="text-base-content/70 mb-4 min-h-[2.5rem]">
-        {getServiceDescription(service.name)}
+    <Card icon={Icon} title={service.display_name} subtitle={service.name}>
+      <p className="text-sm text-base-content/70 mb-4 leading-relaxed">
+        {serviceDescriptions[service.name] || "System service"}
       </p>
 
-      <div className="flex items-center justify-between text-sm text-base-content/50 mb-6 bg-base-200/30">
-        <span>
-          PID: <span className="font-mono">{service.pid ?? "—"}</span>
+      <div className="flex items-center justify-between px-3 py-2 bg-base-200/50 rounded-lg mb-4 text-sm">
+        <span className="text-base-content/50">
+          PID: <span className="font-mono text-base-content/70">{service.pid ?? "\u2014"}</span>
         </span>
-        <span
-          className={`badge rounded-full ${service.enabled ? "badge-success" : "badge-error"
-            } badge-sm`}
+        <StatusBadge
+          status={service.enabled ? "success" : "error"}
+          size="sm"
+          showIcon={false}
         >
           {service.enabled ? "Enabled at boot" : "Disabled at boot"}
-        </span>
+        </StatusBadge>
       </div>
 
-      <div className="card-actions">
+      <div className="flex gap-2">
         {service.running ? (
           <>
             <Button

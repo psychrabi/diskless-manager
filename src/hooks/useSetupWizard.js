@@ -17,7 +17,7 @@ import { useAppStore } from "@/store/useAppStore";
 import { listDisks, checkZfsPoolExists, createZfsPool } from "@/api/modules/disks";
 import { installService, configureSambaServer } from "@/api/modules/services";
 
-export const getInitialStep = ({
+const getInitialStep = ({
   privilegedAccessGranted,
   allServicesInstalled,
   poolExists,
@@ -345,16 +345,8 @@ export const useSetupWizard = () => {
     disks,
     poolExists,
     poolName,
-    bootScriptContent,
-    privilegedAccessGranted,
     dependencies,
     steps,
-    hasDhcp,
-    hasTftp,
-    hasHttp,
-    hasSamba,
-    hasBootScript,
-    allServicesInstalled,
     appConfig,
     checkAll,
     handleCreatePool,

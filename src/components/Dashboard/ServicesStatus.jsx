@@ -1,10 +1,18 @@
 import { Folder, FolderOpen, FolderOpenDot, Globe, Network, RefreshCw, Save, Settings } from "lucide-react";
-import React from "react";
 import { useShallow } from "zustand/shallow";
 import { useAppStore } from "../../store/useAppStore";
-import { Button, Card } from "@/components/ui";
+import { Button, Card, StatusBadge } from "@/components/ui";
 import { restartAllServices } from "@/api/modules/services";
 import { useConfirm } from "@/contexts/confirmDialog";
+
+const serviceIcons = {
+  dhcp: Network,
+  tftp: FolderOpen,
+  iscsi: Save,
+  nfs: FolderOpenDot,
+  samba: Folder,
+  http: Globe,
+};
 
 export default function ServicesStatus() {
   const confirm = useConfirm();
@@ -14,18 +22,6 @@ export default function ServicesStatus() {
       fetchServices: state.fetchServices,
     })),
   );
-
-  function getServiceIcon(name) {
-    const icons = {
-      "dhcp": Network,
-      "tftp": FolderOpen,
-      "iscsi": Save,
-      "nfs": FolderOpenDot,
-      "samba": Folder,
-      "http": Globe,
-    };
-    return icons[name] || Settings;
-  }
 
   async function restartService() {
     await confirm({
@@ -51,42 +47,42 @@ export default function ServicesStatus() {
         />
       }
     >
-      <div className="">
-        {services.length > 0 ? (
-          <ul className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {services.map((service) => (
-              <li
+      {services.length > 0 ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {services.map((service) => {
+            const Icon = serviceIcons[service.name] || Settings;
+            return (
+              <div
                 key={service.name}
-                className="flex items-center justify-between p-3 bg-base-200 rounded-lg hover:bg-base-200 transition-colors"
+                className="flex items-center justify-between p-3 bg-base-200/50 rounded-xl hover:bg-base-200 transition-colors"
               >
-                <div className="flex items-center gap-3">
-                  <span className="text-xl opacity-80">
-                    {React.createElement(getServiceIcon(service.name))}
-                  </span>
-                  <div>
-                    <p className="font-medium text-base-content">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-9 h-9 bg-base-300/50 rounded-lg flex items-center justify-center flex-shrink-0">
+                    <Icon className="w-4 h-4 text-base-content/70" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="font-medium text-sm text-base-content truncate">
                       {service.display_name}
                     </p>
-                    <p className="text-xs text-base-content/60">
+                    <p className="text-xs text-base-content/50 truncate">
                       {service.name}
                     </p>
                   </div>
                 </div>
-                <span
-                  className={`badge ${service.running ? "badge-success" : "badge-error"
-                    } badge-sm font-semibold`}
-                >
-                  {service.running ? "Running" : "Stopped"}
-                </span>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <div className="flex flex-col items-center justify-center h-48 text-base-content/50">
-            <p>No services found</p>
-          </div>
-        )}
-      </div>
+                <StatusBadge
+                  status={service.running ? "running" : "stopped"}
+                  size="sm"
+                  showIcon={false}
+                />
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="flex flex-col items-center justify-center h-48 text-base-content/50">
+          <p>No services found</p>
+        </div>
+      )}
     </Card>
   );
 }

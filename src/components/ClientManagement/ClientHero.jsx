@@ -1,6 +1,5 @@
 import { PlusCircle, Laptop } from "lucide-react";
-import { Card } from "../ui/Card";
-import { Button } from "../ui/Button";
+import { Button, Card } from "@/components/ui";
 
 function ClientHero({ handleClientFormModalOpen }) {
   return (

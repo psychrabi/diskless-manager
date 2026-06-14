@@ -23,7 +23,7 @@ const SnapshotItem = ({
         onClick={() => handleRollbackSnapshot(snap.name, masterName)}
         variant="info"
         size="icon"
-        className="h-7 w-7"
+        className="min-h-[36px] min-w-[36px]"
         title={`Rollback ${snap.name}`}
       >
         <RotateCcw className="h-4 w-4" />
@@ -32,7 +32,7 @@ const SnapshotItem = ({
         onClick={() => handleDeleteSnapshot(snap.name, masterName)}
         variant="destructive"
         size="icon"
-        className="h-7 w-7"
+        className="min-h-[36px] min-w-[36px]"
         title={`Delete ${snap.name}`}
       >
         <Trash2 className="h-4 w-4" />

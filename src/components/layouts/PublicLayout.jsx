@@ -66,7 +66,7 @@ const PublicLayout = () => {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-base-200 text-base-content p-4">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary/5 via-base-200 to-secondary/5 text-base-content p-4">
       <Outlet />
       <div className="fixed bottom-4 right-4 z-50 space-y-2">
         {toasts.map((toast) => (

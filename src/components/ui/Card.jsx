@@ -1,4 +1,4 @@
-import React from "react";
+import { createElement } from "react";
 
 export const Card = ({
   title,
@@ -35,7 +35,7 @@ export const Card = ({
               {icon && (
                 <div className="flex-shrink-0 mr-4">
                   <div className="p-2 w-12 h-12 bg-primary/10 rounded-lg flex items-center justify-center">
-                    {React.createElement(icon, {
+                    {createElement(icon, {
                       className: "h-10 w-10 text-primary",
                     })}
                   </div>

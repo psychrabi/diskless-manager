@@ -1,10 +1,10 @@
+import { memo } from "react";
 import { TableCell } from "@/components/ui";
 import { formatUptime } from "@/utils/formatUptime";
 import { Clock, Monitor, MoveDown, MoveUp } from "lucide-react";
-import React from "react";
 import ControlActionButtons from "./ControlActionButtons";
 
-const ClientStatusBadge = React.memo(({ status }) => {
+const ClientStatusBadge = memo(({ status }) => {
   const currentStatus = status || "Offline";
   const isOnline = currentStatus === "Online";
   const isLeased = currentStatus === "Leased";
@@ -17,7 +17,7 @@ const ClientStatusBadge = React.memo(({ status }) => {
   return <Monitor className={`inline mr-2 h-4 w-4 ${badgeClass}`} />;
 });
 
-const ClientModeBadge = React.memo(({ client }) => {
+const ClientModeBadge = memo(({ client }) => {
   const isUsingMasterDirectly = !client.snapshot;
 
   if (isUsingMasterDirectly) {
@@ -25,7 +25,7 @@ const ClientModeBadge = React.memo(({ client }) => {
       <span
         className="status status-warning status-lg"
         title={`Super Client : ${client.master}`}
-      ></span>
+      />
     );
   }
 
@@ -34,7 +34,7 @@ const ClientModeBadge = React.memo(({ client }) => {
       <span
         className="status status-secondary status-lg"
         title="Non-Persistent"
-      ></span>
+      />
     );
   }
 
@@ -42,20 +42,18 @@ const ClientModeBadge = React.memo(({ client }) => {
     <span
       className="status status-info status-lg"
       title={`Persistent: ${client.block_store}`}
-    ></span>
+    />
   );
 });
 
-const SpeedCell = ({ metricValue, icon, iconClassName }) => {
+const SpeedCell = ({ metricValue, icon: Icon, iconClassName }) => { // eslint-disable-line no-unused-vars
   if (metricValue == null) {
     return <span className="text-base-content/40">-</span>;
   }
 
   return (
     <span className="flex items-center justify-center gap-1">
-      {React.createElement(icon, {
-        className: `w-3 h-3 ${iconClassName}`,
-      })}
+      <Icon className={`w-3 h-3 ${iconClassName}`} />
       {metricValue.toFixed(2)}
     </span>
   );

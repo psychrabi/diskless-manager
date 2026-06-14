@@ -1,39 +1,31 @@
 import { useAppStore } from "@/store/useAppStore";
 import { Key } from "lucide-react";
-import { Card } from "@/components/ui";
+import { Card, StatusBadge } from "@/components/ui";
 
 export default function LicenseCard() {
   const license = useAppStore((state) => state.licenseInfo) || {};
-
-  // We assume license info is fetched by parent or layout if needed,
-  // but for Dashboard we might need to ensure it's fetched.
-  // However, AdminLayout calls fetchData which calls fetchServerInfo etc.
-  // Wait, fetchData does NOT call fetchLicenseInfo yet!
-
-  // I should update fetchData in useAppStore to include fetchLicenseInfo if I want it globally available on dashboard load.
-  // OR, I can fetch it here if missing.
-
-  // Let's just use the store data. If it's null, show "Loading..." or empty.
-
-  if (!license.license_status && !license.license_key) {
-    // Maybe it's not loaded yet.
-    // For now let's just show what we have.
-  }
+  const isActive = Boolean(license.license_status);
 
   return (
     <Card title="License Information" icon={Key}>
-      <ul className="space-y-2">
-        <li>
-          <strong>Status:</strong> {license.license_status || "not activated"}
-        </li>
-        <li>
-          <strong>Expires:</strong> {license.license_expires || "—"}
-        </li>
-        <li>
-          <strong>Key:</strong>{" "}
-          {license.license_key ? license.license_key : "—"}
-        </li>
-      </ul>
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <span className="font-semibold text-sm">Status:</span>
+          <StatusBadge status={isActive ? "success" : "error"} size="sm">
+            {isActive ? license.license_status : "Not activated"}
+          </StatusBadge>
+        </div>
+        <div className="flex justify-between text-sm">
+          <span className="font-semibold">Expires:</span>
+          <span className="text-base-content/70">{license.license_expires || "\u2014"}</span>
+        </div>
+        <div className="flex justify-between text-sm">
+          <span className="font-semibold">Key:</span>
+          <span className="font-mono text-xs text-base-content/70">
+            {license.license_key || "\u2014"}
+          </span>
+        </div>
+      </div>
     </Card>
   );
 }

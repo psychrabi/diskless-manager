@@ -31,24 +31,28 @@ const ClientOverviewCard = () => {
   return (
     <Card title="Client Overview" icon={Users}>
       {loading ? (
-        <div>Loading...</div>
+        <div className="space-y-3" aria-hidden="true">
+          <div className="h-5 bg-base-200 rounded animate-pulse w-2/3" />
+          <div className="h-5 bg-base-200 rounded animate-pulse w-1/2" />
+          <div className="h-5 bg-base-200 rounded animate-pulse w-3/5" />
+        </div>
       ) : overview ? (
-        <ul className="space-y-2 ">
-          <li className="flex justify-between">
+        <div className="space-y-2">
+          <div className="flex justify-between items-center">
             <span className="font-semibold">Total Clients:</span>
-            {overview.total}
-          </li>
-          <li className="flex justify-between">
+            <span className="badge badge-ghost rounded-full font-mono tabular-nums">{overview.total}</span>
+          </div>
+          <div className="flex justify-between items-center">
             <span className="font-semibold">Online Clients:</span>
-            {overview.online}
-          </li>
-          <li className="flex justify-between">
+            <span className="badge badge-success rounded-full font-mono tabular-nums">{overview.online}</span>
+          </div>
+          <div className="flex justify-between items-center">
             <span className="font-semibold">Offline Clients:</span>
-            {overview.offline}
-          </li>
-        </ul>
+            <span className="badge badge-error rounded-full font-mono tabular-nums">{overview.offline}</span>
+          </div>
+        </div>
       ) : (
-        <div className="text-red-500">Failed to load client overview.</div>
+        <div className="text-error text-center py-4">Failed to load client overview.</div>
       )}
     </Card>
   );

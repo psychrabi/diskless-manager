@@ -48,7 +48,7 @@ const AuditLogTable = ({
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <p className="text-sm text-base-content/70">
-          {loading ? "Loading..." : `${logs.length} log entries found`}
+          {loading ? "Loading\u2026" : `${logs.length} log entries found`}
         </p>
       </div>
 

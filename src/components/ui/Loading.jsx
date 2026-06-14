@@ -1,4 +1,4 @@
-export const Loading = ({ message = "Loading...", size = "md" }) => {
+export const Loading = ({ message = "Loading\u2026", size = "md" }) => {
   const sizeClasses = {
     sm: "h-8 w-8 border-2",
     md: "h-16 w-16 border-4",
@@ -6,12 +6,12 @@ export const Loading = ({ message = "Loading...", size = "md" }) => {
   };
 
   return (
-    <div className="min-h-screen min-w-screen bg-gray-100 dark:bg-gray-900 flex flex-col items-center justify-center">
+    <div className="min-h-screen min-w-screen bg-base-200 flex flex-col items-center justify-center">
       <div
-        className={`animate-spin rounded-full border-t-4 border-b-4 border-blue-500 ${sizeClasses[size]}`}
-      ></div>
+        className={`animate-spin rounded-full border-t-4 border-b-4 border-primary ${sizeClasses[size]}`}
+      />
       {message && (
-        <p className="mt-4 text-lg text-gray-700 dark:text-gray-300">
+        <p className="mt-4 text-lg text-base-content/70">
           {message}
         </p>
       )}

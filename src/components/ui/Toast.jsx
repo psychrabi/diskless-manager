@@ -36,12 +36,14 @@ export default function Toast({ toast }) {
         type="button"
         className="p-1 hover:bg-white/20 rounded transition-colors -mr-1"
         onClick={() => dismiss(toast.id)}
+        aria-label="Dismiss notification"
       >
         <svg
           className="w-4 h-4"
           fill="none"
           stroke="currentColor"
           viewBox="0 0 24 24"
+          aria-hidden="true"
         >
           <path
             strokeLinecap="round"

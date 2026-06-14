@@ -41,18 +41,21 @@ const SambaForm = ({ register, errors, config }) => {
         register={register("share_name")}
         error={errors.share_name?.message}
         placeholder="shared"
+        autoComplete="off"
       />
       <Input
         label="Share Path"
         register={register("share_path")}
         error={errors.share_path?.message}
         placeholder="/srv/shared"
+        autoComplete="off"
       />
       <Input
         label="Workgroup"
         register={register("workgroup")}
         error={errors.workgroup?.message}
         placeholder="WORKGROUP"
+        autoComplete="off"
       />
     </div>
   );

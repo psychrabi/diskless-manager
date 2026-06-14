@@ -38,13 +38,13 @@ export const LoadingSkeleton = ({
   `;
 
   if (count === 1) {
-    return <div className={skeletonClass} />;
+    return <div className={skeletonClass} aria-hidden="true" />;
   }
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3" aria-hidden="true">
       {Array.from({ length: count }, (_, i) => (
-        <div key={i} className={skeletonClass} />
+        <div key={i} className={skeletonClass} aria-hidden="true" />
       ))}
     </div>
   );

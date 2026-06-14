@@ -119,7 +119,7 @@ const ScheduledOperationsList = ({ isOpen, onClose }) => {
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <p className="text-sm text-base-content/70">
-              {loading ? "Loading..." : `${operations.length} scheduled operation${operations.length !== 1 ? "s" : ""}`}
+              {loading ? "Loading\u2026" : `${operations.length} scheduled operation${operations.length !== 1 ? "s" : ""}`}
             </p>
           </div>
 

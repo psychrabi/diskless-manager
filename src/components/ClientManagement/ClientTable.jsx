@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo } from "react";
+import { forwardRef, useEffect, useMemo } from "react";
 import { TableVirtuoso } from "react-virtuoso";
 import { useAppStore } from "../../store/useAppStore";
 import { useMetrics } from "@/contexts/useMetrics";
@@ -32,8 +32,8 @@ const VirtuosoTableComponents = {
       ref={ref}
     />
   ),
-  TableBody: React.forwardRef((props, ref) => <tbody {...props} ref={ref} />),
-  TableRow: React.forwardRef((props, ref) => {
+  TableBody: forwardRef((props, ref) => <tbody {...props} ref={ref} />),
+  TableRow: forwardRef((props, ref) => {
     // Destructure to avoid passing non-DOM props to tr, but capture item and context
 
     const { item, context, ...rest } = props;
