@@ -3,6 +3,7 @@
 //! This module contains all authentication-related types and structures.
 
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 /// User structure
 #[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
@@ -46,21 +47,8 @@ pub struct UserResponse {
 }
 
 /// Authentication error structure
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Error, Serialize, Deserialize)]
+#[error("{message}")]
 pub struct AuthError {
     pub message: String,
-}
-
-impl From<String> for AuthError {
-    fn from(s: String) -> Self {
-        AuthError { message: s }
-    }
-}
-
-impl From<&str> for AuthError {
-    fn from(s: &str) -> Self {
-        AuthError {
-            message: s.to_string(),
-        }
-    }
 }

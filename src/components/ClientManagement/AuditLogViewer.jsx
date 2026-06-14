@@ -1,4 +1,4 @@
-import { getAuditLogs } from "@/api/commands";
+import { getAuditLogs } from "@/api/modules/control";
 import { Modal } from "@/components/ui/Modal";
 import { useToastStore } from "@/store/useToastStore";
 import { useCallback, useEffect, useMemo, useState } from "react";

@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+#![expect(dead_code, reason = "Old Tauri commands replaced by Axum handlers in api/handlers/images.rs")]
 
 use crate::core::image::{CreateImageRequest, Image, ImageInfo, ImageManager, ImportImageRequest};
 use crate::state::AppState;

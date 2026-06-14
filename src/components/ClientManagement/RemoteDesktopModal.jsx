@@ -1,9 +1,9 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useToastStore } from "@/store/useToastStore";
-import * as api from "@/api/commands";
+import { remoteDesktopClient } from "@/api/modules/control";
 
 const remoteDesktopSchema = z.object({
   username: z.string().min(1, "Username is required"),
@@ -30,7 +30,7 @@ const RemoteDesktopModal = ({ client, isOpen, onClose, onSuccess }) => {
   const onSubmit = async (data) => {
     setIsLoading(true);
     try {
-      const response = await api.remoteDesktopClient(client.id, {
+      const response = await remoteDesktopClient(client.id, {
         username: data.username,
         password: data.password,
       });

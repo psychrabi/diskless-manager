@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { checkAdminExists } from "@/api/commands";
+import { checkAdminExists } from "@/api/modules/auth";
 import { useAuth } from "@/contexts/auth";
 
 const StartupCheck = () => {

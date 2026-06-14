@@ -5,7 +5,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { useNavigate } from "react-router-dom";
 import { z } from "zod";
-import * as api from "@/api/commands";
+import { login } from "@/api/modules/auth";
 
 // Define validation schema
 const loginSchema = z.object({
@@ -33,7 +33,7 @@ const Login = () => {
 
   const onSubmit = async (data) => {
     try {
-      const response = await api.login(data.username, data.password);
+      const response = await login(data.username, data.password);
 
       // Set auth context immediately so ProtectedRoute sees it
       setAuth(response.user, response.token);

@@ -17,9 +17,8 @@ lazy_static::lazy_static! {
     static ref SECRET_KEY: Vec<u8> = {
         env::var("JWT_SECRET")
             .unwrap_or_else(|_| {
-                eprintln!("WARNING: JWT_SECRET environment variable not set!");
-                eprintln!("Generating an ephemeral secret for this process.");
-                eprintln!("For production, set JWT_SECRET environment variable with a secure random string.");
+                warn!("JWT_SECRET environment variable not set! Generating an ephemeral secret for this process.");
+                warn!("For production, set JWT_SECRET environment variable with a secure random string.");
                 Uuid::new_v4().to_string()
             })
             .into_bytes()
@@ -142,7 +141,7 @@ pub fn validate_token(token: &str) -> Result<Claims, AuthError> {
 
 // Tauri command for login
 
-#[allow(dead_code)]
+#[expect(dead_code, reason = "Old Tauri command - login handled by Axum")]
 pub async fn login(
     state: tauri::State<'_, crate::state::AppState>,
     request: LoginRequest,
@@ -173,14 +172,14 @@ pub async fn login(
 
 // Tauri command for token validation
 
-#[allow(dead_code)]
+#[expect(dead_code, reason = "Old Tauri command - validation handled by Axum")]
 pub fn validate_auth_token(token: &str) -> Result<Claims, AuthError> {
     validate_token(token)
 }
 
 // Tauri command for updating admin password
 
-#[allow(dead_code)]
+#[expect(dead_code, reason = "Old Tauri command - update handled by Axum")]
 pub async fn update_admin_password(
     state: tauri::State<'_, crate::state::AppState>,
     token: &str,

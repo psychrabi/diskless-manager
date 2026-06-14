@@ -2,7 +2,7 @@ import { Button, Card, Input } from "@/components/ui";
 import { useAuth } from "@/contexts/auth";
 import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { updateAdminPassword, login } from "@/api/commands";
+import { updateAdminPassword, login } from "@/api/modules/auth";
 import { useForm } from "react-hook-form";
 import { useNavigate } from "react-router-dom";
 import { z } from "zod";

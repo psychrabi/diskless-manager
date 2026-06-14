@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::core::config::Settings;
 use crate::services::{
     get_service_pid, is_systemd_service_running, run_sudo_command, write_with_sudo_tee,
@@ -8,12 +10,13 @@ use log::info;
 use std::path::PathBuf;
 
 pub struct NfsService {
-    settings: Settings,
+    pub(crate) settings: Arc<Settings>,
 }
 
 impl NfsService {
+    #[expect(dead_code, reason = "Constructed directly by ServiceManager::new, not by external callers")]
     pub fn new(settings: Settings) -> Self {
-        Self { settings }
+        Self { settings: Arc::new(settings) }
     }
 
     pub async fn generate_config(&self) -> anyhow::Result<()> {
@@ -29,7 +32,7 @@ impl NfsService {
         Ok(())
     }
 
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "Method kept for future NFS export management")]
     pub async fn add_export(&self, path: &str, options: &str) -> anyhow::Result<()> {
         // Read the existing exports file
         let content = std::fs::read_to_string("/etc/exports").unwrap_or_default();

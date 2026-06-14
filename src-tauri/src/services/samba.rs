@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::core::config::Settings;
 use crate::services::{
     get_service_pid, is_systemd_service_running, run_sudo_command, write_with_sudo_tee,
@@ -7,12 +9,13 @@ use log::info;
 use std::path::PathBuf;
 
 pub struct SambaService {
-    settings: Settings,
+    pub(crate) settings: Arc<Settings>,
 }
 
 impl SambaService {
+    #[expect(dead_code, reason = "Constructed directly by ServiceManager::new, not by external callers")]
     pub fn new(settings: Settings) -> Self {
-        Self { settings }
+        Self { settings: Arc::new(settings) }
     }
 
     pub async fn start(&self) -> anyhow::Result<()> {

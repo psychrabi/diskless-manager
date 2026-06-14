@@ -17,18 +17,19 @@ use crate::core::config::Settings;
 use crate::error::AppError;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::process::Command;
 
 #[derive(Debug, Clone)]
 pub struct ServiceStatus {
     pub running: bool,
     pub pid: Option<u32>,
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "Part of ServiceStatus struct, used for debug display")]
     pub message: String,
 }
 
 pub struct ServiceManager {
-    pub settings: Settings,
+    pub settings: Arc<Settings>,
     pub dhcp: DhcpService,
     pub tftp: TftpService,
     pub iscsi: IscsiService,
@@ -39,14 +40,15 @@ pub struct ServiceManager {
 
 impl ServiceManager {
     pub fn new(settings: Settings, db_pool: SqlitePool) -> Self {
+        let shared = Arc::new(settings);
         Self {
-            dhcp: DhcpService::new(settings.clone(), db_pool),
-            tftp: TftpService::new(settings.clone()),
-            iscsi: IscsiService::new(settings.clone()),
-            nfs: NfsService::new(settings.clone()),
-            http: HttpService::new(settings.clone()),
-            samba: SambaService::new(settings.clone()),
-            settings,
+            dhcp: DhcpService { settings: Arc::clone(&shared), db_pool },
+            tftp: TftpService { settings: Arc::clone(&shared) },
+            iscsi: IscsiService { settings: Arc::clone(&shared) },
+            nfs: NfsService { settings: Arc::clone(&shared) },
+            http: HttpService { settings: Arc::clone(&shared) },
+            samba: SambaService { settings: Arc::clone(&shared) },
+            settings: shared,
         }
     }
 
@@ -121,7 +123,7 @@ impl ServiceManager {
         Ok(())
     }
 
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "Used for debugging - can be exposed via API later")]
     pub async fn status_all(&self) -> anyhow::Result<HashMap<String, ServiceStatus>> {
         let mut statuses = HashMap::new();
         statuses.insert("dhcp".to_string(), self.dhcp.status().await?);
@@ -181,7 +183,7 @@ impl ServiceManager {
         }
     }
 
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "Utility function for DHCP-only regeneration")]
     pub async fn regenerate_dhcp_config(&self) -> anyhow::Result<()> {
         self.dhcp.generate_config().await?;
         self.dhcp.reload().await

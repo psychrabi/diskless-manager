@@ -1,7 +1,8 @@
 import { useConfirm } from "@/contexts/confirmDialog";
 import { useToastStore } from "@/store/useToastStore";
 import { useCallback } from "react";
-import * as api from "../api/commands";
+import { updateClient, deleteClient } from "../api/modules/clients";
+import { createSnapshot } from "../api/modules/images";
 
 export const useClientActions = (
   fetchData,
@@ -97,74 +98,87 @@ export const useClientActions = (
     [confirm, showError, closeContextMenu, fetchData, setClient, setIsModalOpen, success, info]
   );
 
-  // Wrapper functions to match original interface
-  return {
-    edit: (client) => handleAction(client, "edit"),
+  const handleEdit = useCallback((client) => handleAction(client, "edit"), [handleAction]);
 
-    reboot: (client) =>
+  const handleReboot = useCallback(
+    (client) =>
       handleAction(
         client,
         "reboot",
         "Reboot Client",
         `Are you sure you want to reboot client "${client.name}" ? `,
         "Reboot Client",
-        () => api.updateClient(client.id, { action: "reboot" }),
+        () => updateClient(client.id, { action: "reboot" }),
         "Client Rebooted",
         "Client reboot cancelled."
       ),
+    [handleAction]
+  );
 
-    shutdown: (client) =>
+  const handleShutdown = useCallback(
+    (client) =>
       handleAction(
         client,
         "shutdown",
         "Shutdown Client",
         `Are you sure you want to shutdown client "${client.name}" ? `,
         "Shutdown Client",
-        () => api.updateClient(client.id, { action: "shutdown" }),
+        () => updateClient(client.id, { action: "shutdown" }),
         "Client Shutdown",
         "Client shutdown cancelled."
       ),
+    [handleAction]
+  );
 
-    wake: (client) =>
+  const handleWake = useCallback(
+    (client) =>
       handleAction(
         client,
         "wake",
         "Wake Client",
         `Are you sure you want to wake client "${client.name}" ? `,
         "Wake Client",
-        () => api.updateClient(client.id, { action: "wake" }),
+        () => updateClient(client.id, { action: "wake" }),
         "Client Woken",
         "Client wake up cancelled."
       ),
+    [handleAction]
+  );
 
-    remote: (client) =>
+  const handleRemote = useCallback(
+    (client) =>
       handleAction(
         client,
         "remote",
         "Remote Client",
         `Are you sure you want to remote client "${client.name}" ? `,
         "Remote Client",
-        () => api.updateClient(client.id, { action: "remote" }),
+        () => updateClient(client.id, { action: "remote" }),
         "Client Remotely Connected",
         "Client remote connection cancelled."
       ),
+    [handleAction]
+  );
 
-    reset: (client) =>
+  const handleReset = useCallback(
+    (client) =>
       handleAction(
         client,
         "reset",
         "Reset client writeback",
         `Are you sure you want to reset client "${client.name}" ? This will destroy their ZFS clone and remove configurations.`,
         "Reset Client",
-        () => api.updateClient(client.id, { action: "reset" }),
+        () => updateClient(client.id, { action: "reset" }),
         `Successfully reset writeback for client '${client.name}'`,
         "Client reset cancelled."
       ),
+    [handleAction]
+  );
 
-    resetToClean: async (client) => {
+  const handleResetToClean = useCallback(
+    async (client) => {
       if (!client) return;
 
-      // Check if client is in non-persistent mode
       if (client.keep_writeback !== false) {
         showError(
           "Client Management",
@@ -177,15 +191,18 @@ export const useClientActions = (
         client,
         "resetToClean",
         "Reset to Clean State",
-        `This will delete the writeback for "${client.name}" and recreate it from the snapshot.All changes will be lost.Continue ? `,
+        `This will delete the writeback for "${client.name}" and recreate it from the snapshot. All changes will be lost. Continue?`,
         "Reset to Clean",
-        () => api.updateClient(client.id, { action: "reset_clean" }),
+        () => updateClient(client.id, { action: "reset_clean" }),
         `Successfully reset client '${client.name}' to clean state`,
         "Reset to clean cancelled."
       );
     },
+    [handleAction, showError]
+  );
 
-    delete: async (client) => {
+  const handleDelete = useCallback(
+    async (client) => {
       if (!client) return;
 
       const ok = await confirm({
@@ -204,7 +221,7 @@ export const useClientActions = (
       }
 
       try {
-        await api.deleteClient(client.id);
+        await deleteClient(client.id);
         success("Client Management", "Client Deleted successfully");
         if (fetchData) fetchData();
         if (closeContextMenu) closeContextMenu();
@@ -215,20 +232,26 @@ export const useClientActions = (
         );
       }
     },
+    [confirm, showError, closeContextMenu, fetchData, success, info]
+  );
 
-    enableSuper: (client) =>
+  const handleEnableSuper = useCallback(
+    (client) =>
       handleAction(
         client,
         "enableSuper",
         "Enable Super Client",
-        `Client "${client.name}" will boot directly from master image.This skips clone / writeback.Continue ? `,
+        `Client "${client.name}" will boot directly from master image. This skips clone / writeback. Continue?`,
         "Enable Super",
-        () => api.updateClient(client.id, { action: "super", make_super: true }),
+        () => updateClient(client.id, { action: "super", make_super: true }),
         "Client Enabled Super successfully",
         "Enable Super cancelled."
       ),
+    [handleAction]
+  );
 
-    disableSuper: (client) => {
+  const handleDisableSuper = useCallback(
+    (client) => {
       if (client.mode !== "super") {
         showError("Client Management", "Client is not in Super mode.");
         return;
@@ -237,15 +260,18 @@ export const useClientActions = (
         client,
         "disableSuper",
         "Disable Super Client",
-        `This will point ${client.name} back to its writeback clone.Continue ? `,
+        `This will point ${client.name} back to its writeback clone. Continue?`,
         "Disable Super",
-        () => api.updateClient(client.id, { action: "super", make_super: false }),
+        () => updateClient(client.id, { action: "super", make_super: false }),
         "Client Disabled Super successfully",
         "Disable Super cancelled."
       );
     },
+    [handleAction, showError]
+  );
 
-    saveSuper: async (client) => {
+  const handleSaveSuper = useCallback(
+    async (client) => {
       if (!client) return;
       if (client.mode !== "super") {
         showError("Client Management", "Client is not in Super mode.");
@@ -287,7 +313,7 @@ export const useClientActions = (
         .replace(/\s+/g, "-")}`;
 
       try {
-        const response = await api.createSnapshot(client.master, snapshotName);
+        const response = await createSnapshot(client.master, snapshotName);
         if (response.message) success("Client Management", response.message);
         fetchData();
         closeContextMenu();
@@ -298,5 +324,20 @@ export const useClientActions = (
         );
       }
     },
+    [confirm, showError, info, success, fetchData, closeContextMenu]
+  );
+
+  return {
+    edit: handleEdit,
+    reboot: handleReboot,
+    shutdown: handleShutdown,
+    wake: handleWake,
+    remote: handleRemote,
+    reset: handleReset,
+    resetToClean: handleResetToClean,
+    delete: handleDelete,
+    enableSuper: handleEnableSuper,
+    disableSuper: handleDisableSuper,
+    saveSuper: handleSaveSuper,
   };
 };

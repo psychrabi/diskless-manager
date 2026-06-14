@@ -1,4 +1,4 @@
-import * as api from "@/api/commands";
+import { createSnapshot, deleteSnapshot, rollbackImageSnapshot, setDefaultImage, deleteImage } from "@/api/modules/images";
 import { useConfirm } from "@/contexts/confirmDialog";
 import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
@@ -22,14 +22,14 @@ export const useMasterManager = () => {
   const fetchMasters = useAppStore((state) => state.fetchMasters);
 
   // --- Master/Snapshot Actions ---
-  const handleOpenCreateMasterModal = () => {
+  const handleOpenCreateMasterModal = useCallback(() => {
     setNewMasterName("");
     setNewMasterSize("50G"); // Reset to default
     setIsCreateMasterModalOpen(true);
-  };
+  }, []);
 
-  const handleCreateSnapshot = async (snapshotName) => {
-    await api.createSnapshot(selectedMaster, snapshotName)
+  const handleCreateSnapshot = useCallback(async (snapshotName) => {
+    await createSnapshot(selectedMaster, snapshotName)
       .then(async (response) => {
         await fetchMasters();
         if (response.message) success(response.message);
@@ -38,9 +38,9 @@ export const useMasterManager = () => {
         error(err?.message || String(err));
       });
     setIsCreateSnapshotModalOpen(false);
-  };
+  }, [selectedMaster, fetchMasters, success, error]);
 
-  const handleDeleteSnapshot = async (snapshot, image) => {
+  const handleDeleteSnapshot = useCallback(async (snapshot, image) => {
     if (!snapshot || !image) return;
     confirm({
       title: "Delete Snapshot",
@@ -52,7 +52,7 @@ export const useMasterManager = () => {
     })
       .then((ok) => {
         if (!ok) return;
-        api.deleteSnapshot(image, snapshot)
+        deleteSnapshot(image, snapshot)
           .then(async (response) => {
             await fetchMasters();
             if (response.message) success(response.message);
@@ -64,9 +64,9 @@ export const useMasterManager = () => {
       .catch((err) => {
         console.error("Confirmation dialog error:", err);
       });
-  };
+  }, [confirm, fetchMasters, success, error]);
 
-  const handleRollbackSnapshot = async (snapshot, image) => {
+  const handleRollbackSnapshot = useCallback(async (snapshot, image) => {
     if (!snapshot || !image) return;
     confirm({
       title: "Rollback Snapshot",
@@ -78,7 +78,7 @@ export const useMasterManager = () => {
     })
       .then((ok) => {
         if (!ok) return;
-        api.rollbackImageSnapshot(image, snapshot)
+        rollbackImageSnapshot(image, snapshot)
           .then(async (response) => {
             await fetchMasters();
             if (response.message) success(response.message);
@@ -90,10 +90,10 @@ export const useMasterManager = () => {
       .catch((err) => {
         console.error("Confirmation dialog error:", err);
       });
-  };
+  }, [confirm, fetchMasters, success, error]);
 
-  const setDefaultMaster = async (masterName) => {
-    api.setDefaultImage(masterName)
+  const setDefaultMaster = useCallback(async (masterName) => {
+    setDefaultImage(masterName)
       .then(async (response) => {
         await fetchMasters();
         if (response.message) success(response.message);
@@ -101,9 +101,9 @@ export const useMasterManager = () => {
       .catch((err) => {
         error(err?.error || String(err));
       });
-  };
+  }, [fetchMasters, success, error]);
 
-  const handleDeleteImage = async (image) => {
+  const handleDeleteImage = useCallback(async (image) => {
     if (!image) return;
     confirm({
       title: "Delete Image",
@@ -118,7 +118,7 @@ export const useMasterManager = () => {
         if (!ok) return;
 
         try {
-          await api.deleteImage(image.id);
+          await deleteImage(image.id);
           success("Image Management", "Image deleted successfully");
           await fetchMasters();
         } catch (err) {
@@ -128,22 +128,22 @@ export const useMasterManager = () => {
       .catch((err) => {
         console.error("Confirmation dialog error:", err);
       });
-  };
+  }, [confirm, fetchMasters, success, error]);
 
   const handleOpenDeleteMasterModal = useCallback((master) => {
     setSelectedMaster(master);
     setIsDeleteMasterModalOpen(true);
   }, []);
 
-  const cancelDeleteMaster = () => {
+  const cancelDeleteMaster = useCallback(() => {
     setIsDeleteMasterModalOpen(false);
     setSelectedMaster(null);
-  };
+  }, []);
 
-  const cancelDeleteSnapshot = () => {
+  const cancelDeleteSnapshot = useCallback(() => {
     setIsDeleteSnapshotModalOpen(false);
     setSnapshotToDelete(null);
-  };
+  }, []);
 
   const handleOpenCreateSnapshotModal = useCallback((master) => {
     setSelectedMaster(master);

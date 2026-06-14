@@ -297,7 +297,6 @@ proptest! {
             duration_ms,
         };
 
-        assert!(result.duration_ms >= 0, "Duration should be non-negative");
     }
 }
 

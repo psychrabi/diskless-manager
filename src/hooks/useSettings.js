@@ -1,4 +1,9 @@
-import * as api from "@/api/commands";
+import { getSettings, saveSettings } from "@/api/modules/system";
+import { configureService, restartService } from "@/api/modules/services";
+import { readConfig as readConfigApi } from "@/api/modules/config";
+import { getNetworkInterfaces, getInterfaceIp as getInterfaceIpApi, detectServerNetwork, applyNetworkSettings as applyNetworkSettingsApi } from "@/api/modules/network";
+import { updateAdminPassword } from "@/api/modules/auth";
+import { getLicenseInfo as getLicenseInfoApi, activateLicense as activateLicenseApi } from "@/api/modules/license";
 import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
 import { useCallback, useState } from "react";
@@ -28,7 +33,7 @@ export const useSettings = () => {
     }) =>
       withLoading(async () => {
         try {
-          const currentSettings = await api.getSettings();
+          const currentSettings = await getSettings();
           const updatedSettings = {
             ...currentSettings,
             [section]: {
@@ -36,11 +41,11 @@ export const useSettings = () => {
             },
           };
 
-          await api.saveSettings(updatedSettings);
+          await saveSettings(updatedSettings);
 
           if (serviceName) {
-            await api.configureService(serviceName);
-            await api.restartService(serviceName);
+            await configureService(serviceName);
+            await restartService(serviceName);
           }
 
           await fetchConfig();
@@ -56,7 +61,7 @@ export const useSettings = () => {
 
   const readConfig = useCallback(async () => {
     try {
-      return await api.readConfig();
+      return await readConfigApi();
     } catch (err) {
       console.error("Failed to load config:", err);
       return null;
@@ -140,7 +145,7 @@ export const useSettings = () => {
 
   const fetchInterfaces = useCallback(async () => {
     try {
-      return await api.getNetworkInterfaces();
+      return await getNetworkInterfaces();
     } catch {
       error("Network Interfaces", "Failed to fetch network interfaces");
       return [];
@@ -149,7 +154,7 @@ export const useSettings = () => {
 
   const getInterfaceIp = useCallback(async (iface) => {
     try {
-      return await api.getInterfaceIp(iface);
+      return await getInterfaceIpApi(iface);
     } catch (err) {
       console.error("Failed to fetch interface IP:", err);
       return null;
@@ -157,7 +162,7 @@ export const useSettings = () => {
   }, []);
   const detectNetwork = useCallback(async () => {
     try {
-      return await api.detectServerNetwork();
+      return await detectServerNetwork();
     } catch {
       error("Network Detection", "Failed to auto-detect network settings");
       return null;
@@ -166,7 +171,7 @@ export const useSettings = () => {
   const applyNetworkSettings = useCallback(async () => {
     return withLoading(async () => {
       try {
-        const response = await api.applyNetworkSettings({});
+        const response = await applyNetworkSettingsApi({});
         success("Network Applied", response);
         return true;
       } catch (err) {
@@ -180,7 +185,7 @@ export const useSettings = () => {
     (oldPassword, newPassword) =>
       withLoading(async () => {
         try {
-          const response = await api.updateAdminPassword({
+          const response = await updateAdminPassword({
             old_password: oldPassword,
             new_password: newPassword,
           });
@@ -196,7 +201,7 @@ export const useSettings = () => {
 
   const getLicenseInfo = useCallback(async () => {
     try {
-      return await api.getLicenseInfo();
+      return await getLicenseInfoApi();
     } catch (err) {
       error("License Info", err?.message || String(err));
       return null;
@@ -207,7 +212,7 @@ export const useSettings = () => {
     (key) =>
       withLoading(async () => {
         try {
-          const resp = await api.activateLicense(key);
+          const resp = await activateLicenseApi(key);
           success(
             "License Activated",
             resp?.message || "License activated successfully"

@@ -1,7 +1,6 @@
 use once_cell::sync::OnceCell;
 use std::sync::RwLock;
 
-extern crate dirs;
 use crate::state::AppState;
 use crate::types::AppConfig;
 use log::info;
@@ -18,7 +17,7 @@ pub fn get_config() -> AppConfig {
     });
     cache
         .read()
-        .expect("Failed to acquire read lock on config cache")
+        .unwrap_or_else(|e| e.into_inner())
         .clone()
 }
 
@@ -26,7 +25,7 @@ pub fn set_config(config: &AppConfig) {
     let cache = CONFIG_CACHE.get_or_init(|| RwLock::new(config.clone()));
     let mut w = cache
         .write()
-        .expect("Failed to acquire write lock on config cache");
+        .unwrap_or_else(|e| e.into_inner());
     *w = config.clone();
 }
 
@@ -201,7 +200,7 @@ pub async fn read_config_db(pool: &sqlx::SqlitePool) -> Result<AppConfig, String
     Ok(config)
 }
 
-#[allow(dead_code)]
+#[expect(dead_code, reason = "Old Tauri command - config saving handled by Axum")]
 pub async fn save_config(state: State<'_, AppState>, pool_name: String) -> Result<(), String> {
     let mut cfg = get_config();
     // Ensure settings is an object

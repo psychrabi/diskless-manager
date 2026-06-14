@@ -1,4 +1,4 @@
-import * as api from "@/api/commands";
+import { renameImage } from "@/api/modules/images";
 import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -43,7 +43,7 @@ const RenameImageModal = ({
     console.log(data)
     // Extract the base name from the full ZFS path (e.g., "diskless/win11-master" -> "win11")
     try {
-      await api.renameImage(selectedImage.id, data.newName)
+      await renameImage(selectedImage.id, data.newName)
       success("Image Management", `Image renamed to ${data.newName}`);
       await fetchMasters();
       reset();

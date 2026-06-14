@@ -37,16 +37,16 @@ use tauri::Manager;
 use state::AppState;
 
 // Legacy constants for backward compatibility - prefer using AppConfig
-#[allow(dead_code)]
 const DHCP_CONFIG_PATH: &str = "/etc/dhcp/dhcpd.conf";
 const DHCP_CLIENTS_PATH: &str = "/etc/dhcp/clients.conf";
 pub const TFTP_AUTOEXEC_PATH: &str = "/srv/tftp/autoexec.ipxe";
 
-#[allow(dead_code)]
+#[expect(dead_code, reason = "Reserved for future init use - currently unused")]
 fn setup_logging() -> Result<(), Box<dyn std::error::Error>> {
     // Get the log file path
     let mut log_dir = dirs::config_dir()
-        .unwrap_or_else(|| dirs::home_dir().expect("No home dir or config dir available"));
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
     log_dir.push("com.diskless.local");
     let _ = std::fs::create_dir_all(&log_dir);
 

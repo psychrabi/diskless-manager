@@ -1,6 +1,6 @@
 import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { renameDisk } from "@/api/commands";
+import { renameDisk } from "@/api/modules/disks";
 import { Save } from "lucide-react";
 import { useForm } from "react-hook-form";
 import z from "zod";

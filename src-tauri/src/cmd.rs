@@ -8,8 +8,12 @@ use std::process::{Command, Output, Stdio};
 pub enum CommandError {
     #[error("Failed to execute command {cmd}: {source}")]
     Execution { cmd: String, source: std::io::Error },
-    #[error("Command {cmd} failed with status {status}")]
-    Failure { cmd: String, status: i32 },
+    #[error("Command {cmd} failed with status {status}: {stderr}")]
+    Failure {
+        cmd: String,
+        status: i32,
+        stderr: String,
+    },
 }
 
 // Macro for timing function execution
@@ -46,11 +50,13 @@ where
             cmd: cmd_str.clone(),
             source: e,
         })?;
-    let status = output.status.code().unwrap_or(-1);
     if !output.status.success() {
+        let status = output.status.code().unwrap_or(-1);
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
         return Err(CommandError::Failure {
             cmd: cmd_str,
             status,
+            stderr,
         });
     }
     Ok(output)
@@ -115,24 +121,19 @@ where
     match exec_sudo_cmd(args_vec.iter()) {
         Ok(_) => Ok(()),
         Err(e) => {
-            // Try to get stderr output for better error messages
-            let stderr_output = Command::new("sudo")
-                .arg("-n")
-                .args(args_vec.iter())
-                .output()
-                .ok()
-                .and_then(|o| String::from_utf8(o.stderr).ok())
-                .unwrap_or_default();
-
+            let stderr = match &e {
+                CommandError::Failure { stderr, .. } => stderr.clone(),
+                _ => String::new(),
+            };
             eprintln!("Command failed: sudo {}", cmd_str);
             eprintln!("Error: {}", e);
-            if !stderr_output.is_empty() {
-                eprintln!("Stderr: {}", stderr_output);
+            if !stderr.is_empty() {
+                eprintln!("Stderr: {}", stderr);
             }
 
             Err(AppError::Command(format!(
                 "{} (stderr: {})",
-                e, stderr_output
+                e, stderr
             )))
         }
     }
@@ -149,7 +150,8 @@ where
         .map(|a| a.as_ref().to_string_lossy().into_owned())
         .collect::<Vec<_>>()
         .join(" ");
-    println!("Executing command: sudo {}", cmd_str);
+    #[cfg(debug_assertions)]
+    log::info!("Executing command: sudo {}", cmd_str);
     match exec_sudo_cmd(args_vec.iter()) {
         Ok(o) => o.status.code().unwrap_or(-1),
         Err(_) => -1,
@@ -167,7 +169,8 @@ where
         .map(|a| a.as_ref().to_string_lossy().into_owned())
         .collect::<Vec<_>>()
         .join(" ");
-    println!("Executing command: sudo {}", cmd_str);
+    #[cfg(debug_assertions)]
+    log::info!("Executing command: sudo {}", cmd_str);
     let output = exec_sudo_cmd(args_vec.iter()).map_err(|e| AppError::Command(e.to_string()))?;
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
@@ -183,7 +186,8 @@ where
         .map(|a| a.as_ref().to_string_lossy().into_owned())
         .collect::<Vec<_>>()
         .join(" ");
-    println!("Executing command: {}", cmd_str);
+    #[cfg(debug_assertions)]
+    log::info!("Executing command: {}", cmd_str);
 
     let mut cmd_iter = args_vec.iter();
     let program = cmd_iter
@@ -223,8 +227,10 @@ pub fn get_server_ip() -> String {
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let re = regex::Regex::new(r"src\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})")
-        .expect("Failed to compile IP regex");
+    let Ok(re) = regex::Regex::new(r"src\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})") else {
+        eprintln!("Warning: Failed to compile IP regex");
+        return "192.168.1.200".to_string();
+    };
     if let Some(caps) = re.captures(&stdout) {
         let ip = &caps[1];
         if ip.starts_with("192.168.")
@@ -254,7 +260,7 @@ pub fn get_server_ip() -> String {
     "192.168.1.200".to_string()
 }
 
-#[allow(dead_code)]
+#[expect(dead_code, reason = "May be used for disk selection in setup wizard")]
 pub fn list_disks() -> Result<Vec<Disk>, AppError> {
     let output = Command::new("lsblk")
         .args(["-dn", "-o", "NAME,SIZE,TYPE"])
@@ -280,8 +286,7 @@ pub fn list_disks() -> Result<Vec<Disk>, AppError> {
 }
 
 /// Get current RAM usage statistics
-
-#[allow(dead_code)]
+#[expect(dead_code, reason = "Dashboard telemetry - unused while dashboard not integrated")]
 pub fn get_ram_usage() -> Result<RamUsage, AppError> {
     let output = Command::new("free")
         .arg("-h")
@@ -319,8 +324,7 @@ pub fn get_ram_usage() -> Result<RamUsage, AppError> {
 }
 
 /// Clear RAM cache (sync and drop caches)
-
-#[allow(dead_code)]
+#[expect(dead_code, reason = "System maintenance - unused while UI not integrated")]
 pub async fn clear_ram_cache() -> Result<serde_json::Value, AppError> {
     // Run sync using sudo -n
     run_command_async(["sync"]).await?;
@@ -354,7 +358,7 @@ pub async fn clear_ram_cache() -> Result<serde_json::Value, AppError> {
     Ok(serde_json::json!({ "message": "RAM cache cleared successfully" }))
 }
 
-#[allow(dead_code)]
+#[expect(dead_code, reason = "Replaced by read_service_logs which takes &str")]
 pub fn get_service_logs(service_name: String, lines: Option<u32>) -> Result<String, AppError> {
     let service = match service_name.as_str() {
         "http" => "apache2",
@@ -374,7 +378,8 @@ pub fn get_service_logs(service_name: String, lines: Option<u32>) -> Result<Stri
 
 pub fn log_file_path() -> PathBuf {
     let mut base = dirs::config_dir()
-        .unwrap_or_else(|| dirs::home_dir().expect("No home dir or config dir available"));
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| PathBuf::from("."));
     base.push("com.diskless.local");
     let _ = std::fs::create_dir_all(&base);
     base.push("diskless-manager.log");

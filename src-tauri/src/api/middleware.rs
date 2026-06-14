@@ -6,17 +6,9 @@ use axum::{
 };
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use log::info;
-use serde::{Deserialize, Serialize};
 use tower_http::cors::CorsLayer;
 
 use crate::state::AppState;
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct Claims {
-    pub sub: String,
-    pub exp: usize,
-    pub iat: usize,
-}
 
 pub async fn logger(
     request: Request<axum::body::Body>,
@@ -106,7 +98,7 @@ pub async fn require_auth(
                     .map(|s| s.to_string())
                     .unwrap_or_else(|_| token.to_string());
 
-                match decode::<Claims>(
+                match decode::<crate::types::auth::Claims>(
                     &decoded_token,
                     &DecodingKey::from_secret(crate::auth::jwt_secret()),
                     &Validation::new(Algorithm::HS256),
@@ -141,7 +133,7 @@ pub async fn require_auth(
         None => return Err(StatusCode::UNAUTHORIZED),
     };
 
-    let token_data = decode::<Claims>(
+    let token_data = decode::<crate::types::auth::Claims>(
         token,
         &DecodingKey::from_secret(crate::auth::jwt_secret()),
         &Validation::new(Algorithm::HS256),

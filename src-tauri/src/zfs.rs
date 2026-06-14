@@ -1,15 +1,14 @@
 //! ZFS-related logic for dataset, snapshot, and pool management.
 
-#![allow(dead_code)]
+#![expect(dead_code, reason = "Many ZFS utility functions are only used by old Tauri commands or conditionally")]
 
 use chrono::Local;
 
-use log::info;
+use log::{debug, error, info, warn};
 
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::process::Command;
-use tracing::debug;
 
 use crate::cmd::{run_command, run_command_check, run_command_output_no_sudo};
 use crate::types::image::CreateImageRequest;
@@ -224,7 +223,7 @@ pub async fn save_master_config(pool: &sqlx::SqlitePool, master_data: &MasterDat
     match crate::config::write_config(pool, &config).await {
         Ok(_) => true,
         Err(e) => {
-            println!("Error saving master config: {}", e);
+            error!("Error saving master config: {}", e);
             false
         }
     }
@@ -266,7 +265,7 @@ pub async fn create_image(
         )));
     }
     let mut parent_dataset = format!("{}/images", zpool);
-    eprintln!(
+    debug!(
         "=== CREATE_IMAGE: Initial parent_dataset = {}",
         parent_dataset
     );
@@ -285,7 +284,7 @@ pub async fn create_image(
         let mut image_datasets = vec![];
         for (dataset, val) in parse_property_output(&get_out) {
             debug!("{}: {}", dataset, val);
-            eprintln!(
+            debug!(
                 "=== CREATE_IMAGE: Found dataset {} with type {}",
                 dataset, val
             );
@@ -294,21 +293,21 @@ pub async fn create_image(
                 // e.g., "diskless/images" or "diskless/image-disk"
                 // NOT "diskless/images/win11" (that's an image itself, not a parent)
                 let parts: Vec<&str> = dataset.split('/').collect();
-                eprintln!(
+                debug!(
                     "=== CREATE_IMAGE: Dataset {} has {} parts",
                     dataset,
                     parts.len()
                 );
                 if parts.len() == 2 {
                     // This is a direct child of zpool (zpool/dataset)
-                    eprintln!("=== CREATE_IMAGE: Adding {} to image_datasets", dataset);
+                    debug!("=== CREATE_IMAGE: Adding {} to image_datasets", dataset);
                     image_datasets.push(dataset);
                 }
             }
         }
 
         debug!("Found {} top-level image datasets", image_datasets.len());
-        eprintln!(
+        debug!(
             "=== CREATE_IMAGE: Found {} top-level image datasets",
             image_datasets.len()
         );
@@ -332,7 +331,7 @@ pub async fn create_image(
                 for (dataset, creation_time) in parse_property_output(&creation_out) {
                     datasets_with_time.push((dataset.clone(), creation_time.clone()));
                     debug!("Dataset {} created at {}", dataset, creation_time);
-                    eprintln!(
+                    debug!(
                         "=== CREATE_IMAGE: Dataset {} created at {}",
                         dataset, creation_time
                     );
@@ -344,7 +343,7 @@ pub async fn create_image(
                 // Use the most recently created image dataset
                 if let Some((newest_dataset, _)) = datasets_with_time.first() {
                     debug!("Selected parent dataset: {}", newest_dataset);
-                    eprintln!(
+                    debug!(
                         "=== CREATE_IMAGE: Selected parent dataset: {}",
                         newest_dataset
                     );
@@ -356,7 +355,7 @@ pub async fn create_image(
                     "Failed to get creation times, using first dataset: {}",
                     image_datasets[0]
                 );
-                eprintln!(
+                debug!(
                     "=== CREATE_IMAGE: Failed to get creation times, using first dataset: {}",
                     image_datasets[0]
                 );
@@ -370,7 +369,7 @@ pub async fn create_image(
         }
     }
 
-    eprintln!(
+    debug!(
         "=== CREATE_IMAGE: Final parent_dataset = {}",
         parent_dataset
     );
@@ -556,7 +555,7 @@ pub async fn get_images(
         // Update config.json with the current masters list
         config.masters = serde_json::to_value(&masters_data).unwrap_or(json!({}));
         if let Err(e) = write_config(&state.db_pool, &config).await {
-            eprintln!("Error writing masters to config: {}", e);
+            error!("Error writing masters to config: {}", e);
         }
 
         Ok(masters_data)
@@ -604,24 +603,24 @@ async fn common_delete(
     entity: &str,
     is_snapshot: bool,
 ) -> Result<Value, AppError> {
-    eprintln!("=== common_delete AUTH START: {}", entity);
+    debug!("=== common_delete AUTH START: {}", entity);
     validate_auth(&token)?;
-    eprintln!("=== common_delete AUTH OK");
+    debug!("=== common_delete AUTH OK");
 
-    eprintln!("=== common_delete DEPENDENTS START");
+    debug!("=== common_delete DEPENDENTS START");
     let dependents = check_dependent_clients(state, entity, is_snapshot, &token)
         .await
         .map_err(|e| {
-            eprintln!("=== common_delete DEPENDENTS ERR: {}", e);
+            error!("=== common_delete DEPENDENTS ERR: {}", e);
             AppError::Internal(format!("Failed to check clients: {e}"))
         })?;
-    eprintln!(
+    debug!(
         "=== common_delete DEPENDENTS OK: {} found",
         dependents.len()
     );
 
     if !dependents.is_empty() {
-        eprintln!("=== common_delete BLOCKED BY DEPENDENTS");
+        warn!("=== common_delete BLOCKED BY DEPENDENTS");
         return Ok(json!({
             "error": "Entity has dependent clients",
             "message": format!("Cannot delete – used by: {}", dependents.join(", ")),
@@ -629,10 +628,10 @@ async fn common_delete(
         }));
     }
 
-    eprintln!("=== common_delete ZFS DESTROY START");
+    debug!("=== common_delete ZFS DESTROY START");
     match run_command(&["zfs", "destroy", entity]) {
         Ok(()) => {
-            eprintln!("=== common_delete ZFS DESTROY OK");
+            debug!("=== common_delete ZFS DESTROY OK");
             if !is_snapshot {
                 let _ = delete_image_config(&state.db_pool, entity).await;
             }
@@ -647,7 +646,7 @@ async fn common_delete(
         }
         Err(err) => {
             let stderr = err.to_string();
-            eprintln!("=== common_delete ZFS DESTROY ERR: {}", stderr);
+            error!("=== common_delete ZFS DESTROY ERR: {}", stderr);
             if stderr.contains("has dependent clones") {
                 Ok(json!({
                     "error": "Entity has dependent clones",
@@ -680,11 +679,11 @@ pub async fn delete_image_config(pool: &sqlx::SqlitePool, master_name: &str) -> 
                     config.settings = json!({});
                 }
                 config.settings["default_master"] = json!(null); // Or json!("")
-                eprintln!("=== delete_image_config: Cleared default_master after delete");
+                debug!("=== delete_image_config: Cleared default_master after delete");
             }
 
             if let Err(e) = write_config(pool, &config).await {
-                eprintln!("Error writing config file: {}", e);
+                error!("Error writing config file: {}", e);
                 return false;
             }
             return true;
@@ -698,10 +697,10 @@ pub async fn delete_image(
     token: String,
     master_name: String,
 ) -> Result<serde_json::Value, AppError> {
-    eprintln!("=== delete_image START: {}", master_name); // Terminal log
+    debug!("=== delete_image START: {}", master_name);
     let result = common_delete(&state, token, &master_name, false).await;
 
-    eprintln!("=== delete_image END: {:?}", result); // Will show if it completes
+    debug!("=== delete_image END: {:?}", result);
     result
 }
 
@@ -788,7 +787,7 @@ pub async fn delete_snapshot(
     token: String,
     snapshot_name: String,
 ) -> Result<serde_json::Value, AppError> {
-    eprintln!("=== delete_snapshot START: {}", snapshot_name);
+    debug!("=== delete_snapshot START: {}", snapshot_name);
     let zpool = get_zpool_name();
     if !snapshot_name.contains('@') || !snapshot_name.starts_with(&format!("{}/", &zpool)) {
         return Err(AppError::Validation(
@@ -797,7 +796,7 @@ pub async fn delete_snapshot(
     }
     let result = common_delete(&state, token, &snapshot_name, true).await;
 
-    eprintln!("=== delete_snapshot END: {:?}", result);
+    debug!("=== delete_snapshot END: {:?}", result);
     result
 }
 

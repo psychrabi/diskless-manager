@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::core::config::Settings;
 use crate::core::service::ServiceManager;
 use crate::ssh_executor::{SshConfig, SshExecutor};
@@ -122,6 +120,7 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
+#[expect(dead_code, reason = "Old Tauri command - handler implements its own")]
 pub async fn get_server_status(state: State<'_, AppState>) -> Result<ServerStatus, String> {
     let service_manager = ServiceManager::new();
     let services = service_manager.list_services();
@@ -146,6 +145,7 @@ pub async fn get_server_status(state: State<'_, AppState>) -> Result<ServerStatu
     })
 }
 
+#[expect(dead_code, reason = "Old Tauri command - handler implements its own")]
 pub async fn initialize_server(state: State<'_, AppState>) -> Result<String, String> {
     let settings = state.settings.read().await;
 
@@ -224,11 +224,13 @@ pub async fn check_dependencies() -> Result<Vec<DependencyStatus>, String> {
     Ok(statuses)
 }
 
+#[expect(dead_code, reason = "Old Tauri command - handler implements its own")]
 pub async fn get_settings(state: State<'_, AppState>) -> Result<Settings, String> {
     let settings = state.settings.read().await;
     Ok(settings.clone())
 }
 
+#[expect(dead_code, reason = "Old Tauri command - handler implements its own")]
 pub async fn save_settings(state: State<'_, AppState>, settings: Settings) -> Result<(), String> {
     // Update the in-memory settings
     let mut current = state.settings.write().await;
@@ -374,6 +376,7 @@ pub async fn detect_server_network() -> Result<NetworkDetection, String> {
     })
 }
 
+#[expect(dead_code, reason = "Old Tauri command - handler implements its own")]
 pub async fn apply_network_settings(state: State<'_, AppState>) -> Result<String, String> {
     let mut settings = state.settings.read().await.clone();
     let server = &settings.server;

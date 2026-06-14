@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::core::client::ClientManager;
 use crate::core::config::Settings;
 use crate::services::{
@@ -9,13 +11,13 @@ use sqlx::SqlitePool;
 use std::path::PathBuf;
 
 pub struct DhcpService {
-    settings: Settings,
-    db_pool: SqlitePool,
+    pub(crate) settings: Arc<Settings>,
+    pub(crate) db_pool: SqlitePool,
 }
 
 impl DhcpService {
     pub fn new(settings: Settings, db_pool: SqlitePool) -> Self {
-        Self { settings, db_pool }
+        Self { settings: Arc::new(settings), db_pool }
     }
 
     pub async fn generate_config(&self) -> anyhow::Result<()> {
@@ -388,7 +390,7 @@ host {name} {{
     }
 }
 
-#[allow(dead_code)]
+#[expect(dead_code, reason = "Utility function kept for potential future DHCP network calculations")]
 fn calculate_network(ip: &str, netmask: &str) -> anyhow::Result<String> {
     let ip_parts: Vec<u8> = ip
         .split('.')

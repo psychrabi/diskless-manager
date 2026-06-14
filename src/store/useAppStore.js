@@ -1,7 +1,13 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { shallow } from "zustand/shallow";
-import * as api from "../api/commands";
+import { listClients } from "../api/modules/clients";
+import { listMasters, listImages } from "../api/modules/images";
+import { listDatasets, createZfsDataset, deleteZfsDataset, getZpoolList, listZpools } from "../api/modules/zfs";
+import { listServices, startService, stopService, restartService } from "../api/modules/services";
+import { getSystemInfo, getServerStatus, checkDependencies, getRamUsage, getZfsArcstat } from "../api/modules/system";
+import { getLicenseInfo } from "../api/modules/license";
+import { readConfig } from "../api/modules/config";
 
 // Export shallow comparison helper for consumers
 export { shallow };
@@ -119,21 +125,21 @@ export const useAppStore = create()(
 
         fetchClients: async () =>
           runRequest(
-            () => api.listClients(),
+            () => listClients(),
             (clientsData) => set({ clients: clientsData || [] }),
             "Failed to fetch clients:"
           ),
 
         fetchMasters: async () =>
           runRequest(
-            () => api.listMasters(),
+            () => listMasters(),
             (mastersRes) => set({ masters: mastersRes || [] }),
             "Failed to fetch masters:"
           ),
 
         fetchImages: async () =>
           runRequest(
-            () => api.listImages(),
+            () => listImages(),
             (imagesRes) => set({ images: imagesRes || [] }),
             "Failed to fetch images:"
           ),
@@ -145,7 +151,7 @@ export const useAppStore = create()(
           }
 
           await runRequest(
-            () => api.listDatasets(zpool),
+            () => listDatasets(zpool),
             (datasetsRes) => set({ datasets: datasetsRes || [] }),
             "Failed to fetch datasets:"
           );
@@ -153,7 +159,7 @@ export const useAppStore = create()(
 
         createDataset: async (data) => {
           try {
-            await api.createZfsDataset({
+            await createZfsDataset({
               zpool: data.zpool,
               name: data.name,
               usage_type: data.usage_type,
@@ -175,7 +181,7 @@ export const useAppStore = create()(
 
         deleteDataset: async (name) => {
           try {
-            const response = await api.deleteZfsDataset(name, true);
+            const response = await deleteZfsDataset(name, true);
             return {
               success: true,
               message:
@@ -193,7 +199,7 @@ export const useAppStore = create()(
 
         fetchServices: async () =>
           runRequest(
-            () => api.listServices(),
+            () => listServices(),
             (servicesRes) => set({ services: normalizeServices(servicesRes) }),
             "Failed to fetch services:"
           ),
@@ -201,7 +207,7 @@ export const useAppStore = create()(
         startService: async (name) =>
           runServiceAction({
             name,
-            action: api.startService,
+            action: startService,
             status: "running",
             errorPrefix: "Failed to start service:",
           }),
@@ -209,7 +215,7 @@ export const useAppStore = create()(
         stopService: async (name) =>
           runServiceAction({
             name,
-            action: api.stopService,
+            action: stopService,
             status: "stopped",
             errorPrefix: "Failed to stop service:",
           }),
@@ -217,35 +223,35 @@ export const useAppStore = create()(
         restartService: async (name) =>
           runServiceAction({
             name,
-            action: api.restartService,
+            action: restartService,
             status: "restarting",
             errorPrefix: "Failed to restart service:",
           }),
 
         fetchServerInfo: async () =>
           runRequest(
-            () => api.getSystemInfo(),
+            () => getSystemInfo(),
             (serverInfoRes) => set({ serverInfo: serverInfoRes }),
             "Failed to fetch server info:"
           ),
 
         fetchServerStatus: async () =>
           runRequest(
-            () => api.getServerStatus(),
+            () => getServerStatus(),
             (serverStatusRes) => set({ serverStatus: serverStatusRes }),
             "Failed to fetch server status:"
           ),
 
         fetchDependencies: async () =>
           runRequest(
-            () => api.checkDependencies(),
+            () => checkDependencies(),
             (dependenciesRes) => set({ dependencies: dependenciesRes }),
             "Failed to fetch dependencies:"
           ),
 
         fetchLicenseInfo: async () =>
           runRequest(
-            () => api.getLicenseInfo(),
+            () => getLicenseInfo(),
             (licenseRes) => set({ licenseInfo: licenseRes }),
             "Failed to fetch license info:"
           ),
@@ -253,8 +259,8 @@ export const useAppStore = create()(
         fetchDisks: async () => {
           try {
             const [zpoolStatsRes, zpoolsRes] = await Promise.all([
-              api.getZpoolList(),
-              api.listZpools(),
+              getZpoolList(),
+              listZpools(),
             ]);
             set({
               zpoolStats: Array.isArray(zpoolStatsRes) ? zpoolStatsRes[0] : null,
@@ -267,14 +273,14 @@ export const useAppStore = create()(
 
         fetchRamUsage: async () =>
           runRequest(
-            () => api.getRamUsage(),
+            () => getRamUsage(),
             (ramUsageRes) => set({ ramUsage: ramUsageRes }),
             "Failed to fetch ram usage:"
           ),
 
         fetchArcStat: async () =>
           runRequest(
-            () => api.getZfsArcstat(),
+            () => getZfsArcstat(),
             (arcStatRes) => set({ arcStat: arcStatRes }),
             "Failed to fetch arc stat:"
           ),
@@ -324,7 +330,7 @@ export const useAppStore = create()(
 
           const id = setInterval(async () => {
             try {
-              const newClients = await api.listClients();
+              const newClients = await listClients();
               const { clients: currentClients } = get();
 
               if (hasClientStatusChanges(currentClients, newClients)) {
@@ -350,7 +356,7 @@ export const useAppStore = create()(
         fetchConfig: async () => {
           set({ checkingConfig: true, loading: true });
           try {
-            const cfg = await api.readConfig();
+            const cfg = await readConfig();
             set({ appConfig: cfg });
           } catch (err) {
             set({

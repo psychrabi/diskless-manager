@@ -1,4 +1,4 @@
-import * as api from "@/api/commands";
+import { getLogs } from "@/api/modules/logs";
 import { useToastStore } from "@/store/useToastStore";
 import { useCallback, useState } from "react";
 
@@ -13,7 +13,7 @@ export const useLogs = () => {
       setLoading(true);
       try {
         console.log("Fetching logs for unit:", unit, "lines:", lines);
-        const response = await api.getLogs(unit, lines);
+        const response = await getLogs(unit, lines);
         console.log("Logs response:", response);
         // Extract the text from the response object
         const logText = response?.text || response || "";

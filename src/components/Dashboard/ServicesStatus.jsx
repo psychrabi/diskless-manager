@@ -3,7 +3,7 @@ import React from "react";
 import { useShallow } from "zustand/shallow";
 import { useAppStore } from "../../store/useAppStore";
 import { Button, Card } from "@/components/ui";
-import { restartAllServices } from "@/api/commands";
+import { restartAllServices } from "@/api/modules/services";
 import { useConfirm } from "@/contexts/confirmDialog";
 
 export default function ServicesStatus() {

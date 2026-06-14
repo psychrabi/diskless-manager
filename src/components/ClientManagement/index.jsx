@@ -1,7 +1,7 @@
 import { useClientActions } from "@/hooks/useClientActions";
 import { StatusBadge, LoadingSkeleton } from "@/components/ui";
 import { Laptop, PlusCircle, Users, Wifi, WifiOff, History, Clock } from "lucide-react";
-import { memo, useCallback, useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "../../store/useAppStore";
@@ -118,7 +118,7 @@ const ClientManagement = () => {
   }, [clients, masters]);
 
   // Calculate statistics
-  const onlineClients = clients.filter((c) => c.status === "Online").length;
+  const onlineClients = useMemo(() => clients.filter((c) => c.status === "Online").length, [clients]);
   const offlineClients = clients.length - onlineClients;
 
   if (loading && clients.length === 0) {

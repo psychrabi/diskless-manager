@@ -140,9 +140,9 @@ pub struct ImageInfo {
 
 pub struct ImageManager {
     pool: SqlitePool,
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "Struct field stored for future use")]
     images_dir: PathBuf,
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "Struct field stored for future use")]
     snapshots_dir: PathBuf,
 }
 

@@ -2,8 +2,9 @@ import ErrorBoundary from "@/components/ErrorBoundary";
 import { Activity, Error, Loading } from "@/components/ui";
 import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
-import { checkDependencies, checkZfsPoolExists } from "@/api/commands";
-import { lazy, useEffect, useRef, useState } from "react";
+import { checkDependencies } from "@/api/modules/system";
+import { checkZfsPoolExists } from "@/api/modules/disks";
+import { useEffect, useRef, useState } from "react";
 import {
   Outlet,
   useLocation,
@@ -12,8 +13,8 @@ import {
 } from "react-router-dom";
 import Toast from "../ui/Toast";
 
-const Sidebar = lazy(() => import("@/components/layouts/Sidebar"));
-const Header = lazy(() => import("@/components/layouts/Header"));
+import Sidebar from "@/components/layouts/Sidebar";
+import Header from "@/components/layouts/Header";
 
 const AdminLayout = () => {
   const { error, fetchData, loading } = useAppStore();
@@ -36,16 +37,15 @@ const AdminLayout = () => {
   }, [fetchData]);
 
   // Restore path on mount if we are at root and have a saved path
+  const pathRestored = useRef(false);
   useEffect(() => {
+    if (pathRestored.current) return;
     const lastPath = localStorage.getItem("last_path");
-    // Determine if we should navigate:
-    // Logic: If on root '/' AND we have a saved path that is not '/', restore it.
-    // Note with HashRouter: window.location.hash might be '#/' initially.
     if (lastPath && lastPath !== "/" && location.pathname === "/") {
-      navigate(lastPath);
+      pathRestored.current = true;
+      navigate(lastPath, { replace: true });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Run once on mount
+  }, [location.pathname, navigate]);
 
   // Preflight check for setup
   useEffect(() => {

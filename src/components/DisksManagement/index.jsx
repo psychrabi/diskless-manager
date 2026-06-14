@@ -1,6 +1,6 @@
 import { useAppStore } from "@/store/useAppStore";
 import { HardDrive, PlusCircle } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button, Card } from "@/components/ui";
 import DiskFormModal from "./DiskFormModal";
 import DiskTable from "./DiskTable";
@@ -17,11 +17,12 @@ export default function DisksManagement() {
   }, []);
 
   // Set default pool when zpools are loaded
+  const poolInitialized = useRef(false);
   useEffect(() => {
-    if (zpools.length > 0 && !selectedPool) {
+    if (zpools.length > 0 && !poolInitialized.current) {
+      poolInitialized.current = true;
       setSelectedPool(zpools[0]);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zpools]);
 
   useEffect(() => {

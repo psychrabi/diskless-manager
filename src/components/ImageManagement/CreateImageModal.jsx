@@ -4,7 +4,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { Save } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { Button, Modal } from "@/components/ui";
-import * as api from "@/api/commands";
+import { createImage } from "@/api/modules/images";
 import { imageSchema } from "@/schema";
 
 
@@ -33,7 +33,7 @@ const CreateImageModal = ({
   const onSubmit = async (data) => {
     // Get token from localStorage
     try {
-      await api.createImage(data);
+      await createImage(data);
       success("Image Management", `Image ${data.name} created successfully`);
       await fetchMasters(); // Refresh images
       reset();

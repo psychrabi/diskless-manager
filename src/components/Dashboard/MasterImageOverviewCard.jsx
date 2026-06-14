@@ -1,5 +1,5 @@
 import { useToastStore } from "@/store/useToastStore";
-import { getDefaultImageOverview } from "@/api/commands";
+import { getDefaultImageOverview } from "@/api/modules/dashboard";
 import { HardDrive, RefreshCw } from "lucide-react"; // Add Refresh icon
 import { useCallback, useEffect, useState } from "react";
 import { Button, Card } from "@/components/ui"; // Assume Button component

@@ -1,6 +1,8 @@
 import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
-import { checkDependencies, checkZfsPoolExists, getLicenseInfo } from "@/api/commands";
+import { checkDependencies } from "@/api/modules/system";
+import { checkZfsPoolExists } from "@/api/modules/disks";
+import { getLicenseInfo } from "@/api/modules/license";
 import { useEffect, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { Loading } from "@/components/ui";

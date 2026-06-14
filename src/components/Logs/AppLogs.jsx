@@ -1,5 +1,5 @@
 import { useToastStore } from "@/store/useToastStore";
-import { getLogs, clearLogs } from "@/api/commands";
+import { getLogs, clearLogs } from "@/api/modules/logs";
 import { BrushCleaning, Loader, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Button, Card } from "@/components/ui";

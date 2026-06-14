@@ -1,4 +1,4 @@
-import { clearRamCache } from "@/api/commands";
+import { clearRamCache } from "@/api/modules/system";
 import { useAppStore } from "@/store/useAppStore";
 import { RefreshCw } from "lucide-react";
 import { Button, Card } from "../components/ui";

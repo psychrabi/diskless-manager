@@ -1,4 +1,5 @@
 use axum::{extract::State, http::StatusCode, Json};
+use log::error;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::net::IpAddr;
@@ -163,7 +164,7 @@ pub async fn get_client_io_metrics(
             Ok(Json(ClientIOMetricsResponse { clients }))
         }
         Err(e) => {
-            eprintln!("Error fetching client I/O metrics: {:?}", e);
+            error!("Error fetching client I/O metrics: {:?}", e);
             Ok(Json(ClientIOMetricsResponse {
                 clients: Vec::new(),
             }))

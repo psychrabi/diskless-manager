@@ -4,8 +4,7 @@ use crate::middleware::validate_auth;
 use log::info;
 
 /// Return entire log content as string
-
-#[allow(dead_code)]
+#[expect(dead_code, reason = "Old Tauri command - log viewing handled by Axum")]
 pub fn get_logs(token: String) -> Result<serde_json::Value, AppError> {
     validate_auth(&token)?;
     let text = cmd::read_logs();
@@ -13,8 +12,7 @@ pub fn get_logs(token: String) -> Result<serde_json::Value, AppError> {
 }
 
 /// Clear log file
-
-#[allow(dead_code)]
+#[expect(dead_code, reason = "Old Tauri command - log clearing handled by Axum")]
 pub fn clear_logs(token: String) -> Result<serde_json::Value, AppError> {
     validate_auth(&token)?;
     info!("Log cleared by user");

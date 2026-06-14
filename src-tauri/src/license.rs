@@ -46,7 +46,7 @@ pub fn verify_license_remote(key: &str) -> Result<LicenseVerifyResponse, String>
     Ok(body)
 }
 
-#[allow(dead_code)]
+#[expect(dead_code, reason = "Old Tauri command replaced by HTTP handler")]
 pub async fn activate_license(state: State<'_, AppState>, key: &str) -> Result<String, AuthError> {
     if key.trim().is_empty() {
         return Err(AuthError {
@@ -135,7 +135,7 @@ pub async fn activate_license(state: State<'_, AppState>, key: &str) -> Result<S
     }
 }
 
-#[allow(dead_code)]
+#[expect(dead_code, reason = "License validation function kept for potential future use")]
 pub fn ensure_license_valid() -> Result<(), AuthError> {
     let cfg = config::get_config();
     let settings = cfg.settings.as_object().ok_or_else(|| AuthError {

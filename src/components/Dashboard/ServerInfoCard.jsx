@@ -1,7 +1,7 @@
 import { RefreshCw } from "lucide-react";
 import { useAppStore } from "../../store/useAppStore";
 import { Card, Button } from "@/components/ui";
-import { clearRamCache } from "@/api/commands";
+import { clearRamCache } from "@/api/modules/system";
 
 const ServerInfoCard = () => {
   const serverInfo = useAppStore((state) => state.serverInfo);

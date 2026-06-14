@@ -82,9 +82,10 @@ pub async fn update_admin_password(
         r#"
         SELECT id, username, password_hash, role
         FROM users
-        WHERE username = 'admin'
+        WHERE username = ?
         "#,
     )
+    .bind("admin")
     .fetch_one(&state.db_pool)
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;

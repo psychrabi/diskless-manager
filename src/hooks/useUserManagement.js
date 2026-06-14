@@ -4,7 +4,7 @@
  */
 
 import { useState, useCallback } from 'react';
-import * as api from '@/api/commands';
+import { listUsers as listUsersApi, getUser as getUserApi, createUser as createUserApi, updateUser as updateUserApi, updateUserPassword as updateUserPasswordApi, deleteUser as deleteUserApi } from '@/api/modules/users';
 
 export function useUserManagement() {
   const [loading, setLoading] = useState(false);
@@ -17,7 +17,7 @@ export function useUserManagement() {
     setLoading(true);
     setError(null);
     try {
-      const users = await api.listUsers();
+      const users = await listUsersApi();
       return users;
     } catch (err) {
       setError(err.message || 'Failed to list users');
@@ -34,7 +34,7 @@ export function useUserManagement() {
     setLoading(true);
     setError(null);
     try {
-      const user = await api.getUser(userId);
+      const user = await getUserApi(userId);
       return user;
     } catch (err) {
       setError(err.message || 'Failed to get user');
@@ -52,7 +52,7 @@ export function useUserManagement() {
       setLoading(true);
       setError(null);
       try {
-        const user = await api.createUser({
+        const user = await createUserApi({
           username,
           password,
           role,
@@ -76,7 +76,7 @@ export function useUserManagement() {
       setLoading(true);
       setError(null);
       try {
-        const user = await api.updateUser(userId, updates);
+        const user = await updateUserApi(userId, updates);
         return user;
       } catch (err) {
         setError(err.message || 'Failed to update user');
@@ -96,7 +96,7 @@ export function useUserManagement() {
       setLoading(true);
       setError(null);
       try {
-        const result = await api.updateUserPassword(userId, password);
+        const result = await updateUserPasswordApi(userId, password);
         return result;
       } catch (err) {
         setError(err.message || 'Failed to update password');
@@ -116,7 +116,7 @@ export function useUserManagement() {
       setLoading(true);
       setError(null);
       try {
-        const result = await api.deleteUser(userId);
+        const result = await deleteUserApi(userId);
         return result;
       } catch (err) {
         setError(err.message || 'Failed to delete user');

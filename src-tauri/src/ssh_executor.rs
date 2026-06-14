@@ -46,7 +46,6 @@ impl Default for SshConfig {
 
 /// SSH connection pool entry
 struct PooledConnection {
-    #[allow(dead_code)]
     session: Session,
     last_used: std::time::Instant,
 }
@@ -180,15 +179,31 @@ impl SshExecutor {
                 if pooled.last_used.elapsed() < Duration::from_secs(300) {
                     debug!("Reusing pooled SSH connection to {}", host);
                     pooled.last_used = std::time::Instant::now();
-                    // We can't clone Session, so we need to create a new one
-                    // For now, we'll remove it and create a new one
+                    // Session::clone shares the underlying connection via Arc
+                    return Ok(pooled.session.clone());
+                } else {
+                    // Connection expired, remove and recreate
                     pool.remove(host);
                 }
             }
         }
 
         // Create new connection
-        self.create_connection(host).await
+        let session = self.create_connection(host).await?;
+
+        // Store in pool for future reuse
+        {
+            let mut pool = self.connection_pool.lock();
+            pool.insert(
+                host.to_string(),
+                PooledConnection {
+                    session: session.clone(),
+                    last_used: std::time::Instant::now(),
+                },
+            );
+        }
+
+        Ok(session)
     }
 
     /// Create a new SSH connection
@@ -225,9 +240,13 @@ impl SshExecutor {
             AppError::SshConnection(format!("SSH handshake failed: {}", e))
         })?;
 
-        // Disable host key verification if configured
+        // Disable host key verification if configured.
+        // NOTE: ssh2 0.9's safe API doesn't expose host key bypass.
+        // LIBSSH2_FLAG_SKIP_HOSTKEY_CHECK requires a newer libssh2-sys.
+        // In practice, libssh2 skips host key checking when no known_hosts
+        // file is loaded, which is the default here.
         if self.config.disable_host_key_verification {
-            session.set_compress(true);
+            debug!("Host key verification bypass is requested but not fully supported in ssh2 0.9");
         }
 
         // Authenticate with public key (no password)
@@ -251,18 +270,6 @@ impl SshExecutor {
         }
 
         info!("SSH connection established to {}", host);
-
-        // Store in pool
-        {
-            let mut pool = self.connection_pool.lock();
-            pool.insert(
-                host.to_string(),
-                PooledConnection {
-                    session: session.clone(),
-                    last_used: std::time::Instant::now(),
-                },
-            );
-        }
 
         Ok(session)
     }

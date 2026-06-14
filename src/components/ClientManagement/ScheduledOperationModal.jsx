@@ -1,8 +1,8 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { Clock } from "lucide-react";
 import { useToastStore } from "@/store/useToastStore";
 import { Button, Modal } from "@/components/ui";
-import * as api from "@/api/commands";
+import { shutdownClient, rebootClient } from "@/api/modules/control";
 
 const ScheduledOperationModal = ({ client, isOpen, onClose, onSuccess }) => {
   const { success, error: showError } = useToastStore();
@@ -19,12 +19,12 @@ const ScheduledOperationModal = ({ client, isOpen, onClose, onSuccess }) => {
     try {
       let response;
       if (operationType === "shutdown") {
-        response = await api.shutdownClient(client.id, {
+        response = await shutdownClient(client.id, {
           force: mode === "force",
           delay_minutes: delayMinutes,
         });
       } else if (operationType === "reboot") {
-        response = await api.rebootClient(client.id, {
+        response = await rebootClient(client.id, {
           force: mode === "force",
           delay_minutes: delayMinutes,
         });

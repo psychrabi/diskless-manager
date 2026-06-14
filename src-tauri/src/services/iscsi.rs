@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::core::client::Client;
 use crate::core::config::Settings;
 use crate::services::{
@@ -8,12 +10,12 @@ use std::path::PathBuf;
 use tokio::process::Command;
 
 pub struct IscsiService {
-    settings: Settings,
+    pub(crate) settings: Arc<Settings>,
 }
 
 impl IscsiService {
     pub fn new(settings: Settings) -> Self {
-        Self { settings }
+        Self { settings: Arc::new(settings) }
     }
 
     pub async fn generate_config(&self) -> anyhow::Result<()> {

@@ -1,10 +1,10 @@
-import React, { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AlertCircle, Clock, Trash2 } from "lucide-react";
 import { useAppStore } from "../../store/useAppStore";
 import { Button } from "@/components/ui/Button";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/Table";
 import { Modal } from "@/components/ui/Modal";
-import { cancelScheduledOperation, getScheduledOperations } from "@/api/commands";
+import { cancelScheduledOperation, getScheduledOperations } from "@/api/modules/control";
 import { useToastStore } from "@/store/useToastStore";
 
 const ScheduledOperationsList = ({ isOpen, onClose }) => {

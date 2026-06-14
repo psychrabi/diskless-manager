@@ -1,5 +1,5 @@
 import { File, HardDrive, PlusCircle } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAppStore } from "../../store/useAppStore";
 import { Button, Card } from "@/components/ui";
@@ -12,7 +12,6 @@ const ImageManagement = () => {
   const datasets = useAppStore((state) => state.datasets);
   const zpools = useAppStore((state) => state.zpools);
   const [openImageCreateModal, setOpenImageCreateModal] = useState(false);
-  const [selectedPool, setSelectedPool] = useState("");
 
   // Check if there are any image disks (datasets with org.diskless:type=image)
   const hasImageDisk = datasets.some(
@@ -27,11 +26,11 @@ const ImageManagement = () => {
   };
 
   // Set default pool when zpools are loaded
+  const poolInitialized = useRef(false);
   useEffect(() => {
-    if (zpools.length > 0 && !selectedPool) {
-      setSelectedPool(zpools[0]);
+    if (zpools.length > 0 && !poolInitialized.current) {
+      poolInitialized.current = true;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zpools]);
 
   return (

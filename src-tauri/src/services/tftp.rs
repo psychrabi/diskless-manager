@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::core::config::Settings;
 use crate::services::{
@@ -8,12 +9,13 @@ use crate::services::{
 use log::info;
 
 pub struct TftpService {
-    settings: Settings,
+    pub(crate) settings: Arc<Settings>,
 }
 
 impl TftpService {
+    #[expect(dead_code, reason = "Constructed directly by ServiceManager::new, not by external callers")]
     pub fn new(settings: Settings) -> Self {
-        Self { settings }
+        Self { settings: Arc::new(settings) }
     }
 
     pub async fn generate_config(&self) -> anyhow::Result<()> {

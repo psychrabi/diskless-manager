@@ -1,4 +1,4 @@
-use log::{info, warn};
+use log::{debug, info, warn};
 
 use crate::cmd::{run_command, run_command_output, run_command_output_no_sudo};
 use crate::error::AppError;
@@ -262,21 +262,21 @@ pub fn setup_iscsi_target_with_game_disks(
     boot_block_store: &str,
     boot_volume_path: &str,
 ) -> Result<(), AppError> {
-    eprintln!(
+    debug!(
         "=== setup_iscsi_target_with_game_disks: target_iqn={}",
         target_iqn
     );
 
     // Check and create iSCSI target if it doesn't exist
     let exists = target_exists(target_iqn)?;
-    eprintln!("=== target_exists returned: {}", exists);
+    debug!("=== target_exists returned: {}", exists);
 
     if !exists {
-        eprintln!("=== Creating iSCSI target: {}", target_iqn);
+        info!("=== Creating iSCSI target: {}", target_iqn);
         run_command(&["targetcli", "/iscsi", "create", target_iqn])?;
-        eprintln!("=== Target created successfully");
+        info!("=== Target created successfully");
 
-        eprintln!("=== Setting target attributes");
+        info!("=== Setting target attributes");
         run_command(&[
             "targetcli",
             &format!("/iscsi/{}/tpg1", target_iqn),
@@ -288,9 +288,9 @@ pub fn setup_iscsi_target_with_game_disks(
             "authentication=0",
         ])
         .map_err(|e| AppError::Command(format!("Failed to set target attributes: {}", e)))?;
-        eprintln!("=== Attributes set successfully");
+        info!("=== Attributes set successfully");
     } else {
-        eprintln!("=== Target already exists, skipping creation");
+        info!("=== Target already exists, skipping creation");
     }
 
     // Setup LUN 0: Boot disk

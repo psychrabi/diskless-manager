@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { Power, RefreshCw, ScreenShare } from "lucide-react";
 import PowerActionModal from "./PowerActionModal";
 import RemoteDesktopModal from "./RemoteDesktopModal";

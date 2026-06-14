@@ -1,8 +1,8 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { Power, RefreshCw } from "lucide-react";
 import { useToastStore } from "@/store/useToastStore";
 import { Button, Modal } from "@/components/ui";
-import * as api from "@/api/commands";
+import { shutdownClient, rebootClient } from "@/api/modules/control";
 
 const CONFIG = {
   shutdown: {
@@ -12,7 +12,7 @@ const CONFIG = {
     verbing: "Shutting down",
     noun: "Shutdown",
     icon: Power,
-    apiCall: (id, opts) => api.shutdownClient(id, opts),
+    apiCall: (id, opts) => shutdownClient(id, opts),
   },
   reboot: {
     title: "Reboot Client",
@@ -21,7 +21,7 @@ const CONFIG = {
     verbing: "Rebooting",
     noun: "Reboot",
     icon: RefreshCw,
-    apiCall: (id, opts) => api.rebootClient(id, opts),
+    apiCall: (id, opts) => rebootClient(id, opts),
   },
 };
 

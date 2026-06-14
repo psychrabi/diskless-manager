@@ -60,13 +60,14 @@ async fn main() {
             use_game_disk,
         };
 
-        let state = AppState::new()
-            .await
-            .expect("Failed to initialize AppState");
+        let Ok(state) = AppState::new().await else {
+            log::error!("Failed to initialize AppState");
+            std::process::exit(1);
+        };
         match client::add_client_impl(&state, req).await {
             Ok(v) => info!("Success auto adding: {}", v),
             Err(e) => {
-                eprintln!("Error: {}", e);
+                log::error!("Error: {}", e);
                 std::process::exit(1);
             }
         }

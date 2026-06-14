@@ -1,4 +1,4 @@
-import React from "react";
+
 
 export const Activity = ({ mode, children }) => {
   if (mode === "hidden") {

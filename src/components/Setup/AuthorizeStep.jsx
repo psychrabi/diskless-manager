@@ -1,6 +1,6 @@
 import { ShieldCheck, ShieldAlert } from "lucide-react";
 import { useState } from "react";
-import { setupPrivilegedAccess } from "@/api/commands";
+import { setupPrivilegedAccess } from "@/api/modules/system";
 import { useToastStore } from "@/store/useToastStore";
 import { Button, Card } from "@/components/ui";
 

@@ -1,4 +1,4 @@
-import * as api from "@/api/commands";
+import { addClient, updateClient } from "@/api/modules/clients";
 import { clientSchema } from "@/schema";
 import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -39,7 +39,7 @@ const ClientFormModal = ({ client, masters, isOpen, onClose, refresh }) => {
 
       if (!client?.id) {
         // Create new client
-        await api.addClient({
+        await addClient({
           name: data.name,
           mac: data.mac,
           ip: data.ip,
@@ -52,7 +52,7 @@ const ClientFormModal = ({ client, masters, isOpen, onClose, refresh }) => {
         success("Client Management", `Client ${data.name} added successfully.`);
       } else {
         // Update existing client
-        await api.updateClient(client.id, {
+        await updateClient(client.id, {
           name: data.name,
           mac: data.mac,
           ip: data.ip,

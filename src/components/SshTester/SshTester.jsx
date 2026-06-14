@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import * as api from "../../api/commands";
+import { testSshConnection, executeSshCommand, getWindowsSystemInfo } from "../../api/modules/ssh";
 
 const DEFAULT_USERNAME = "Administrator";
 
@@ -95,7 +95,7 @@ const SshTester = () => {
     await runWithLoading({
       before: () => setTestResult(null),
       action: () =>
-        api.testSshConnection(
+        testSshConnection(
           connectionForm.host,
           connectionForm.username,
           connectionForm.port
@@ -109,7 +109,7 @@ const SshTester = () => {
     await runWithLoading({
       before: () => setCommandResult(null),
       action: () =>
-        api.executeSshCommand(
+        executeSshCommand(
           commandForm.host,
           commandForm.username,
           commandForm.command
@@ -123,7 +123,7 @@ const SshTester = () => {
     await runWithLoading({
       before: () => setSystemInfo(null),
       action: () =>
-        api.getWindowsSystemInfo(connectionForm.host, connectionForm.username),
+        getWindowsSystemInfo(connectionForm.host, connectionForm.username),
       onSuccess: (result) => setSystemInfo(result),
       onError: (error) =>
         setSystemInfo({

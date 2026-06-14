@@ -5,7 +5,7 @@ import { Save } from "lucide-react";
 import { useForm } from "react-hook-form";
 import z from "zod";
 import { Button, Modal } from "@/components/ui";
-import * as api from "@/api/commands";
+import { createSnapshot } from "@/api/modules/images";
 
 const snapshotSchema = z.object({
   name: z.string().min(1, "Snapshot name is required"),
@@ -30,7 +30,7 @@ const CreateSnapshotModal = ({
   const onSubmit = async (data) => {
     if (!selectedImage) return;
     try {
-      await api.createSnapshot(selectedImage.id, data.name)
+      await createSnapshot(selectedImage.id, data.name)
       success("Image Management", `Snapshot created successfully`);
       await fetchMasters();
       reset();

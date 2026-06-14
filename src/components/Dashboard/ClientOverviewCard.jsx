@@ -1,5 +1,5 @@
 import { useToastStore } from "@/store/useToastStore";
-import { getClientOverview } from "@/api/commands";
+import { getClientOverview } from "@/api/modules/dashboard";
 import { Users } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Card } from "@/components/ui";
