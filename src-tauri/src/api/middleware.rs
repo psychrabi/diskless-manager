@@ -78,6 +78,8 @@ pub async fn require_auth(
         || path == "/api/auth/admin/exists"
         || path == "/api/auth/admin/password"
         || path == "/api/system/dependencies"
+        || path == "/api/system/privileged-access"
+        || path == "/api/services/install"
         || path == "/api/license/info"
         || path == "/api/disks/pool/exists"
         || path == "/api/config"
