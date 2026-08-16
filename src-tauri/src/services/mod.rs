@@ -24,7 +24,10 @@ use tokio::process::Command;
 pub struct ServiceStatus {
     pub running: bool,
     pub pid: Option<u32>,
-    #[expect(dead_code, reason = "Part of ServiceStatus struct, used for debug display")]
+    #[expect(
+        dead_code,
+        reason = "Part of ServiceStatus struct, used for debug display"
+    )]
     pub message: String,
 }
 
@@ -42,12 +45,25 @@ impl ServiceManager {
     pub fn new(settings: Settings, db_pool: SqlitePool) -> Self {
         let shared = Arc::new(settings);
         Self {
-            dhcp: DhcpService { settings: Arc::clone(&shared), db_pool },
-            tftp: TftpService { settings: Arc::clone(&shared) },
-            iscsi: IscsiService { settings: Arc::clone(&shared) },
-            nfs: NfsService { settings: Arc::clone(&shared) },
-            http: HttpService { settings: Arc::clone(&shared) },
-            samba: SambaService { settings: Arc::clone(&shared) },
+            dhcp: DhcpService {
+                settings: Arc::clone(&shared),
+                db_pool,
+            },
+            tftp: TftpService {
+                settings: Arc::clone(&shared),
+            },
+            iscsi: IscsiService {
+                settings: Arc::clone(&shared),
+            },
+            nfs: NfsService {
+                settings: Arc::clone(&shared),
+            },
+            http: HttpService {
+                settings: Arc::clone(&shared),
+            },
+            samba: SambaService {
+                settings: Arc::clone(&shared),
+            },
             settings: shared,
         }
     }
@@ -123,7 +139,10 @@ impl ServiceManager {
         Ok(())
     }
 
-    #[expect(dead_code, reason = "Used for debugging - can be exposed via API later")]
+    #[expect(
+        dead_code,
+        reason = "Used for debugging - can be exposed via API later"
+    )]
     pub async fn status_all(&self) -> anyhow::Result<HashMap<String, ServiceStatus>> {
         let mut statuses = HashMap::new();
         statuses.insert("dhcp".to_string(), self.dhcp.status().await?);

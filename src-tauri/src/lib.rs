@@ -11,6 +11,11 @@ mod middleware;
 mod service;
 pub mod types;
 
+pub mod application;
+pub mod domain;
+pub mod infrastructure;
+pub mod persistence;
+
 pub mod audit_logger;
 pub mod command_builder;
 pub mod control_handler;

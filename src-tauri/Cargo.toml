@@ -73,6 +73,7 @@ proptest = "1.4"
 
 
 [profile.dev]
+debug = "line-tables-only"
 incremental = true # Compile your binary in smaller steps.
 
 [profile.release]

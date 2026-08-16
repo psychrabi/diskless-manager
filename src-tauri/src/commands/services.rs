@@ -1,4 +1,7 @@
-#![expect(dead_code, reason = "Old Tauri commands replaced by Axum handlers in api/handlers/services.rs")]
+#![expect(
+    dead_code,
+    reason = "Old Tauri commands replaced by Axum handlers in api/handlers/services.rs"
+)]
 
 use crate::error::AppError;
 use crate::services::ServiceManager;

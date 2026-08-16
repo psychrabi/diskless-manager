@@ -131,10 +131,7 @@ where
                 eprintln!("Stderr: {}", stderr);
             }
 
-            Err(AppError::Command(format!(
-                "{} (stderr: {})",
-                e, stderr
-            )))
+            Err(AppError::Command(format!("{} (stderr: {})", e, stderr)))
         }
     }
 }
@@ -286,7 +283,10 @@ pub fn list_disks() -> Result<Vec<Disk>, AppError> {
 }
 
 /// Get current RAM usage statistics
-#[expect(dead_code, reason = "Dashboard telemetry - unused while dashboard not integrated")]
+#[expect(
+    dead_code,
+    reason = "Dashboard telemetry - unused while dashboard not integrated"
+)]
 pub fn get_ram_usage() -> Result<RamUsage, AppError> {
     let output = Command::new("free")
         .arg("-h")
@@ -324,7 +324,10 @@ pub fn get_ram_usage() -> Result<RamUsage, AppError> {
 }
 
 /// Clear RAM cache (sync and drop caches)
-#[expect(dead_code, reason = "System maintenance - unused while UI not integrated")]
+#[expect(
+    dead_code,
+    reason = "System maintenance - unused while UI not integrated"
+)]
 pub async fn clear_ram_cache() -> Result<serde_json::Value, AppError> {
     // Run sync using sudo -n
     run_command_async(["sync"]).await?;

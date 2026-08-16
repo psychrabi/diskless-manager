@@ -3,7 +3,10 @@ use crate::auth::validate_token;
 use crate::types::{AuthError, Claims};
 
 /// Middleware for Tauri commands that require authentication
-#[expect(dead_code, reason = "Old Tauri middleware - auth handled by Axum middleware")]
+#[expect(
+    dead_code,
+    reason = "Old Tauri middleware - auth handled by Axum middleware"
+)]
 pub fn authenticate(token: String) -> Result<Claims, AuthError> {
     validate_token(&token)
 }

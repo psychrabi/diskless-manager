@@ -15,17 +15,12 @@ pub fn get_config() -> AppConfig {
         // and cached when the application starts up via read_config_db
         RwLock::new(AppConfig::default())
     });
-    cache
-        .read()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone()
+    cache.read().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
 pub fn set_config(config: &AppConfig) {
     let cache = CONFIG_CACHE.get_or_init(|| RwLock::new(config.clone()));
-    let mut w = cache
-        .write()
-        .unwrap_or_else(|e| e.into_inner());
+    let mut w = cache.write().unwrap_or_else(|e| e.into_inner());
     *w = config.clone();
 }
 
@@ -200,7 +195,10 @@ pub async fn read_config_db(pool: &sqlx::SqlitePool) -> Result<AppConfig, String
     Ok(config)
 }
 
-#[expect(dead_code, reason = "Old Tauri command - config saving handled by Axum")]
+#[expect(
+    dead_code,
+    reason = "Old Tauri command - config saving handled by Axum"
+)]
 pub async fn save_config(state: State<'_, AppState>, pool_name: String) -> Result<(), String> {
     let mut cfg = get_config();
     // Ensure settings is an object

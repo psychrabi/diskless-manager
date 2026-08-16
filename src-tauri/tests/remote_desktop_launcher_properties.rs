@@ -71,7 +71,7 @@ fn test_property_12_vnc_protocol_type() {
 #[test]
 fn test_property_13_rdp_launch_available() {
     let ssh_executor = Arc::new(SshExecutor::new());
-    let launcher = RemoteDesktopLauncher::new(ssh_executor);
+    let _launcher = RemoteDesktopLauncher::new(ssh_executor);
 
     // Verify launcher is created and ready
     assert!(true);
@@ -175,7 +175,7 @@ fn test_remote_desktop_protocol_serialization_ssh() {
 #[test]
 fn test_remote_desktop_launcher_creation() {
     let ssh_executor = Arc::new(SshExecutor::new());
-    let launcher = RemoteDesktopLauncher::new(ssh_executor);
+    let _launcher = RemoteDesktopLauncher::new(ssh_executor);
 
     // Verify launcher is created successfully
     assert!(true);

@@ -117,7 +117,9 @@ pub async fn clear_cache() -> Result<Json<serde_json::Value>, StatusCode> {
         let _ = stdin.write_all(b"3\n");
     }
 
-    let status = child.wait().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let status = child
+        .wait()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     if status.success() {
         Ok(Json(

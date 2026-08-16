@@ -1,4 +1,7 @@
-#![expect(dead_code, reason = "Old Tauri commands replaced by Axum handlers in api/handlers/clients.rs")]
+#![expect(
+    dead_code,
+    reason = "Old Tauri commands replaced by Axum handlers in api/handlers/clients.rs"
+)]
 
 use crate::core::client::{
     BootLogEntry, Client, ClientManager, CreateClientRequest, UpdateClientRequest,

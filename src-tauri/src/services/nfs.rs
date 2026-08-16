@@ -14,9 +14,14 @@ pub struct NfsService {
 }
 
 impl NfsService {
-    #[expect(dead_code, reason = "Constructed directly by ServiceManager::new, not by external callers")]
+    #[expect(
+        dead_code,
+        reason = "Constructed directly by ServiceManager::new, not by external callers"
+    )]
     pub fn new(settings: Settings) -> Self {
-        Self { settings: Arc::new(settings) }
+        Self {
+            settings: Arc::new(settings),
+        }
     }
 
     pub async fn generate_config(&self) -> anyhow::Result<()> {

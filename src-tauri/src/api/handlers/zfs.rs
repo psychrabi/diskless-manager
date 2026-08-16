@@ -206,7 +206,9 @@ pub async fn create_dataset(
             // Set the org.diskless:type property so list_datasets can find it
             let _ = Command::new("sudo")
                 .args(&[
-                    "-n", "zfs", "set",
+                    "-n",
+                    "zfs",
+                    "set",
                     &format!("org.diskless:type={}", request.usage_type),
                     &dataset_name,
                 ])

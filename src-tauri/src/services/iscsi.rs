@@ -15,7 +15,9 @@ pub struct IscsiService {
 
 impl IscsiService {
     pub fn new(settings: Settings) -> Self {
-        Self { settings: Arc::new(settings) }
+        Self {
+            settings: Arc::new(settings),
+        }
     }
 
     pub async fn generate_config(&self) -> anyhow::Result<()> {

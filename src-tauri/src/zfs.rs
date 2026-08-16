@@ -1,6 +1,10 @@
 //! ZFS-related logic for dataset, snapshot, and pool management.
 
-#![expect(dead_code, reason = "Many ZFS utility functions are only used by old Tauri commands or conditionally")]
+#![expect(
+    dead_code,
+    reason = "Many ZFS utility functions are only used by old Tauri commands or conditionally"
+)]
+use crate::infrastructure::zfs::{ZfsCloneOperations, ZfsCommand};
 
 use chrono::Local;
 
@@ -29,7 +33,7 @@ use crate::timed_execution;
 
 // Check if a ZFS dataset/snapshot exists (returns 0 if exists)
 pub fn zfs_exists(dataset: &str) -> bool {
-    run_command_check(&["zfs", "list", "-H", dataset]) == 0
+    ZfsCommand::new().check(["zfs", "list", "-H", dataset])
 }
 
 // Get the OS type of a master image from ZFS property
@@ -55,12 +59,16 @@ pub fn get_master_os(master_name: &str) -> Option<String> {
 
 // Destroy a ZFS dataset/snapshot
 pub fn zfs_destroy(dataset: &str) -> Result<(), AppError> {
-    run_command(&["zfs", "destroy", dataset])
+    ZfsCommand::new()
+        .execute(["zfs", "destroy", dataset])
+        .map_err(|error| AppError::Command(error.to_string()))
 }
 
 // Clone a ZFS snapshot to a new dataset
 pub fn zfs_clone(snapshot: &str, clone: &str) -> Result<(), AppError> {
-    run_command(&["zfs", "clone", snapshot, clone])
+    ZfsCloneOperations::new(ZfsCommand::new())
+        .clone(snapshot, clone)
+        .map_err(|error| AppError::Command(error.to_string()))
 }
 
 // Get the writeback dataset path if one exists, otherwise return the default zpool path

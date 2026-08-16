@@ -1,4 +1,7 @@
-#![expect(dead_code, reason = "Old Tauri commands replaced by Axum handlers in api/handlers/users.rs")]
+#![expect(
+    dead_code,
+    reason = "Old Tauri commands replaced by Axum handlers in api/handlers/users.rs"
+)]
 
 //! User management commands
 use crate::types::{AuthError, User, UserResponse};

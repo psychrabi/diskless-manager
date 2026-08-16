@@ -17,7 +17,10 @@ pub struct DhcpService {
 
 impl DhcpService {
     pub fn new(settings: Settings, db_pool: SqlitePool) -> Self {
-        Self { settings: Arc::new(settings), db_pool }
+        Self {
+            settings: Arc::new(settings),
+            db_pool,
+        }
     }
 
     pub async fn generate_config(&self) -> anyhow::Result<()> {
@@ -390,7 +393,10 @@ host {name} {{
     }
 }
 
-#[expect(dead_code, reason = "Utility function kept for potential future DHCP network calculations")]
+#[expect(
+    dead_code,
+    reason = "Utility function kept for potential future DHCP network calculations"
+)]
 fn calculate_network(ip: &str, netmask: &str) -> anyhow::Result<String> {
     let ip_parts: Vec<u8> = ip
         .split('.')

@@ -1,4 +1,7 @@
-#![expect(dead_code, reason = "Old Tauri commands replaced by Axum handlers - no handler for versions yet")]
+#![expect(
+    dead_code,
+    reason = "Old Tauri commands replaced by Axum handlers - no handler for versions yet"
+)]
 
 use crate::state::AppState;
 use serde::{Deserialize, Serialize};

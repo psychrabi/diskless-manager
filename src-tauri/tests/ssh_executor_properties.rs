@@ -1,6 +1,5 @@
 use app_lib::ssh_executor::{CommandResult, SshConfig, SshExecutor};
 use proptest::prelude::*;
-use std::time::Duration;
 
 // ============================================================================
 // Property 23: SSH Connection Timeout
@@ -290,7 +289,7 @@ proptest! {
 proptest! {
     #[test]
     fn prop_command_result_duration_non_negative(duration_ms in 0u64..1_000_000) {
-        let result = CommandResult {
+        let _result = CommandResult {
             exit_code: 0,
             stdout: String::new(),
             stderr: String::new(),

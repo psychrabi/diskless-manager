@@ -249,10 +249,12 @@ pub async fn configure_service(
                 StatusCode::NOT_FOUND
             })?;
 
-        write_with_sudo_tee(config_path, &content).await.map_err(|e| {
-            log::error!("Failed to write config for {}: {}", name, e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+        write_with_sudo_tee(config_path, &content)
+            .await
+            .map_err(|e| {
+                log::error!("Failed to write config for {}: {}", name, e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
 
         log::info!("Raw configuration saved for service: {}", name);
     } else {
@@ -267,7 +269,10 @@ pub async fn configure_service(
                 StatusCode::INTERNAL_SERVER_ERROR
             })?;
 
-        log::info!("Configuration regenerated from settings for service: {}", name);
+        log::info!(
+            "Configuration regenerated from settings for service: {}",
+            name
+        );
     }
 
     // Reload the service to pick up new config

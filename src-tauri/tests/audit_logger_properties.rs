@@ -1,7 +1,7 @@
 use app_lib::audit_logger::{AuditLogFilter, AuditLogger, ControlOperation, OperationResult};
 use app_lib::error_logger::{ControlError, ErrorLogger};
 use chrono::Utc;
-use proptest::prelude::*;
+
 use sqlx::sqlite::SqlitePool;
 use std::sync::Arc;
 

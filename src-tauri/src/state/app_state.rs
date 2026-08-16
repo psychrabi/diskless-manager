@@ -81,27 +81,105 @@ impl AppState {
     async fn init_database(pool: &SqlitePool) -> anyhow::Result<()> {
         sqlx::query(
             r#"
-            CREATE TABLE IF NOT EXISTS clients (
+            CREATE TABLE IF NOT EXISTS images (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL UNIQUE,
-                mac TEXT NOT NULL UNIQUE,
-                ip TEXT NOT NULL UNIQUE,
-                master TEXT,
-                enabled INTEGER NOT NULL DEFAULT 1,
-                created_at TEXT,
-                updated_at TEXT,
-                snapshot TEXT,
-                block_store TEXT,
-                target_iqn TEXT,
-                writeback TEXT,
-                last_modified TEXT,
-                block_device TEXT,
-                status TEXT,
-                mode TEXT,
-                pxe_mode TEXT NOT NULL DEFAULT 'uefi',
-                keep_writeback INTEGER NOT NULL DEFAULT 1,
-                use_game_disk INTEGER NOT NULL DEFAULT 0
+                kind TEXT NOT NULL DEFAULT 'master',
+                os_type TEXT NOT NULL,
+                size_gb INTEGER NOT NULL,
+                path TEXT NOT NULL,
+                format TEXT NOT NULL DEFAULT 'raw',
+                status TEXT NOT NULL DEFAULT 'ready',
+                description TEXT,
+                parent_id TEXT,
+                source_snapshot TEXT,
+                tags TEXT,
+                checksum TEXT,
+                is_default INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
             )
+            "#,
+        )
+        .execute(pool)
+        .await?;
+
+        let has_kind: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM pragma_table_info('images')
+            WHERE name = 'kind'
+            "#,
+        )
+        .fetch_one(pool)
+        .await?;
+
+        if has_kind == 0 {
+            sqlx::query(
+                r#"
+                ALTER TABLE images
+                ADD COLUMN kind TEXT NOT NULL DEFAULT 'master'
+                "#,
+            )
+            .execute(pool)
+            .await?;
+        }
+
+        let has_source_snapshot: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM pragma_table_info('images')
+            WHERE name = 'source_snapshot'
+            "#,
+        )
+        .fetch_one(pool)
+        .await?;
+
+        if has_source_snapshot == 0 {
+            sqlx::query(
+                r#"
+                ALTER TABLE images
+                ADD COLUMN source_snapshot TEXT
+                "#,
+            )
+            .execute(pool)
+            .await?;
+        }
+
+        // ---------------------------------------------------------------------
+        // Migrate legacy image records.
+        //
+        // Before ImageKind existed, parent_id was used for both snapshots
+        // and clones. Detect the old records from their descriptions.
+        // ---------------------------------------------------------------------
+
+        sqlx::query(
+            r#"
+            UPDATE images
+            SET kind = 'snapshot'
+            WHERE
+                parent_id IS NOT NULL
+                AND description LIKE 'Snapshot of %'
+                AND (kind IS NULL OR kind = 'master')
+            "#,
+        )
+        .execute(pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            UPDATE images
+            SET
+                kind = 'clone',
+                source_snapshot = CASE
+                    WHEN instr(description, '@') > 0
+                    THEN substr(description, instr(description, '@') + 1)
+                    ELSE source_snapshot
+                END
+            WHERE
+                parent_id IS NOT NULL
+                AND description LIKE 'Clone of %@%'
+                AND (kind IS NULL OR kind = 'master')
             "#,
         )
         .execute(pool)

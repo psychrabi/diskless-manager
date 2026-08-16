@@ -6,10 +6,8 @@ use axum::{
 // API routes configuration
 use crate::api::handlers::{
     auth::{check_admin_exists, login, update_admin_password, validate_auth_token},
-    clients::{
-        create_client, delete_client, get_client, get_client_boot_history, list_clients,
-        update_client,
-    },
+    clients::{create_client, delete_client, get_client_boot_history, update_client},
+    clients_v2::{get_client, list_clients},
     config::get_config,
     control::{
         cancel_operation, get_audit_logs, get_scheduled_operations, reboot_client,

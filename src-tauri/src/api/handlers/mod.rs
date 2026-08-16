@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod clients;
+pub mod clients_v2;
 pub mod config;
 pub mod control;
 pub mod dashboard;

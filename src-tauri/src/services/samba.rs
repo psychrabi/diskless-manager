@@ -13,9 +13,14 @@ pub struct SambaService {
 }
 
 impl SambaService {
-    #[expect(dead_code, reason = "Constructed directly by ServiceManager::new, not by external callers")]
+    #[expect(
+        dead_code,
+        reason = "Constructed directly by ServiceManager::new, not by external callers"
+    )]
     pub fn new(settings: Settings) -> Self {
-        Self { settings: Arc::new(settings) }
+        Self {
+            settings: Arc::new(settings),
+        }
     }
 
     pub async fn start(&self) -> anyhow::Result<()> {

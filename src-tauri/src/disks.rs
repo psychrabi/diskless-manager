@@ -7,16 +7,9 @@ use crate::{
     validation::{validate_pool_name, validate_size, validate_zfs_name},
 };
 
-
 pub fn list_block_devices() -> Result<Vec<String>, AppError> {
-    let out = run_command_output_no_sudo(&[
-        "lsblk",
-        "-d",
-        "-n",
-        "-o",
-        "NAME",
-    ])
-    .map_err(|e| AppError::Command(e.to_string()))?;
+    let out = run_command_output_no_sudo(&["lsblk", "-d", "-n", "-o", "NAME"])
+        .map_err(|e| AppError::Command(e.to_string()))?;
 
     let devices: Vec<String> = out
         .lines()
@@ -26,7 +19,6 @@ pub fn list_block_devices() -> Result<Vec<String>, AppError> {
 
     Ok(devices)
 }
-
 
 #[expect(dead_code, reason = "Utility function available for future use")]
 pub fn list_zpools() -> Result<Vec<String>, AppError> {
@@ -41,7 +33,6 @@ pub fn list_zpools() -> Result<Vec<String>, AppError> {
 
     Ok(pools)
 }
-
 
 #[expect(dead_code, reason = "Utility function available for future use")]
 pub fn list_datasets(zpool: &str) -> Result<Vec<DatasetInfo>, AppError> {
@@ -126,7 +117,6 @@ pub fn list_datasets(zpool: &str) -> Result<Vec<DatasetInfo>, AppError> {
 
     Ok(result)
 }
-
 
 #[expect(dead_code, reason = "Utility function available for future use")]
 pub fn create_zfs_dataset(req: CreateDatasetRequest) -> Result<String, AppError> {

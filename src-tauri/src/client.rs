@@ -929,7 +929,10 @@ pub async fn get_client_overview() -> Result<crate::types::ClientOverview, AppEr
     })
 }
 
-#[expect(dead_code, reason = "Utility function kept for reference, used by old Tauri commands")]
+#[expect(
+    dead_code,
+    reason = "Utility function kept for reference, used by old Tauri commands"
+)]
 fn check_client_online_status(mac: &str) -> bool {
     // Check DHCP leases
     if let Ok(output) = Command::new("dhcp-lease-list").output() {
