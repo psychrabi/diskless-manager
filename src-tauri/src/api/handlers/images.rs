@@ -176,11 +176,40 @@ pub async fn delete_image(
 ) -> Result<(), StatusCode> {
     let service = image_service(&state);
 
-    service.delete(&id).await.map_err(|error| {
-        log::error!("Failed to delete image '{}': {}", id, error);
+    match service.delete(&id).await {
+        Ok(()) => Ok(()),
 
-        StatusCode::INTERNAL_SERVER_ERROR
-    })
+        Err(error) => {
+            let message = error.to_string();
+
+            log::error!("Failed to delete image '{}': {}", id, message);
+
+            /*
+             * Image lifecycle conflicts are expected application-level
+             * conditions, not server failures.
+             *
+             * Examples:
+             *
+             * - master has snapshots
+             * - master has clones
+             * - clone has snapshots
+             * - image is marked as default
+             */
+            if message.contains("while dependent snapshots or clones exist") {
+                return Err(StatusCode::CONFLICT);
+            }
+
+            if message.contains("cannot delete the default image") {
+                return Err(StatusCode::CONFLICT);
+            }
+
+            /*
+             * Everything else remains an internal error until we
+             * introduce a typed application error hierarchy.
+             */
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
 }
 
 pub async fn import_image(
