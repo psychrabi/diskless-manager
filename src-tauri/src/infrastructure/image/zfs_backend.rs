@@ -115,7 +115,27 @@ impl ImageBackend for ZfsImageBackend {
     }
 
     fn clone_image(&self, source: &str, destination: &str) -> Result<()> {
-        self.clones.clone(source, destination)
+        if !source.contains('@') {
+            bail!("ZFS image clone source must be a snapshot: '{}'", source);
+        }
+
+        if destination.contains('@') {
+            bail!(
+                "ZFS clone destination cannot be a snapshot: '{}'",
+                destination
+            );
+        }
+
+        if self.exists(destination)? {
+            bail!("ZFS clone destination already exists: '{}'", destination);
+        }
+
+        self.clones.clone(source, destination).with_context(|| {
+            format!(
+                "failed to clone ZFS snapshot '{}' to '{}'",
+                source, destination
+            )
+        })
     }
 
     fn create_snapshot(&self, dataset: &str, snapshot: &str) -> Result<()> {

@@ -282,3 +282,20 @@ pub async fn configure_service(
 
     Ok(Json(format!("Service {} configured successfully", name)))
 }
+
+pub async fn install_service(
+    Json(payload): Json<serde_json::Value>,
+) -> Result<Json<String>, StatusCode> {
+    let service = payload
+        .get("service")
+        .and_then(|v| v.as_str())
+        .ok_or(StatusCode::BAD_REQUEST)?;
+
+    match crate::commands::system::install_package(service.to_string()).await {
+        Ok(msg) => Ok(Json(msg)),
+        Err(e) => {
+            log::error!("Failed to install service '{}': {}", service, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}

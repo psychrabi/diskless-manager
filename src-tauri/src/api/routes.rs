@@ -23,7 +23,7 @@ use crate::api::handlers::{
     license::{activate_license_handler, get_license_info_handler},
     logs::{clear_logs, get_logs},
     services::{
-        configure_service, get_service_config, get_service_status, list_services,
+        configure_service, get_service_config, get_service_status, install_service, list_services,
         restart_all_services, restart_service, start_all_services, start_service,
         stop_all_services, stop_service,
     },
@@ -131,6 +131,7 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route("/api/services/all/restart", post(restart_all_services))
         .route("/api/services/{name}/config", get(get_service_config))
         .route("/api/services/{name}/configure", post(configure_service))
+        .route("/api/services/install", post(install_service))
         // System routes (auth required)
         .route("/api/system/info", get(get_system_info))
         .route("/api/system/status", get(get_server_status))

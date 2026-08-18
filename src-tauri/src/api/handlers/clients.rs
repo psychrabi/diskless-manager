@@ -9,17 +9,18 @@ use log::{error, info};
 use serde::{Deserialize, Serialize};
 use std::process::Command;
 
-use crate::core::client::{
-    BootLogEntry, Client, ClientManager, CreateClientRequest, UpdateClientRequest,
+use crate::{
+    core::client::{BootLogEntry, Client, ClientManager, CreateClientRequest, UpdateClientRequest},
+    domain::storage::{ClientStorage, ClientStorageSpec, StorageSource, StorageVolume},
+    state::AppState,
+    validation::{validate_ip_address, validate_mac_address},
 };
-use crate::state::AppState;
-use crate::validation::{validate_ip_address, validate_mac_address};
-use crate::zfs::{get_writeback_or_default_dataset, zfs_clone, zfs_destroy, zfs_exists};
 
-// Helper function to get master OS
+/// Helper function to determine the master OS.
+///
+/// This is currently based on the master name. It can later be replaced
+/// with a proper image repository lookup.
 fn get_master_os(master_name: &str) -> Option<String> {
-    // This would typically query the database or cache to get the master image OS
-    // For now, return a default based on the master name
     if master_name.to_lowercase().contains("windows") {
         Some("windows".to_string())
     } else if master_name.to_lowercase().contains("linux") {
@@ -46,12 +47,176 @@ impl IntoResponse for ErrorResponse {
     }
 }
 
+// ============================================================================
+// Storage helpers
+// ============================================================================
+
+/// Build the desired storage specification for a client.
+///
+/// When a snapshot is configured:
+///
+/// ```text
+/// snapshot
+///     │
+///     ▼
+/// ZFS clone
+///     │
+///     ▼
+/// iSCSI LUN
+/// ```
+///
+/// When no snapshot is configured, the client references the existing
+/// master ZVOL instead:
+///
+/// ```text
+/// existing master ZVOL
+///     │
+///     ▼
+/// iSCSI LUN
+/// ```
+
+fn build_storage_spec(
+    settings: &crate::core::config::Settings,
+    client_id: &str,
+    client_name: &str,
+    master: &str,
+    snapshot: Option<&str>,
+    use_game_disk: bool,
+) -> Result<ClientStorageSpec, String> {
+    let client_name = client_name.trim();
+
+    if client_name.is_empty() {
+        return Err("Client name cannot be empty".to_string());
+    }
+
+    if master.trim().is_empty() {
+        return Err("Master image cannot be empty".to_string());
+    }
+
+    let target_iqn = format!(
+        "{}:client.{}",
+        settings.iscsi.target_prefix,
+        client_name.to_lowercase()
+    );
+
+    let backstore = format!("block_{}", client_name.to_lowercase());
+
+    match snapshot {
+        Some(snapshot) if !snapshot.trim().is_empty() => {
+            let dataset = crate::zfs::get_writeback_or_default_dataset(client_name);
+
+            Ok(ClientStorageSpec {
+                client_id: client_id.to_string(),
+                source: StorageSource::Snapshot(snapshot.to_string()),
+                dataset,
+                backstore,
+                target_iqn,
+                lun: 0,
+                use_game_disk,
+            })
+        }
+
+        _ => Ok(ClientStorageSpec {
+            client_id: client_id.to_string(),
+            source: StorageSource::ExistingVolume(master.to_string()),
+            dataset: master.to_string(),
+            backstore,
+            target_iqn,
+            lun: 0,
+            use_game_disk,
+        }),
+    }
+}
+
+/// Convert application storage information into the legacy client fields
+/// stored in the clients table.
+fn apply_storage_to_request(request: &mut CreateClientRequest, storage: &ClientStorage) {
+    request.block_store = Some(format!("/dev/zvol/{}", storage.dataset()));
+
+    request.block_device = Some(storage.block_device().display().to_string());
+
+    request.target_iqn = Some(storage.target_iqn().to_string());
+}
+
+/// Convert application storage information into the legacy client fields
+/// stored in the clients table.
+fn apply_storage_to_update_request(request: &mut UpdateClientRequest, storage: &ClientStorage) {
+    request.block_store = Some(format!("/dev/zvol/{}", storage.dataset()));
+
+    request.block_device = Some(storage.block_device().display().to_string());
+
+    request.target_iqn = Some(storage.target_iqn().to_string());
+}
+
+/// Reconstruct the application-level storage object from the persisted
+/// client record.
+///
+/// This is required when deleting/resetting a client because the actual
+/// application storage object is not persisted separately.
+fn storage_from_client(
+    settings: &crate::core::config::Settings,
+    client: &Client,
+) -> Result<ClientStorage, String> {
+    let spec = build_storage_spec(
+        settings,
+        &client.id,
+        &client.name,
+        &client.master,
+        client.snapshot.as_deref(),
+        client.use_game_disk.unwrap_or(false),
+    )?;
+
+    Ok(ClientStorage {
+        client_id: spec.client_id.clone(),
+        source: spec.source.clone(),
+        volume: StorageVolume::new(
+            spec.dataset.clone(),
+            spec.block_device(),
+            spec.backstore.clone(),
+            spec.target_iqn.clone(),
+            spec.lun,
+        ),
+        use_game_disk: spec.use_game_disk,
+    })
+}
+
+/// Regenerate DHCP configuration after a client change.
+async fn refresh_dhcp(state: &AppState, settings: &crate::core::config::Settings, operation: &str) {
+    if !settings.dhcp.enabled {
+        return;
+    }
+
+    let dhcp_service = crate::services::DhcpService::new(settings.clone(), state.db_pool.clone());
+
+    if let Err(e) = dhcp_service.generate_client_configs().await {
+        tracing::warn!(
+            "Failed to regenerate DHCP client configuration after {}: {}",
+            operation,
+            e
+        );
+    } else {
+        info!("DHCP client configuration regenerated after {}", operation);
+    }
+
+    if let Err(e) = dhcp_service.reload().await {
+        tracing::warn!("Failed to reload DHCP service after {}: {}", operation, e);
+    } else {
+        info!("DHCP service reloaded successfully after {}", operation);
+    }
+}
+
+// ============================================================================
+// Client CRUD
+// ============================================================================
+
 pub async fn list_clients(State(state): State<AppState>) -> Result<Json<Vec<Client>>, StatusCode> {
     let manager = ClientManager::new(state.db_pool.clone());
+
     let clients = manager
         .list()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
     Ok(Json(clients))
 }
 
@@ -60,7 +225,9 @@ pub async fn get_client(
     Path(id): Path<String>,
 ) -> Result<Json<Client>, StatusCode> {
     let manager = ClientManager::new(state.db_pool.clone());
+
     let client = manager.get(&id).await.map_err(|_| StatusCode::NOT_FOUND)?;
+
     Ok(Json(client))
 }
 
@@ -72,103 +239,96 @@ pub async fn create_client(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    let settings = state.settings.read().await;
-
     info!("Creating client: {:?}", request);
 
-    request.target_iqn = Some(format!(
-        "{}:client.{}",
-        settings.iscsi.target_prefix,
-        request.name.to_lowercase()
-    ));
-    request.block_store = Some(format!("/dev/zvol/{}", request.master));
-    request.block_device = Some(format!("block_{}", request.name.to_lowercase()));
+    let settings = state.settings.read().await;
 
-    let client_name: &str = &request.name;
+    // ------------------------------------------------------------------------
+    // Build desired storage state.
+    // ------------------------------------------------------------------------
 
-    let clone_dataset = get_writeback_or_default_dataset(client_name);
-
-    // Check if a clone already exists and destroy it first
-    if zfs_exists(&clone_dataset) {
-        if let Err(e) = zfs_destroy(&clone_dataset) {
-            error!(
-                "Failed to destroy existing ZFS clone for client '{}': {}",
-                client_name, e
-            );
-            return Err(StatusCode::INTERNAL_SERVER_ERROR);
-        }
-        info!(
-            "Successfully destroyed existing ZFS clone for client '{}' before creating new one",
-            client_name
+    let storage_spec = build_storage_spec(
+        &settings,
+        &request.name,
+        &request.name,
+        &request.master,
+        request.snapshot.as_deref(),
+        request.use_game_disk.unwrap_or(false),
+    )
+    .map_err(|error| {
+        error!(
+            "Invalid storage configuration for client '{}': {}",
+            request.name, error
         );
-    }
 
-    // Generate iSCSI target details based on whether snapshot is provided
-    if let Some(snapshot) = &request.snapshot {
-        // If snapshot is provided, create ZFS clone for the snapshot
-        let block_store_path = format!("/dev/zvol/{}", clone_dataset);
-        request.block_store = Some(block_store_path);
-        // Create the ZFS clone from the snapshot
-        if let Err(e) = zfs_clone(snapshot, &clone_dataset) {
+        StatusCode::BAD_REQUEST
+    })?;
+
+    // ------------------------------------------------------------------------
+    // Provision storage through the application service.
+    // ------------------------------------------------------------------------
+
+    let storage = state
+        .application
+        .storage
+        .create_client_storage(&storage_spec)
+        .map_err(|error| {
             error!(
-                "Failed to create ZFS clone for client '{}': {}",
-                client_name, e
+                "Failed to provision storage for client '{}': {}",
+                request.name, error
             );
-            return Err(StatusCode::INTERNAL_SERVER_ERROR);
-        }
-        info!(
-            "Successfully created ZFS clone for client '{}' from snapshot '{}'",
-            client_name, snapshot
-        );
-    }
+
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    apply_storage_to_request(&mut request, &storage);
 
     info!(
-        "Generated iSCSI details for client '{}': block_store={}\n, block_device={}\n, target_iqn={}",
+        "Provisioned storage for client '{}': dataset={}, block_device={}, target_iqn={}",
         request.name,
-        request.block_store.clone().ok_or(StatusCode::BAD_REQUEST)?,
-        request
-            .block_device
-            .clone()
-            .ok_or(StatusCode::BAD_REQUEST)?,
-        request.target_iqn.clone().ok_or(StatusCode::BAD_REQUEST)?
+        storage.dataset(),
+        storage.block_device().display(),
+        storage.target_iqn()
     );
 
+    // ------------------------------------------------------------------------
+    // Persist client.
+    //
+    // If persistence fails, rollback storage so that we don't leave orphaned
+    // ZFS/iSCSI resources behind.
+    // ------------------------------------------------------------------------
+
     let manager = ClientManager::new(state.db_pool.clone());
-    let client = manager
-        .create(request)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let client = match manager.create(request).await {
+        Ok(client) => client,
+
+        Err(error) => {
+            error!(
+                "Failed to persist client after storage provisioning: {}",
+                error
+            );
+
+            if let Err(cleanup_error) = state.application.storage.destroy_client_storage(&storage) {
+                error!(
+                    "Failed to rollback storage after client creation failure: {}",
+                    cleanup_error
+                );
+            }
+
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
 
     info!("Created client: {}", client.name);
 
-    // Refresh client IPs cache
+    // Refresh client IP cache.
     if let Err(e) = state.refresh_client_ips().await {
         tracing::warn!("Failed to refresh client IPs cache: {}", e);
     }
 
-    let iscsi_service = crate::services::IscsiService::new(settings.clone());
-    let _ = iscsi_service.create_target(&client).await.inspect_err(|e| {
-        tracing::error!("Failed to create iSCSI target for client: {}", e);
-    });
-    info!("Created iSCSI target for client: {}", client.name);
-
-    // Regenerate DHCP configuration with new client
-    if settings.dhcp.enabled {
-        let dhcp_service =
-            crate::services::DhcpService::new(settings.clone(), state.db_pool.clone());
-        if let Err(e) = dhcp_service.generate_client_configs().await {
-            tracing::warn!("Failed to regenerate DHCP client config: {}", e);
-        } else {
-            info!("DHCP client configuration regenerated after adding client");
-        }
-
-        // Reload DHCP service to apply changes
-        if let Err(e) = dhcp_service.reload().await {
-            tracing::warn!("Failed to reload DHCP service: {}", e);
-        } else {
-            info!("DHCP service reloaded successfully after adding client");
-        }
-    }
+    // DHCP configuration.
+    refresh_dhcp(&state, &settings, "adding client").await;
 
     Ok(Json(client))
 }
@@ -179,6 +339,10 @@ pub async fn update_client(
     Json(mut request): Json<UpdateClientRequest>,
 ) -> Result<Json<Client>, (StatusCode, Json<ErrorResponse>)> {
     info!("Updating client: {:?}", request);
+
+    // ------------------------------------------------------------------------
+    // Validate request.
+    // ------------------------------------------------------------------------
 
     if let Some(ip) = &request.ip {
         if validate_ip_address(ip).is_err() {
@@ -203,7 +367,7 @@ pub async fn update_client(
     }
 
     let manager = ClientManager::new(state.db_pool.clone());
-    // Get existing client to determine the name for iSCSI details
+
     let existing_client = manager.get(&id).await.map_err(|_| {
         (
             StatusCode::NOT_FOUND,
@@ -213,12 +377,16 @@ pub async fn update_client(
         )
     })?;
 
-    // Handle action-based requests (wake, reboot, shutdown, etc.)
+    // ========================================================================
+    // Action-based requests
+    // ========================================================================
+
     if let Some(action) = &request.action {
         match action.as_str() {
+            // ----------------------------------------------------------------
+            // Wake
+            // ----------------------------------------------------------------
             "wake" => {
-                // Send WOL packet to wake the client
-                use std::process::Command;
                 let mac = &existing_client.mac;
 
                 info!(
@@ -226,113 +394,92 @@ pub async fn update_client(
                     existing_client.name, mac
                 );
 
-                // Try wakeonlan first
                 let result = Command::new("wakeonlan").arg(mac).output();
 
                 match result {
                     Ok(output) => {
                         let stdout = String::from_utf8_lossy(&output.stdout);
+
                         let stderr = String::from_utf8_lossy(&output.stderr);
 
                         if output.status.success() {
-                            info!("Successfully sent WOL packet using wakeonlan to client {} ({}). Output: {}", existing_client.name, mac, stdout);
-                            return Ok(Json(existing_client));
-                        } else {
-                            error!(
-                                "wakeonlan failed for client {} ({}). Status: {:?}, Stderr: {}",
-                                existing_client.name, mac, output.status, stderr
+                            info!(
+                                "Successfully sent WOL packet using wakeonlan to client {} ({}). Output: {}",
+                                existing_client.name,
+                                mac,
+                                stdout
                             );
 
-                            // Try etherwake as fallback
-                            let result2 = Command::new("etherwake").arg("-b").arg(mac).output();
-
-                            match result2 {
-                                Ok(output2) => {
-                                    let stdout2 = String::from_utf8_lossy(&output2.stdout);
-                                    let stderr2 = String::from_utf8_lossy(&output2.stderr);
-
-                                    if output2.status.success() {
-                                        info!("Successfully sent WOL packet using etherwake to client {} ({}). Output: {}", existing_client.name, mac, stdout2);
-                                        return Ok(Json(existing_client));
-                                    } else {
-                                        let error_msg = format!(
-                                            "etherwake failed for client {} ({}): {}",
-                                            existing_client.name, mac, stderr2
-                                        );
-                                        error!("{}", error_msg);
-                                        return Err((
-                                            StatusCode::INTERNAL_SERVER_ERROR,
-                                            Json(ErrorResponse { error: error_msg }),
-                                        )
-                                            .into());
-                                    }
-                                }
-                                Err(e) => {
-                                    let error_msg = format!(
-                                        "Failed to execute etherwake for client {} ({}): {}",
-                                        existing_client.name, mac, e
-                                    );
-                                    error!("{}", error_msg);
-                                    return Err((
-                                        StatusCode::INTERNAL_SERVER_ERROR,
-                                        Json(ErrorResponse { error: error_msg }),
-                                    )
-                                        .into());
-                                }
-                            }
+                            return Ok(Json(existing_client));
                         }
-                    }
-                    Err(e) => {
+
                         error!(
-                            "wakeonlan command not found or failed: {}. Trying etherwake...",
-                            e
+                            "wakeonlan failed for client {} ({}). Status: {:?}, Stderr: {}",
+                            existing_client.name, mac, output.status, stderr
+                        );
+                    }
+
+                    Err(e) => {
+                        error!("wakeonlan command not found or failed: {}", e);
+                    }
+                }
+
+                // Fallback to etherwake.
+                match Command::new("etherwake").arg("-b").arg(mac).output() {
+                    Ok(output) => {
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+
+                        if output.status.success() {
+                            info!(
+                                "Successfully sent WOL packet using etherwake to client {} ({}). Output: {}",
+                                existing_client.name,
+                                mac,
+                                stdout
+                            );
+
+                            return Ok(Json(existing_client));
+                        }
+
+                        let error_msg = format!(
+                            "etherwake failed for client {} ({}): {}",
+                            existing_client.name, mac, stderr
                         );
 
-                        // Try etherwake directly
-                        let result2 = Command::new("etherwake").arg("-b").arg(mac).output();
+                        error!("{}", error_msg);
 
-                        match result2 {
-                            Ok(output2) => {
-                                let stdout2 = String::from_utf8_lossy(&output2.stdout);
-                                let stderr2 = String::from_utf8_lossy(&output2.stderr);
+                        return Err((
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(ErrorResponse { error: error_msg }),
+                        ));
+                    }
 
-                                if output2.status.success() {
-                                    info!("Successfully sent WOL packet using etherwake to client {} ({}). Output: {}", existing_client.name, mac, stdout2);
-                                    return Ok(Json(existing_client));
-                                } else {
-                                    let error_msg = format!(
-                                        "etherwake failed for client {} ({}): {}",
-                                        existing_client.name, mac, stderr2
-                                    );
-                                    error!("{}", error_msg);
-                                    return Err((
-                                        StatusCode::INTERNAL_SERVER_ERROR,
-                                        Json(ErrorResponse { error: error_msg }),
-                                    )
-                                        .into());
-                                }
-                            }
-                            Err(e) => {
-                                let error_msg = format!(
-                                    "Failed to execute etherwake for client {} ({}): {}",
-                                    existing_client.name, mac, e
-                                );
-                                error!("{}", error_msg);
-                                return Err((
-                                    StatusCode::INTERNAL_SERVER_ERROR,
-                                    Json(ErrorResponse { error: error_msg }),
-                                )
-                                    .into());
-                            }
-                        }
+                    Err(e) => {
+                        let error_msg = format!(
+                            "Failed to execute etherwake for client {} ({}): {}",
+                            existing_client.name, mac, e
+                        );
+
+                        error!("{}", error_msg);
+
+                        return Err((
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(ErrorResponse { error: error_msg }),
+                        ));
                     }
                 }
             }
+
+            // ----------------------------------------------------------------
+            // Reboot
+            // ----------------------------------------------------------------
             "reboot" => {
                 let ip = &existing_client.ip;
+
                 if ip.is_empty() {
                     let error_msg = format!("IP address not found for '{}'", existing_client.name);
-                    error!("{}", error_msg);
+
                     return Err((
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(ErrorResponse { error: error_msg }),
@@ -344,9 +491,8 @@ pub async fn update_client(
                     .to_lowercase();
 
                 if master_os.contains("linux") {
-                    // Linux: SSH reboot
                     let output = Command::new("ssh")
-                        .args(&[
+                        .args([
                             "-o",
                             "StrictHostKeyChecking=no",
                             "-o",
@@ -369,16 +515,15 @@ pub async fn update_client(
                             "Failed to reboot Linux client (SSH): {}",
                             String::from_utf8_lossy(&output.stderr)
                         );
-                        error!("{}", error_msg);
+
                         return Err((
                             StatusCode::INTERNAL_SERVER_ERROR,
                             Json(ErrorResponse { error: error_msg }),
                         ));
                     }
                 } else {
-                    // Windows: NET RPC
                     let output = Command::new("net")
-                        .args(&[
+                        .args([
                             "rpc",
                             "shutdown",
                             "-r",
@@ -405,7 +550,7 @@ pub async fn update_client(
                             "Failed to reboot client: {}",
                             String::from_utf8_lossy(&output.stderr)
                         );
-                        error!("{}", error_msg);
+
                         return Err((
                             StatusCode::INTERNAL_SERVER_ERROR,
                             Json(ErrorResponse { error: error_msg }),
@@ -414,13 +559,19 @@ pub async fn update_client(
                 }
 
                 info!("Reboot command sent to {} ({})", existing_client.name, ip);
+
                 return Ok(Json(existing_client));
             }
+
+            // ----------------------------------------------------------------
+            // Shutdown
+            // ----------------------------------------------------------------
             "shutdown" => {
                 let ip = &existing_client.ip;
+
                 if ip.is_empty() {
                     let error_msg = format!("IP address not found for '{}'", existing_client.name);
-                    error!("{}", error_msg);
+
                     return Err((
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(ErrorResponse { error: error_msg }),
@@ -432,9 +583,8 @@ pub async fn update_client(
                     .to_lowercase();
 
                 if master_os.contains("linux") {
-                    // Linux: SSH poweroff
                     let output = Command::new("ssh")
-                        .args(&[
+                        .args([
                             "-o",
                             "StrictHostKeyChecking=no",
                             "-o",
@@ -457,16 +607,15 @@ pub async fn update_client(
                             "Failed to shutdown Linux client (SSH): {}",
                             String::from_utf8_lossy(&output.stderr)
                         );
-                        error!("{}", error_msg);
+
                         return Err((
                             StatusCode::INTERNAL_SERVER_ERROR,
                             Json(ErrorResponse { error: error_msg }),
                         ));
                     }
                 } else {
-                    // Windows: NET RPC
                     let output = Command::new("net")
-                        .args(&[
+                        .args([
                             "rpc",
                             "shutdown",
                             "-I",
@@ -492,7 +641,7 @@ pub async fn update_client(
                             "Failed to shutdown client: {}",
                             String::from_utf8_lossy(&output.stderr)
                         );
-                        error!("{}", error_msg);
+
                         return Err((
                             StatusCode::INTERNAL_SERVER_ERROR,
                             Json(ErrorResponse { error: error_msg }),
@@ -501,23 +650,34 @@ pub async fn update_client(
                 }
 
                 info!("Shutdown command sent to {} ({})", existing_client.name, ip);
+
                 return Ok(Json(existing_client));
             }
+
+            // ----------------------------------------------------------------
+            // Remote
+            // ----------------------------------------------------------------
             "remote" => {
-                // Remote control is handled by the frontend
                 info!("Remote control for client: {}", existing_client.name);
+
                 return Ok(Json(existing_client));
             }
+
+            // ----------------------------------------------------------------
+            // Super mode
+            // ----------------------------------------------------------------
             "super" => {
-                // Handle super mode toggle
                 if let Some(make_super) = request.make_super {
                     let mut client = existing_client.clone();
+
                     client.mode = if make_super {
                         Some("super".to_string())
                     } else {
                         None
                     };
+
                     client.updated_at = Utc::now();
+
                     client.last_modified =
                         Some(client.updated_at.format("%Y-%m-%d %H:%M:%S").to_string());
 
@@ -544,330 +704,222 @@ pub async fn update_client(
                     })?;
 
                     info!("Client '{}' super mode set to: {}", client.name, make_super);
+
                     return Ok(Json(client));
                 }
             }
+
+            // ----------------------------------------------------------------
+            // Reset writeback
+            // ----------------------------------------------------------------
             "reset" => {
-                // Reset writeback - destroy and recreate the client's ZFS clone
                 info!("Reset writeback for client: {}", existing_client.name);
 
-                let clone_dataset = get_writeback_or_default_dataset(&existing_client.name);
+                let snapshot = match existing_client.snapshot.as_deref() {
+                    Some(value) if !value.trim().is_empty() => value,
 
-                // Only proceed if the client has a snapshot to clone from
-                if let Some(snapshot) = &existing_client.snapshot {
-                    // First, remove the iSCSI target if it exists to free up the dataset
-                    if existing_client.target_iqn.is_some() {
-                        let settings = state.settings.read().await;
-                        let iscsi_service = crate::services::IscsiService::new(settings.clone());
-
-                        info!(
-                            "Removing iSCSI target for client '{}' before reset",
-                            existing_client.name
-                        );
-                        if let Err(e) = iscsi_service.remove_target(&existing_client.name).await {
-                            log::warn!(
-                                "Failed to remove iSCSI target for client '{}': {}",
-                                existing_client.name,
-                                e
-                            );
-                            // Continue anyway - the target might not exist or be in an inconsistent state
-                        }
-                    }
-
-                    // Destroy existing clone if it exists
-                    if zfs_exists(&clone_dataset) {
-                        if let Err(e) = zfs_destroy(&clone_dataset) {
-                            log::warn!(
-                                "Failed to destroy existing clone for client '{}': {}",
-                                existing_client.name,
-                                e
-                            );
-                            return Err((
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                Json(ErrorResponse {
-                                    error: format!("Failed to destroy existing writeback clone: {}. The dataset may still be in use by a running client.", e)
-                                })
-                            ));
-                        }
-                        info!("Destroyed existing writeback clone: {}", clone_dataset);
-                    }
-
-                    // Recreate the clone from the snapshot
-                    if let Err(e) = zfs_clone(snapshot, &clone_dataset) {
-                        log::error!(
-                            "Failed to recreate writeback clone for client '{}': {}",
-                            existing_client.name,
-                            e
-                        );
+                    _ => {
                         return Err((
-                            StatusCode::INTERNAL_SERVER_ERROR,
+                            StatusCode::BAD_REQUEST,
                             Json(ErrorResponse {
-                                error: format!("Failed to recreate writeback clone: {}", e),
+                                error: "Cannot reset writeback: client has no snapshot configured"
+                                    .to_string(),
                             }),
                         ));
                     }
-
-                    // Recreate the iSCSI target if it existed
-                    if existing_client.target_iqn.is_some() {
-                        let settings = state.settings.read().await;
-                        let iscsi_service = crate::services::IscsiService::new(settings.clone());
-
-                        info!(
-                            "Recreating iSCSI target for client '{}' after reset",
-                            existing_client.name
-                        );
-                        if let Err(e) = iscsi_service.create_target(&existing_client).await {
-                            log::warn!(
-                                "Failed to recreate iSCSI target for client '{}': {}",
-                                existing_client.name,
-                                e
-                            );
-                            // Don't fail the entire operation - the clone was successfully created
-                        }
-                    }
-
-                    info!(
-                        "Successfully reset writeback for client '{}': recreated clone from {}",
-                        existing_client.name, snapshot
-                    );
-                    return Ok(Json(existing_client));
-                } else {
-                    log::warn!(
-                        "Cannot reset writeback for client '{}': no snapshot configured",
-                        existing_client.name
-                    );
-                    return Err((
-                        StatusCode::BAD_REQUEST,
-                        Json(ErrorResponse {
-                            error: "Cannot reset writeback: client has no snapshot configured"
-                                .to_string(),
-                        }),
-                    ));
-                }
-            }
-            "reset_clean" => {
-                // Reset to clean state - destroy clone and recreate from master image directly
-                info!("Reset to clean state for client: {}", existing_client.name);
-
-                let clone_dataset = get_writeback_or_default_dataset(&existing_client.name);
-
-                // First, remove the iSCSI target if it exists to free up the dataset
-                if existing_client.target_iqn.is_some() {
-                    let settings = state.settings.read().await;
-                    let iscsi_service = crate::services::IscsiService::new(settings.clone());
-
-                    info!(
-                        "Removing iSCSI target for client '{}' before clean reset",
-                        existing_client.name
-                    );
-                    if let Err(e) = iscsi_service.remove_target(&existing_client.name).await {
-                        log::warn!(
-                            "Failed to remove iSCSI target for client '{}': {}",
-                            existing_client.name,
-                            e
-                        );
-                        // Continue anyway - the target might not exist or be in an inconsistent state
-                    }
-                }
-
-                // Destroy existing clone if it exists
-                if zfs_exists(&clone_dataset) {
-                    if let Err(e) = zfs_destroy(&clone_dataset) {
-                        log::warn!(
-                            "Failed to destroy existing clone for client '{}': {}",
-                            existing_client.name,
-                            e
-                        );
-                        return Err((
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ErrorResponse {
-                                error: format!("Failed to destroy existing clone: {}. The dataset may still be in use by a running client.", e)
-                            })
-                        ));
-                    }
-                    info!(
-                        "Destroyed existing clone for clean reset: {}",
-                        clone_dataset
-                    );
-                }
-
-                // For clean reset, recreate from the base snapshot or master
-                let source = if let Some(snapshot) = &existing_client.snapshot {
-                    snapshot.clone()
-                } else {
-                    // If no snapshot, try to use the master directly
-                    existing_client.master.clone()
                 };
 
-                // Recreate the clone
-                if let Err(e) = zfs_clone(&source, &clone_dataset) {
-                    log::error!(
-                        "Failed to recreate clean clone for client '{}': {}",
-                        existing_client.name,
-                        e
-                    );
-                    return Err((
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(ErrorResponse {
-                            error: format!("Failed to recreate clean clone: {}", e),
-                        }),
-                    ));
-                }
+                let settings = state.settings.read().await;
 
-                // Recreate the iSCSI target if it existed
-                if existing_client.target_iqn.is_some() {
-                    let settings = state.settings.read().await;
-                    let iscsi_service = crate::services::IscsiService::new(settings.clone());
+                let spec = build_storage_spec(
+                    &settings,
+                    &existing_client.id,
+                    &existing_client.name,
+                    &existing_client.master,
+                    Some(snapshot),
+                    existing_client.use_game_disk.unwrap_or(false),
+                )
+                .map_err(|error| (StatusCode::BAD_REQUEST, Json(ErrorResponse { error })))?;
 
-                    info!(
-                        "Recreating iSCSI target for client '{}' after clean reset",
-                        existing_client.name
-                    );
-                    if let Err(e) = iscsi_service.create_target(&existing_client).await {
-                        log::warn!(
-                            "Failed to recreate iSCSI target for client '{}': {}",
-                            existing_client.name,
-                            e
-                        );
-                        // Don't fail the entire operation - the clone was successfully created
-                    }
-                }
+                let current =
+                    storage_from_client(&settings, &existing_client).map_err(|error| {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(ErrorResponse { error }),
+                        )
+                    })?;
+
+                state
+                    .application
+                    .storage
+                    .reset_client_storage(&current, &spec)
+                    .map_err(|error| {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(ErrorResponse {
+                                error: format!("Failed to reset client storage: {}", error),
+                            }),
+                        )
+                    })?;
 
                 info!(
-                    "Successfully reset client '{}' to clean state: recreated clone from {}",
-                    existing_client.name, source
+                    "Successfully reset writeback for client '{}'",
+                    existing_client.name
                 );
+
                 return Ok(Json(existing_client));
             }
+
+            // ----------------------------------------------------------------
+            // Reset clean
+            // ----------------------------------------------------------------
+            "reset_clean" => {
+                info!("Reset to clean state for client: {}", existing_client.name);
+
+                let settings = state.settings.read().await;
+
+                let source = existing_client
+                    .snapshot
+                    .as_deref()
+                    .filter(|value| !value.trim().is_empty());
+
+                let spec = build_storage_spec(
+                    &settings,
+                    &existing_client.id,
+                    &existing_client.name,
+                    &existing_client.master,
+                    source,
+                    existing_client.use_game_disk.unwrap_or(false),
+                )
+                .map_err(|error| (StatusCode::BAD_REQUEST, Json(ErrorResponse { error })))?;
+
+                let current =
+                    storage_from_client(&settings, &existing_client).map_err(|error| {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(ErrorResponse { error }),
+                        )
+                    })?;
+
+                state
+                    .application
+                    .storage
+                    .reset_client_storage(&current, &spec)
+                    .map_err(|error| {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(ErrorResponse {
+                                error: format!("Failed to reset client storage: {}", error),
+                            }),
+                        )
+                    })?;
+
+                info!(
+                    "Successfully reset client '{}' to clean state",
+                    existing_client.name
+                );
+
+                return Ok(Json(existing_client));
+            }
+
             _ => {
-                log::warn!("Unknown action: {}", action);
+                tracing::warn!("Unknown client action: {}", action);
             }
         }
     }
+
+    // ========================================================================
+    // Normal client update
+    // ========================================================================
 
     let settings = state.settings.read().await;
 
-    // Regenerate iSCSI target if iSCSI details were updated
-    let iscsi_service = crate::services::IscsiService::new(settings.clone());
-    // First remove the old target if it existed
-    info!(
-        "Removing old iSCSI target for client: {}",
-        existing_client.name
-    );
-    if existing_client.target_iqn.is_some() {
-        let _ = iscsi_service
-            .remove_target(&existing_client.name)
-            .await
-            .inspect_err(|e| {
-                tracing::warn!(
-                    "Failed to remove old iSCSI target for client '{}': {}",
-                    existing_client.name,
-                    e
-                );
-            });
-        info!(
-            "Removed old iSCSI target for client: {}",
-            existing_client.name
+    let new_name = request.name.as_deref().unwrap_or(&existing_client.name);
+
+    let new_master = request.master.as_deref().unwrap_or(&existing_client.master);
+
+    let new_snapshot = request.snapshot.as_deref();
+
+    // ------------------------------------------------------------------------
+    // Remove current storage first.
+    //
+    // This allows us to safely replace:
+    //
+    //     old snapshot clone
+    //
+    // with:
+    //
+    //     new snapshot clone
+    //
+    // or:
+    //
+    //     master volume
+    // ------------------------------------------------------------------------
+
+    let current_storage = storage_from_client(&settings, &existing_client).map_err(|error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { error }),
+        )
+    })?;
+
+    if let Err(error) = state
+        .application
+        .storage
+        .destroy_client_storage(&current_storage)
+    {
+        tracing::warn!(
+            "Failed to remove existing storage for client '{}': {}",
+            existing_client.name,
+            error
         );
     }
 
-    // Generate iSCSI target details based on snapshot presence
-    // Use new name if provided, otherwise use existing name
-    let client_name: &str = request.name.as_deref().unwrap_or(&existing_client.name);
+    // ------------------------------------------------------------------------
+    // Create desired new storage.
+    // ------------------------------------------------------------------------
 
-    // Ensure required iSCSI fields are set
-    if request.target_iqn.is_none() {
-        request.target_iqn = Some(format!(
-            "{}:client.{}",
-            settings.iscsi.target_prefix,
-            client_name.to_lowercase()
-        ));
-    }
+    let storage_spec = build_storage_spec(
+        &settings,
+        &existing_client.id,
+        new_name,
+        new_master,
+        new_snapshot,
+        request
+            .use_game_disk
+            .or(existing_client.use_game_disk)
+            .unwrap_or(false),
+    )
+    .map_err(|error| (StatusCode::BAD_REQUEST, Json(ErrorResponse { error })))?;
 
-    if request.block_device.is_none() {
-        request.block_device = Some(format!("block_{}", client_name.to_lowercase()));
-    }
-
-    // Handle ZFS clone based on snapshot value in request
-    if let Some(snapshot) = &request.snapshot {
-        // If snapshot is provided, create ZFS clone for the snapshot
-        let clone_dataset = get_writeback_or_default_dataset(client_name);
-
-        // Check if a clone already exists and destroy it first
-        if zfs_exists(&clone_dataset) {
-            if let Err(e) = zfs_destroy(&clone_dataset) {
-                let error_msg = format!(
-                    "Failed to destroy existing ZFS clone for client '{}': {}",
-                    client_name, e
-                );
-                error!("{}", error_msg);
-                return Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse { error: error_msg }),
-                ));
-            }
-            info!(
-                "Successfully destroyed existing ZFS clone for client '{}' before creating new one",
-                client_name
-            );
-        }
-
-        let block_store_path = format!("/dev/zvol/{}", clone_dataset);
-        request.block_store = Some(block_store_path);
-        // Create the ZFS clone from the snapshot
-        if let Err(e) = zfs_clone(snapshot, &clone_dataset) {
-            let error_msg = format!(
-                "Failed to create ZFS clone for client '{}': {}",
-                client_name, e
-            );
-            error!("{}", error_msg);
-            return Err((
+    let storage = state
+        .application
+        .storage
+        .create_client_storage(&storage_spec)
+        .map_err(|error| {
+            (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse { error: error_msg }),
-            ));
-        }
-        info!(
-            "Successfully created ZFS clone for client '{}' from snapshot '{}'",
-            client_name, snapshot
-        );
-    } else {
-        // Previous client had a snapshot, but now it's being removed
-        let clone_dataset = get_writeback_or_default_dataset(client_name);
-        if zfs_exists(&clone_dataset) {
-            if let Err(e) = zfs_destroy(&clone_dataset) {
-                let error_msg = format!(
-                    "Failed to destroy ZFS clone for client '{}': {}",
-                    client_name, e
-                );
-                error!("{}", error_msg);
-                return Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse { error: error_msg }),
-                ));
-            }
-            info!(
-                "Successfully destroyed ZFS clone for client '{}' after snapshot removal",
-                client_name
+                Json(ErrorResponse {
+                    error: format!("Failed to provision new client storage: {}", error),
+                }),
+            )
+        })?;
+
+    apply_storage_to_update_request(&mut request, &storage);
+
+    // ------------------------------------------------------------------------
+    // Persist the new client configuration.
+    // ------------------------------------------------------------------------
+
+    let client = manager.update(&id, request).await.map_err(|e| {
+        // Database update failed. Remove newly created storage.
+        if let Err(cleanup_error) = state.application.storage.destroy_client_storage(&storage) {
+            error!(
+                "Failed to rollback newly created storage after database update failure: {}",
+                cleanup_error
             );
         }
 
-        // Since previous client had a snapshot but it's not provided in request,
-        // we should clear the snapshot in the database to indicate no snapshot is used
-        request.snapshot = None;
-
-        // Use master image as block store (prefer new master from request)
-        let master_dataset = request.master.as_deref().unwrap_or(&existing_client.master);
-        let block_store_path = format!("/dev/zvol/{}", master_dataset);
-        request.block_store = Some(block_store_path);
-        info!(
-            "Using master image as block store for client '{}'",
-            client_name
-        );
-    }
-
-    let manager = ClientManager::new(state.db_pool.clone());
-    info!("Updating client in database: {:?}", request);
-    let client = manager.update(&id, request).await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
@@ -878,37 +930,20 @@ pub async fn update_client(
 
     info!("Updated client: {}", client.name);
 
-    // Refresh client IPs cache
+    // Refresh IP cache.
     if let Err(e) = state.refresh_client_ips().await {
         tracing::warn!("Failed to refresh client IPs cache: {}", e);
     }
 
-    let iscsi_service = crate::services::IscsiService::new(settings.clone());
-    let _ = iscsi_service.create_target(&client).await.inspect_err(|e| {
-        tracing::error!("Failed to create iSCSI target for client: {}", e);
-    });
-    info!("Created iSCSI target for client: {}", client.name);
-
-    // Regenerate DHCP configuration with updated client
-    if settings.dhcp.enabled {
-        let dhcp_service =
-            crate::services::DhcpService::new(settings.clone(), state.db_pool.clone());
-        if let Err(e) = dhcp_service.generate_client_configs().await {
-            tracing::warn!("Failed to regenerate DHCP client config: {}", e);
-        } else {
-            info!("DHCP client configuration regenerated after updating client");
-        }
-
-        // Reload DHCP service to apply changes
-        if let Err(e) = dhcp_service.reload().await {
-            tracing::warn!("Failed to reload DHCP service: {}", e);
-        } else {
-            info!("DHCP service reloaded successfully after updating client");
-        }
-    }
+    // Regenerate DHCP.
+    refresh_dhcp(&state, &settings, "updating client").await;
 
     Ok(Json(client))
 }
+
+// ============================================================================
+// Delete client
+// ============================================================================
 
 pub async fn delete_client(
     State(state): State<AppState>,
@@ -919,89 +954,64 @@ pub async fn delete_client(
         id
     );
 
-    // Get the client first to access its iSCSI details
     let manager = ClientManager::new(state.db_pool.clone());
+
     let client = manager.get(&id).await.map_err(|_| StatusCode::NOT_FOUND)?;
 
-    // Remove the iSCSI target if it exists
     let settings = state.settings.read().await;
-    let iscsi_service = crate::services::IscsiService::new(settings.clone());
-    let _ = iscsi_service
-        .remove_target(&client.name)
-        .await
-        .inspect_err(|e| {
-            tracing::warn!(
-                "Failed to remove iSCSI target for client '{}': {}",
-                client.name,
-                e
-            );
-        });
-    if let Some(_snapshot) = client.snapshot {
-        if let Some(block_store) = client.block_store.as_ref() {
-            if block_store.starts_with("/dev/zvol/") {
-                // Extract the dataset name from the block_store path
-                let dataset_name = block_store
-                    .strip_prefix("/dev/zvol/")
-                    .unwrap_or(block_store);
-                info!(
-                    "Found potential ZFS dataset in block_store: {} (extracted: {})",
-                    block_store, dataset_name
-                );
 
-                if zfs_exists(dataset_name) {
-                    info!("ZFS dataset {} exists, attempting to destroy", dataset_name);
-                    let result = zfs_destroy(dataset_name);
-                    match result {
-                        Ok(_) => info!("Successfully destroyed ZFS dataset: {}", dataset_name),
-                        Err(e) => tracing::warn!(
-                            "Failed to destroy ZFS dataset for client '{}': {}",
-                            client.name,
-                            e
-                        ),
-                    }
-                } else {
-                    info!("ZFS dataset {} does not exist", dataset_name);
-                }
+    // ------------------------------------------------------------------------
+    // Remove client storage through application service.
+    // ------------------------------------------------------------------------
+
+    match storage_from_client(&settings, &client) {
+        Ok(storage) => {
+            if let Err(error) = state.application.storage.destroy_client_storage(&storage) {
+                tracing::warn!(
+                    "Failed to completely remove storage for client '{}': {}",
+                    client.name,
+                    error
+                );
             }
+        }
+
+        Err(error) => {
+            tracing::warn!(
+                "Could not reconstruct storage for client '{}': {}",
+                client.name,
+                error
+            );
         }
     }
 
-    // Delete the client from the database
+    // ------------------------------------------------------------------------
+    // Delete database record.
+    // ------------------------------------------------------------------------
+
     tracing::info!("DELETE CLIENT - About to delete from database: {}", id);
+
     manager.delete(&id).await.map_err(|e| {
         tracing::error!("DELETE CLIENT - Database deletion failed: {}", e);
+
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
     tracing::info!("DELETE CLIENT - Successfully deleted from database: {}", id);
 
-    // Refresh client IPs cache
+    // Refresh client IP cache.
     if let Err(e) = state.refresh_client_ips().await {
         tracing::warn!("Failed to refresh client IPs cache: {}", e);
     }
 
-    // Regenerate DHCP configuration without deleted client
-    if settings.dhcp.enabled {
-        let dhcp_service =
-            crate::services::DhcpService::new(settings.clone(), state.db_pool.clone());
-        if let Err(e) = dhcp_service.generate_client_configs().await {
-            tracing::error!("Failed to regenerate DHCP client config: {}", e);
-            return Err(StatusCode::INTERNAL_SERVER_ERROR);
-        } else {
-            info!("DHCP client configuration regenerated after deleting client");
-        }
-
-        // Reload DHCP service to apply changes
-        if let Err(e) = dhcp_service.reload().await {
-            tracing::error!("Failed to reload DHCP service: {}", e);
-            return Err(StatusCode::INTERNAL_SERVER_ERROR);
-        } else {
-            info!("DHCP service reloaded successfully after deleting client");
-        }
-    }
+    // Regenerate DHCP configuration.
+    refresh_dhcp(&state, &settings, "deleting client").await;
 
     Ok(())
 }
+
+// ============================================================================
+// Boot history
+// ============================================================================
 
 pub async fn get_client_boot_history(
     State(state): State<AppState>,
@@ -1009,10 +1019,13 @@ pub async fn get_client_boot_history(
     Query(params): Query<Pagination>,
 ) -> Result<Json<Vec<BootLogEntry>>, StatusCode> {
     let limit = params.limit.unwrap_or(50);
+
     let manager = ClientManager::new(state.db_pool.clone());
+
     let history = manager
         .get_boot_history(&client_id, limit)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
     Ok(Json(history))
 }

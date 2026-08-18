@@ -37,8 +37,11 @@ pub trait ImageBackend: Send + Sync {
 
     fn rename(&self, old_name: &str, new_name: &str) -> Result<()>;
 
+    /// Clone a ZFS/image snapshot into a writable client image.
+    ///
+    /// `source` must identify an immutable snapshot.
+    /// `destination` must identify the new writable image.
     fn clone_image(&self, source: &str, destination: &str) -> Result<()>;
-
     fn create_snapshot(&self, dataset: &str, snapshot: &str) -> Result<()>;
 
     fn destroy_snapshot(&self, dataset: &str, snapshot: &str) -> Result<()>;

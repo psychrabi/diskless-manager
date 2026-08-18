@@ -704,3 +704,17 @@ fn mask_to_prefix(mask: &str) -> Option<u32> {
     }
     Some(full_mask.count_ones())
 }
+
+pub async fn install_package(service: String) -> Result<String, String> {
+    let output = Command::new("sudo")
+        .args(["apt-get", "install", "-y", &service])
+        .output()
+        .map_err(|e| format!("Failed to spawn apt-get: {}", e))?;
+
+    if output.status.success() {
+        Ok(format!("Package {} installed successfully", service))
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("Failed to install {}: {}", service, stderr))
+    }
+}

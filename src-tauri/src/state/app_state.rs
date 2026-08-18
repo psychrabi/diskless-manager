@@ -1,3 +1,4 @@
+use crate::application::ApplicationServices;
 use crate::core::config::Settings;
 use crate::ssh_executor::SshExecutor;
 use log::info;
@@ -13,6 +14,7 @@ pub struct AppState {
     pub config_path: PathBuf,
     pub client_ips: Arc<RwLock<Vec<String>>>,
     pub ssh_executor: Arc<SshExecutor>,
+    pub application: Arc<ApplicationServices>,
 }
 
 impl AppState {
@@ -34,6 +36,7 @@ impl AppState {
 
         let pool = SqlitePool::connect(&db_url).await?;
 
+        let application = Arc::new(ApplicationServices::new());
         // Run migrations
         Self::init_database(&pool).await?;
 
@@ -59,6 +62,7 @@ impl AppState {
             config_path,
             client_ips: Arc::new(RwLock::new(client_ips)),
             ssh_executor: Arc::new(SshExecutor::new()),
+            application,
         })
     }
 

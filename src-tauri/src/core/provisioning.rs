@@ -2,8 +2,8 @@ use crate::cmd::{run_command, run_command_async, run_command_output_no_sudo};
 use crate::config::{get_config, get_zpool_name};
 use crate::core::client::Client;
 use crate::dhcp::{create_dhcp_entry, update_dhcp_config};
+use crate::domain::storage::{ClientStorageSpec, StorageSource};
 use crate::error::AppError;
-use crate::iscsi::{cleanup_iscsi_target, setup_iscsi_target, setup_iscsi_target_with_game_disks};
 use crate::state::AppState;
 use crate::zfs::{get_writeback_or_default_dataset, zfs_destroy};
 use log::{error, info, warn};
@@ -12,29 +12,35 @@ use std::collections::HashMap;
 
 pub fn get_client_by_id(client_id: &str) -> Option<Client> {
     let config = get_config();
+
     for c in &config.clients {
         if c.id.eq_ignore_ascii_case(client_id) {
             return Some(c.clone());
         }
     }
+
     None
 }
 
 pub fn check_duplicate_client(name: &str, mac: &str, ip: &str) -> Option<String> {
     let config = get_config();
+
     for client in &config.clients {
         let client_name = client.name.to_lowercase();
         let client_ip = &client.ip;
         let client_mac = client.mac.to_uppercase();
+
         if name.to_lowercase() == client_name {
             return Some(format!("A client with name '{}' already exists", name));
         }
+
         if ip == client_ip {
             return Some(format!(
                 "IP address {} is already in use by client '{}'",
                 ip, client.name
             ));
         }
+
         if mac.to_uppercase() == client_mac {
             return Some(format!(
                 "MAC address {} is already in use by client '{}'",
@@ -42,6 +48,7 @@ pub fn check_duplicate_client(name: &str, mac: &str, ip: &str) -> Option<String>
             ));
         }
     }
+
     None
 }
 
@@ -219,7 +226,11 @@ pub async fn add_client_provisioning(
         }
 
         if let Some((iqn, store)) = r_target {
-            if let Err(e) = cleanup_iscsi_target(&iqn, &store) {
+            if let Err(e) = state
+                .application
+                .storage
+                .remove_client_target(&iqn, Some(&store))
+            {
                 error!("Rollback: Failed to cleanup iSCSI target: {}", e);
             }
         }
@@ -254,26 +265,50 @@ pub async fn add_client_provisioning(
         rollback_clone = Some(paths["clone"].clone());
     }
 
-    // Step 2: Set up iSCSI target
+    // Step 2: Set up iSCSI target through the application storage service.
     let block_device = format!("/dev/zvol/{}", &paths["clone"]);
 
-    let iscsi_result = if use_game_disk.unwrap_or(false) {
-        setup_iscsi_target_with_game_disks(
-            &paths["target_iqn"],
-            &paths["block_store"],
-            &block_device,
-        )
+    let storage_result = if use_game_disk.unwrap_or(false) {
+        state
+            .application
+            .storage
+            .create_client_storage_with_game_disks(
+                &name,
+                &paths["target_iqn"],
+                &paths["block_store"],
+                std::path::Path::new(&block_device),
+            )
     } else {
-        setup_iscsi_target(&paths["target_iqn"], &paths["block_store"], &block_device)
+        let storage_spec = ClientStorageSpec {
+            client_id: name.clone(),
+            source: if used_master_directly {
+                StorageSource::ExistingVolume(master.clone())
+            } else {
+                StorageSource::Snapshot(snapshot.clone())
+            },
+            dataset: paths["clone"].clone(),
+            backstore: paths["block_store"].clone(),
+            target_iqn: paths["target_iqn"].clone(),
+            lun: 0,
+            use_game_disk: use_game_disk.unwrap_or(false),
+        };
+
+        state
+            .application
+            .storage
+            .create_client_storage(&storage_spec)
+            .map(|_| ())
     };
 
-    if let Err(e) = iscsi_result {
+    if let Err(e) = storage_result {
         perform_rollback(rollback_clone, rollback_target, rollback_dhcp, name.clone()).await;
+
         return Err(AppError::Command(format!(
             "Failed to setup iSCSI target: {}",
             e
         )));
     }
+
     rollback_target = Some((paths["target_iqn"].clone(), paths["block_store"].clone()));
 
     // Step 3: Create DHCP entry
