@@ -155,7 +155,7 @@ impl ImageBackend for ZfsImageBackend {
     }
 
     fn import_raw(&self, source: &Path, destination: &str, size_bytes: u64) -> Result<()> {
-        let size_gb = (size_bytes + (1024 * 1024 * 1024 - 1)) / (1024 * 1024 * 1024);
+        let size_gb = size_bytes.div_ceil(1024 * 1024 * 1024);
 
         self.create_volume(destination, size_gb.max(1))?;
 

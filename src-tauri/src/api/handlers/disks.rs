@@ -59,7 +59,7 @@ pub async fn create_pool(
     use std::process::Command;
 
     let output = Command::new("zpool")
-        .args(&["create", &request.name, &format!("/dev/{}", request.disk)])
+        .args(["create", &request.name, &format!("/dev/{}", request.disk)])
         .output();
 
     match output {
@@ -80,7 +80,7 @@ pub async fn pool_exists(State(_state): State<AppState>) -> Result<Json<bool>, S
     use std::process::Command;
 
     let output = Command::new("zpool")
-        .args(&["list", "-H", "-o", "name"])
+        .args(["list", "-H", "-o", "name"])
         .output();
 
     match output {

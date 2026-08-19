@@ -4,7 +4,6 @@ mod config;
 mod dhcp;
 mod disks;
 mod error;
-mod iscsi;
 mod license;
 mod logs;
 mod middleware;

@@ -49,7 +49,7 @@ pub async fn get_default_image(
         Ok(Some((name, path))) => {
             // Now get ZFS info for this image
             let output = Command::new("zfs")
-                .args(&["get", "creation,clones", "-o", "value", "-H", &path])
+                .args(["get", "creation,clones", "-o", "value", "-H", &path])
                 .output();
 
             match output {

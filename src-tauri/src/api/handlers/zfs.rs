@@ -48,7 +48,7 @@ pub struct DeleteDatasetRequest {
 
 pub async fn list_zpools(State(_state): State<AppState>) -> Result<Json<Vec<String>>, StatusCode> {
     let output = Command::new("zpool")
-        .args(&["list", "-H", "-o", "name"])
+        .args(["list", "-H", "-o", "name"])
         .output();
 
     match output {
@@ -68,7 +68,7 @@ pub async fn list_zpools(State(_state): State<AppState>) -> Result<Json<Vec<Stri
 pub async fn get_zpool_stats(
     State(_state): State<AppState>,
 ) -> Result<Json<Vec<ZpoolStats>>, StatusCode> {
-    let output = Command::new("zpool").args(&["list", "-H"]).output();
+    let output = Command::new("zpool").args(["list", "-H"]).output();
 
     match output {
         Ok(output) if output.status.success() => {
@@ -103,7 +103,7 @@ pub async fn list_datasets(
     use std::process::Command;
 
     let output = Command::new("zfs")
-        .args(&[
+        .args([
             "list",
             "-H",
             "-o",
@@ -127,7 +127,7 @@ pub async fn list_datasets(
                         if name.contains('-') {
                             // Get the custom property org.diskless:type
                             let disk_type = match Command::new("zfs")
-                                .args(&["get", "-H", "-o", "value", "org.diskless:type", name])
+                                .args(["get", "-H", "-o", "value", "org.diskless:type", name])
                                 .output()
                             {
                                 Ok(output) if output.status.success() => {
@@ -190,12 +190,12 @@ pub async fn create_dataset(
 
     // zfs create requires root
     let mut cmd = Command::new("sudo");
-    cmd.args(&["-n", "zfs", "create"]);
+    cmd.args(["-n", "zfs", "create"]);
 
     if let Some(size) = request.size {
         let size = size.trim();
         if !size.is_empty() {
-            cmd.args(&["-o", &format!("quota={}", size)]);
+            cmd.args(["-o", &format!("quota={}", size)]);
         }
     }
 
@@ -205,7 +205,7 @@ pub async fn create_dataset(
         Ok(output) if output.status.success() => {
             // Set the org.diskless:type property so list_datasets can find it
             let _ = Command::new("sudo")
-                .args(&[
+                .args([
                     "-n",
                     "zfs",
                     "set",
@@ -217,7 +217,7 @@ pub async fn create_dataset(
             // Enable compression for image datasets
             if request.usage_type == "image" {
                 let _ = Command::new("sudo")
-                    .args(&["-n", "zfs", "set", "compression=lz4", &dataset_name])
+                    .args(["-n", "zfs", "set", "compression=lz4", &dataset_name])
                     .output();
             }
 
@@ -243,7 +243,7 @@ pub async fn delete_dataset(
     Json(request): Json<DeleteDatasetRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let mut cmd = Command::new("sudo");
-    cmd.args(&["-n", "zfs", "destroy"]);
+    cmd.args(["-n", "zfs", "destroy"]);
 
     if request.recursive {
         cmd.arg("-r");

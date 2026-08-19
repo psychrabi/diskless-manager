@@ -7,17 +7,25 @@ pub enum StorageSource {
     /// Client owns a ZFS clone created from this snapshot.
     Snapshot(String),
 
-    /// Client uses an existing ZFS volume, normally a master image.
+    /// Client uses an existing shared ZFS volume.
     ///
     /// The client does NOT own this volume and must never destroy it.
     ExistingVolume(String),
+
+    /// Client uses an already-created ZFS volume that is owned by
+    /// the client.
+    ///
+    /// This is used when the ZFS clone was created before the
+    /// StorageService was asked to expose it through iSCSI.
+    ExistingClientVolume(String),
 }
 
 impl StorageSource {
     pub fn value(&self) -> &str {
         match self {
-            Self::Snapshot(value) => value,
-            Self::ExistingVolume(value) => value,
+            Self::Snapshot(value)
+            | Self::ExistingVolume(value)
+            | Self::ExistingClientVolume(value) => value,
         }
     }
 
@@ -26,7 +34,7 @@ impl StorageSource {
     /// Snapshot clones are client-owned.
     /// Existing volumes are shared infrastructure and are not owned.
     pub fn owns_zfs_resource(&self) -> bool {
-        matches!(self, Self::Snapshot(_))
+        matches!(self, Self::Snapshot(_) | Self::ExistingClientVolume(_))
     }
 }
 
@@ -159,7 +167,7 @@ impl ClientStorage {
     pub fn source_snapshot(&self) -> Option<&str> {
         match &self.source {
             StorageSource::Snapshot(snapshot) => Some(snapshot.as_str()),
-            StorageSource::ExistingVolume(_) => None,
+            StorageSource::ExistingVolume(_) | StorageSource::ExistingClientVolume(_) => None,
         }
     }
 }

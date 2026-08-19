@@ -1,27 +1,25 @@
 use crate::cmd::{run_command, run_command_async, run_command_output_no_sudo};
 use crate::config::get_config;
-use crate::dhcp::{create_dhcp_entry, update_dhcp_config};
-use crate::error::AppError;
-use crate::iscsi::{cleanup_iscsi_target, setup_iscsi_target};
-use crate::state::AppState;
-use crate::timed_execution;
-use crate::types::{AddClientRequest, ControlRequest, EditClientRequest};
-use crate::zfs::{get_latest_snapshot, get_master_os, zfs_clone, zfs_destroy, zfs_exists}; // Check imports
-use chrono::Local;
-use log::{debug, error, info, warn};
-use std::process::Command;
-use tauri::State;
-
-// New imports
 use crate::core::client::ClientManager;
 use crate::core::provisioning::{
     add_client_provisioning, check_duplicate_client, delete_client_config, get_client_by_id,
     get_client_paths, get_client_paths_with_master, save_client_config,
 };
+use crate::dhcp::{create_dhcp_entry, update_dhcp_config};
+use crate::domain::storage::{ClientStorageSpec, StorageSource};
+use crate::error::AppError;
 use crate::middleware::validate_auth;
+use crate::state::AppState;
+use crate::timed_execution;
+use crate::types::{AddClientRequest, ControlRequest, EditClientRequest};
 use crate::utils::network::{get_client_status_realtime, ping_host};
 use crate::utils::remote::{launch_remote_desktop, launch_vnc_viewer};
 use crate::validation::validate_client_id;
+use crate::zfs::{get_latest_snapshot, get_master_os, zfs_clone, zfs_destroy, zfs_exists};
+use chrono::Local;
+use log::{debug, error, info, warn};
+use std::process::Command;
+use tauri::State;
 
 pub async fn get_clients(
     state: State<'_, AppState>,
@@ -30,6 +28,7 @@ pub async fn get_clients(
 ) -> Result<serde_json::Value, AppError> {
     // Validate authentication token
     validate_auth(&token)?;
+
     timed_execution!("get_clients", {
         let mut config = crate::config::read_config(state)
             .await
@@ -40,20 +39,24 @@ pub async fn get_clients(
                 .clients
                 .iter()
                 .find(|c| c.id.eq_ignore_ascii_case(&id));
+
             Ok(serde_json::json!(client))
         } else {
             // Update statuses for all clients concurrently with optimized ping
             let client_count = config.clients.len();
+
             if client_count > 0 {
                 // Use dynamic semaphore limiting based on client count for better performance
                 let max_concurrent = client_count.clamp(50, 200);
                 let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(max_concurrent));
 
                 let mut futures = Vec::new();
+
                 for (i, client) in config.clients.iter().enumerate() {
                     if !client.ip.is_empty() && client.ip != "N/A" {
                         let sem = semaphore.clone();
                         let ip = client.ip.clone();
+
                         let future = tokio::spawn(async move {
                             if let Ok(_permit) = sem.acquire().await {
                                 ping_host(ip).await
@@ -62,6 +65,7 @@ pub async fn get_clients(
                                 "Offline".to_string()
                             }
                         });
+
                         futures.push((i, future));
                     }
                 }
@@ -89,6 +93,7 @@ async fn try_get_client(state: &AppState, id: &str) -> Option<crate::core::clien
 
     // 2. Try SQLite database
     let manager = ClientManager::new(state.db_pool.clone());
+
     if let Ok(c) = manager.get(id).await {
         return Some(c);
     }
@@ -103,23 +108,27 @@ pub async fn remote_client(
 ) -> Result<serde_json::Value, AppError> {
     // Validate authentication token
     validate_auth(&token)?;
+
     info!("Remote client: {}", client_id);
+
     let client = try_get_client(&state, &client_id)
         .await
         .ok_or_else(|| AppError::NotFound("Client not found".to_string()))?;
 
     let client_ip = client.ip.clone();
+
     if client_ip.is_empty() {
         return Err(AppError::Validation("Client IP not found".to_string()));
     }
 
-    // 2. Check if client is online
+    // Check if client is online
     let status = get_client_status_realtime(client_ip.clone());
+
     if status != "Online" {
         return Err(AppError::Validation("Client is not online".to_string()));
     }
 
-    // 3. Launch remote desktop (xfreerdp) or VNC based on OS
+    // Launch remote desktop (xfreerdp) or VNC based on OS
     let master_os = get_master_os(&client.master)
         .unwrap_or_default()
         .to_lowercase();
@@ -158,6 +167,7 @@ pub async fn add_client(
 ) -> Result<serde_json::Value, AppError> {
     // Validate authentication token
     validate_auth(&token)?;
+
     add_client_impl(state.inner(), req).await
 }
 
@@ -191,6 +201,7 @@ pub async fn add_client_impl(
     // If master is not provided, try to use the default master from settings
     if master.is_empty() {
         let config = get_config();
+
         if let Some(default) = config
             .settings
             .get("default_master")
@@ -209,12 +220,12 @@ pub async fn add_client_impl(
         .map(|s| s.trim().to_string())
         .unwrap_or_default();
 
-    // Check for duplicates (implement as needed)
+    // Check for duplicates
     if let Some(dup) = check_duplicate_client(&name, &mac, &ip) {
         return Err(AppError::Validation(dup));
     }
 
-    // Pass keep_writeback and use_game_disk from req
+    // Pass keep_writeback and use_game_disk from request
     add_client_provisioning(
         state,
         name,
@@ -236,8 +247,10 @@ pub async fn edit_client(
 ) -> Result<serde_json::Value, AppError> {
     // Validate authentication token
     validate_auth(&token)?;
+
     // Validate client_id format
     validate_client_id(&client_id)?;
+
     // Validate input data
     data.validate()?;
 
@@ -247,8 +260,10 @@ pub async fn edit_client(
             info!("Client {} found", client_id);
             info
         }
+
         None => {
             info!("Client {} not found", client_id);
+
             return Err(AppError::NotFound(format!(
                 "Client {} not found",
                 client_id
@@ -282,20 +297,26 @@ pub async fn edit_client(
         client_info.mac = new_mac.clone();
         client_info.ip = new_ip.clone();
         client_info.master = new_master.clone();
+
         client_info.snapshot = if new_snapshot.is_empty() {
             None
         } else {
             Some(new_snapshot.clone())
         };
+
         client_info.keep_writeback = new_keep_writeback;
         client_info.use_game_disk = new_use_game_disk;
         client_info.last_modified = Some(Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
 
         save_client_config(&state.db_pool, &client_info).await;
-        return Ok(serde_json::json!({"message": format!("Client {} updated", client_id)}));
+
+        return Ok(serde_json::json!({
+            "message": format!("Client {} updated", client_id)
+        }));
     }
 
-    // Case 1: Minimal changes (MAC, IP, orientation settings) that don't require ZFS re-provisioning
+    // Case 1: Minimal changes (MAC, IP, writeback/game-disk settings)
+    // that don't require ZFS re-provisioning
     if (mac_changed || ip_changed || keep_wb_changed || use_game_changed)
         && !(name_changed || master_changed || snapshot_changed)
     {
@@ -307,36 +328,48 @@ pub async fn edit_client(
 
         let dhcp_entry =
             create_dhcp_entry(&new_name, &new_mac, &new_ip, &current_paths["target_iqn"]);
+
         update_dhcp_config(&client_id, &dhcp_entry, false)
             .await
             .map_err(AppError::Config)?;
+
         save_client_config(&state.db_pool, &client_info).await;
-        return Ok(
-            serde_json::json!({"message": format!("Successfully updated client {}", client_id)}),
-        );
+
+        return Ok(serde_json::json!({
+            "message": format!("Successfully updated client {}", client_id)
+        }));
     }
 
-    // For other cases, we'll re-provision
-
-    // Cleanup old resources first
+    // For other cases, we'll re-provision.
+    //
+    // Remove the old iSCSI target and its client-owned boot backstore
+    // through StorageService. The ZFS resource is handled separately below.
     info!(
         "Cleaning up old resources for re-provisioning client {}",
         client_id
     );
+
     if let (Some(ref iqn), Some(ref store)) = (
         client_info.target_iqn.clone(),
         client_info.block_store.clone(),
     ) {
-        if let Err(e) = cleanup_iscsi_target(iqn, store) {
+        if let Err(e) = state
+            .application
+            .storage
+            .remove_client_target(iqn, Some(store))
+        {
             warn!("Failed to cleanup old iSCSI target: {}", e);
         }
     }
+
+    // Destroy old ZFS clone
     if let Some(ref wb) = client_info.writeback {
         if let Err(e) = zfs_destroy(wb) {
             warn!("Failed to destroy old ZFS clone {}: {}", wb, e);
         }
     }
 
+    // Re-provision the client through the application provisioning layer
     crate::core::provisioning::add_client_provisioning(
         &state,
         new_name,
@@ -354,7 +387,9 @@ pub async fn edit_client(
         crate::core::provisioning::delete_client_config(&state.db_pool, &client_id).await;
     }
 
-    Ok(serde_json::json!({"message": format!("Successfully updated client {}", client_id)}))
+    Ok(serde_json::json!({
+        "message": format!("Successfully updated client {}", client_id)
+    }))
 }
 
 pub async fn delete_client(
@@ -370,9 +405,13 @@ pub async fn delete_client(
         .await
         .ok_or_else(|| AppError::NotFound(format!("Client {} not found", client_id)))?;
 
-    // Clean up iSCSI target
-    if let (Some(ref iqn), Some(ref store)) = (client.target_iqn, client.block_store) {
-        if let Err(e) = cleanup_iscsi_target(iqn, store) {
+    // Clean up iSCSI target and client-owned boot backstore.
+    if let (Some(ref iqn), Some(ref store)) = (&client.target_iqn, &client.block_store) {
+        if let Err(e) = state
+            .application
+            .storage
+            .remove_client_target(iqn, Some(store))
+        {
             warn!("Failed to cleanup iSCSI target for {}: {}", client_id, e);
         }
     }
@@ -409,7 +448,9 @@ pub async fn delete_client(
         )));
     }
 
-    Ok(serde_json::json!({"message": format!("Client {} deleted successfully", client_id)}))
+    Ok(serde_json::json!({
+        "message": format!("Client {} deleted successfully", client_id)
+    }))
 }
 
 pub async fn control_client(
@@ -420,6 +461,7 @@ pub async fn control_client(
 ) -> Result<serde_json::Value, AppError> {
     // Validate authentication token
     validate_auth(&token)?;
+
     let client = try_get_client(&state, &client_id)
         .await
         .ok_or_else(|| AppError::NotFound(format!("Client {} not found", client_id)))?;
@@ -438,20 +480,24 @@ pub async fn control_client(
                     name
                 )));
             }
+
             let output = Command::new("wakeonlan")
                 .arg(&mac)
                 .output()
                 .map_err(AppError::Io)?;
+
             if !output.status.success() {
                 return Err(AppError::Command(format!(
                     "Wake-on-LAN failed: {}",
                     String::from_utf8_lossy(&output.stderr)
                 )));
             }
-            Ok(
-                serde_json::json!({ "message": format!("Wake-on-LAN command sent to {} ({})", name, ip) }),
-            )
+
+            Ok(serde_json::json!({
+                "message": format!("Wake-on-LAN command sent to {} ({})", name, ip)
+            }))
         }
+
         "reboot" => {
             if ip.is_empty() {
                 return Err(AppError::Validation(format!(
@@ -501,6 +547,7 @@ pub async fn control_client(
                     ])
                     .output()
                     .map_err(AppError::Io)?;
+
                 if !output.status.success() {
                     return Err(AppError::Command(format!(
                         "Failed to reboot client: {}",
@@ -508,10 +555,12 @@ pub async fn control_client(
                     )));
                 }
             }
-            Ok(
-                serde_json::json!({ "message": format!("Reboot command sent to {} ({})", name, ip) }),
-            )
+
+            Ok(serde_json::json!({
+                "message": format!("Reboot command sent to {} ({})", name, ip)
+            }))
         }
+
         "shutdown" => {
             if ip.is_empty() {
                 return Err(AppError::Validation(format!(
@@ -533,7 +582,7 @@ pub async fn control_client(
                         "-o",
                         "ConnectTimeout=5",
                         &format!("root@{}", ip),
-                        "poweroff", // or 'shutdown -h now'
+                        "poweroff",
                     ])
                     .output()
                     .map_err(AppError::Io)?;
@@ -550,6 +599,7 @@ pub async fn control_client(
                     .args(["rpc", "shutdown", "-S", &ip, "-U", "diskless%1"])
                     .output()
                     .map_err(AppError::Io)?;
+
                 if !output.status.success() {
                     return Err(AppError::Command(format!(
                         "Failed to shutdown client: {}",
@@ -557,13 +607,16 @@ pub async fn control_client(
                     )));
                 }
             }
-            Ok(
-                serde_json::json!({ "message": format!("Shutdown command sent to {} ({})", name, ip) }),
-            )
+
+            Ok(serde_json::json!({
+                "message": format!("Shutdown command sent to {} ({})", name, ip)
+            }))
         }
+
         "super" => {
             // Super mode toggle requires client to be offline
             let status = get_client_status_realtime(client.ip);
+
             if status != "Offline" {
                 return Err(AppError::Validation(
                     "Client must be offline to toggle Super mode".to_string(),
@@ -573,17 +626,36 @@ pub async fn control_client(
             let paths = get_client_paths_with_master(&client.id, &client.mac, &client.master);
 
             if req.make_super.unwrap_or(false) {
-                // Promote: point iSCSI target to master directly (ZFS)
+                // ----------------------------------------------------------------
+                // Promote:
+                //
+                // Point the iSCSI target directly at the master ZVOL.
+                // ----------------------------------------------------------------
+
                 let block_device = format!("/dev/zvol/{}", client.master);
 
-                // Clean up existing iSCSI target
                 let target_iqn = paths.get("target_iqn").cloned().unwrap_or_default();
+
                 let block_store = paths.get("block_store").cloned().unwrap_or_default();
+
+                // Remove the existing client target and its client-owned
+                // backstore. Do not destroy the master ZVOL.
                 if let Some(tiqn) = client.target_iqn.as_ref() {
-                    let _ = cleanup_iscsi_target(tiqn, &block_store);
+                    if let Err(e) = state
+                        .application
+                        .storage
+                        .remove_client_target(tiqn, Some(&block_store))
+                    {
+                        warn!(
+                            "Failed to remove existing iSCSI target before enabling super mode: {}",
+                            e
+                        );
+                    }
                 }
 
-                // Delete existing ZFS clone if it exists (not using master directly)
+                // Delete existing ZFS clone if it exists.
+                //
+                // The master volume itself must never be destroyed.
                 if let Some(ref writeback) = client.writeback {
                     if client.mode.as_deref() != Some("super") && zfs_exists(writeback) {
                         if let Err(e) = zfs_destroy(writeback) {
@@ -592,17 +664,38 @@ pub async fn control_client(
                     }
                 }
 
-                // Set up iSCSI target pointing to master
-                setup_iscsi_target(&target_iqn, &block_store, &block_device).map_err(|e| {
-                    AppError::Command(format!("Failed to set iSCSI to master: {}", e))
-                })?;
+                // Create the iSCSI target through StorageService.
+                let storage_spec = ClientStorageSpec {
+                    client_id: client.id.clone(),
+                    source: StorageSource::ExistingVolume(client.master.clone()),
+                    dataset: client.master.clone(),
+                    backstore: block_store.clone(),
+                    target_iqn: target_iqn.clone(),
+                    lun: 0,
+                    use_game_disk: client.use_game_disk.unwrap_or(false),
+                };
 
-                // Persist mode = super and block_device, clear snapshot and writeback
+                state
+                    .application
+                    .storage
+                    .create_client_storage(&storage_spec)
+                    .map_err(|error| {
+                        AppError::Command(format!(
+                            "Failed to setup iSCSI target '{}': {}",
+                            target_iqn, error
+                        ))
+                    })?;
+
+                // Persist mode = super and block_device.
+                // Snapshot/writeback are cleared because the client now
+                // points directly at the master volume.
                 let mut updated = client_clone.clone();
+
                 updated.mode = Some("super".to_string());
                 updated.block_device = Some(block_device);
-                updated.snapshot = None; // Clear snapshot when using master directly
-                updated.writeback = None; // Clear writeback when using master directly
+                updated.snapshot = None;
+                updated.writeback = None;
+
                 if !save_client_config(&state.db_pool, &updated).await {
                     warn!("Failed to persist client mode change for {}", client_id);
                 }
@@ -611,28 +704,39 @@ pub async fn control_client(
                     "message": format!("Super Client enabled for {}", client_id)
                 }))
             } else {
-                // Demote: point iSCSI back to client's writeback clone (ZFS)
+                // ----------------------------------------------------------------
+                // Demote:
+                //
+                // Recreate a client writeback clone from the latest master
+                // snapshot and point the iSCSI target at that clone.
+                // ----------------------------------------------------------------
+
                 let paths = get_client_paths_with_master(&client.id, &client.mac, &client.master);
+
                 let clone_path = paths.get("clone").cloned().unwrap_or_default();
 
-                // Debug: Let's also try a simple zfs list command to see what's available
+                // Debug: Let's also try a simple zfs list command to see
+                // what is available.
                 debug!("Testing ZFS list command for master: {}", client.master);
+
                 if let Ok(stdout) =
                     run_command_output_no_sudo(["zfs", "list", "-t", "snapshot", &client.master])
                 {
                     debug!("Simple ZFS list output: {}", stdout);
                 }
 
-                // Get the latest snapshot for the master image, or create one if none exist
+                // Get the latest snapshot for the master image,
+                // or create/find one if necessary.
                 let latest_snapshot = match get_latest_snapshot(&client.master) {
                     Ok(snapshot) => {
                         debug!("Found existing snapshot: {}", snapshot);
                         snapshot
                     }
+
                     Err(e) => {
                         debug!("Failed to find existing snapshots: {}", e);
 
-                        // Try to find any snapshot manually using a simpler approach
+                        // Try to find any snapshot manually.
                         if let Ok(stdout) = run_command_output_no_sudo([
                             "zfs",
                             "list",
@@ -645,33 +749,33 @@ pub async fn control_client(
                         ]) {
                             debug!("Manual snapshot search output: {}", stdout);
 
-                            // Find the first snapshot that contains the master name
                             if let Some(first_snapshot) = stdout
                                 .lines()
                                 .find(|line| line.contains(&client.master) && line.contains('@'))
                             {
                                 debug!("Found snapshot manually: {}", first_snapshot);
+
                                 first_snapshot.to_string()
                             } else {
-                                // No snapshots found - cannot disable super mode without snapshots
                                 return Ok(serde_json::json!({
-                                    "message": format!("Cannot disable super mode for {}: No snapshots found for master {}. Client will remain in super mode.", client_id, client.master)
+                                    "message": format!(
+                                        "Cannot disable super mode for {}: No snapshots found for master {}. Client will remain in super mode.",
+                                        client_id,
+                                        client.master
+                                    )
                                 }));
                             }
                         } else {
-                            // Manual search failed - cannot disable super mode without snapshots
                             return Ok(serde_json::json!({
-                                "message": format!("Cannot disable super mode for {}: Unable to find snapshots for master {}. Client will remain in super mode.", client_id, client.master)
+                                "message": format!(
+                                    "Cannot disable super mode for {}: Unable to find snapshots for master {}. Client will remain in super mode.",
+                                    client_id,
+                                    client.master
+                                )
                             }));
                         }
                     }
                 };
-
-                // Create clone from the snapshot
-                debug!(
-                    "Creating ZFS clone from {} to {}",
-                    latest_snapshot, clone_path
-                );
 
                 // Verify snapshot exists
                 if !zfs_exists(&latest_snapshot) {
@@ -680,14 +784,16 @@ pub async fn control_client(
                         latest_snapshot
                     )));
                 }
+
                 debug!("Snapshot {} exists, proceeding with clone", latest_snapshot);
 
-                // Check if target already exists
+                // Check if target clone already exists
                 if zfs_exists(&clone_path) {
                     debug!(
                         "Target clone {} already exists, destroying it first",
                         clone_path
                     );
+
                     zfs_destroy(&clone_path).map_err(|e| {
                         AppError::Command(format!(
                             "Failed to destroy existing clone {}: {}",
@@ -696,7 +802,7 @@ pub async fn control_client(
                     })?;
                 }
 
-                // Use a more detailed command execution for better error reporting
+                // Create clone from snapshot.
                 if let Err(e) = run_command(["zfs", "clone", &latest_snapshot, &clone_path]) {
                     return Err(AppError::Command(format!(
                         "ZFS clone failed: {} -> {}: {}",
@@ -711,22 +817,55 @@ pub async fn control_client(
 
                 let block_device = format!("/dev/zvol/{}", clone_path);
 
-                // Recreate iSCSI target pointing back to client writeback
                 let target_iqn = paths.get("target_iqn").cloned().unwrap_or_default();
-                let block_store = paths.get("block_store").cloned().unwrap_or_default();
-                if let Some(tiqn) = client.target_iqn.as_ref() {
-                    let _ = cleanup_iscsi_target(tiqn, &block_store);
-                }
-                setup_iscsi_target(&target_iqn, &block_store, &block_device).map_err(|e| {
-                    AppError::Command(format!("Failed to set iSCSI to client writeback: {}", e))
-                })?;
 
-                // Persist mode cleared and update snapshot/writeback info
+                let block_store = paths.get("block_store").cloned().unwrap_or_default();
+
+                // Remove the existing Super-mode target.
+                //
+                // The master ZVOL is not destroyed here.
+                if let Some(tiqn) = client.target_iqn.as_ref() {
+                    if let Err(e) = state
+                        .application
+                        .storage
+                        .remove_client_target(tiqn, Some(&block_store))
+                    {
+                        warn!(
+                            "Failed to remove existing iSCSI target before demotion: {}",
+                            e
+                        );
+                    }
+                }
+
+                // Create the target against the newly-created client clone.
+                let storage_spec = ClientStorageSpec {
+                    client_id: client.id.clone(),
+                    source: StorageSource::ExistingClientVolume(clone_path.clone()),
+                    dataset: clone_path.clone(),
+                    backstore: block_store.clone(),
+                    target_iqn: target_iqn.clone(),
+                    lun: 0,
+                    use_game_disk: client.use_game_disk.unwrap_or(false),
+                };
+
+                state
+                    .application
+                    .storage
+                    .create_client_storage(&storage_spec)
+                    .map_err(|error| {
+                        AppError::Command(format!(
+                            "Failed to set iSCSI to client writeback: {}",
+                            error
+                        ))
+                    })?;
+                // Persist mode cleared and update snapshot/writeback info.
                 let mut updated = client_clone.clone();
+
                 updated.mode = None;
                 updated.block_device = Some(block_device);
                 updated.snapshot = Some(latest_snapshot);
                 updated.writeback = Some(clone_path);
+
                 if !save_client_config(&state.db_pool, &updated).await {
                     warn!("Failed to persist client mode change for {}", client_id);
                 }
@@ -736,9 +875,14 @@ pub async fn control_client(
                 }))
             }
         }
-        "edit" => Ok(
-            serde_json::json!({ "message": format!("Placeholder: Edit Client {} not implemented.", client_id) }),
-        ),
+
+        "edit" => Ok(serde_json::json!({
+            "message": format!(
+                "Placeholder: Edit Client {} not implemented.",
+                client_id
+            )
+        })),
+
         _ => Err(AppError::Validation(format!(
             "Invalid action: {}",
             req.action
@@ -752,14 +896,17 @@ pub async fn reset_client(
     client_id: String,
 ) -> Result<serde_json::Value, AppError> {
     info!("reset_client start: client_id={}", client_id);
+
     // Validate authentication token
     validate_auth(&token)?;
+
     // Validate client ID
     validate_client_id(&client_id)?;
 
     // Fetch client info
     let mut client_info = match try_get_client(&state, &client_id).await {
         Some(info) => info,
+
         None => {
             return Err(AppError::NotFound(format!(
                 "Client {} not found",
@@ -768,21 +915,33 @@ pub async fn reset_client(
         }
     };
 
-    // Get paths for the client, including the correct clone path that respects writeback datasets
+    // Get paths for the client, including the correct clone path
+    // that respects writeback datasets.
     let current_paths = get_client_paths(&client_id, &client_info.mac);
+
     let target_iqn = current_paths.get("target_iqn").cloned().unwrap_or_default();
+
     let block_store = current_paths
         .get("block_store")
         .cloned()
         .unwrap_or_default();
+
     let clone = current_paths.get("clone").cloned().unwrap_or_default();
 
-    // 1. Clean up existing iSCSI resources
-    if let Err(e) = cleanup_iscsi_target(&target_iqn, &block_store) {
+    // ----------------------------------------------------------------
+    // 1. Clean up existing iSCSI resources.
+    // ----------------------------------------------------------------
+    if let Err(e) = state
+        .application
+        .storage
+        .remove_client_target(&target_iqn, Some(&block_store))
+    {
         warn!("Failed to clean up iSCSI target: {}", e);
     }
 
-    // 2. Destroy existing client image (ZFS clone)
+    // ----------------------------------------------------------------
+    // 2. Destroy existing client image.
+    // ----------------------------------------------------------------
     if zfs_exists(&clone) {
         if let Err(e) = zfs_destroy(&clone) {
             return Err(AppError::Command(format!(
@@ -792,15 +951,19 @@ pub async fn reset_client(
         }
     }
 
-    // 3. Create new client image from master (ZFS)
+    // ----------------------------------------------------------------
+    // 3. Create new client image from master snapshot.
+    // ----------------------------------------------------------------
     let snapshot = match &client_info.snapshot {
         Some(s) if !s.is_empty() => s,
+
         _ => {
             return Err(AppError::Validation(
                 "No snapshot found for client".to_string(),
             ));
         }
     };
+
     if let Err(e) = zfs_clone(snapshot, &clone) {
         return Err(AppError::Command(format!(
             "Failed to create ZFS clone: {}",
@@ -808,32 +971,45 @@ pub async fn reset_client(
         )));
     }
 
-    // 4. Setup new iSCSI target
+    // ----------------------------------------------------------------
+    // 4. Setup new iSCSI target through StorageService.
+    // ----------------------------------------------------------------
     let block_device = format!("/dev/zvol/{}", clone);
 
-    if let Err(e) = setup_iscsi_target(&target_iqn, &block_store, &block_device) {
-        return Err(AppError::Command(format!(
-            "Failed to set up iSCSI target: {}",
-            e
-        )));
-    }
+    let storage_spec = ClientStorageSpec {
+        client_id: client_info.id.clone(),
+        source: StorageSource::ExistingClientVolume(clone.clone()),
+        dataset: clone.clone(),
+        backstore: block_store.clone(),
+        target_iqn: target_iqn.clone(),
+        lun: 0,
+        use_game_disk: client_info.use_game_disk.unwrap_or(false),
+    };
 
-    // 5. Update config.json and dhcp.conf
-    // Reuse and update the client_info struct, persist it and update DHCP
+    state
+        .application
+        .storage
+        .create_client_storage(&storage_spec)
+        .map_err(|error| AppError::Command(format!("Failed to set up iSCSI target: {}", error)))?;
+
+    // ----------------------------------------------------------------
+    // 5. Update config.json and dhcp.conf.
+    // ----------------------------------------------------------------
     client_info.target_iqn = Some(target_iqn.clone());
     client_info.block_store = Some(block_store.clone());
     client_info.block_device = Some(block_device.clone());
     client_info.writeback = Some(clone.clone());
     client_info.last_modified = Some(Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
-    client_info.status = None; // transient
+    client_info.status = None;
 
-    // Update DHCP entry and restart dhcp service (best-effort)
+    // Update DHCP entry and restart DHCP service (best-effort)
     let dhcp_entry = create_dhcp_entry(
         &client_info.name,
         &client_info.mac,
         &client_info.ip,
         &target_iqn,
     );
+
     if let Err(e) = update_dhcp_config(&client_id, &dhcp_entry, false).await {
         warn!("Failed to update DHCP config after reset: {}", e);
     } else if let Err(e) =
@@ -842,18 +1018,23 @@ pub async fn reset_client(
         warn!("Failed to restart DHCP service: {}", e);
     }
 
-    // Persist updated client info (save_client_config will refresh in-memory cache)
+    // Persist updated client info.
     if !save_client_config(&state.db_pool, &client_info).await {
         error!("Failed to persist client after reset: {}", client_id);
     }
+
     info!("reset_client completed: client_id={}", client_id);
+
     Ok(serde_json::json!({
-        "message": format!("Client {} reset successfully", client_id.to_uppercase())
+        "message": format!(
+            "Client {} reset successfully",
+            client_id.to_uppercase()
+        )
     }))
 }
 
-/// Reset a non-persistent client to clean state by recreating writeback from snapshot
-
+/// Reset a non-persistent client to clean state by recreating
+/// writeback from its configured snapshot.
 pub async fn reset_client_to_clean(
     state: State<'_, AppState>,
     token: String,
@@ -900,16 +1081,22 @@ pub async fn reset_client_to_clean(
 
     // Recreate writeback from snapshot
     info!("Recreating writeback from snapshot: {}", snapshot);
+
     zfs_clone(snapshot, writeback)?;
+
     info!("Writeback recreated successfully");
 
     Ok(serde_json::json!({
-        "message": format!("Client {} reset to clean state successfully", client_id)
+        "message": format!(
+            "Client {} reset to clean state successfully",
+            client_id
+        )
     }))
 }
 
 pub async fn get_client_overview() -> Result<crate::types::ClientOverview, AppError> {
     let config = get_config();
+
     let mut online_clients = 0;
 
     for client in &config.clients {
@@ -941,7 +1128,8 @@ fn check_client_online_status(mac: &str) -> bool {
         }
     }
 
-    // Check if client responds to ping (if we can determine IP)
+    // Check if client responds to ping
+    // (if we can determine IP)
     if let Ok(output) = Command::new("grep")
         .args(["-A", "10", mac, "/var/lib/dhcp/dhcpd.leases"])
         .output()
@@ -950,6 +1138,7 @@ fn check_client_online_status(mac: &str) -> bool {
             if let Some(ip_line) = lease_content.lines().find(|line| line.contains("lease")) {
                 if let Some(ip) = ip_line.split_whitespace().nth(1) {
                     let ip = ip.trim_end_matches(';');
+
                     if Command::new("ping")
                         .args(["-c", "1", "-W", "2", ip])
                         .output()
@@ -973,26 +1162,24 @@ mod tests {
     #[test]
     fn test_get_client_paths() {
         let _paths = get_client_paths("client1", "00:11:22:33:44:55");
-        // Note: get_zpool_name() reads config, might panic in test if config not set up or mocked.
+
+        // Note: get_zpool_name() reads config, might panic in test
+        // if config is not set up or mocked.
+        //
         // However, get_client_paths calls get_zpool_name().
-        // If get_zpool_name() is not test-friendly, this test might fail.
+        //
+        // If get_zpool_name is not test-friendly, this test might fail.
+        //
         // Let's check get_zpool_name implementation.
+        //
         // It calls read_config().
-
-        // If we can't easily mock config, we might skip this test or mock the function if possible (not easy in Rust without traits).
-        // Alternatively, we can test logic that doesn't depend on global state.
-
-        // get_client_paths depends on get_zpool_name().
-        // Let's assume for now it works or returns a default if config missing.
-        // Actually, read_config() tries to read file.
-
-        // Let's skip testing get_client_paths if it depends on file IO/global config for now,
-        // or we can try to set a mock config if the module supports it.
-        // crate::config::set_config exists.
-
+        //
+        // If we can't easily mock config, we might skip this test
+        // or mock the function if possible.
+        //
         // crate::config::set_config(&AppConfig::default());
-        // But we need to import AppConfig.
-
-        // For now, let's just test that it compiles and maybe a simple assertion if we can.
+        //
+        // For now, just ensure the function compiles and can be
+        // called in the test environment.
     }
 }

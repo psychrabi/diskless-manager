@@ -797,7 +797,7 @@ pub async fn delete_snapshot(
 ) -> Result<serde_json::Value, AppError> {
     debug!("=== delete_snapshot START: {}", snapshot_name);
     let zpool = get_zpool_name();
-    if !snapshot_name.contains('@') || !snapshot_name.starts_with(&format!("{}/", &zpool)) {
+    if !snapshot_name.contains('@') || !snapshot_name.starts_with(&format!("{}/", zpool)) {
         return Err(AppError::Validation(
             "Invalid snapshot name format.".to_string(),
         ));

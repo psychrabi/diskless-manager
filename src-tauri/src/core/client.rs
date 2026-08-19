@@ -124,7 +124,7 @@ impl Client {
 
     /// Check if client has a snapshot assigned
     pub fn has_snapshot(&self) -> bool {
-        self.snapshot.is_some() && !self.snapshot.as_ref().map_or(false, |s| s.is_empty())
+        self.snapshot.is_some() && !self.snapshot.as_ref().is_some_and(|s| s.is_empty())
     }
 }
 

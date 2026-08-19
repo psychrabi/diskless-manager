@@ -16,10 +16,7 @@ pub async fn get_logs(
 
     let logs = if let Some(unit) = unit {
         // Fetch logs for a specific systemd unit
-        match crate::cmd::read_service_logs(unit, lines) {
-            Ok(logs) => logs,
-            Err(_) => String::new(),
-        }
+        crate::cmd::read_service_logs(unit, lines).unwrap_or_default()
     } else {
         // Fetch app logs
         crate::cmd::read_logs()

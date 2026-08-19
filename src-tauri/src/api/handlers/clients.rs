@@ -74,7 +74,6 @@ impl IntoResponse for ErrorResponse {
 ///     ▼
 /// iSCSI LUN
 /// ```
-
 fn build_storage_spec(
     settings: &crate::core::config::Settings,
     client_id: &str,

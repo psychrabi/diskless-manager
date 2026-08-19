@@ -74,7 +74,7 @@ pub async fn update_dhcp_config(
 
     if let Err(e) = run_command(["mv", &temp_path, DHCP_CLIENTS_PATH]) {
         let msg = format!("Sudo mv failed: {}", e);
-        error!("{:?}", &msg);
+        error!("{:?}", msg);
         let _ = async_fs::remove_file(&dhcp_backup_path).await;
         let _ = async_fs::remove_file(&temp_path).await;
         return Err(msg);

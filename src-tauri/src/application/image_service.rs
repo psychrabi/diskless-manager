@@ -417,7 +417,7 @@ impl ImageService {
 
             os_type,
 
-            size_gb: (size_bytes + 1024 * 1024 * 1024 - 1) / (1024 * 1024 * 1024),
+            size_gb: size_bytes.div_ceil(1024 * 1024 * 1024),
 
             path: PathBuf::from(format!("/dev/zvol/{}", destination)),
 

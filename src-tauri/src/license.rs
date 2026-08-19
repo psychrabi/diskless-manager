@@ -235,7 +235,7 @@ pub async fn activate_license_http(state: AppState, key: &str) -> Result<String,
         Ok("Trial License activated".to_string())
     } else {
         // verify with remote
-        let res: LicenseVerifyResponse = verify_license_remote(key).map_err(|e| e)?;
+        let res: LicenseVerifyResponse = verify_license_remote(key)?;
         if !res.valid {
             return Err(res
                 .message

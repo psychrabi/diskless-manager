@@ -101,21 +101,16 @@ impl fmt::Display for MacAddress {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ClientStatus {
+    #[default]
     Provisioning,
     Ready,
     Online,
     Offline,
     Error,
     Disabled,
-}
-
-impl Default for ClientStatus {
-    fn default() -> Self {
-        Self::Provisioning
-    }
 }
 
 impl ClientStatus {
@@ -131,17 +126,12 @@ impl ClientStatus {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum PxeMode {
+    #[default]
     Uefi,
     Bios,
-}
-
-impl Default for PxeMode {
-    fn default() -> Self {
-        Self::Uefi
-    }
 }
 
 impl PxeMode {
@@ -153,17 +143,12 @@ impl PxeMode {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum BootMode {
+    #[default]
     Normal,
     Super,
-}
-
-impl Default for BootMode {
-    fn default() -> Self {
-        Self::Normal
-    }
 }
 
 impl BootMode {

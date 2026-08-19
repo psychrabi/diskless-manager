@@ -65,22 +65,22 @@ pub async fn initialize_server(
     let settings = state.settings.read().await;
 
     // Create directories
-    if let Err(_) = std::fs::create_dir_all(&settings.tftp.root_dir) {
+    if std::fs::create_dir_all(&settings.tftp.root_dir).is_err() {
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
-    if let Err(_) = std::fs::create_dir_all(&settings.iscsi.targets_dir) {
+    if std::fs::create_dir_all(&settings.iscsi.targets_dir).is_err() {
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
-    if let Err(_) = std::fs::create_dir_all(&settings.nfs.exports_dir) {
+    if std::fs::create_dir_all(&settings.nfs.exports_dir).is_err() {
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
-    if let Err(_) = std::fs::create_dir_all(&settings.samba.share_path) {
+    if std::fs::create_dir_all(&settings.samba.share_path).is_err() {
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
-    if let Err(_) = std::fs::create_dir_all(&settings.storage.images_dir) {
+    if std::fs::create_dir_all(&settings.storage.images_dir).is_err() {
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
-    if let Err(_) = std::fs::create_dir_all(&settings.storage.snapshots_dir) {
+    if std::fs::create_dir_all(&settings.storage.snapshots_dir).is_err() {
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
 
@@ -196,12 +196,18 @@ pub async fn apply_network_settings(
     );
 
     let path = "/etc/netplan/99-diskless-manager.yaml";
-    if let Err(_) = crate::services::write_with_sudo_tee(path, &netplan_content).await {
+    if crate::services::write_with_sudo_tee(path, &netplan_content)
+        .await
+        .is_err()
+    {
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     // Apply netplan
-    if let Err(_) = crate::services::run_sudo_command(["netplan", "apply"]).await {
+    if crate::services::run_sudo_command(["netplan", "apply"])
+        .await
+        .is_err()
+    {
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
 
@@ -230,7 +236,7 @@ pub async fn apply_network_settings(
         *write_lock = settings.clone();
 
         // 2. Save to TOML
-        if let Err(_) = write_lock.save(&state.config_path) {
+        if write_lock.save(&state.config_path).is_err() {
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
         }
 
@@ -254,17 +260,20 @@ pub async fn apply_network_settings(
             new_config.settings = new_settings_value;
         }
 
-        if let Err(_) = crate::config::write_config(&state.db_pool, &new_config).await {
+        if crate::config::write_config(&state.db_pool, &new_config)
+            .await
+            .is_err()
+        {
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
         }
     }
 
     // Regenerate and reload all services
     let service_manager = crate::services::ServiceManager::new(settings, state.db_pool.clone());
-    if let Err(_) = service_manager.generate_all_configs().await {
+    if service_manager.generate_all_configs().await.is_err() {
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
-    if let Err(_) = service_manager.restart_all().await {
+    if service_manager.restart_all().await.is_err() {
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
 
@@ -310,13 +319,16 @@ pub async fn save_settings(
         new_config.settings = new_settings_value;
     }
 
-    if let Err(_) = crate::config::write_config(&state.db_pool, &new_config).await {
+    if crate::config::write_config(&state.db_pool, &new_config)
+        .await
+        .is_err()
+    {
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     // Also persist to config.toml for redundancy and manual editing support
     let toml_path = state.config_path.with_extension("toml");
-    if let Err(_) = state.settings.read().await.save(&toml_path) {
+    if state.settings.read().await.save(&toml_path).is_err() {
         // Log but don't fail if TOML save fails
     }
 
@@ -363,7 +375,7 @@ pub async fn get_ram_usage(
 
     // Try to get memory info from /proc/meminfo
     let output = Command::new("grep")
-        .args(&["MemTotal\\|MemAvailable", "/proc/meminfo"])
+        .args(["MemTotal\\|MemAvailable", "/proc/meminfo"])
         .output();
 
     match output {

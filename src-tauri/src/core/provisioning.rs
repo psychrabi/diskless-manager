@@ -266,39 +266,27 @@ pub async fn add_client_provisioning(
     }
 
     // Step 2: Set up iSCSI target through the application storage service.
-    let block_device = format!("/dev/zvol/{}", &paths["clone"]);
+    let block_device = format!("/dev/zvol/{}", paths["clone"]);
 
-    let storage_result = if use_game_disk.unwrap_or(false) {
-        state
-            .application
-            .storage
-            .create_client_storage_with_game_disks(
-                &name,
-                &paths["target_iqn"],
-                &paths["block_store"],
-                std::path::Path::new(&block_device),
-            )
-    } else {
-        let storage_spec = ClientStorageSpec {
-            client_id: name.clone(),
-            source: if used_master_directly {
-                StorageSource::ExistingVolume(master.clone())
-            } else {
-                StorageSource::Snapshot(snapshot.clone())
-            },
-            dataset: paths["clone"].clone(),
-            backstore: paths["block_store"].clone(),
-            target_iqn: paths["target_iqn"].clone(),
-            lun: 0,
-            use_game_disk: use_game_disk.unwrap_or(false),
-        };
-
-        state
-            .application
-            .storage
-            .create_client_storage(&storage_spec)
-            .map(|_| ())
+    let storage_spec = ClientStorageSpec {
+        client_id: name.clone(),
+        source: if used_master_directly {
+            StorageSource::ExistingVolume(master.clone())
+        } else {
+            StorageSource::ExistingClientVolume(paths["clone"].clone())
+        },
+        dataset: paths["clone"].clone(),
+        backstore: paths["block_store"].clone(),
+        target_iqn: paths["target_iqn"].clone(),
+        lun: 0,
+        use_game_disk: use_game_disk.unwrap_or(false),
     };
+
+    let storage_result = state
+        .application
+        .storage
+        .create_client_storage(&storage_spec)
+        .map(|_| ());
 
     if let Err(e) = storage_result {
         perform_rollback(rollback_clone, rollback_target, rollback_dhcp, name.clone()).await;

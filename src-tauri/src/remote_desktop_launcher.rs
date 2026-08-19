@@ -425,7 +425,6 @@ mod tests {
         let ssh_executor = Arc::new(SshExecutor::new());
         RemoteDesktopLauncher::new(ssh_executor);
         // Just verify it can be created
-        assert!(true);
     }
 
     #[test]

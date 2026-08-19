@@ -477,7 +477,5 @@ mod tests {
     fn test_control_handler_creation() {
         let ssh_executor = Arc::new(SshExecutor::new());
         ControlHandler::new(ssh_executor);
-        // Just verify it can be created
-        assert!(true);
     }
 }

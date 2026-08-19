@@ -134,11 +134,9 @@ impl IscsiLunState {
 
 /// Current state of an iSCSI target.
 ///
-/// The `backstore_exists` and `lun_exists` fields are retained as
-/// aggregate compatibility fields for the application layer.
-///
-/// For multi-LUN targets, the authoritative per-LUN information is
-/// available in `luns`.
+/// The aggregate fields are retained for compatibility with the
+/// application layer. For multi-LUN targets, `luns` contains the
+/// authoritative per-LUN state.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IscsiTargetState {
     /// iSCSI target IQN.
@@ -170,7 +168,7 @@ impl IscsiTargetState {
             && self.luns.iter().all(IscsiLunState::is_ready)
     }
 
-    /// Calculate aggregate state from the individual LUN states.
+    /// Calculate aggregate state from individual LUN states.
     pub fn from_luns(
         target_iqn: String,
         exists: bool,
@@ -189,5 +187,60 @@ impl IscsiTargetState {
             luns,
             portal_exists,
         }
+    }
+}
+
+/// Resources created by one iSCSI provisioning transaction.
+///
+/// This is intentionally different from `IscsiTargetState`.
+///
+/// `IscsiTargetState` answers:
+///
+/// ```text
+/// What exists right now?
+/// ```
+///
+/// `IscsiProvisionResult` answers:
+///
+/// ```text
+/// What did THIS transaction create?
+/// ```
+///
+/// The distinction is required for safe rollback.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IscsiProvisionResult {
+    /// Whether the target itself was created by this transaction.
+    pub target_created: bool,
+
+    /// Backstores created by this transaction.
+    ///
+    /// Existing/shared backstores must not appear here.
+    pub backstores_created: Vec<String>,
+
+    /// LUN numbers created by this transaction.
+    pub luns_created: Vec<u32>,
+
+    /// Whether the portal was created by this transaction.
+    pub portal_created: bool,
+}
+
+impl IscsiProvisionResult {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn owns_backstore(&self, backstore: &str) -> bool {
+        self.backstores_created.iter().any(|item| item == backstore)
+    }
+
+    pub fn owns_lun(&self, lun: u32) -> bool {
+        self.luns_created.contains(&lun)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        !self.target_created
+            && self.backstores_created.is_empty()
+            && self.luns_created.is_empty()
+            && !self.portal_created
     }
 }

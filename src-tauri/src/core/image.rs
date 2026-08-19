@@ -2,18 +2,13 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ImageKind {
+    #[default]
     Master,
     Snapshot,
     Clone,
-}
-
-impl Default for ImageKind {
-    fn default() -> Self {
-        Self::Master
-    }
 }
 
 impl std::fmt::Display for ImageKind {

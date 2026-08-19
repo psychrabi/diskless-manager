@@ -40,134 +40,6 @@ impl StorageService {
         }
     }
 
-    // ========================================================================
-    // CREATE MULTI-LUN
-    // ========================================================================
-
-    /// Create an iSCSI target containing multiple LUNs.
-    ///
-    /// This is used when a client receives its normal boot disk plus
-    /// additional shared disks such as game volumes.
-    ///
-    /// The storage resources represented by the LUNs are assumed to have
-    /// already been created and are therefore not owned by this operation.
-    ///
-    /// LUN 0 is normally the client boot disk.
-    /// LUN 1+ may contain shared game disks.
-    pub fn create_client_storage_with_luns(
-        &self,
-        client_id: &str,
-        target_iqn: &str,
-        luns: Vec<IscsiLunSpec>,
-    ) -> Result<()> {
-        if client_id.trim().is_empty() {
-            bail!("client ID cannot be empty");
-        }
-
-        if target_iqn.trim().is_empty() {
-            bail!("target IQN cannot be empty");
-        }
-
-        if luns.is_empty() {
-            bail!("at least one LUN is required");
-        }
-
-        let spec = IscsiTargetSpec::with_luns(target_iqn, luns)?;
-
-        self.iscsi.create_target(&spec).with_context(|| {
-            format!(
-                "failed to provision iSCSI target '{}' for client '{}'",
-                target_iqn, client_id
-            )
-        })?;
-
-        Ok(())
-    }
-
-    /// Create a client's iSCSI target with its boot disk and all shared
-    /// ZFS game disks.
-    ///
-    /// The resulting layout is:
-    ///
-    /// ```text
-    /// LUN 0 -> client boot disk
-    /// LUN 1 -> game disk
-    /// LUN 2 -> game disk
-    /// LUN 3 -> game disk
-    /// ...
-    /// ```
-    ///
-    /// Game disks are requested as read-only LUNs.
-    pub fn create_client_storage_with_game_disks(
-        &self,
-        client_id: &str,
-        target_iqn: &str,
-        boot_blockstore: &str,
-        boot_volume_path: &std::path::Path,
-    ) -> Result<()> {
-        if client_id.trim().is_empty() {
-            bail!("client ID cannot be empty");
-        }
-
-        if target_iqn.trim().is_empty() {
-            bail!("target IQN cannot be empty");
-        }
-
-        if boot_blockstore.trim().is_empty() {
-            bail!("boot iSCSI backstore cannot be empty");
-        }
-
-        if !boot_volume_path.is_absolute() {
-            bail!(
-                "boot volume path must be absolute: {}",
-                boot_volume_path.display()
-            );
-        }
-
-        if !boot_volume_path.exists() {
-            bail!(
-                "boot volume path does not exist: {}",
-                boot_volume_path.display()
-            );
-        }
-
-        let mut luns = vec![IscsiLunSpec::new(0, boot_blockstore, boot_volume_path)];
-
-        let game_disks = Self::get_game_disks()?;
-
-        for (index, game_disk_path) in game_disks.iter().enumerate() {
-            let lun_number = (index + 1) as u32;
-
-            let game_disk_name = game_disk_path
-                .strip_prefix("/dev/zvol/")
-                .unwrap_or(game_disk_path)
-                .replace('/', "_");
-
-            let game_backstore = format!("game_{game_disk_name}");
-
-            luns.push(IscsiLunSpec::readonly(
-                lun_number,
-                game_backstore,
-                game_disk_path,
-            ));
-        }
-
-        tracing::debug!(
-            client_id = %client_id,
-            target_iqn = %target_iqn,
-            game_disk_count = game_disks.len(),
-            "creating client iSCSI target with game disks"
-        );
-
-        self.create_client_storage_with_luns(client_id, target_iqn, luns)
-            .with_context(|| {
-                format!(
-                    "failed to create iSCSI target '{}' with game disks",
-                    target_iqn
-                )
-            })
-    }
-
     /// Discover all ZFS game-disk volumes.
     ///
     /// Game disks are stored below:
@@ -302,6 +174,29 @@ impl StorageService {
                     "using existing ZFS volume; resource is not client-owned"
                 );
             }
+
+            StorageSource::ExistingClientVolume(dataset) => {
+                if dataset != &spec.dataset {
+                    bail!(
+                        "existing client volume source '{}' does not match destination '{}'",
+                        dataset,
+                        spec.dataset
+                    );
+                }
+
+                if !self.image_backend.exists(&spec.dataset)? {
+                    bail!(
+                        "existing client ZFS volume does not exist: {}",
+                        spec.dataset
+                    );
+                }
+
+                tracing::debug!(
+                    client_id = %spec.client_id,
+                    dataset = %spec.dataset,
+                    "using existing client-owned ZFS volume"
+                );
+            }
         }
 
         // --------------------------------------------------------------------
@@ -340,10 +235,19 @@ impl StorageService {
         let iscsi_spec = IscsiTargetSpec::with_luns(&spec.target_iqn, luns)?;
 
         // --------------------------------------------------------------------
-        // Step 3: Create iSCSI target.
+        // Step 3: Create iSCSI target transactionally.
         // --------------------------------------------------------------------
+        //
+        // IMPORTANT:
+        //
+        // create_target_transaction() performs its own infrastructure
+        // rollback if targetcli fails part-way through.
+        //
+        // Therefore StorageService only needs to roll back the ZFS
+        // resource if it was created by this operation.
+        //
 
-        if let Err(error) = self.iscsi.create_target(&iscsi_spec) {
+        if let Err(error) = self.iscsi.create_target_transaction(&iscsi_spec) {
             tracing::error!(
                 client_id = %spec.client_id,
                 dataset = %spec.dataset,
@@ -352,31 +256,20 @@ impl StorageService {
                 "iSCSI provisioning failed"
             );
 
-            // Only the boot backstore belongs to this client.
-            //
-            // Game backstores are shared and therefore must not be
-            // destroyed during rollback.
-            let owned_backstores = vec![spec.backstore.clone()];
-
-            if let Err(cleanup_error) = self
-                .iscsi
-                .remove_target_with_backstores(&spec.target_iqn, &owned_backstores)
-            {
-                tracing::warn!(
-                    target_iqn = %spec.target_iqn,
-                    error = %cleanup_error,
-                    "failed to rollback partial iSCSI configuration"
-                );
-            }
-
-            // Never destroy an existing master volume.
+            // Never destroy a shared/master volume.
             if spec.owns_dataset() {
                 if let Err(cleanup_error) = self.image_backend.destroy(&spec.dataset) {
                     tracing::error!(
+                        client_id = %spec.client_id,
                         dataset = %spec.dataset,
                         error = %cleanup_error,
-                        "failed to rollback ZFS clone after iSCSI failure"
+                        "failed to rollback ZFS client resource after iSCSI failure"
                     );
+
+                    return Err(error).context(format!(
+                        "iSCSI provisioning failed and ZFS rollback also failed: {}",
+                        cleanup_error
+                    ));
                 }
             }
 
@@ -407,7 +300,6 @@ impl StorageService {
             use_game_disk: spec.use_game_disk,
         })
     }
-
     // ========================================================================
     // DESTROY
     // ========================================================================
@@ -707,7 +599,10 @@ impl StorageService {
             // The target may already be gone while the owned boot backstore
             // remains after an interrupted operation.
             self.iscsi
-                .remove_target_with_backstores(&spec.target_iqn, &[spec.backstore.clone()])
+                .remove_target_with_backstores(
+                    &spec.target_iqn,
+                    std::slice::from_ref(&spec.backstore),
+                )
                 .with_context(|| {
                     format!(
                         "failed to remove partial iSCSI backstore '{}'",
@@ -787,6 +682,12 @@ impl StorageService {
             StorageSource::ExistingVolume(volume) => {
                 if volume.trim().is_empty() {
                     bail!("existing volume cannot be empty");
+                }
+            }
+
+            StorageSource::ExistingClientVolume(volume) => {
+                if volume.trim().is_empty() {
+                    bail!("existing client volume cannot be empty");
                 }
             }
         }

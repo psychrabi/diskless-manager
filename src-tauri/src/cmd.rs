@@ -417,8 +417,7 @@ pub fn read_service_logs(unit: &str, lines: u32) -> Result<String, AppError> {
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     } else {
-        Err(AppError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        Err(AppError::Io(std::io::Error::other(
             "Failed to read service logs",
         )))
     }

@@ -173,7 +173,7 @@ pub async fn shutdown_client(
         .to_lowercase();
     let (success, message) = if master_os.contains("linux") {
         let output = Command::new("ssh")
-            .args(&[
+            .args([
                 "-o",
                 "StrictHostKeyChecking=no",
                 "-o",
@@ -207,7 +207,7 @@ pub async fn shutdown_client(
         }
     } else {
         let output = Command::new("net")
-            .args(&[
+            .args([
                 "rpc",
                 "shutdown",
                 "-I",
@@ -320,7 +320,7 @@ pub async fn reboot_client(
         .to_lowercase();
     let (success, message) = if master_os.contains("linux") {
         let output = Command::new("ssh")
-            .args(&[
+            .args([
                 "-o",
                 "StrictHostKeyChecking=no",
                 "-o",
@@ -354,7 +354,7 @@ pub async fn reboot_client(
         }
     } else {
         let output = Command::new("net")
-            .args(&[
+            .args([
                 "rpc",
                 "shutdown",
                 "-r",
@@ -535,7 +535,7 @@ pub async fn remote_desktop_client(
                 // Fallback to rdesktop with NLA/CredSSP bypass
                 let mut rdesktop_cmd = Command::new("rdesktop");
                 rdesktop_cmd
-                    .args(&[
+                    .args([
                         ip.as_str(),
                         "-u",
                         username.as_str(),
@@ -924,7 +924,7 @@ pub async fn get_scheduled_operations(
 
     // Apply status filter if provided
     if let Some(status) = &query.status {
-        operations.retain(|op| op.result.as_ref().map_or(false, |r| r == status));
+        operations.retain(|op| op.result.as_ref() == Some(status));
     }
 
     // Apply limit and offset
