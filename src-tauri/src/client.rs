@@ -4,6 +4,7 @@ use crate::core::client::ClientManager;
 use crate::core::provisioning::{
     add_client_provisioning, check_duplicate_client, delete_client_config, get_client_by_id,
     get_client_paths, get_client_paths_with_master, save_client_config,
+    AddClientProvisioningRequest,
 };
 use crate::dhcp::{create_dhcp_entry, update_dhcp_config};
 use crate::domain::storage::{ClientStorageSpec, StorageSource};
@@ -228,13 +229,15 @@ pub async fn add_client_impl(
     // Pass keep_writeback and use_game_disk from request
     add_client_provisioning(
         state,
-        name,
-        mac,
-        ip,
-        master,
-        snapshot,
-        req.keep_writeback,
-        req.use_game_disk,
+        AddClientProvisioningRequest {
+            name,
+            mac,
+            ip,
+            master,
+            snapshot,
+            keep_writeback: req.keep_writeback,
+            use_game_disk: req.use_game_disk,
+        },
     )
     .await
 }
@@ -372,13 +375,15 @@ pub async fn edit_client(
     // Re-provision the client through the application provisioning layer
     crate::core::provisioning::add_client_provisioning(
         &state,
-        new_name,
-        new_mac,
-        new_ip,
-        new_master,
-        new_snapshot,
-        new_keep_writeback,
-        new_use_game_disk,
+        AddClientProvisioningRequest {
+            name: new_name,
+            mac: new_mac,
+            ip: new_ip,
+            master: new_master,
+            snapshot: new_snapshot,
+            keep_writeback: new_keep_writeback,
+            use_game_disk: new_use_game_disk,
+        },
     )
     .await?;
 

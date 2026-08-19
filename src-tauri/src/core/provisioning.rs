@@ -124,17 +124,31 @@ pub async fn delete_client_config(pool: &SqlitePool, client_id: &str) -> bool {
     }
 }
 
+pub struct AddClientProvisioningRequest {
+    pub name: String,
+    pub mac: String,
+    pub ip: String,
+    pub master: String,
+    pub snapshot: String,
+    pub keep_writeback: Option<bool>,
+    pub use_game_disk: Option<bool>,
+}
+
 pub async fn add_client_provisioning(
     state: &AppState,
-    name: String,
-    mac: String,
-    ip: String,
-    master: String,
-    snapshot: String,
-    keep_writeback: Option<bool>,
-    use_game_disk: Option<bool>,
+    request: AddClientProvisioningRequest,
 ) -> Result<serde_json::Value, AppError> {
     // If no master image is selected, only save to config files
+    let AddClientProvisioningRequest {
+        name,
+        mac,
+        ip,
+        master,
+        snapshot,
+        keep_writeback,
+        use_game_disk,
+    } = request;
+
     if master.is_empty() {
         let now = chrono::Utc::now();
         let client_data = Client {

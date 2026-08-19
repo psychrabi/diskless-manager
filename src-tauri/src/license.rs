@@ -174,7 +174,6 @@ pub fn ensure_license_valid() -> Result<(), AuthError> {
 }
 
 /// Return current license details (for dashboard display)
-
 pub fn get_license_info() -> Result<LicenseInfo, String> {
     let cfg = config::get_config();
     let mut key: Option<String> = None;

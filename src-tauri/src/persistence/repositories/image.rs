@@ -10,32 +10,31 @@ pub struct ImageRepository {
     pool: SqlitePool,
 }
 
+type ImageRow = (
+    String,         // id
+    String,         // name
+    String,         // kind
+    String,         // os_type
+    i64,            // size_gb
+    String,         // path
+    String,         // format
+    String,         // status
+    Option<String>, // description
+    Option<String>, // parent_id
+    Option<String>, // source_snapshot
+    Option<String>, // checksum
+    i64,            // is_default
+    String,         // created_at
+    String,         // updated_at
+);
+
 impl ImageRepository {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
     }
 
     pub async fn list(&self) -> Result<Vec<Image>> {
-        let rows = sqlx::query_as::<
-            _,
-            (
-                String,         // id
-                String,         // name
-                String,         // kind
-                String,         // os_type
-                i64,            // size_gb
-                String,         // path
-                String,         // format
-                String,         // status
-                Option<String>, // description
-                Option<String>, // parent_id
-                Option<String>, // source_snapshot
-                Option<String>, // checksum
-                i64,            // is_default
-                String,         // created_at
-                String,         // updated_at
-            ),
-        >(
+        let rows = sqlx::query_as::<_, ImageRow>(
             r#"
             SELECT
                 id,
@@ -246,25 +245,7 @@ impl ImageRepository {
         Ok(result.rows_affected() > 0)
     }
 
-    fn map_row(
-        row: (
-            String,         // id
-            String,         // name
-            String,         // kind
-            String,         // os_type
-            i64,            // size_gb
-            String,         // path
-            String,         // format
-            String,         // status
-            Option<String>, // description
-            Option<String>, // parent_id
-            Option<String>, // source_snapshot
-            Option<String>, // checksum
-            i64,            // is_default
-            String,         // created_at
-            String,         // updated_at
-        ),
-    ) -> Result<Image> {
+    fn map_row(row: ImageRow) -> Result<Image> {
         let (
             id,
             name,
