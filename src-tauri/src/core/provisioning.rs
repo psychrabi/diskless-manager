@@ -1,12 +1,13 @@
 use crate::cmd::{run_command, run_command_async, run_command_output_no_sudo};
 use crate::config::{get_config, get_zpool_name};
 use crate::core::client::Client;
+use crate::core::provisioning_transaction::ProvisioningTransaction;
 use crate::dhcp::{create_dhcp_entry, update_dhcp_config};
 use crate::domain::storage::{ClientStorageSpec, StorageSource};
 use crate::error::AppError;
 use crate::state::AppState;
-use crate::zfs::{get_writeback_or_default_dataset, zfs_destroy};
-use log::{error, info, warn};
+use crate::zfs::get_writeback_or_default_dataset;
+use log::{info, warn};
 use sqlx::SqlitePool;
 
 pub fn get_client_by_id(client_id: &str) -> Option<Client> {
@@ -53,9 +54,8 @@ pub fn check_duplicate_client(name: &str, mac: &str, ip: &str) -> Option<String>
 
 /// Storage resources calculated for a diskless client.
 ///
-/// This replaces the previous `HashMap<String, String>` representation.
-/// A typed structure prevents invalid string keys such as `clone`,
-/// `target_iqn`, and `block_store` from being silently misspelled.
+/// This typed structure replaces the previous HashMap representation.
+/// It prevents invalid string keys from being silently introduced.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientStoragePaths {
     /// ZFS dataset used for the client's boot/writeback volume.
@@ -81,7 +81,8 @@ impl ClientStoragePaths {
         }
     }
 
-    /// Replace the calculated dataset while preserving the iSCSI resources.
+    /// Replace the calculated dataset while preserving
+    /// the iSCSI resources.
     pub fn with_dataset(mut self, dataset: impl Into<String>) -> Self {
         self.dataset = dataset.into();
         self
@@ -104,7 +105,6 @@ pub async fn save_client_config(pool: &SqlitePool, client_data: &Client) -> bool
     let mut cfg = get_config();
     let mut found = false;
 
-    // Match case-insensitively.
     for client in cfg.clients.iter_mut() {
         if client.id.eq_ignore_ascii_case(&client_data.id) {
             *client = client_data.clone();
@@ -122,6 +122,7 @@ pub async fn save_client_config(pool: &SqlitePool, client_data: &Client) -> bool
             crate::config::set_config(&cfg);
             true
         }
+
         Err(error) => {
             warn!("Error saving client config: {}", error);
             false
@@ -147,6 +148,7 @@ pub async fn delete_client_config(pool: &SqlitePool, client_id: &str) -> bool {
             crate::config::set_config(&cfg);
             true
         }
+
         Err(error) => {
             warn!("Error writing config file: {}", error);
             false
@@ -164,6 +166,18 @@ pub struct AddClientProvisioningRequest {
     pub use_game_disk: Option<bool>,
 }
 
+/// Provision a client and atomically clean up resources if any
+/// provisioning step fails.
+///
+/// The transaction covers:
+///
+/// 1. ZFS clone creation
+/// 2. iSCSI target creation
+/// 3. DHCP configuration
+/// 4. Client configuration persistence
+///
+/// Persistent configuration is written only after all external
+/// resources have been successfully prepared.
 pub async fn add_client_provisioning(
     state: &AppState,
     request: AddClientProvisioningRequest,
@@ -178,7 +192,13 @@ pub async fn add_client_provisioning(
         use_game_disk,
     } = request;
 
-    // If no master image is selected, only save the client configuration.
+    // ---------------------------------------------------------------------
+    // No master image selected.
+    //
+    // There are no external storage resources to provision, so this
+    // remains a simple configuration-only operation.
+    // ---------------------------------------------------------------------
+
     if master.is_empty() {
         let now = chrono::Utc::now();
 
@@ -224,13 +244,21 @@ pub async fn add_client_provisioning(
     }
 
     // ---------------------------------------------------------------------
+    // Validate that the target client does not already exist.
+    // ---------------------------------------------------------------------
+
+    if let Some(duplicate) = check_duplicate_client(&name, &mac, &ip) {
+        return Err(AppError::Validation(duplicate));
+    }
+
+    // ---------------------------------------------------------------------
     // Calculate storage resources.
     // ---------------------------------------------------------------------
 
     let mut paths = get_client_paths_with_master(&name, &mac, &master);
 
-    // If a dataset with org.diskless:type=writeback exists, use it as
-    // the parent for client clones.
+    // If a dataset with org.diskless:type=writeback exists,
+    // use it as the parent for client clones.
     if let Ok(pool_list) =
         run_command_output_no_sudo(&["zfs", "list", "-H", "-o", "name", "-r", &get_zpool_name()])
     {
@@ -249,6 +277,7 @@ pub async fn add_client_provisioning(
                         dataset,
                     ]) {
                         Ok(value) if value.trim() == "writeback" => Some(dataset.to_string()),
+
                         _ => None,
                     }
                 })
@@ -259,69 +288,41 @@ pub async fn add_client_provisioning(
         }
     }
 
-    warn!("Client storage paths: {:?}", paths);
+    info!("Client storage paths: {:?}", paths);
 
     // ---------------------------------------------------------------------
-    // Transaction tracking.
+    // Create transaction.
     // ---------------------------------------------------------------------
 
-    let mut rollback_clone: Option<String> = None;
-    let mut rollback_target: Option<(String, String)> = None;
-    let mut rollback_dhcp = false;
-
-    // Rollback helper.
-    let perform_rollback = |r_clone: Option<String>,
-                            r_target: Option<(String, String)>,
-                            r_dhcp: bool,
-                            client_id: String| async move {
-        warn!("Rolling back provisioning for {}", client_id);
-
-        if r_dhcp {
-            if let Err(error) = update_dhcp_config(&client_id, "", false).await {
-                error!("Rollback: Failed to remove DHCP entry: {}", error);
-            }
-        }
-
-        if let Some((iqn, store)) = r_target {
-            if let Err(error) = state
-                .application
-                .storage
-                .remove_client_target(&iqn, Some(&store))
-            {
-                error!("Rollback: Failed to cleanup iSCSI target: {}", error);
-            }
-        }
-
-        if let Some(clone) = r_clone {
-            if let Err(error) = zfs_destroy(&clone) {
-                error!("Rollback: Failed to destroy ZFS clone: {}", error);
-            }
-        }
-    };
+    let mut transaction = ProvisioningTransaction::new(state, name.clone());
 
     // ---------------------------------------------------------------------
-    // Step 1: Create client image.
+    // Step 1: Create the client ZFS resource.
     // ---------------------------------------------------------------------
 
-    let mut used_master_directly = false;
+    let used_master_directly;
 
-    let clone_result = if !snapshot.is_empty() {
-        run_command(&["zfs", "clone", &snapshot, &paths.dataset])
-    } else {
+    if snapshot.is_empty() {
+        // No snapshot means the client points directly to the master.
+        //
+        // This resource is NOT owned by the client and therefore must
+        // never be registered as a ZFS clone in the transaction.
         paths.dataset = master.clone();
         used_master_directly = true;
-        Ok(())
-    };
+    } else {
+        used_master_directly = false;
 
-    if let Err(error) = clone_result {
-        return Err(AppError::Command(format!(
-            "Failed to create ZFS clone: {}",
-            error
-        )));
-    }
+        if let Err(error) = run_command(&["zfs", "clone", &snapshot, &paths.dataset]) {
+            let provisioning_error = AppError::Command(format!(
+                "Failed to create ZFS clone {} from {}: {}",
+                paths.dataset, snapshot, error
+            ));
 
-    if !used_master_directly {
-        rollback_clone = Some(paths.dataset.clone());
+            return Err(transaction.rollback_with_error(provisioning_error).await);
+        }
+
+        // Only client-owned clones are registered.
+        transaction.record_zfs_clone(paths.dataset.clone());
     }
 
     // ---------------------------------------------------------------------
@@ -332,103 +333,135 @@ pub async fn add_client_provisioning(
 
     let storage_spec = ClientStorageSpec {
         client_id: name.clone(),
+
         source: if used_master_directly {
             StorageSource::ExistingVolume(master.clone())
         } else {
             StorageSource::ExistingClientVolume(paths.dataset.clone())
         },
+
         dataset: paths.dataset.clone(),
+
         backstore: paths.backstore.clone(),
+
         target_iqn: paths.target_iqn.clone(),
+
         lun: 0,
+
         use_game_disk: use_game_disk.unwrap_or(false),
     };
 
-    let storage_result = state
+    if let Err(error) = state
         .application
         .storage
         .create_client_storage(&storage_spec)
-        .map(|_| ());
+    {
+        let provisioning_error = AppError::Command(format!(
+            "Failed to setup iSCSI target '{}': {}",
+            paths.target_iqn, error
+        ));
 
-    if let Err(error) = storage_result {
-        perform_rollback(rollback_clone, rollback_target, rollback_dhcp, name.clone()).await;
-
-        return Err(AppError::Command(format!(
-            "Failed to setup iSCSI target: {}",
-            error
-        )));
+        return Err(transaction.rollback_with_error(provisioning_error).await);
     }
 
-    rollback_target = Some((paths.target_iqn.clone(), paths.backstore.clone()));
+    transaction.record_iscsi_target(paths.target_iqn.clone(), paths.backstore.clone());
 
     // ---------------------------------------------------------------------
-    // Step 3: Create DHCP entry.
+    // Step 3: Update DHCP configuration.
     // ---------------------------------------------------------------------
 
     let dhcp_entry = create_dhcp_entry(&name, &mac, &ip, &paths.target_iqn);
 
     if let Err(error) = update_dhcp_config(&name, &dhcp_entry, true).await {
-        perform_rollback(rollback_clone, rollback_target, rollback_dhcp, name.clone()).await;
+        let provisioning_error =
+            AppError::Config(format!("Failed to update DHCP config: {}", error));
 
-        return Err(AppError::Config(format!(
-            "Failed to update DHCP config: {}",
-            error
-        )));
+        return Err(transaction.rollback_with_error(provisioning_error).await);
     }
 
-    rollback_dhcp = true;
+    transaction.record_dhcp_entry(name.clone());
 
     // ---------------------------------------------------------------------
     // Step 4: Persist client configuration.
+    //
+    // At this point:
+    //
+    // - ZFS is ready
+    // - iSCSI is ready
+    // - DHCP is ready
+    //
+    // If persistence fails, transaction rollback removes all three
+    // external resources.
     // ---------------------------------------------------------------------
 
     let now = chrono::Utc::now();
 
     let client_data = Client {
         id: name.clone(),
+
         name: name.to_uppercase(),
+
         mac: mac.clone(),
+
         ip: ip.clone(),
+
         master: master.clone(),
+
         enabled: true,
+
         created_at: now,
+
         updated_at: now,
+
         snapshot: if used_master_directly {
             None
         } else {
             Some(snapshot.clone())
         },
+
         target_iqn: Some(paths.target_iqn.clone()),
+
         block_device: Some(block_device.clone()),
+
         block_store: Some(paths.backstore.clone()),
+
         writeback: if used_master_directly {
             None
         } else {
             Some(paths.dataset.clone())
         },
+
         last_modified: Some(now.format("%Y-%m-%d %H:%M:%S").to_string()),
+
         status: None,
+
         mode: if used_master_directly {
             Some("super".to_string())
         } else {
             None
         },
+
         pxe_mode: Some("uefi".to_string()),
+
         keep_writeback: keep_writeback.or(Some(true)),
+
         use_game_disk,
     };
 
     if !save_client_config(&state.db_pool, &client_data).await {
-        perform_rollback(rollback_clone, rollback_target, rollback_dhcp, name.clone()).await;
+        let provisioning_error =
+            AppError::Config(format!("Failed to save client configuration for {}", name));
 
-        return Err(AppError::Config(format!(
-            "Failed to save client configuration for {}",
-            name
-        )));
+        return Err(transaction.rollback_with_error(provisioning_error).await);
     }
 
     // ---------------------------------------------------------------------
     // Step 5: Restart DHCP service.
+    //
+    // Failure to restart the service does not mean that provisioning
+    // itself failed because the configuration has already been written.
+    //
+    // We therefore log the failure but commit the transaction.
     // ---------------------------------------------------------------------
 
     if let Err(error) =
@@ -440,10 +473,19 @@ pub async fn add_client_provisioning(
         );
     }
 
-    info!("Client {} added successfully", name);
+    // ---------------------------------------------------------------------
+    // Commit.
+    // ---------------------------------------------------------------------
+
+    transaction.commit();
+
+    info!("Client {} provisioning completed successfully", name);
 
     Ok(serde_json::json!({
-        "message": format!("Client {} added successfully", name)
+        "message": format!(
+            "Client {} added successfully",
+            name
+        )
     }))
 }
 
