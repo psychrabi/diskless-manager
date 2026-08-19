@@ -8,14 +8,13 @@ use crate::state::AppState;
 use crate::zfs::{get_writeback_or_default_dataset, zfs_destroy};
 use log::{error, info, warn};
 use sqlx::SqlitePool;
-use std::collections::HashMap;
 
 pub fn get_client_by_id(client_id: &str) -> Option<Client> {
     let config = get_config();
 
-    for c in &config.clients {
-        if c.id.eq_ignore_ascii_case(client_id) {
-            return Some(c.clone());
+    for client in &config.clients {
+        if client.id.eq_ignore_ascii_case(client_id) {
+            return Some(client.clone());
         }
     }
 
@@ -52,7 +51,44 @@ pub fn check_duplicate_client(name: &str, mac: &str, ip: &str) -> Option<String>
     None
 }
 
-pub fn get_client_paths(client_id: &str, client_mac: &str) -> HashMap<String, String> {
+/// Storage resources calculated for a diskless client.
+///
+/// This replaces the previous `HashMap<String, String>` representation.
+/// A typed structure prevents invalid string keys such as `clone`,
+/// `target_iqn`, and `block_store` from being silently misspelled.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientStoragePaths {
+    /// ZFS dataset used for the client's boot/writeback volume.
+    pub dataset: String,
+
+    /// iSCSI Qualified Name assigned to the client.
+    pub target_iqn: String,
+
+    /// LIO/targetcli backstore owned by the client.
+    pub backstore: String,
+}
+
+impl ClientStoragePaths {
+    /// Build the default storage paths for a client.
+    pub fn new(client_id: &str, client_mac: &str) -> Self {
+        Self {
+            dataset: get_writeback_or_default_dataset(client_id),
+            target_iqn: format!(
+                "iqn.2025-04.local.diskless:{}",
+                client_mac.to_lowercase().replace(':', "-")
+            ),
+            backstore: format!("block_{}", client_id.to_lowercase()),
+        }
+    }
+
+    /// Replace the calculated dataset while preserving the iSCSI resources.
+    pub fn with_dataset(mut self, dataset: impl Into<String>) -> Self {
+        self.dataset = dataset.into();
+        self
+    }
+}
+
+pub fn get_client_paths(client_id: &str, client_mac: &str) -> ClientStoragePaths {
     get_client_paths_with_master(client_id, client_mac, "")
 }
 
@@ -60,33 +96,23 @@ pub fn get_client_paths_with_master(
     client_id: &str,
     client_mac: &str,
     _master: &str,
-) -> HashMap<String, String> {
-    // If a dataset with org.diskless:type=writeback exists, use it as the parent for client clones.
-    let clone_path = get_writeback_or_default_dataset(client_id);
-
-    let target_iqn = format!(
-        "iqn.2025-04.local.diskless:{}",
-        client_mac.to_lowercase().replace(':', "-")
-    );
-    let block_store = format!("block_{}", client_id.to_lowercase());
-    let mut map = HashMap::new();
-    map.insert("clone".to_string(), clone_path);
-    map.insert("target_iqn".to_string(), target_iqn);
-    map.insert("block_store".to_string(), block_store);
-    map
+) -> ClientStoragePaths {
+    ClientStoragePaths::new(client_id, client_mac)
 }
 
 pub async fn save_client_config(pool: &SqlitePool, client_data: &Client) -> bool {
     let mut cfg = get_config();
     let mut found = false;
-    // match case-insensitively
-    for c in cfg.clients.iter_mut() {
-        if c.id.eq_ignore_ascii_case(&client_data.id) {
-            *c = client_data.clone();
+
+    // Match case-insensitively.
+    for client in cfg.clients.iter_mut() {
+        if client.id.eq_ignore_ascii_case(&client_data.id) {
+            *client = client_data.clone();
             found = true;
             break;
         }
     }
+
     if !found {
         cfg.clients.push(client_data.clone());
     }
@@ -96,8 +122,8 @@ pub async fn save_client_config(pool: &SqlitePool, client_data: &Client) -> bool
             crate::config::set_config(&cfg);
             true
         }
-        Err(e) => {
-            warn!("Error saving client config: {}", e);
+        Err(error) => {
+            warn!("Error saving client config: {}", error);
             false
         }
     }
@@ -105,20 +131,24 @@ pub async fn save_client_config(pool: &SqlitePool, client_data: &Client) -> bool
 
 pub async fn delete_client_config(pool: &SqlitePool, client_id: &str) -> bool {
     info!("Deleting client config: {}", client_id);
+
     let mut cfg = get_config();
     let before = cfg.clients.len();
+
     cfg.clients
-        .retain(|c| !c.id.eq_ignore_ascii_case(client_id));
+        .retain(|client| !client.id.eq_ignore_ascii_case(client_id));
+
     if cfg.clients.len() == before {
         return true;
     }
+
     match crate::config::write_config(pool, &cfg).await {
         Ok(_) => {
             crate::config::set_config(&cfg);
             true
         }
-        Err(e) => {
-            warn!("Error writing config file: {}", e);
+        Err(error) => {
+            warn!("Error writing config file: {}", error);
             false
         }
     }
@@ -138,7 +168,6 @@ pub async fn add_client_provisioning(
     state: &AppState,
     request: AddClientProvisioningRequest,
 ) -> Result<serde_json::Value, AppError> {
-    // If no master image is selected, only save to config files
     let AddClientProvisioningRequest {
         name,
         mac,
@@ -149,8 +178,10 @@ pub async fn add_client_provisioning(
         use_game_disk,
     } = request;
 
+    // If no master image is selected, only save the client configuration.
     if master.is_empty() {
         let now = chrono::Utc::now();
+
         let client_data = Client {
             id: name.clone(),
             name: name.to_uppercase(),
@@ -176,57 +207,69 @@ pub async fn add_client_provisioning(
             keep_writeback: keep_writeback.or(Some(true)),
             use_game_disk,
         };
+
         if !save_client_config(&state.db_pool, &client_data).await {
             return Err(AppError::Config(format!(
                 "Failed to save client configuration for {}",
                 name
             )));
         }
-        return Ok(
-            serde_json::json!({ "message": format!("Client {} added to configuration (no image selected)", name) }),
-        );
+
+        return Ok(serde_json::json!({
+            "message": format!(
+                "Client {} added to configuration (no image selected)",
+                name
+            )
+        }));
     }
 
-    // Compute ZFS paths
+    // ---------------------------------------------------------------------
+    // Calculate storage resources.
+    // ---------------------------------------------------------------------
+
     let mut paths = get_client_paths_with_master(&name, &mac, &master);
 
-    // If a dataset with org.diskless:type=writeback exists, use it as the parent for client clones.
+    // If a dataset with org.diskless:type=writeback exists, use it as
+    // the parent for client clones.
     if let Ok(pool_list) =
         run_command_output_no_sudo(&["zfs", "list", "-H", "-o", "name", "-r", &get_zpool_name()])
     {
-        if let Some(parent) = pool_list.lines().filter(|l| !l.is_empty()).find_map(|ds| {
-            match run_command_output_no_sudo(&[
-                "zfs",
-                "get",
-                "-H",
-                "-o",
-                "value",
-                "org.diskless:type",
-                ds,
-            ]) {
-                Ok(v) if v.trim() == "writeback" => Some(ds.to_string()),
-                _ => None,
-            }
-        }) {
-            paths.insert(
-                "clone".to_string(),
-                format!("{}/{}-disk", parent, name.to_uppercase()),
-            );
+        if let Some(parent) =
+            pool_list
+                .lines()
+                .filter(|line| !line.is_empty())
+                .find_map(|dataset| {
+                    match run_command_output_no_sudo(&[
+                        "zfs",
+                        "get",
+                        "-H",
+                        "-o",
+                        "value",
+                        "org.diskless:type",
+                        dataset,
+                    ]) {
+                        Ok(value) if value.trim() == "writeback" => Some(dataset.to_string()),
+                        _ => None,
+                    }
+                })
+        {
+            paths.dataset = format!("{}/{}-disk", parent, name.to_uppercase());
         } else {
-            paths.insert(
-                "clone".to_string(),
-                format!("{}/{}-disk", get_zpool_name(), name.to_uppercase()),
-            );
+            paths.dataset = format!("{}/{}-disk", get_zpool_name(), name.to_uppercase());
         }
     }
-    warn!("Client paths: {:?}", paths);
 
-    // Transaction tracking
+    warn!("Client storage paths: {:?}", paths);
+
+    // ---------------------------------------------------------------------
+    // Transaction tracking.
+    // ---------------------------------------------------------------------
+
     let mut rollback_clone: Option<String> = None;
     let mut rollback_target: Option<(String, String)> = None;
-    let mut rollback_dhcp: bool = false;
+    let mut rollback_dhcp = false;
 
-    // Helper closure for rollback
+    // Rollback helper.
     let perform_rollback = |r_clone: Option<String>,
                             r_target: Option<(String, String)>,
                             r_dhcp: bool,
@@ -234,64 +277,69 @@ pub async fn add_client_provisioning(
         warn!("Rolling back provisioning for {}", client_id);
 
         if r_dhcp {
-            if let Err(e) = update_dhcp_config(&client_id, "", false).await {
-                error!("Rollback: Failed to remove DHCP entry: {}", e);
+            if let Err(error) = update_dhcp_config(&client_id, "", false).await {
+                error!("Rollback: Failed to remove DHCP entry: {}", error);
             }
         }
 
         if let Some((iqn, store)) = r_target {
-            if let Err(e) = state
+            if let Err(error) = state
                 .application
                 .storage
                 .remove_client_target(&iqn, Some(&store))
             {
-                error!("Rollback: Failed to cleanup iSCSI target: {}", e);
+                error!("Rollback: Failed to cleanup iSCSI target: {}", error);
             }
         }
 
         if let Some(clone) = r_clone {
-            if let Err(e) = zfs_destroy(&clone) {
-                error!("Rollback: Failed to destroy ZFS clone: {}", e);
+            if let Err(error) = zfs_destroy(&clone) {
+                error!("Rollback: Failed to destroy ZFS clone: {}", error);
             }
         }
     };
 
-    // Step 1: Create client image (ZFS clone or use master directly)
+    // ---------------------------------------------------------------------
+    // Step 1: Create client image.
+    // ---------------------------------------------------------------------
+
     let mut used_master_directly = false;
+
     let clone_result = if !snapshot.is_empty() {
-        // Use provided snapshot (full ZFS path: master@snapshot_name)
-        run_command(&["zfs", "clone", &snapshot, &paths["clone"]])
+        run_command(&["zfs", "clone", &snapshot, &paths.dataset])
     } else {
-        // Use master volume directly
-        paths.insert("clone".to_string(), master.clone());
+        paths.dataset = master.clone();
         used_master_directly = true;
         Ok(())
     };
 
-    if let Err(e) = clone_result {
+    if let Err(error) = clone_result {
         return Err(AppError::Command(format!(
             "Failed to create ZFS clone: {}",
-            e
+            error
         )));
     }
 
     if !used_master_directly {
-        rollback_clone = Some(paths["clone"].clone());
+        rollback_clone = Some(paths.dataset.clone());
     }
 
-    // Step 2: Set up iSCSI target through the application storage service.
-    let block_device = format!("/dev/zvol/{}", paths["clone"]);
+    // ---------------------------------------------------------------------
+    // Step 2: Create iSCSI target.
+    // ---------------------------------------------------------------------
+
+    let block_device = format!("/dev/zvol/{}", paths.dataset);
 
     let storage_spec = ClientStorageSpec {
         client_id: name.clone(),
         source: if used_master_directly {
             StorageSource::ExistingVolume(master.clone())
         } else {
-            StorageSource::ExistingClientVolume(paths["clone"].clone())
+            StorageSource::ExistingClientVolume(paths.dataset.clone())
         },
-        dataset: paths["clone"].clone(),
-        backstore: paths["block_store"].clone(),
-        target_iqn: paths["target_iqn"].clone(),
+        dataset: paths.dataset.clone(),
+        backstore: paths.backstore.clone(),
+        target_iqn: paths.target_iqn.clone(),
         lun: 0,
         use_game_disk: use_game_disk.unwrap_or(false),
     };
@@ -302,30 +350,40 @@ pub async fn add_client_provisioning(
         .create_client_storage(&storage_spec)
         .map(|_| ());
 
-    if let Err(e) = storage_result {
+    if let Err(error) = storage_result {
         perform_rollback(rollback_clone, rollback_target, rollback_dhcp, name.clone()).await;
 
         return Err(AppError::Command(format!(
             "Failed to setup iSCSI target: {}",
-            e
+            error
         )));
     }
 
-    rollback_target = Some((paths["target_iqn"].clone(), paths["block_store"].clone()));
+    rollback_target = Some((paths.target_iqn.clone(), paths.backstore.clone()));
 
-    // Step 3: Create DHCP entry
-    let dhcp_entry = create_dhcp_entry(&name, &mac, &ip, &paths["target_iqn"]);
-    if let Err(e) = update_dhcp_config(&name, &dhcp_entry, true).await {
+    // ---------------------------------------------------------------------
+    // Step 3: Create DHCP entry.
+    // ---------------------------------------------------------------------
+
+    let dhcp_entry = create_dhcp_entry(&name, &mac, &ip, &paths.target_iqn);
+
+    if let Err(error) = update_dhcp_config(&name, &dhcp_entry, true).await {
         perform_rollback(rollback_clone, rollback_target, rollback_dhcp, name.clone()).await;
+
         return Err(AppError::Config(format!(
             "Failed to update DHCP config: {}",
-            e
+            error
         )));
     }
+
     rollback_dhcp = true;
 
-    // Step 4: Save client configuration to JSON file
+    // ---------------------------------------------------------------------
+    // Step 4: Persist client configuration.
+    // ---------------------------------------------------------------------
+
     let now = chrono::Utc::now();
+
     let client_data = Client {
         id: name.clone(),
         name: name.to_uppercase(),
@@ -340,13 +398,13 @@ pub async fn add_client_provisioning(
         } else {
             Some(snapshot.clone())
         },
-        target_iqn: Some(paths["target_iqn"].clone()),
+        target_iqn: Some(paths.target_iqn.clone()),
         block_device: Some(block_device.clone()),
-        block_store: Some(paths["block_store"].clone()),
+        block_store: Some(paths.backstore.clone()),
         writeback: if used_master_directly {
             None
         } else {
-            Some(paths["clone"].clone())
+            Some(paths.dataset.clone())
         },
         last_modified: Some(now.format("%Y-%m-%d %H:%M:%S").to_string()),
         status: None,
@@ -362,19 +420,66 @@ pub async fn add_client_provisioning(
 
     if !save_client_config(&state.db_pool, &client_data).await {
         perform_rollback(rollback_clone, rollback_target, rollback_dhcp, name.clone()).await;
+
         return Err(AppError::Config(format!(
             "Failed to save client configuration for {}",
             name
         )));
     }
 
-    // Step 5: Restart DHCP service
-    if let Err(e) = run_command_async(&["systemctl", "restart", "isc-dhcp-server.service"]).await {
+    // ---------------------------------------------------------------------
+    // Step 5: Restart DHCP service.
+    // ---------------------------------------------------------------------
+
+    if let Err(error) =
+        run_command_async(&["systemctl", "restart", "isc-dhcp-server.service"]).await
+    {
         warn!(
             "Failed to restart DHCP service after adding client {}: {}",
-            name, e
+            name, error
         );
     }
+
     info!("Client {} added successfully", name);
-    Ok(serde_json::json!({ "message": format!("Client {} added successfully", name) }))
+
+    Ok(serde_json::json!({
+        "message": format!("Client {} added successfully", name)
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn client_storage_paths_build_expected_target_iqn() {
+        let paths = ClientStoragePaths::new("client_1", "00:11:22:33:44:55");
+
+        assert_eq!(
+            paths.target_iqn,
+            "iqn.2025-04.local.diskless:00-11-22-33-44-55"
+        );
+    }
+
+    #[test]
+    fn client_storage_paths_build_expected_backstore() {
+        let paths = ClientStoragePaths::new("CLIENT_1", "00:11:22:33:44:55");
+
+        assert_eq!(paths.backstore, "block_client_1");
+    }
+
+    #[test]
+    fn client_storage_paths_can_replace_dataset() {
+        let paths = ClientStoragePaths::new("client_1", "00:11:22:33:44:55")
+            .with_dataset("tank/writeback/CLIENT_1-disk");
+
+        assert_eq!(paths.dataset, "tank/writeback/CLIENT_1-disk");
+
+        assert_eq!(
+            paths.target_iqn,
+            "iqn.2025-04.local.diskless:00-11-22-33-44-55"
+        );
+
+        assert_eq!(paths.backstore, "block_client_1");
+    }
 }
