@@ -3,6 +3,7 @@ use crate::core::provisioning::ClientStoragePaths;
 use crate::domain::storage::{
     ClientStorageSpec, StorageReconcileResult, StorageSource, StorageState,
 };
+use crate::infrastructure::iscsi::target_has_active_sessions;
 use crate::state::AppState;
 use serde::Serialize;
 
@@ -130,6 +131,20 @@ pub async fn repair_client_storage(
             client_id
         )
     })?;
+
+    if target_has_active_sessions(&spec.target_iqn)? {
+        return Ok(ReconciliationEntry {
+            client_id: client.id,
+            client_name: client.name,
+            outcome: ReconciliationOutcome::Error,
+            message: format!(
+                "Client storage is in use: active iSCSI session on target '{}'. Disconnect the client before repair.",
+                spec.target_iqn
+            ),
+            target_iqn: Some(spec.target_iqn),
+            dataset: Some(spec.dataset),
+        });
+    }
 
     let storage = state
         .application
