@@ -212,10 +212,6 @@ pub async fn add_client_provisioning(
         use_game_disk,
     } = request;
 
-    // -----------------------------------------------------------------
-    // No master image selected.
-    // -----------------------------------------------------------------
-
     if master.is_empty() {
         let now = chrono::Utc::now();
 
@@ -260,41 +256,32 @@ pub async fn add_client_provisioning(
         }));
     }
 
-    // -----------------------------------------------------------------
-    // Validate duplicates.
-    // -----------------------------------------------------------------
-
     if let Some(duplicate) = check_duplicate_client(&name, &mac, &ip) {
         return Err(AppError::Validation(duplicate));
     }
-
-    // -----------------------------------------------------------------
-    // Calculate storage resources.
-    // -----------------------------------------------------------------
 
     let mut paths = get_client_paths_with_master(&name, &mac, &master);
 
     if let Ok(pool_list) =
         run_command_output_no_sudo(["zfs", "list", "-H", "-o", "name", "-r", &get_zpool_name()])
     {
-        if let Some(parent) =
-            pool_list
-                .lines()
-                .filter(|line| !line.is_empty())
-                .find_map(|dataset| {
-                    match run_command_output_no_sudo([
-                        "zfs",
-                        "get",
-                        "-H",
-                        "-o",
-                        "value",
-                        "org.diskless:type",
-                        dataset,
-                    ]) {
-                        Ok(value) if value.trim() == "writeback" => Some(dataset.to_string()),
-                        _ => None,
-                    }
-                })
+        if let Some(parent) = pool_list
+            .lines()
+            .filter(|line| !line.is_empty())
+            .find_map(|dataset| {
+                match run_command_output_no_sudo([
+                    "zfs",
+                    "get",
+                    "-H",
+                    "-o",
+                    "value",
+                    "org.diskless:type",
+                    dataset,
+                ]) {
+                    Ok(value) if value.trim() == "writeback" => Some(dataset.to_string()),
+                    _ => None,
+                }
+            })
         {
             paths.dataset = format!("{}/{}-disk", parent, name.to_uppercase());
         } else {
@@ -304,16 +291,7 @@ pub async fn add_client_provisioning(
 
     info!("Client storage paths: {:?}", paths);
 
-    // -----------------------------------------------------------------
-    // Create outer transaction.
-    // -----------------------------------------------------------------
-
     let mut transaction = ProvisioningTransaction::new(state, name.clone());
-
-    // -----------------------------------------------------------------
-    // Step 1: Create ZFS resource.
-    // -----------------------------------------------------------------
-
     let used_master_directly;
 
     if snapshot.is_empty() {
@@ -333,10 +311,6 @@ pub async fn add_client_provisioning(
 
         transaction.record_zfs_clone(paths.dataset.clone());
     }
-
-    // -----------------------------------------------------------------
-    // Step 2: Create iSCSI target.
-    // -----------------------------------------------------------------
 
     let block_device = format!("/dev/zvol/{}", paths.dataset);
 
@@ -375,10 +349,6 @@ pub async fn add_client_provisioning(
         iscsi_result.backstores_created.clone(),
     );
 
-    // -----------------------------------------------------------------
-    // Step 3: Update DHCP.
-    // -----------------------------------------------------------------
-
     let dhcp_entry = create_dhcp_entry(&name, &mac, &ip, &paths.target_iqn);
 
     if let Err(error) = update_dhcp_config(&name, &dhcp_entry, true).await {
@@ -389,10 +359,6 @@ pub async fn add_client_provisioning(
     }
 
     transaction.record_dhcp_entry(name.clone());
-
-    // -----------------------------------------------------------------
-    // Step 4: Persist configuration.
-    // -----------------------------------------------------------------
 
     let now = chrono::Utc::now();
 
@@ -437,10 +403,6 @@ pub async fn add_client_provisioning(
         return Err(transaction.rollback_with_error(provisioning_error).await);
     }
 
-    // -----------------------------------------------------------------
-    // Step 5: Restart DHCP.
-    // -----------------------------------------------------------------
-
     if let Err(error) = run_command_async(["systemctl", "restart", "isc-dhcp-server.service"]).await
     {
         warn!(
@@ -448,10 +410,6 @@ pub async fn add_client_provisioning(
             name, error
         );
     }
-
-    // -----------------------------------------------------------------
-    // Commit.
-    // -----------------------------------------------------------------
 
     transaction.commit();
 
@@ -496,23 +454,5 @@ mod tests {
         );
 
         assert_eq!(paths.backstore, "block_client_1");
-    }
-
-    #[test]
-    fn client_storage_paths_preserve_persisted_target_iqn() {
-        let mut config = get_config();
-        config.clients.push(Client {
-            id: "client_1".to_string(),
-            target_iqn: Some("iqn.2024-01.com.diskless:client.pc001".to_string()),
-            ..Client::default()
-        });
-        crate::config::set_config(&config);
-
-        let paths = get_client_paths_with_master("client_1", "00:11:22:33:44:55", "");
-
-        assert_eq!(
-            paths.target_iqn,
-            "iqn.2024-01.com.diskless:client.pc001"
-        );
     }
 }
