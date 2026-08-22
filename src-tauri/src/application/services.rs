@@ -4,7 +4,7 @@ use super::StorageService;
 
 use crate::infrastructure::{
     image::{ImageBackend, ZfsImageBackend},
-    iscsi::{IscsiProvisioner, TargetCliProvisioner},
+    iscsi::{IscsiProvisioner, SafeIscsiProvisioner},
 };
 
 /// Application service container.
@@ -19,7 +19,7 @@ impl ApplicationServices {
     pub fn new() -> Self {
         let image_backend: Arc<dyn ImageBackend> = Arc::new(ZfsImageBackend::new());
 
-        let iscsi: Arc<dyn IscsiProvisioner> = Arc::new(TargetCliProvisioner::new());
+        let iscsi: Arc<dyn IscsiProvisioner> = Arc::new(SafeIscsiProvisioner::new());
 
         let storage = StorageService::new(image_backend, iscsi);
 
@@ -36,7 +36,7 @@ impl Default for ApplicationServices {
 pub fn build_storage_service() -> StorageService {
     let image_backend = Arc::new(ZfsImageBackend::new());
 
-    let iscsi: Arc<dyn IscsiProvisioner> = Arc::new(TargetCliProvisioner::new());
+    let iscsi: Arc<dyn IscsiProvisioner> = Arc::new(SafeIscsiProvisioner::new());
 
     StorageService::new(image_backend, iscsi)
 }
