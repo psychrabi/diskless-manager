@@ -549,7 +549,12 @@ impl IscsiProvisioner for TargetCliProvisioner {
                     if let Some(number) = line
                         .split_whitespace()
                         .find_map(|token| token.strip_prefix("lun"))
-                        .and_then(|value| value.trim_matches(|c: char| !c.is_ascii_digit()).parse::<u32>().ok())
+                        .and_then(|value| {
+                            value
+                                .trim_matches(|c: char| !c.is_ascii_digit())
+                                .parse::<u32>()
+                                .ok()
+                        })
                     {
                         owned_lun_numbers.push(number);
                     }

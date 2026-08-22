@@ -28,16 +28,13 @@ impl IntoResponse for ReconciliationApiError {
 pub async fn inspect_storage_reconciliation(
     State(state): State<AppState>,
 ) -> Result<Json<crate::core::reconciliation::ReconciliationSummary>, ReconciliationApiError> {
-    inspect_storage(&state)
-        .await
-        .map(Json)
-        .map_err(|error| {
-            tracing::error!(error = %error, "storage reconciliation inspection failed");
+    inspect_storage(&state).await.map(Json).map_err(|error| {
+        tracing::error!(error = %error, "storage reconciliation inspection failed");
 
-            ReconciliationApiError {
-                error: error.to_string(),
-            }
-        })
+        ReconciliationApiError {
+            error: error.to_string(),
+        }
+    })
 }
 
 /// Repair one client using the persisted desired storage configuration.

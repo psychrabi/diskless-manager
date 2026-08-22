@@ -1,6 +1,8 @@
 use crate::core::client::{Client, ClientManager};
 use crate::core::provisioning::ClientStoragePaths;
-use crate::domain::storage::{ClientStorageSpec, StorageReconcileResult, StorageSource, StorageState};
+use crate::domain::storage::{
+    ClientStorageSpec, StorageReconcileResult, StorageSource, StorageState,
+};
 use crate::state::AppState;
 use serde::Serialize;
 
@@ -91,9 +93,10 @@ pub async fn inspect_storage(state: &AppState) -> anyhow::Result<ReconciliationS
                 outcome: ReconciliationOutcome::Skipped,
                 message: "Client has no storage configuration to reconcile".to_string(),
                 target_iqn: client.target_iqn.clone(),
-                dataset: client.writeback.clone().or_else(|| {
-                    (!client.master.is_empty()).then(|| client.master.clone())
-                }),
+                dataset: client
+                    .writeback
+                    .clone()
+                    .or_else(|| (!client.master.is_empty()).then(|| client.master.clone())),
             }),
             Err(error) => summary.push(ReconciliationEntry {
                 client_id: client.id.clone(),
@@ -101,9 +104,10 @@ pub async fn inspect_storage(state: &AppState) -> anyhow::Result<ReconciliationS
                 outcome: ReconciliationOutcome::Error,
                 message: error.to_string(),
                 target_iqn: client.target_iqn.clone(),
-                dataset: client.writeback.clone().or_else(|| {
-                    (!client.master.is_empty()).then(|| client.master.clone())
-                }),
+                dataset: client
+                    .writeback
+                    .clone()
+                    .or_else(|| (!client.master.is_empty()).then(|| client.master.clone())),
             }),
         }
     }
@@ -121,7 +125,10 @@ pub async fn repair_client_storage(
     let manager = ClientManager::new(state.db_pool.clone());
     let client = manager.get(client_id).await?;
     let spec = storage_spec_for_client(&client)?.ok_or_else(|| {
-        anyhow::anyhow!("client '{}' has no storage configuration to reconcile", client_id)
+        anyhow::anyhow!(
+            "client '{}' has no storage configuration to reconcile",
+            client_id
+        )
     })?;
 
     let storage = state
