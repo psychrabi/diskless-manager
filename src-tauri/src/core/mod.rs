@@ -1,5 +1,6 @@
 pub mod client;
 pub mod config;
+pub mod dhcp_reconciliation;
 pub mod image;
 pub mod provisioning;
 pub mod provisioning_transaction;
