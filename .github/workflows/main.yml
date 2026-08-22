@@ -1,4 +1,5 @@
 name: "Publish Release"
+
 on:
   push:
     tags:
@@ -23,11 +24,9 @@ jobs:
       - name: Build changelog
         id: build_changelog
         run: |
-          # Get all tags sorted by version
           ALL_TAGS=$(git tag --sort=-v:refname)
           CURRENT_TAG=${GITHUB_REF#refs/tags/}
 
-          # Find the previous tag
           PREVIOUS_TAG=""
           FOUND_CURRENT=false
           for tag in $ALL_TAGS; do
@@ -41,51 +40,39 @@ jobs:
             fi
           done
 
-          # Generate changelog
           if [ -z "$PREVIOUS_TAG" ]; then
-            # If no previous tag, get all commits
-            changelog=$(git log --pretty=format:"- %s" --date=short)
+            changelog=$(git log --pretty=format:"- %s")
           else
-            # Get commits between previous and current tag
             changelog=$(git log --pretty=format:"- %s" "$PREVIOUS_TAG..$CURRENT_TAG")
           fi
 
-          # Output the changelog
-          echo "changelog<<EOF" >> $GITHUB_OUTPUT
-          echo "$changelog" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          echo "changelog<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$changelog" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
 
   release:
     needs: changelog
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: "ubuntu-latest"
-            args: ""
-    runs-on: ${{ matrix.platform }}
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Install dependencies (Ubuntu only)
-        if: matrix.platform == 'ubuntu-latest'
+      - name: Install Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
 
       - name: Install Bun
-        run: |
-          curl -fsSL https://bun.sh/install | bash
-          echo "$HOME/.bun/bin" >> $GITHUB_PATH
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: oven-sh/setup-bun@v2
         with:
-          node-version: lts/*
+          bun-version: latest
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -96,90 +83,29 @@ jobs:
           workspaces: "./src-tauri -> target"
 
       - name: Install frontend dependencies
-        run: bun install
+        run: bun install --frozen-lockfile
 
-      - name: Build Tauri app
+      - name: Build and publish Tauri release
         uses: tauri-apps/tauri-action@v0
-        # if u get Error: Resource not accessible by integration
-        # go to repository Settings => Action => General => Workflow permissions => Switch to Read and Write permisions
         env:
           CI: true
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          # tauri-action replaces \_\_VERSION\_\_ with the app version
           tagName: ${{ github.ref_name }}
           releaseName: ${{ env.APP_NAME }} v__VERSION__
           releaseBody: |
             ${{ needs.changelog.outputs.changelog }}
 
-            See the assets to download this version and install.
+            See the release assets to download and install this version.
           releaseDraft: false
           prerelease: false
-          args: ${{ matrix.args }}
+          args: ""
 
-      - name: Upload Release Assets
+      - name: Upload Debian package
         uses: actions/upload-artifact@v4
         with:
-          name: "Release Assets"
-          path: |
-            src-tauri/target/release/bundle/deb/*.deb
-            src-tauri/target/release/bundle/AppImage/*.AppImage
-
-  # Separate job for branch builds (non-release)
-  build:
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/v'))
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: "ubuntu-latest"
-            args: ""
-    runs-on: ${{ matrix.platform }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Install dependencies (Ubuntu only)
-        if: matrix.platform == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-
-      - name: Install Bun
-        run: |
-          curl -fsSL https://bun.sh/install | bash
-          echo "$HOME/.bun/bin" >> $GITHUB_PATH
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: lts/*
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: "./src-tauri -> target"
-
-      - name: Install frontend dependencies
-        run: bun install
-
-      - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
-        env:
-          CI: true
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          args: ${{ matrix.args }}
-
-      - name: Upload Build Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: "Build Artifacts - ${{ matrix.platform }}"
-          path: |
-            src-tauri/target/release/bundle/deb/*.deb
-            src-tauri/target/release/bundle/AppImage/*.AppImage
+          name: diskless-manager-release-deb
+          path: src-tauri/target/release/bundle/deb/*.deb
+          if-no-files-found: error
