@@ -36,6 +36,7 @@ use crate::api::handlers::{
         get_system_info, get_zfs_arcstat, initialize_server, save_settings,
         setup_privileged_access,
     },
+    system_reconciliation::inspect_system_reconciliation_handler,
     users::{create_user, delete_user, get_user, list_users, update_user, update_user_password},
     ws::ws_metrics_handler,
     zfs::{create_dataset, delete_dataset, get_zpool_stats, list_datasets, list_zpools},
@@ -147,6 +148,10 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         )
         .route("/api/system/ram-usage", get(get_ram_usage))
         .route("/api/system/zfs-arcstat", get(get_zfs_arcstat))
+        .route(
+            "/api/system/reconciliation",
+            get(inspect_system_reconciliation_handler),
+        )
         .route(
             "/api/system/reconciliation/storage",
             get(inspect_storage_reconciliation),
