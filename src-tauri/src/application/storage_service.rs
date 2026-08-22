@@ -5,7 +5,7 @@ use crate::{
     },
     infrastructure::{
         image::ImageBackend,
-        iscsi::{IscsiLunSpec, IscsiProvisioner, IscsiTargetSpec},
+        iscsi::{IscsiLunSpec, IscsiProvisionResult, IscsiProvisioner, IscsiTargetSpec},
     },
 };
 use anyhow::{bail, Context, Result};
@@ -54,7 +54,6 @@ impl StorageService {
         let zpool = get_zpool_name();
         let games_parent = format!("{zpool}/games");
 
-        // No games dataset means there are no game disks.
         if run_command_output_no_sudo(["zfs", "list", "-H", &games_parent]).is_err() {
             return Ok(Vec::new());
         }
@@ -81,33 +80,32 @@ impl StorageService {
             .collect())
     }
 
-    // ========================================================================
+    // ====================================================================
     // CREATE
-    // ========================================================================
+    // ====================================================================
 
-    /// Create the ZFS client resource and expose it through iSCSI.
+    /// Create client storage.
     ///
-    /// The provisioning sequence is:
+    /// This compatibility method preserves the original API.
     ///
-    /// ```text
-    /// source snapshot
-    ///      │
-    ///      ▼
-    /// ZFS clone
-    ///      │
-    ///      ▼
-    /// verify clone
-    ///      │
-    ///      ▼
-    /// iSCSI target
-    ///      │
-    ///      ├── LUN 0 -> boot disk
-    ///      └── LUN 1+ -> optional shared game disks
-    /// ```
-    ///
-    /// If iSCSI provisioning fails, the newly-created ZFS clone and
-    /// client-owned boot backstore are removed as part of rollback.
+    /// When callers need transaction ownership information they should
+    /// use `create_client_storage_transaction()`.
     pub fn create_client_storage(&self, spec: &ClientStorageSpec) -> Result<ClientStorage> {
+        let (storage, _) = self.create_client_storage_transaction(spec)?;
+        Ok(storage)
+    }
+
+    /// Create client storage and return the exact iSCSI resources
+    /// created by this operation.
+    ///
+    /// The returned `IscsiProvisionResult` is authoritative for
+    /// transaction rollback.
+    ///
+    /// Existing resources are deliberately not reported as created.
+    pub fn create_client_storage_transaction(
+        &self,
+        spec: &ClientStorageSpec,
+    ) -> Result<(ClientStorage, IscsiProvisionResult)> {
         self.validate_spec(spec)?;
 
         let block_device = spec.block_device();
@@ -121,9 +119,9 @@ impl StorageService {
             "creating client storage"
         );
 
-        // --------------------------------------------------------------------
-        // Step 1: Prepare the ZFS resource.
-        // --------------------------------------------------------------------
+        // ---------------------------------------------------------------
+        // Step 1: Prepare ZFS resource.
+        // ---------------------------------------------------------------
 
         match &spec.source {
             StorageSource::Snapshot(snapshot) => {
@@ -199,9 +197,9 @@ impl StorageService {
             }
         }
 
-        // --------------------------------------------------------------------
+        // ---------------------------------------------------------------
         // Step 2: Build iSCSI LUN specification.
-        // --------------------------------------------------------------------
+        // ---------------------------------------------------------------
 
         let mut luns = vec![IscsiLunSpec::new(spec.lun, &spec.backstore, &block_device)];
 
@@ -234,56 +232,55 @@ impl StorageService {
 
         let iscsi_spec = IscsiTargetSpec::with_luns(&spec.target_iqn, luns)?;
 
-        // --------------------------------------------------------------------
-        // Step 3: Create iSCSI target transactionally.
-        // --------------------------------------------------------------------
-        //
-        // IMPORTANT:
-        //
-        // create_target_transaction() performs its own infrastructure
-        // rollback if targetcli fails part-way through.
-        //
-        // Therefore StorageService only needs to roll back the ZFS
-        // resource if it was created by this operation.
-        //
+        // ---------------------------------------------------------------
+        // Step 3: Create iSCSI transactionally.
+        // ---------------------------------------------------------------
 
-        if let Err(error) = self.iscsi.create_target_transaction(&iscsi_spec) {
-            tracing::error!(
-                client_id = %spec.client_id,
-                dataset = %spec.dataset,
-                target_iqn = %spec.target_iqn,
-                error = %error,
-                "iSCSI provisioning failed"
-            );
+        let iscsi_result = match self.iscsi.create_target_transaction(&iscsi_spec) {
+            Ok(result) => result,
 
-            // Never destroy a shared/master volume.
-            if spec.owns_dataset() {
-                if let Err(cleanup_error) = self.image_backend.destroy(&spec.dataset) {
-                    tracing::error!(
-                        client_id = %spec.client_id,
-                        dataset = %spec.dataset,
-                        error = %cleanup_error,
-                        "failed to rollback ZFS client resource after iSCSI failure"
-                    );
+            Err(error) => {
+                tracing::error!(
+                    client_id = %spec.client_id,
+                    dataset = %spec.dataset,
+                    target_iqn = %spec.target_iqn,
+                    error = %error,
+                    "iSCSI provisioning failed"
+                );
 
-                    return Err(error).context(format!(
-                        "iSCSI provisioning failed and ZFS rollback also failed: {}",
-                        cleanup_error
-                    ));
+                // The iSCSI provisioner already rolled back its own
+                // partially-created resources.
+                //
+                // StorageService only owns the ZFS resource when
+                // the source declares ownership.
+                if spec.owns_dataset() {
+                    if let Err(cleanup_error) = self.image_backend.destroy(&spec.dataset) {
+                        tracing::error!(
+                            client_id = %spec.client_id,
+                            dataset = %spec.dataset,
+                            error = %cleanup_error,
+                            "failed to rollback ZFS client resource after iSCSI failure"
+                        );
+
+                        return Err(error).context(format!(
+                            "iSCSI provisioning failed and ZFS rollback also failed: {}",
+                            cleanup_error
+                        ));
+                    }
                 }
+
+                return Err(error).with_context(|| {
+                    format!(
+                        "failed to provision iSCSI storage for client '{}'",
+                        spec.client_id
+                    )
+                });
             }
+        };
 
-            return Err(error).with_context(|| {
-                format!(
-                    "failed to provision iSCSI storage for client '{}'",
-                    spec.client_id
-                )
-            });
-        }
-
-        // --------------------------------------------------------------------
+        // ---------------------------------------------------------------
         // Step 4: Build application result.
-        // --------------------------------------------------------------------
+        // ---------------------------------------------------------------
 
         let volume = StorageVolume::new(
             spec.dataset.clone(),
@@ -293,36 +290,31 @@ impl StorageService {
             spec.lun,
         );
 
-        Ok(ClientStorage {
+        let storage = ClientStorage {
             client_id: spec.client_id.clone(),
             source: spec.source.clone(),
             volume,
             use_game_disk: spec.use_game_disk,
-        })
+        };
+
+        tracing::info!(
+            client_id = %spec.client_id,
+            target_iqn = %spec.target_iqn,
+            target_created = iscsi_result.target_created,
+            portal_created = iscsi_result.portal_created,
+            luns_created = ?iscsi_result.luns_created,
+            backstores_created = ?iscsi_result.backstores_created,
+            "client storage provisioned"
+        );
+
+        Ok((storage, iscsi_result))
     }
-    // ========================================================================
+
+    // ====================================================================
     // DESTROY
-    // ========================================================================
+    // ====================================================================
 
     /// Destroy the client's storage resources.
-    ///
-    /// For client-owned snapshot clones, the lifecycle is:
-    ///
-    /// ```text
-    /// iSCSI target
-    ///      │
-    ///      ├── boot backstore -> remove
-    ///      └── game backstores -> preserve
-    ///      │
-    ///      ▼
-    /// ZFS client clone
-    ///      │
-    ///      ▼
-    /// destroy clone
-    /// ```
-    ///
-    /// iSCSI is removed first so the underlying ZFS volume is no longer
-    /// exposed through LIO before it is destroyed.
     pub fn destroy_client_storage(&self, storage: &ClientStorage) -> Result<()> {
         tracing::info!(
             client_id = %storage.client_id,
@@ -333,19 +325,11 @@ impl StorageService {
             "destroying client storage"
         );
 
-        // --------------------------------------------------------------------
-        // Step 1: Remove iSCSI target and client-owned boot backstore.
-        // --------------------------------------------------------------------
-
         let owned_backstores = vec![storage.backstore().to_string()];
 
         self.iscsi
             .remove_target_with_backstores(storage.target_iqn(), &owned_backstores)
             .with_context(|| format!("failed to remove iSCSI target '{}'", storage.target_iqn()))?;
-
-        // --------------------------------------------------------------------
-        // Step 2: Destroy client-owned ZFS clone.
-        // --------------------------------------------------------------------
 
         if storage.owns_dataset() {
             self.image_backend
@@ -367,17 +351,11 @@ impl StorageService {
         Ok(())
     }
 
-    // ========================================================================
+    // ====================================================================
     // RESET
-    // ========================================================================
+    // ====================================================================
 
     /// Reset a client's storage from its desired source.
-    ///
-    /// This operation is intended primarily for snapshot-backed writable
-    /// client storage.
-    ///
-    /// Existing master volumes cannot be reset because they are shared
-    /// infrastructure and are not owned by the client.
     pub fn reset_client_storage(
         &self,
         current: &ClientStorage,
@@ -402,10 +380,6 @@ impl StorageService {
             "resetting client storage"
         );
 
-        // --------------------------------------------------------------------
-        // Remove existing iSCSI target and client-owned boot backstore.
-        // --------------------------------------------------------------------
-
         let owned_backstores = vec![current.backstore().to_string()];
 
         self.iscsi
@@ -416,10 +390,6 @@ impl StorageService {
                     current.target_iqn()
                 )
             })?;
-
-        // --------------------------------------------------------------------
-        // Destroy old client-owned ZFS clone.
-        // --------------------------------------------------------------------
 
         if current.owns_dataset() && self.image_backend.exists(current.dataset())? {
             self.image_backend
@@ -432,47 +402,47 @@ impl StorageService {
                 })?;
         }
 
-        // --------------------------------------------------------------------
-        // Recreate.
-        // --------------------------------------------------------------------
-
         self.create_client_storage(spec)
             .context("client storage reset failed")
     }
 
-    /// Remove a client's iSCSI target without destroying its ZFS storage.
+    // ====================================================================
+    // TARGET REMOVAL
+    // ====================================================================
+
+    /// Remove a client's iSCSI target without destroying ZFS storage.
     ///
-    /// This is used by provisioning rollback and mode transitions where
-    /// the underlying ZFS resource is handled separately.
-    pub fn remove_client_target(&self, target_iqn: &str, backstore: Option<&str>) -> Result<()> {
+    /// `backstores` must contain only backstores owned by the caller.
+    pub fn remove_client_target(&self, target_iqn: &str, backstores: &[String]) -> Result<()> {
         if target_iqn.trim().is_empty() {
             bail!("target IQN cannot be empty");
         }
 
-        match backstore {
-            Some(backstore) if !backstore.trim().is_empty() => {
-                let owned_backstores = vec![backstore.to_string()];
+        let owned_backstores: Vec<String> = backstores
+            .iter()
+            .filter(|item| !item.trim().is_empty())
+            .cloned()
+            .collect();
 
-                self.iscsi
-                    .remove_target_with_backstores(target_iqn, &owned_backstores)
-                    .with_context(|| {
-                        format!(
-                            "failed to remove iSCSI target '{}' and boot backstore '{}'",
-                            target_iqn, backstore
-                        )
-                    })
-            }
-
-            _ => self
-                .iscsi
+        if owned_backstores.is_empty() {
+            self.iscsi
                 .remove_target(target_iqn)
-                .with_context(|| format!("failed to remove iSCSI target '{}'", target_iqn)),
+                .with_context(|| format!("failed to remove iSCSI target '{}'", target_iqn))
+        } else {
+            self.iscsi
+                .remove_target_with_backstores(target_iqn, &owned_backstores)
+                .with_context(|| {
+                    format!(
+                        "failed to remove iSCSI target '{}' and owned backstores",
+                        target_iqn
+                    )
+                })
         }
     }
 
-    // ========================================================================
+    // ====================================================================
     // RECONCILIATION
-    // ========================================================================
+    // ====================================================================
 
     /// Inspect current storage state without changing anything.
     pub fn reconcile_client_storage(
@@ -544,7 +514,7 @@ impl StorageService {
         })
     }
 
-    /// Reconcile actual infrastructure to the desired state.
+    /// Reconcile actual infrastructure to desired state.
     pub fn reconcile_client_storage_in_place(
         &self,
         spec: &ClientStorageSpec,
@@ -568,9 +538,9 @@ impl StorageService {
         }
     }
 
-    // ========================================================================
+    // ====================================================================
     // PARTIAL REPAIR
-    // ========================================================================
+    // ====================================================================
 
     fn repair_partial_storage(&self, spec: &ClientStorageSpec) -> Result<ClientStorage> {
         tracing::warn!(
@@ -579,10 +549,6 @@ impl StorageService {
             target_iqn = %spec.target_iqn,
             "repairing partially provisioned client storage"
         );
-
-        // --------------------------------------------------------------------
-        // Remove incomplete iSCSI state.
-        // --------------------------------------------------------------------
 
         if self.iscsi.target_exists(&spec.target_iqn)? {
             let owned_backstores = vec![spec.backstore.clone()];
@@ -596,8 +562,6 @@ impl StorageService {
                     )
                 })?;
         } else {
-            // The target may already be gone while the owned boot backstore
-            // remains after an interrupted operation.
             self.iscsi
                 .remove_target_with_backstores(
                     &spec.target_iqn,
@@ -611,10 +575,6 @@ impl StorageService {
                 })?;
         }
 
-        // --------------------------------------------------------------------
-        // Only remove the ZFS resource if the client owns it.
-        // --------------------------------------------------------------------
-
         if spec.owns_dataset() && self.image_backend.exists(&spec.dataset)? {
             self.image_backend.destroy(&spec.dataset).with_context(|| {
                 format!(
@@ -624,17 +584,13 @@ impl StorageService {
             })?;
         }
 
-        // --------------------------------------------------------------------
-        // Recreate desired state.
-        // --------------------------------------------------------------------
-
         self.create_client_storage(spec)
             .context("failed to repair partial client storage")
     }
 
-    // ========================================================================
+    // ====================================================================
     // HELPERS
-    // ========================================================================
+    // ====================================================================
 
     fn storage_from_spec(&self, spec: &ClientStorageSpec) -> ClientStorage {
         ClientStorage {

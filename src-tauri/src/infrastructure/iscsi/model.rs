@@ -244,3 +244,178 @@ impl IscsiProvisionResult {
             && !self.portal_created
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provision_result_starts_empty() {
+        let result = IscsiProvisionResult::new();
+
+        assert!(result.is_empty());
+        assert!(!result.target_created);
+        assert!(result.backstores_created.is_empty());
+        assert!(result.luns_created.is_empty());
+        assert!(!result.portal_created);
+    }
+
+    #[test]
+    fn provision_result_tracks_owned_backstores() {
+        let mut result = IscsiProvisionResult::new();
+
+        result.backstores_created.push("client_boot".to_string());
+
+        assert!(result.owns_backstore("client_boot"));
+        assert!(!result.owns_backstore("game_disk"));
+    }
+
+    #[test]
+    fn provision_result_tracks_owned_luns() {
+        let mut result = IscsiProvisionResult::new();
+
+        result.luns_created.push(0);
+        result.luns_created.push(2);
+
+        assert!(result.owns_lun(0));
+        assert!(!result.owns_lun(1));
+        assert!(result.owns_lun(2));
+    }
+
+    #[test]
+    fn provision_result_is_not_empty_when_target_was_created() {
+        let mut result = IscsiProvisionResult::new();
+        result.target_created = true;
+
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn provision_result_is_not_empty_when_portal_was_created() {
+        let mut result = IscsiProvisionResult::new();
+        result.portal_created = true;
+
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn provision_result_is_not_empty_when_backstore_was_created() {
+        let mut result = IscsiProvisionResult::new();
+        result.backstores_created.push("client_boot".to_string());
+
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn provision_result_is_not_empty_when_lun_was_created() {
+        let mut result = IscsiProvisionResult::new();
+        result.luns_created.push(0);
+
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn provision_result_distinguishes_owned_and_shared_resources() {
+        let result = IscsiProvisionResult {
+            target_created: true,
+            backstores_created: vec!["client_boot".to_string()],
+            luns_created: vec![0],
+            portal_created: true,
+        };
+
+        assert!(result.owns_backstore("client_boot"));
+        assert!(!result.owns_backstore("game_disk"));
+
+        assert!(result.owns_lun(0));
+        assert!(!result.owns_lun(1));
+    }
+
+    #[test]
+    fn target_state_is_not_ready_when_target_is_missing() {
+        let state =
+            IscsiTargetState::from_luns("iqn.test:client".to_string(), false, vec![], false);
+
+        assert!(!state.is_ready());
+    }
+
+    #[test]
+    fn target_state_is_not_ready_when_lun_is_incomplete() {
+        let state = IscsiTargetState::from_luns(
+            "iqn.test:client".to_string(),
+            true,
+            vec![IscsiLunState {
+                lun: 0,
+                backstore: "client_boot".to_string(),
+                exists: true,
+                backstore_exists: true,
+                block_device_matches: false,
+            }],
+            true,
+        );
+
+        assert!(!state.is_ready());
+    }
+
+    #[test]
+    fn target_state_is_not_ready_when_portal_is_missing() {
+        let state = IscsiTargetState::from_luns(
+            "iqn.test:client".to_string(),
+            true,
+            vec![IscsiLunState {
+                lun: 0,
+                backstore: "client_boot".to_string(),
+                exists: true,
+                backstore_exists: true,
+                block_device_matches: true,
+            }],
+            false,
+        );
+
+        assert!(!state.is_ready());
+    }
+
+    #[test]
+    fn target_state_is_ready_when_all_resources_match() {
+        let state = IscsiTargetState::from_luns(
+            "iqn.test:client".to_string(),
+            true,
+            vec![IscsiLunState {
+                lun: 0,
+                backstore: "client_boot".to_string(),
+                exists: true,
+                backstore_exists: true,
+                block_device_matches: true,
+            }],
+            true,
+        );
+
+        assert!(state.is_ready());
+    }
+
+    #[test]
+    fn target_state_requires_all_luns_to_be_ready() {
+        let state = IscsiTargetState::from_luns(
+            "iqn.test:client".to_string(),
+            true,
+            vec![
+                IscsiLunState {
+                    lun: 0,
+                    backstore: "client_boot".to_string(),
+                    exists: true,
+                    backstore_exists: true,
+                    block_device_matches: true,
+                },
+                IscsiLunState {
+                    lun: 1,
+                    backstore: "game_disk".to_string(),
+                    exists: true,
+                    backstore_exists: true,
+                    block_device_matches: false,
+                },
+            ],
+            true,
+        );
+
+        assert!(!state.is_ready());
+    }
+}

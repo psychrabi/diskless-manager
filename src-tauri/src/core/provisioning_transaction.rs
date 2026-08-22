@@ -15,10 +15,12 @@ pub enum ProvisioningResource {
     /// A client-owned ZFS clone created during provisioning.
     ZfsClone { dataset: String },
 
-    /// An iSCSI target and its client-owned backstore.
+    /// An iSCSI target and the backstores created by this transaction.
+    ///
+    /// Existing/shared backstores are deliberately excluded.
     IscsiTarget {
         target_iqn: String,
-        backstore: String,
+        backstores: Vec<String>,
     },
 
     /// A DHCP configuration entry created for the client.
@@ -26,13 +28,6 @@ pub enum ProvisioningResource {
 }
 
 /// Transaction state.
-///
-/// A transaction starts as Active.
-///
-/// Once commit() is called, the transaction becomes Committed and
-/// rollback is no longer performed.
-///
-/// If rollback() is called, the transaction becomes RolledBack.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProvisioningTransactionState {
     Active,
@@ -92,23 +87,29 @@ impl<'a> ProvisioningTransaction<'a> {
             .push(ProvisioningResource::ZfsClone { dataset });
     }
 
-    /// Register a successfully-created iSCSI target.
+    /// Register an iSCSI target and the resources created by the
+    /// iSCSI transaction.
+    ///
+    /// Only backstores actually created by the iSCSI transaction
+    /// should be supplied here.
     pub fn record_iscsi_target(
         &mut self,
         target_iqn: impl Into<String>,
-        backstore: impl Into<String>,
+        backstores: impl IntoIterator<Item = String>,
     ) {
         let target_iqn = target_iqn.into();
-        let backstore = backstore.into();
+        let backstores: Vec<String> = backstores.into_iter().collect();
 
         info!(
-            "Provisioning transaction {}: registered iSCSI target {}",
-            self.client_id, target_iqn
+            "Provisioning transaction {}: registered iSCSI target {} with {} owned backstores",
+            self.client_id,
+            target_iqn,
+            backstores.len()
         );
 
         self.resources.push(ProvisioningResource::IscsiTarget {
             target_iqn,
-            backstore,
+            backstores,
         });
     }
 
@@ -152,12 +153,27 @@ impl<'a> ProvisioningTransaction<'a> {
     ///
     /// Rollback always occurs in reverse creation order.
     ///
-    /// This is important because:
+    /// Typical provisioning order:
     ///
-    ///     DHCP -> iSCSI -> ZFS
+    /// ```text
+    /// ZFS
+    ///   ↓
+    /// iSCSI
+    ///   ↓
+    /// DHCP
+    ///   ↓
+    /// persistence
+    /// ```
     ///
-    /// resources depend on each other. The dependent resource must be
-    /// removed before its underlying resource.
+    /// Therefore rollback occurs as:
+    ///
+    /// ```text
+    /// DHCP
+    ///   ↓
+    /// iSCSI
+    ///   ↓
+    /// ZFS
+    /// ```
     pub async fn rollback(&mut self) -> Vec<String> {
         if self.transaction_state != ProvisioningTransactionState::Active {
             warn!(
@@ -243,8 +259,8 @@ impl<'a> ProvisioningTransaction<'a> {
 
             ProvisioningResource::IscsiTarget {
                 target_iqn,
-                backstore,
-            } => self.rollback_iscsi(&target_iqn, &backstore),
+                backstores,
+            } => self.rollback_iscsi(&target_iqn, &backstores),
 
             ProvisioningResource::ZfsClone { dataset } => self.rollback_zfs(&dataset),
         }
@@ -266,17 +282,23 @@ impl<'a> ProvisioningTransaction<'a> {
         Ok(())
     }
 
-    /// Remove the iSCSI target created by the transaction.
-    fn rollback_iscsi(&self, target_iqn: &str, backstore: &str) -> Result<(), AppError> {
+    /// Remove the iSCSI target and only the backstores owned by this
+    /// transaction.
+    ///
+    /// Shared/game backstores that were already present are not
+    /// supplied and therefore remain untouched.
+    fn rollback_iscsi(&self, target_iqn: &str, backstores: &[String]) -> Result<(), AppError> {
         info!(
-            "Rollback iSCSI target {} / backstore {} for client {}",
-            target_iqn, backstore, self.client_id
+            "Rollback iSCSI target {} with {} owned backstores for client {}",
+            target_iqn,
+            backstores.len(),
+            self.client_id
         );
 
         self.state
             .application
             .storage
-            .remove_client_target(target_iqn, Some(backstore))
+            .remove_client_target(target_iqn, backstores)
             .map_err(|error| {
                 AppError::Command(format!(
                     "Failed to remove iSCSI target {}: {}",
@@ -325,15 +347,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn transaction_starts_active() {
-        // This test only verifies the state machine type.
-        assert_eq!(
-            ProvisioningTransactionState::Active,
-            ProvisioningTransactionState::Active
-        );
-    }
-
-    #[test]
     fn resource_variants_are_distinct() {
         let zfs = ProvisioningResource::ZfsClone {
             dataset: "tank/client".to_string(),
@@ -341,7 +354,7 @@ mod tests {
 
         let iscsi = ProvisioningResource::IscsiTarget {
             target_iqn: "iqn.test:client".to_string(),
-            backstore: "block_client".to_string(),
+            backstores: vec!["block_client".to_string()],
         };
 
         let dhcp = ProvisioningResource::DhcpEntry {
@@ -351,5 +364,13 @@ mod tests {
         assert_ne!(zfs, iscsi);
         assert_ne!(iscsi, dhcp);
         assert_ne!(zfs, dhcp);
+    }
+
+    #[test]
+    fn transaction_state_starts_active() {
+        assert_eq!(
+            ProvisioningTransactionState::Active,
+            ProvisioningTransactionState::Active
+        );
     }
 }

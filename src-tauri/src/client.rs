@@ -335,7 +335,7 @@ pub async fn edit_client(
         if let Err(error) = state
             .application
             .storage
-            .remove_client_target(&iqn, Some(&store))
+            .remove_client_target(&iqn, &[store])
         {
             warn!("Failed to cleanup old iSCSI target: {}", error);
         }
@@ -385,7 +385,7 @@ pub async fn delete_client(
         if let Err(error) = state
             .application
             .storage
-            .remove_client_target(iqn, Some(store))
+            .remove_client_target(iqn, std::slice::from_ref(store))
         {
             warn!(
                 "Failed to cleanup iSCSI target for {}: {}",
@@ -612,7 +612,7 @@ pub async fn control_client(
                     if let Err(error) = state
                         .application
                         .storage
-                        .remove_client_target(tiqn, Some(&block_store))
+                        .remove_client_target(tiqn, std::slice::from_ref(&block_store))
                     {
                         warn!(
                             "Failed to remove existing iSCSI target before enabling super mode: {}",
@@ -773,7 +773,7 @@ pub async fn control_client(
                     if let Err(error) = state
                         .application
                         .storage
-                        .remove_client_target(tiqn, Some(&block_store))
+                        .remove_client_target(tiqn, std::slice::from_ref(&block_store))
                     {
                         warn!(
                             "Failed to remove existing iSCSI target before demotion: {}",
@@ -867,7 +867,7 @@ pub async fn reset_client(
     if let Err(error) = state
         .application
         .storage
-        .remove_client_target(&target_iqn, Some(&block_store))
+        .remove_client_target(&target_iqn, std::slice::from_ref(&block_store))
     {
         warn!("Failed to clean up iSCSI target: {}", error);
     }
