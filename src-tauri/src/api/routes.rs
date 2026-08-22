@@ -14,6 +14,7 @@ use crate::api::handlers::{
         remote_desktop_client, shutdown_client,
     },
     dashboard::{get_client_io_metrics, get_client_overview, get_default_image},
+    dhcp_reconciliation::{inspect_dhcp_reconciliation, repair_dhcp_reconciliation},
     disks::{create_pool, list_disks, pool_exists, rename_disk},
     images::{
         clone_image, create_image, create_snapshot, delete_image, delete_snapshot, get_image,
@@ -44,10 +45,8 @@ use tower::limit::ConcurrencyLimitLayer;
 use tower_http::trace::TraceLayer;
 
 pub fn create_app(state: crate::state::AppState) -> Router {
-    // CORS layer must be applied first (outermost) to handle preflight requests
     let cors = cors_layer();
 
-    // Public routes (no auth middleware)
     let public_router = Router::new()
         .route("/health", get(|| async { "OK" }))
         .route("/api/auth/login", post(login))
@@ -61,7 +60,6 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route("/api/config", get(get_config))
         .with_state(state.clone());
 
-    // WebSocket routes (with custom auth handling)
     let ws_router = Router::new()
         .route("/ws/metrics", axum::routing::get(ws_metrics_handler))
         .with_state(state.clone())
@@ -70,9 +68,7 @@ pub fn create_app(state: crate::state::AppState) -> Router {
             require_auth,
         ));
 
-    // Protected API routes (with auth middleware)
     let api_router = Router::new()
-        // Client routes (auth required)
         .route("/api/clients", get(list_clients).post(create_client))
         .route(
             "/api/clients/{id}",
@@ -82,7 +78,6 @@ pub fn create_app(state: crate::state::AppState) -> Router {
             "/api/clients/{id}/boot-history",
             get(get_client_boot_history),
         )
-        // Control operation routes (auth required)
         .route("/api/clients/{id}/shutdown", post(shutdown_client))
         .route("/api/clients/{id}/reboot", post(reboot_client))
         .route(
@@ -95,7 +90,6 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         )
         .route("/api/audit-logs", get(get_audit_logs))
         .route("/api/scheduled-operations", get(get_scheduled_operations))
-        // Image routes (auth required)
         .route("/api/images", get(list_images).post(create_image))
         .route("/api/masters", get(list_masters))
         .route(
@@ -121,7 +115,6 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route("/api/images/{id}/resize", post(resize_image))
         .route("/api/images/{id}/verify", post(verify_image))
         .route("/api/images/{id}/set-default", post(set_default_image))
-        // Service routes (auth required)
         .route("/api/services", get(list_services))
         .route("/api/services/{name}/status", get(get_service_status))
         .route("/api/services/{name}/start", post(start_service))
@@ -133,7 +126,6 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route("/api/services/{name}/config", get(get_service_config))
         .route("/api/services/{name}/configure", post(configure_service))
         .route("/api/services/install", post(install_service))
-        // System routes (auth required)
         .route("/api/system/info", get(get_system_info))
         .route("/api/system/status", get(get_server_status))
         .route("/api/system/initialize", post(initialize_server))
@@ -163,33 +155,34 @@ pub fn create_app(state: crate::state::AppState) -> Router {
             "/api/system/reconciliation/storage/{id}",
             post(repair_storage_reconciliation),
         )
-        // Disk routes (auth required)
+        .route(
+            "/api/system/reconciliation/dhcp",
+            get(inspect_dhcp_reconciliation),
+        )
+        .route(
+            "/api/system/reconciliation/dhcp/{id}",
+            post(repair_dhcp_reconciliation),
+        )
         .route("/api/disks/{name}/rename", put(rename_disk))
         .route("/api/disks/pool", post(create_pool))
-        // ZFS routes (auth required)
         .route("/api/zfs/pools", get(list_zpools))
         .route("/api/zfs/pools/stats", get(get_zpool_stats))
         .route("/api/zfs/datasets", get(list_datasets).post(create_dataset))
         .route("/api/zfs/datasets/{dataset}", delete(delete_dataset))
-        // Dashboard routes (auth required)
         .route("/api/dashboard/default-image", get(get_default_image))
         .route("/api/dashboard/clients", get(get_client_overview))
         .route(
             "/api/dashboard/clients/io-metrics",
             get(get_client_io_metrics),
         )
-        // Logs routes (auth required)
         .route("/api/logs", get(get_logs).delete(clear_logs))
-        // License routes (auth required)
         .route("/api/license/activate", post(activate_license_handler))
-        // User management routes (auth required, admin only)
         .route("/api/users", get(list_users).post(create_user))
         .route(
             "/api/users/{id}",
             get(get_user).put(update_user).delete(delete_user),
         )
         .route("/api/users/{id}/password", put(update_user_password))
-        // SSH routes (auth required)
         .route("/api/ssh/test-connection", post(test_ssh_connection))
         .route("/api/ssh/execute-command", post(execute_ssh_command))
         .route("/api/ssh/system-info", post(get_windows_system_info))
@@ -199,7 +192,6 @@ pub fn create_app(state: crate::state::AppState) -> Router {
             require_auth,
         ));
 
-    // Combine all routers
     Router::new()
         .merge(public_router)
         .merge(ws_router)
