@@ -116,6 +116,18 @@ pub async fn inspect_storage(state: &AppState) -> anyhow::Result<ReconciliationS
     Ok(summary)
 }
 
+/// Refuse destructive storage repair while an initiator is connected.
+fn ensure_storage_repair_safe(target_iqn: &str, active_sessions: bool) -> anyhow::Result<()> {
+    if active_sessions {
+        anyhow::bail!(
+            "Client storage is in use: active iSCSI session on target '{}'. Disconnect the client before repair.",
+            target_iqn
+        );
+    }
+
+    Ok(())
+}
+
 /// Repair one persisted client's ZFS/iSCSI state to the desired configuration.
 ///
 /// The operation is explicit. It does not run during application startup.
@@ -132,19 +144,10 @@ pub async fn repair_client_storage(
         )
     })?;
 
-    if target_has_active_sessions(&spec.target_iqn)? {
-        return Ok(ReconciliationEntry {
-            client_id: client.id,
-            client_name: client.name,
-            outcome: ReconciliationOutcome::Error,
-            message: format!(
-                "Client storage is in use: active iSCSI session on target '{}'. Disconnect the client before repair.",
-                spec.target_iqn
-            ),
-            target_iqn: Some(spec.target_iqn),
-            dataset: Some(spec.dataset),
-        });
-    }
+    ensure_storage_repair_safe(
+        &spec.target_iqn,
+        target_has_active_sessions(&spec.target_iqn)?,
+    )?;
 
     let storage = state
         .application
@@ -308,5 +311,19 @@ mod tests {
         };
 
         assert!(storage_spec_for_client(&client).unwrap().is_none());
+    }
+
+    #[test]
+    fn repair_policy_allows_disconnected_clients() {
+        assert!(ensure_storage_repair_safe("iqn.test:client", false).is_ok());
+    }
+
+    #[test]
+    fn repair_policy_rejects_connected_clients() {
+        let error = ensure_storage_repair_safe("iqn.test:client", true).unwrap_err();
+        let message = error.to_string();
+
+        assert!(message.contains("active iSCSI session"));
+        assert!(message.contains("Disconnect the client before repair"));
     }
 }
