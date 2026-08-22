@@ -4,6 +4,7 @@ use crate::{
     state::AppState,
     DHCP_CLIENTS_PATH,
 };
+use regex::Regex;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -72,14 +73,23 @@ fn classify_dhcp_entry(
         return DhcpReconciliationOutcome::Ready;
     }
 
-    let host_name = format_client_name(client_name);
-    let host_header = format!("host {host_name} {{");
-
-    if content.lines().any(|line| line.trim() == host_header) {
+    if dhcp_host_exists(content, client_name) {
         DhcpReconciliationOutcome::Partial
     } else {
         DhcpReconciliationOutcome::Missing
     }
+}
+
+fn dhcp_host_exists(content: &str, client_name: &str) -> bool {
+    let formatted_name = format_client_name(client_name);
+    let pattern = format!(
+        r#"(?m)^\s*host\s+{}\s*\{{\s*$"#,
+        regex::escape(&formatted_name)
+    );
+
+    Regex::new(&pattern)
+        .map(|regex| regex.is_match(content))
+        .unwrap_or(false)
 }
 
 pub async fn inspect_dhcp(state: &AppState) -> anyhow::Result<DhcpReconciliationSummary> {
