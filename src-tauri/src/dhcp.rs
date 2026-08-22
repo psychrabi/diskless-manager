@@ -16,7 +16,6 @@ pub async fn update_dhcp_config(
         client_id, is_new
     );
 
-    // Acquire lock to prevent race conditions.
     let lock_path = std::env::temp_dir().join("diskless-manager-dhcp.lock");
 
     let lock_file = std::fs::OpenOptions::new()
@@ -33,10 +32,8 @@ pub async fn update_dhcp_config(
         .lock_exclusive()
         .map_err(|error| format!("Failed to acquire lock: {}", error))?;
 
-    // Read current configuration.
     let mut content = std::fs::read_to_string(DHCP_CLIENTS_PATH).unwrap_or_default();
 
-    // Backup directory.
     let backup_dir = "/srv/tftp/backups";
 
     async_fs::create_dir_all(backup_dir)
@@ -50,10 +47,6 @@ pub async fn update_dhcp_config(
     async_fs::write(&dhcp_backup_path, &content)
         .await
         .map_err(|error| format!("Backup failed: {}", error))?;
-
-    // ---------------------------------------------------------------
-    // Remove an existing entry.
-    // ---------------------------------------------------------------
 
     if !is_new {
         let formatted_name = format_client_name(client_id);
@@ -78,13 +71,6 @@ pub async fn update_dhcp_config(
         content = blank_re.replace_all(&content, "\n\n").to_string();
     }
 
-    // ---------------------------------------------------------------
-    // Deletion operation.
-    //
-    // An empty dhcp_entry means the caller is intentionally removing
-    // the entry and does not want a replacement.
-    // ---------------------------------------------------------------
-
     if !is_new && dhcp_entry.trim().is_empty() {
         let temp_path = format!("{}/dhcp_clients_{}.tmp", backup_dir, pid);
 
@@ -98,7 +84,6 @@ pub async fn update_dhcp_config(
             error!("{}", message);
 
             let _ = async_fs::remove_file(&dhcp_backup_path).await;
-
             let _ = async_fs::remove_file(&temp_path).await;
 
             return Err(message);
@@ -110,10 +95,6 @@ pub async fn update_dhcp_config(
 
         return Ok(());
     }
-
-    // ---------------------------------------------------------------
-    // Append replacement/new entry.
-    // ---------------------------------------------------------------
 
     content = if content.trim().is_empty() {
         dhcp_entry.to_string()
@@ -133,7 +114,6 @@ pub async fn update_dhcp_config(
         error!("{}", message);
 
         let _ = async_fs::remove_file(&dhcp_backup_path).await;
-
         let _ = async_fs::remove_file(&temp_path).await;
 
         return Err(message);
@@ -155,7 +135,6 @@ pub fn format_client_name(name: &str) -> String {
 
 pub fn create_dhcp_entry(name: &str, mac: &str, ip: &str, target_iqn: &str) -> String {
     let formatted_name = format_client_name(name);
-
     let server_ip = get_server_ip();
 
     let entry = format!(
@@ -177,6 +156,34 @@ option root-path "iscsi:{server_ip}::::{target_iqn}";
     entry
 }
 
+/// Check whether a client's DHCP host block exactly matches the desired entry.
+pub fn dhcp_entry_matches(content: &str, client_name: &str, desired_entry: &str) -> bool {
+    let formatted_name = format_client_name(client_name);
+    let host_block_re = Regex::new(&format!(
+        concat!(
+            r#"(?ms)^\s*host\s+{}\s*\{{.*?^\s*\}}\s*$"#
+        ),
+        regex::escape(&formatted_name)
+    ));
+
+    let Ok(regex) = host_block_re else {
+        return false;
+    };
+
+    regex
+        .find_iter(content)
+        .any(|matched| normalize_dhcp_block(matched.as_str()) == normalize_dhcp_block(desired_entry))
+}
+
+fn normalize_dhcp_block(value: &str) -> String {
+    value
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,13 +191,9 @@ mod tests {
     #[test]
     fn test_format_client_name() {
         assert_eq!(format_client_name("client_1"), "PC001");
-
         assert_eq!(format_client_name("client_10"), "PC010");
-
         assert_eq!(format_client_name("client_100"), "PC100");
-
         assert_eq!(format_client_name("my_pc"), "MY_PC");
-
         assert_eq!(format_client_name("test"), "TEST");
     }
 
@@ -199,15 +202,38 @@ mod tests {
         let entry = create_dhcp_entry("client_1", "00:11:22:33:44:55", "192.168.1.100", "iqn.test");
 
         assert!(entry.contains("host PC001 {"));
-
         assert!(entry.contains("hardware ethernet 00:11:22:33:44:55;"));
-
         assert!(entry.contains("fixed-address 192.168.1.100;"));
-
         assert!(entry.contains("option host-name \"PC001\";"));
-
         assert!(entry.contains("option root-path \"iscsi:"));
-
         assert!(entry.contains("::::iqn.test\";"));
+    }
+
+    #[test]
+    fn test_dhcp_entry_matches_exact_block() {
+        let desired = r#"host PC001 {
+hardware ethernet 00:11:22:33:44:55;
+fixed-address 192.168.1.100;
+option host-name "PC001";
+option root-path "iscsi:192.168.1.1::::iqn.test";
+}"#;
+
+        let content = format!("# header\n\n{}\n\n# footer\n", desired);
+
+        assert!(dhcp_entry_matches(&content, "client_1", desired));
+    }
+
+    #[test]
+    fn test_dhcp_entry_matches_detects_drift() {
+        let desired = r#"host PC001 {
+hardware ethernet 00:11:22:33:44:55;
+fixed-address 192.168.1.100;
+option host-name "PC001";
+option root-path "iscsi:192.168.1.1::::iqn.test";
+}"#;
+
+        let drifted = desired.replace("192.168.1.100", "192.168.1.101");
+
+        assert!(!dhcp_entry_matches(&drifted, "client_1", desired));
     }
 }
