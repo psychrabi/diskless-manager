@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use std::path::Path;
 
-use crate::cmd::{run_command, run_command_output_no_sudo};
+use crate::cmd::{run_command, run_command_output};
 
 use super::model::{
     IscsiLunSpec, IscsiLunState, IscsiProvisionResult, IscsiTargetSpec, IscsiTargetState,
@@ -75,7 +75,7 @@ impl TargetCliProvisioner {
         I: IntoIterator<Item = S>,
         S: AsRef<std::ffi::OsStr>,
     {
-        run_command_output_no_sudo(args)
+        run_command_output(args)
             .map_err(anyhow::Error::from)
             .context("targetcli command failed")
     }
