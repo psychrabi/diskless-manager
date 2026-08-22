@@ -8,6 +8,7 @@ pub mod disks;
 pub mod images;
 pub mod license;
 pub mod logs;
+pub mod reconciliation;
 pub mod services;
 pub mod ssh;
 pub mod system;
