@@ -4,6 +4,7 @@ pub mod clients_v2;
 pub mod config;
 pub mod control;
 pub mod dashboard;
+pub mod dhcp_reconciliation;
 pub mod disks;
 pub mod images;
 pub mod license;
