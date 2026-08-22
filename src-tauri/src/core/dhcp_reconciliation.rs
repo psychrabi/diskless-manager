@@ -1,6 +1,6 @@
 use crate::{
-    core::client::{Client, ClientManager},
-    dhcp::{create_dhcp_entry, dhcp_entry_matches},
+    core::client::ClientManager,
+    dhcp::{create_dhcp_entry, dhcp_entry_matches, format_client_name},
     state::AppState,
     DHCP_CLIENTS_PATH,
 };
@@ -51,7 +51,7 @@ impl DhcpReconciliationSummary {
     fn push(&mut self, entry: DhcpReconciliationEntry) {
         self.checked += 1;
 
-        match entry.outcome {
+        match &entry.outcome {
             DhcpReconciliationOutcome::Ready => self.ready += 1,
             DhcpReconciliationOutcome::Partial => self.partial += 1,
             DhcpReconciliationOutcome::Missing => self.missing += 1,
@@ -97,13 +97,14 @@ pub async fn inspect_dhcp(state: &AppState) -> anyhow::Result<DhcpReconciliation
         };
 
         let desired = create_dhcp_entry(&client.name, &client.mac, &client.ip, target_iqn);
+        let host_name = format_client_name(&client.name);
+        let host_exists = content
+            .lines()
+            .any(|line| line.trim() == format!("host {host_name} {{"));
 
         let outcome = if dhcp_entry_matches(&content, &client.name, &desired) {
             DhcpReconciliationOutcome::Ready
-        } else if content
-            .lines()
-            .any(|line| line.trim() == format!("host {} {{", crate::dhcp::format_client_name(&client.name)))
-        {
+        } else if host_exists {
             DhcpReconciliationOutcome::Partial
         } else {
             DhcpReconciliationOutcome::Missing
