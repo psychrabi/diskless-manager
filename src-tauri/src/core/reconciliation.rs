@@ -51,7 +51,7 @@ impl ReconciliationSummary {
     fn push(&mut self, entry: ReconciliationEntry) {
         self.checked += 1;
 
-        match entry.outcome {
+        match &entry.outcome {
             ReconciliationOutcome::Ready => self.ready += 1,
             ReconciliationOutcome::Partial => self.partial += 1,
             ReconciliationOutcome::Missing => self.missing += 1,
