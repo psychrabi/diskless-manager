@@ -147,7 +147,9 @@ pub async fn repair_client_dhcp(
         .target_iqn
         .as_deref()
         .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| anyhow::anyhow!("client '{}' has no persisted iSCSI target IQN", client_id))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!("client '{}' has no persisted iSCSI target IQN", client_id)
+        })?;
 
     let desired = create_dhcp_entry(&client.name, &client.mac, &client.ip, target_iqn);
 

@@ -159,10 +159,9 @@ option root-path "iscsi:{server_ip}::::{target_iqn}";
 /// Check whether a client's DHCP host block exactly matches the desired entry.
 pub fn dhcp_entry_matches(content: &str, client_name: &str, desired_entry: &str) -> bool {
     let formatted_name = format_client_name(client_name);
+
     let host_block_re = Regex::new(&format!(
-        concat!(
-            r#"(?ms)^\s*host\s+{}\s*\{{.*?^\s*\}}\s*$"#
-        ),
+        r#"(?s)host\s+{}\s*\{{.*?\}}"#,
         regex::escape(&formatted_name)
     ));
 
@@ -170,9 +169,13 @@ pub fn dhcp_entry_matches(content: &str, client_name: &str, desired_entry: &str)
         return false;
     };
 
-    regex
+    let desired = normalize_dhcp_block(desired_entry);
+
+    let result = regex
         .find_iter(content)
-        .any(|matched| normalize_dhcp_block(matched.as_str()) == normalize_dhcp_block(desired_entry))
+        .any(|matched| normalize_dhcp_block(matched.as_str()) == desired);
+
+    result
 }
 
 fn normalize_dhcp_block(value: &str) -> String {

@@ -7,7 +7,9 @@ use axum::{
 use serde::Serialize;
 
 use crate::{
-    core::dhcp_reconciliation::{inspect_dhcp, repair_client_dhcp, DhcpReconciliationEntry, DhcpReconciliationSummary},
+    core::dhcp_reconciliation::{
+        inspect_dhcp, repair_client_dhcp, DhcpReconciliationEntry, DhcpReconciliationSummary,
+    },
     state::AppState,
 };
 
