@@ -3,7 +3,7 @@ use anyhow::{bail, Result};
 use super::{
     model::{IscsiProvisionResult, IscsiTargetSpec, IscsiTargetState},
     reconcile::target_has_active_sessions,
-    IscsiLunSpec, IscsiProvisioner, TargetCliProvisioner,
+    IscsiProvisioner, TargetCliProvisioner,
 };
 
 /// Application-facing iSCSI provisioner that refuses destructive changes
