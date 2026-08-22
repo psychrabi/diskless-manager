@@ -212,6 +212,10 @@ pub async fn add_client_provisioning(
         use_game_disk,
     } = request;
 
+    // -----------------------------------------------------------------
+    // No master image selected.
+    // -----------------------------------------------------------------
+
     if master.is_empty() {
         let now = chrono::Utc::now();
 
@@ -256,32 +260,42 @@ pub async fn add_client_provisioning(
         }));
     }
 
+    // -----------------------------------------------------------------
+    // Validate duplicates.
+    // -----------------------------------------------------------------
+
     if let Some(duplicate) = check_duplicate_client(&name, &mac, &ip) {
         return Err(AppError::Validation(duplicate));
     }
+
+    // -----------------------------------------------------------------
+    // Calculate storage resources.
+    // -----------------------------------------------------------------
 
     let mut paths = get_client_paths_with_master(&name, &mac, &master);
 
     if let Ok(pool_list) =
         run_command_output_no_sudo(["zfs", "list", "-H", "-o", "name", "-r", &get_zpool_name()])
     {
-        if let Some(parent) = pool_list
-            .lines()
-            .filter(|line| !line.is_empty())
-            .find_map(|dataset| {
-                match run_command_output_no_sudo([
-                    "zfs",
-                    "get",
-                    "-H",
-                    "-o",
-                    "value",
-                    "org.diskless:type",
-                    dataset,
-                ]) {
-                    Ok(value) if value.trim() == "writeback" => Some(dataset.to_string()),
-                    _ => None,
-                }
-            })
+        if let Some(parent) =
+            pool_list
+                .lines()
+                .filter(|line| !line.is_empty())
+                .find_map(|dataset| {
+                    match run_command_output_no_sudo([
+                        "zfs",
+                        "get",
+                        "-H",
+                        "-o",
+                        "value",
+                        "org.diskless:type",
+                        dataset,
+                    ]) {
+                        Ok(value) if value.trim() == "writeback" => Some(dataset.to_string()),
+
+                        _ => None,
+                    }
+                })
         {
             paths.dataset = format!("{}/{}-disk", parent, name.to_uppercase());
         } else {
@@ -291,7 +305,16 @@ pub async fn add_client_provisioning(
 
     info!("Client storage paths: {:?}", paths);
 
+    // -----------------------------------------------------------------
+    // Create outer transaction.
+    // -----------------------------------------------------------------
+
     let mut transaction = ProvisioningTransaction::new(state, name.clone());
+
+    // -----------------------------------------------------------------
+    // Step 1: Create ZFS resource.
+    // -----------------------------------------------------------------
+
     let used_master_directly;
 
     if snapshot.is_empty() {
@@ -312,19 +335,29 @@ pub async fn add_client_provisioning(
         transaction.record_zfs_clone(paths.dataset.clone());
     }
 
+    // -----------------------------------------------------------------
+    // Step 2: Create iSCSI target.
+    // -----------------------------------------------------------------
+
     let block_device = format!("/dev/zvol/{}", paths.dataset);
 
     let storage_spec = ClientStorageSpec {
         client_id: name.clone(),
+
         source: if used_master_directly {
             StorageSource::ExistingVolume(master.clone())
         } else {
             StorageSource::ExistingClientVolume(paths.dataset.clone())
         },
+
         dataset: paths.dataset.clone(),
+
         backstore: paths.backstore.clone(),
+
         target_iqn: paths.target_iqn.clone(),
+
         lun: 0,
+
         use_game_disk: use_game_disk.unwrap_or(false),
     };
 
@@ -334,6 +367,7 @@ pub async fn add_client_provisioning(
         .create_client_storage_transaction(&storage_spec)
     {
         Ok(result) => result,
+
         Err(error) => {
             let provisioning_error = AppError::Command(format!(
                 "Failed to setup iSCSI target '{}': {}",
@@ -344,10 +378,16 @@ pub async fn add_client_provisioning(
         }
     };
 
+    // Register the exact resources created by the iSCSI
+    // transaction.
     transaction.record_iscsi_target(
         paths.target_iqn.clone(),
         iscsi_result.backstores_created.clone(),
     );
+
+    // -----------------------------------------------------------------
+    // Step 3: Update DHCP.
+    // -----------------------------------------------------------------
 
     let dhcp_entry = create_dhcp_entry(&name, &mac, &ip, &paths.target_iqn);
 
@@ -360,39 +400,61 @@ pub async fn add_client_provisioning(
 
     transaction.record_dhcp_entry(name.clone());
 
+    // -----------------------------------------------------------------
+    // Step 4: Persist configuration.
+    // -----------------------------------------------------------------
+
     let now = chrono::Utc::now();
 
     let client_data = Client {
         id: name.clone(),
+
         name: name.to_uppercase(),
+
         mac: mac.clone(),
+
         ip: ip.clone(),
+
         master: master.clone(),
+
         enabled: true,
+
         created_at: now,
+
         updated_at: now,
+
         snapshot: if used_master_directly {
             None
         } else {
             Some(snapshot.clone())
         },
+
         target_iqn: Some(paths.target_iqn.clone()),
+
         block_device: Some(block_device.clone()),
+
         block_store: Some(paths.backstore.clone()),
+
         writeback: if used_master_directly {
             None
         } else {
             Some(paths.dataset.clone())
         },
+
         last_modified: Some(now.format("%Y-%m-%d %H:%M:%S").to_string()),
+
         status: None,
+
         mode: if used_master_directly {
             Some("super".to_string())
         } else {
             None
         },
+
         pxe_mode: Some("uefi".to_string()),
+
         keep_writeback: keep_writeback.or(Some(true)),
+
         use_game_disk,
     };
 
@@ -403,13 +465,22 @@ pub async fn add_client_provisioning(
         return Err(transaction.rollback_with_error(provisioning_error).await);
     }
 
-    if let Err(error) = run_command_async(["systemctl", "restart", "isc-dhcp-server.service"]).await
+    // -----------------------------------------------------------------
+    // Step 5: Restart DHCP.
+    // -----------------------------------------------------------------
+
+    if let Err(error) =
+        run_command_async(["systemctl", "restart", "isc-dhcp-server.service"]).await
     {
         warn!(
             "Failed to restart DHCP service after adding client {}: {}",
             name, error
         );
     }
+
+    // -----------------------------------------------------------------
+    // Commit.
+    // -----------------------------------------------------------------
 
     transaction.commit();
 
