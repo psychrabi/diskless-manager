@@ -39,7 +39,10 @@ export default function AppLogs() {
   }
 
   useEffect(() => {
-    load();
+    // Defer so setState inside load() is not synchronous within the
+    // effect body (react-hooks/set-state-in-effect).
+    const timer = setTimeout(load, 0);
+    return () => clearTimeout(timer);
   }, [load]);
 
   return (

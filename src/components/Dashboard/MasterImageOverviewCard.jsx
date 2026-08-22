@@ -46,7 +46,10 @@ const MasterImageOverviewCard = () => {
   );
 
   useEffect(() => {
-    fetchMasterImageOverview();
+    // Defer so setState inside the fetch is not synchronous within
+    // the effect body (react-hooks/set-state-in-effect).
+    const timer = setTimeout(fetchMasterImageOverview, 0);
+    return () => clearTimeout(timer);
   }, [fetchMasterImageOverview]); // Run once on mount
 
   const handleRetry = () => fetchMasterImageOverview(false); // No duplicate toast

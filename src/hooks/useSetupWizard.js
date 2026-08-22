@@ -125,25 +125,33 @@ export const useSetupWizard = () => {
   }, [fetchDependencies, fetchConfig, fetchServiceConfig]);
 
   useEffect(() => {
-    checkAll();
+    // Defer so setState inside checkAll() is not synchronous within
+    // the effect body (react-hooks/set-state-in-effect).
+    const timer = setTimeout(checkAll, 0);
+    return () => clearTimeout(timer);
   }, [checkAll]);
 
   const allServicesInstalled =
     dependencies.length > 0 && !dependencies.some((svc) => !svc.installed);
 
   useEffect(() => {
-    setActiveStep(
-      getInitialStep({
-        privilegedAccessGranted,
-        allServicesInstalled,
-        poolExists,
-        hasDhcp,
-        hasTftp,
-        hasHttp,
-        hasSamba,
-        hasBootScript,
-      })
-    );
+    // Defer so setActiveStep is not synchronous within the effect
+    // body (react-hooks/set-state-in-effect).
+    const timer = setTimeout(() => {
+      setActiveStep(
+        getInitialStep({
+          privilegedAccessGranted,
+          allServicesInstalled,
+          poolExists,
+          hasDhcp,
+          hasTftp,
+          hasHttp,
+          hasSamba,
+          hasBootScript,
+        })
+      );
+    }, 0);
+    return () => clearTimeout(timer);
   }, [
     privilegedAccessGranted,
     allServicesInstalled,

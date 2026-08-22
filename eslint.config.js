@@ -23,7 +23,16 @@ export default [
     rules: {
       ...js.configs.recommended.rules,
       ...reactHooks.configs.recommended.rules,
-      "no-unused-vars": ["error", { varsIgnorePattern: "^[A-Z_]" }],
+      "no-unused-vars": [
+        "error",
+        {
+          varsIgnorePattern: "^[A-Z_]",
+          // Destructured props used only as JSX components (e.g.
+          // <FormComponent />) are invisible to core no-unused-vars
+          // because eslint-plugin-react/jsx-uses-vars is not enabled.
+          argsIgnorePattern: "^[A-Z_]",
+        },
+      ],
       "react-refresh/only-export-components": [
         "warn",
         { allowConstantExport: true },

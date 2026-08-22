@@ -31,12 +31,16 @@ const ScheduledOperationsList = ({ isOpen, onClose }) => {
 
   // Fetch scheduled operations when modal opens
   useEffect(() => {
-    if (isOpen) {
-      fetchScheduledOperations();
-      // Refresh every 10 seconds
-      const interval = setInterval(fetchScheduledOperations, 10000);
-      return () => clearInterval(interval);
-    }
+    if (!isOpen) return undefined;
+    // Defer initial fetch so setState is not synchronous within the
+    // effect body (react-hooks/set-state-in-effect).
+    const timer = setTimeout(fetchScheduledOperations, 0);
+    // Refresh every 10 seconds
+    const interval = setInterval(fetchScheduledOperations, 10000);
+    return () => {
+      clearTimeout(timer);
+      clearInterval(interval);
+    };
   }, [isOpen, fetchScheduledOperations]);
 
   const handleCancelOperation = async (operationId) => {

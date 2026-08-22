@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useServiceManager } from "../../hooks/useServiceManager";
 import { Button, Modal } from "@/components/ui";
 
@@ -16,17 +16,26 @@ function ServiceConfigModal({
   const [saving, setSaving] = useState(false);
   const { handleConfigSave } = useServiceManager();
 
-  // Sync prop config to local state when it changes (e.g. data fetch completes)
-  useEffect(() => {
-    setConfig(initialConfig || "");
-  }, [initialConfig]);
+  // Sync local config when the fetched value from the parent changes.
+  // Adjusting state during render avoids a setState-in-effect cascade
+  // (react.dev: "adjusting state when a prop changes").
+  const normalizedInitialConfig = initialConfig || "";
+  const [prevInitialConfig, setPrevInitialConfig] = useState(
+    normalizedInitialConfig
+  );
+  if (normalizedInitialConfig !== prevInitialConfig) {
+    setPrevInitialConfig(normalizedInitialConfig);
+    setConfig(normalizedInitialConfig);
+  }
 
-  // Reset editable state when modal opens/closes
-  useEffect(() => {
+  // Reset edit mode whenever the modal closes.
+  const [prevIsOpen, setPrevIsOpen] = useState(isOpen);
+  if (prevIsOpen !== isOpen) {
+    setPrevIsOpen(isOpen);
     if (!isOpen) {
       setEditable(false);
     }
-  }, [isOpen]);
+  }
 
   const handleChange = (e) => {
     setConfig(e.target.value);

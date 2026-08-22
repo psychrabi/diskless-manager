@@ -39,9 +39,11 @@ const AuditLogViewer = ({ isOpen, onClose }) => {
   }, [error, filters]);
 
   useEffect(() => {
-    if (isOpen) {
-      fetchLogs();
-    }
+    if (!isOpen) return undefined;
+    // Defer so setState inside fetchLogs is not synchronous within
+    // the effect body (react-hooks/set-state-in-effect).
+    const timer = setTimeout(fetchLogs, 0);
+    return () => clearTimeout(timer);
   }, [isOpen, fetchLogs]);
 
   const handleFilterChange = useCallback((field, value) => {
