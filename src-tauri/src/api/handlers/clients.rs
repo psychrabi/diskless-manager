@@ -127,6 +127,22 @@ fn build_storage_spec(
     }
 }
 
+/// Replace a generated target IQN with the persisted IQN for an existing client.
+///
+/// New clients receive an IQN generated from the configured prefix. Existing
+/// clients keep their persisted IQN so legacy targets are never renamed by a
+/// reset, update, or delete operation.
+fn preserve_persisted_target_iqn(spec: &mut ClientStorageSpec, client: &Client) {
+    if let Some(target_iqn) = client
+        .target_iqn
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        spec.target_iqn = target_iqn.to_string();
+    }
+}
+
 /// Convert application storage information into the legacy client fields
 /// stored in the clients table.
 fn apply_storage_to_request(request: &mut CreateClientRequest, storage: &ClientStorage) {
@@ -156,7 +172,7 @@ fn storage_from_client(
     settings: &crate::core::config::Settings,
     client: &Client,
 ) -> Result<ClientStorage, String> {
-    let spec = build_storage_spec(
+    let mut spec = build_storage_spec(
         settings,
         &client.id,
         &client.name,
@@ -164,6 +180,8 @@ fn storage_from_client(
         client.snapshot.as_deref(),
         client.use_game_disk.unwrap_or(false),
     )?;
+
+    preserve_persisted_target_iqn(&mut spec, client);
 
     Ok(ClientStorage {
         client_id: spec.client_id.clone(),
@@ -730,7 +748,7 @@ pub async fn update_client(
 
                 let settings = state.settings.read().await;
 
-                let spec = build_storage_spec(
+                let mut spec = build_storage_spec(
                     &settings,
                     &existing_client.id,
                     &existing_client.name,
@@ -739,6 +757,8 @@ pub async fn update_client(
                     existing_client.use_game_disk.unwrap_or(false),
                 )
                 .map_err(|error| (StatusCode::BAD_REQUEST, Json(ErrorResponse { error })))?;
+
+                preserve_persisted_target_iqn(&mut spec, &existing_client);
 
                 let current =
                     storage_from_client(&settings, &existing_client).map_err(|error| {
@@ -782,7 +802,7 @@ pub async fn update_client(
                     .as_deref()
                     .filter(|value| !value.trim().is_empty());
 
-                let spec = build_storage_spec(
+                let mut spec = build_storage_spec(
                     &settings,
                     &existing_client.id,
                     &existing_client.name,
@@ -791,6 +811,8 @@ pub async fn update_client(
                     existing_client.use_game_disk.unwrap_or(false),
                 )
                 .map_err(|error| (StatusCode::BAD_REQUEST, Json(ErrorResponse { error })))?;
+
+                preserve_persisted_target_iqn(&mut spec, &existing_client);
 
                 let current =
                     storage_from_client(&settings, &existing_client).map_err(|error| {
@@ -878,7 +900,7 @@ pub async fn update_client(
     // Create desired new storage.
     // ------------------------------------------------------------------------
 
-    let storage_spec = build_storage_spec(
+    let mut storage_spec = build_storage_spec(
         &settings,
         &existing_client.id,
         new_name,
@@ -890,6 +912,8 @@ pub async fn update_client(
             .unwrap_or(false),
     )
     .map_err(|error| (StatusCode::BAD_REQUEST, Json(ErrorResponse { error })))?;
+
+    preserve_persisted_target_iqn(&mut storage_spec, &existing_client);
 
     let storage = state
         .application
