@@ -110,7 +110,7 @@ const ScheduledOperationsList = ({ isOpen, onClose }) => {
       <div className="space-y-4">
         {/* Info Banner */}
         <div className="bg-info/10 border border-info/30 p-4 rounded-lg flex gap-3">
-          <AlertCircle className="h-5 w-5 text-info flex-shrink-0 mt-0.5" />
+          <AlertCircle className="h-5 w-5 text-info shrink-0 mt-0.5" />
           <div className="text-sm text-info-content">
             <p className="font-semibold">Scheduled Operations</p>
             <p className="text-xs mt-1">

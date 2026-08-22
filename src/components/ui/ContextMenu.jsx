@@ -13,7 +13,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { useOnClickOutside } from "../../hooks/useOnClickOutside";
 
 const MenuItem = ({
-  icon: Icon, // eslint-disable-line no-unused-vars
+  icon: Icon,
   label,
   onClick,
   variant = "default",

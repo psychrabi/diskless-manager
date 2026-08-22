@@ -171,9 +171,9 @@ pub fn dhcp_entry_matches(content: &str, client_name: &str, desired_entry: &str)
 
     let desired = normalize_dhcp_block(desired_entry);
 
-    let matches = regex.find_iter(content).any(|matched| {
-        normalize_dhcp_block(matched.as_str()) == desired
-    });
+    let matches = regex
+        .find_iter(content)
+        .any(|matched| normalize_dhcp_block(matched.as_str()) == desired);
 
     matches
 }

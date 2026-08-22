@@ -46,7 +46,7 @@ const ClientModeBadge = memo(({ client }) => {
   );
 });
 
-const SpeedCell = ({ metricValue, icon: Icon, iconClassName }) => { // eslint-disable-line no-unused-vars
+const SpeedCell = ({ metricValue, icon: Icon, iconClassName }) => {
   if (metricValue == null) {
     return <span className="text-base-content/40">-</span>;
   }
