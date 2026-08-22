@@ -3,6 +3,7 @@ use crate::config::{get_config, get_zpool_name};
 use crate::core::client::Client;
 use crate::core::provisioning_transaction::ProvisioningTransaction;
 use crate::dhcp::{create_dhcp_entry, update_dhcp_config};
+use crate::domain::provisioning::TargetIqn;
 use crate::domain::storage::{ClientStorageSpec, StorageSource};
 use crate::error::AppError;
 use crate::state::AppState;
@@ -52,6 +53,24 @@ pub fn check_duplicate_client(name: &str, mac: &str, ip: &str) -> Option<String>
     None
 }
 
+fn configured_target_prefix() -> String {
+    let settings = get_config().settings;
+
+    settings
+        .get("iscsi")
+        .and_then(|iscsi| iscsi.get("target_prefix"))
+        .and_then(|value| value.as_str())
+        .or_else(|| {
+            settings
+                .get("iscsi_target_prefix")
+                .and_then(|value| value.as_str())
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("iqn.2024-01.com.diskless")
+        .to_string()
+}
+
 /// Storage resources calculated for a diskless client.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientStoragePaths {
@@ -67,15 +86,12 @@ pub struct ClientStoragePaths {
 
 impl ClientStoragePaths {
     /// Build the default storage paths for a client.
-    pub fn new(client_id: &str, client_mac: &str) -> Self {
+    pub fn new(client_id: &str, _client_mac: &str) -> Self {
+        let target_iqn = TargetIqn::for_client_name(&configured_target_prefix(), client_id);
+
         Self {
             dataset: get_writeback_or_default_dataset(client_id),
-
-            target_iqn: format!(
-                "iqn.2025-04.local.diskless:{}",
-                client_mac.to_lowercase().replace(':', "-")
-            ),
-
+            target_iqn: target_iqn.as_str().to_string(),
             backstore: format!("block_{}", client_id.to_lowercase()),
         }
     }
@@ -97,7 +113,15 @@ pub fn get_client_paths_with_master(
     client_mac: &str,
     _master: &str,
 ) -> ClientStoragePaths {
-    ClientStoragePaths::new(client_id, client_mac)
+    let mut paths = ClientStoragePaths::new(client_id, client_mac);
+
+    if let Some(client) = get_client_by_id(client_id) {
+        if let Some(target_iqn) = client.target_iqn.filter(|value| !value.trim().is_empty()) {
+            paths.target_iqn = target_iqn;
+        }
+    }
+
+    paths
 }
 
 pub async fn save_client_config(pool: &SqlitePool, client_data: &Client) -> bool {
@@ -268,7 +292,6 @@ pub async fn add_client_provisioning(
                         dataset,
                     ]) {
                         Ok(value) if value.trim() == "writeback" => Some(dataset.to_string()),
-
                         _ => None,
                     }
                 })
@@ -319,21 +342,15 @@ pub async fn add_client_provisioning(
 
     let storage_spec = ClientStorageSpec {
         client_id: name.clone(),
-
         source: if used_master_directly {
             StorageSource::ExistingVolume(master.clone())
         } else {
             StorageSource::ExistingClientVolume(paths.dataset.clone())
         },
-
         dataset: paths.dataset.clone(),
-
         backstore: paths.backstore.clone(),
-
         target_iqn: paths.target_iqn.clone(),
-
         lun: 0,
-
         use_game_disk: use_game_disk.unwrap_or(false),
     };
 
@@ -343,7 +360,6 @@ pub async fn add_client_provisioning(
         .create_client_storage_transaction(&storage_spec)
     {
         Ok(result) => result,
-
         Err(error) => {
             let provisioning_error = AppError::Command(format!(
                 "Failed to setup iSCSI target '{}': {}",
@@ -354,8 +370,6 @@ pub async fn add_client_provisioning(
         }
     };
 
-    // Register the exact resources created by the iSCSI
-    // transaction.
     transaction.record_iscsi_target(
         paths.target_iqn.clone(),
         iscsi_result.backstores_created.clone(),
@@ -384,53 +398,35 @@ pub async fn add_client_provisioning(
 
     let client_data = Client {
         id: name.clone(),
-
         name: name.to_uppercase(),
-
         mac: mac.clone(),
-
         ip: ip.clone(),
-
         master: master.clone(),
-
         enabled: true,
-
         created_at: now,
-
         updated_at: now,
-
         snapshot: if used_master_directly {
             None
         } else {
             Some(snapshot.clone())
         },
-
         target_iqn: Some(paths.target_iqn.clone()),
-
         block_device: Some(block_device.clone()),
-
         block_store: Some(paths.backstore.clone()),
-
         writeback: if used_master_directly {
             None
         } else {
             Some(paths.dataset.clone())
         },
-
         last_modified: Some(now.format("%Y-%m-%d %H:%M:%S").to_string()),
-
         status: None,
-
         mode: if used_master_directly {
             Some("super".to_string())
         } else {
             None
         },
-
         pxe_mode: Some("uefi".to_string()),
-
         keep_writeback: keep_writeback.or(Some(true)),
-
         use_game_disk,
     };
 
@@ -462,10 +458,7 @@ pub async fn add_client_provisioning(
     info!("Client {} provisioning completed successfully", name);
 
     Ok(serde_json::json!({
-        "message": format!(
-            "Client {} added successfully",
-            name
-        )
+        "message": format!("Client {} added successfully", name)
     }))
 }
 
@@ -479,7 +472,7 @@ mod tests {
 
         assert_eq!(
             paths.target_iqn,
-            "iqn.2025-04.local.diskless:00-11-22-33-44-55"
+            "iqn.2024-01.com.diskless:client.client_1"
         );
     }
 
@@ -499,9 +492,27 @@ mod tests {
 
         assert_eq!(
             paths.target_iqn,
-            "iqn.2025-04.local.diskless:00-11-22-33-44-55"
+            "iqn.2024-01.com.diskless:client.client_1"
         );
 
         assert_eq!(paths.backstore, "block_client_1");
+    }
+
+    #[test]
+    fn client_storage_paths_preserve_persisted_target_iqn() {
+        let mut config = get_config();
+        config.clients.push(Client {
+            id: "client_1".to_string(),
+            target_iqn: Some("iqn.2024-01.com.diskless:client.pc001".to_string()),
+            ..Client::default()
+        });
+        crate::config::set_config(&config);
+
+        let paths = get_client_paths_with_master("client_1", "00:11:22:33:44:55", "");
+
+        assert_eq!(
+            paths.target_iqn,
+            "iqn.2024-01.com.diskless:client.pc001"
+        );
     }
 }
