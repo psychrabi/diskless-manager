@@ -6,7 +6,7 @@ use crate::{
 };
 use serde::Serialize;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum DhcpReconciliationOutcome {
     Ready,
@@ -63,6 +63,25 @@ impl DhcpReconciliationSummary {
     }
 }
 
+fn classify_dhcp_entry(
+    content: &str,
+    client_name: &str,
+    desired_entry: &str,
+) -> DhcpReconciliationOutcome {
+    if dhcp_entry_matches(content, client_name, desired_entry) {
+        return DhcpReconciliationOutcome::Ready;
+    }
+
+    let host_name = format_client_name(client_name);
+    let host_header = format!("host {host_name} {{");
+
+    if content.lines().any(|line| line.trim() == host_header) {
+        DhcpReconciliationOutcome::Partial
+    } else {
+        DhcpReconciliationOutcome::Missing
+    }
+}
+
 pub async fn inspect_dhcp(state: &AppState) -> anyhow::Result<DhcpReconciliationSummary> {
     let manager = ClientManager::new(state.db_pool.clone());
     let clients = manager.list().await?;
@@ -97,18 +116,7 @@ pub async fn inspect_dhcp(state: &AppState) -> anyhow::Result<DhcpReconciliation
         };
 
         let desired = create_dhcp_entry(&client.name, &client.mac, &client.ip, target_iqn);
-        let host_name = format_client_name(&client.name);
-        let host_exists = content
-            .lines()
-            .any(|line| line.trim() == format!("host {host_name} {{"));
-
-        let outcome = if dhcp_entry_matches(&content, &client.name, &desired) {
-            DhcpReconciliationOutcome::Ready
-        } else if host_exists {
-            DhcpReconciliationOutcome::Partial
-        } else {
-            DhcpReconciliationOutcome::Missing
-        };
+        let outcome = classify_dhcp_entry(&content, &client.name, &desired);
 
         let message = match outcome {
             DhcpReconciliationOutcome::Ready => {
@@ -169,6 +177,13 @@ pub async fn repair_client_dhcp(
 mod tests {
     use super::*;
 
+    const DESIRED_ENTRY: &str = r#"host PC001 {
+hardware ethernet 00:11:22:33:44:55;
+fixed-address 192.168.1.100;
+option host-name "PC001";
+option root-path "iscsi:192.168.1.1::::iqn.test";
+}"#;
+
     #[test]
     fn summary_counts_outcomes() {
         let mut summary = DhcpReconciliationSummary::new();
@@ -193,5 +208,45 @@ mod tests {
         assert_eq!(summary.missing, 0);
         assert_eq!(summary.errors, 0);
         assert_eq!(summary.skipped, 0);
+    }
+
+    #[test]
+    fn classify_dhcp_entry_ready_when_block_matches() {
+        assert_eq!(
+            classify_dhcp_entry(
+                &format!("# header\n{}\n# footer", DESIRED_ENTRY),
+                "client_1",
+                DESIRED_ENTRY,
+            ),
+            DhcpReconciliationOutcome::Ready
+        );
+    }
+
+    #[test]
+    fn classify_dhcp_entry_partial_when_host_exists_with_drift() {
+        let drifted = DESIRED_ENTRY.replace("192.168.1.100", "192.168.1.101");
+
+        assert_eq!(
+            classify_dhcp_entry(&drifted, "client_1", DESIRED_ENTRY),
+            DhcpReconciliationOutcome::Partial
+        );
+    }
+
+    #[test]
+    fn classify_dhcp_entry_missing_when_host_does_not_exist() {
+        assert_eq!(
+            classify_dhcp_entry("# no client entries\n", "client_1", DESIRED_ENTRY),
+            DhcpReconciliationOutcome::Missing
+        );
+    }
+
+    #[test]
+    fn classify_dhcp_entry_tolerates_whitespace_in_header() {
+        let content = DESIRED_ENTRY.replace("host PC001 {", "  host   PC001   {  ");
+
+        assert_eq!(
+            classify_dhcp_entry(&content, "client_1", DESIRED_ENTRY),
+            DhcpReconciliationOutcome::Partial
+        );
     }
 }
