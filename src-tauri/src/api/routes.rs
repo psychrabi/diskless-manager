@@ -22,6 +22,7 @@ use crate::api::handlers::{
     },
     license::{activate_license_handler, get_license_info_handler},
     logs::{clear_logs, get_logs},
+    reconciliation::{inspect_storage_reconciliation, repair_storage_reconciliation},
     services::{
         configure_service, get_service_config, get_service_status, install_service, list_services,
         restart_all_services, restart_service, start_all_services, start_service,
@@ -154,6 +155,14 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         )
         .route("/api/system/ram-usage", get(get_ram_usage))
         .route("/api/system/zfs-arcstat", get(get_zfs_arcstat))
+        .route(
+            "/api/system/reconciliation/storage",
+            get(inspect_storage_reconciliation),
+        )
+        .route(
+            "/api/system/reconciliation/storage/{id}",
+            post(repair_storage_reconciliation),
+        )
         // Disk routes (auth required)
         .route("/api/disks/{name}/rename", put(rename_disk))
         .route("/api/disks/pool", post(create_pool))
