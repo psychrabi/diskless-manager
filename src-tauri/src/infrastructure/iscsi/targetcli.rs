@@ -35,9 +35,10 @@ pub trait IscsiProvisioner: Send + Sync {
     /// shared or owned independently of the target.
     fn remove_target(&self, target_iqn: &str) -> Result<()>;
 
-    /// Remove an iSCSI target and explicitly-owned backstores.
+    /// Remove a target's LUN references and explicitly-owned backstores.
     ///
-    /// Only the supplied backstores are deleted.
+    /// The target itself is preserved. This is required when a target may
+    /// contain resources owned by another client or a shared disk.
     fn remove_target_with_backstores(&self, target_iqn: &str, backstores: &[String]) -> Result<()>;
 
     /// Check whether an iSCSI target exists.
@@ -59,10 +60,6 @@ impl TargetCliProvisioner {
         Self
     }
 
-    // ========================================================================
-    // COMMAND HELPERS
-    // ========================================================================
-
     fn execute<I, S>(&self, args: I) -> Result<()>
     where
         I: IntoIterator<Item = S>,
@@ -83,10 +80,6 @@ impl TargetCliProvisioner {
             .context("targetcli command failed")
     }
 
-    // ========================================================================
-    // PATH HELPERS
-    // ========================================================================
-
     fn tpg_path(target_iqn: &str) -> String {
         format!("/iscsi/{target_iqn}/tpg1")
     }
@@ -102,10 +95,6 @@ impl TargetCliProvisioner {
     fn backstore_path(backstore: &str) -> String {
         format!("/backstores/block/{backstore}")
     }
-
-    // ========================================================================
-    // VALIDATION
-    // ========================================================================
 
     fn validate_spec(spec: &IscsiTargetSpec) -> Result<()> {
         if spec.target_iqn.trim().is_empty() {
@@ -162,10 +151,6 @@ impl TargetCliProvisioner {
         Ok(())
     }
 
-    // ========================================================================
-    // TARGET
-    // ========================================================================
-
     fn create_target_object(&self, spec: &IscsiTargetSpec) -> Result<()> {
         if self.target_exists(&spec.target_iqn)? {
             return Ok(());
@@ -211,13 +196,8 @@ impl TargetCliProvisioner {
         Ok(())
     }
 
-    // ========================================================================
-    // BACKSTORE
-    // ========================================================================
-
     fn backstore_exists(&self, name: &str) -> Result<bool> {
         let output = self.output(["targetcli", "/backstores/block", "ls"])?;
-
         Ok(output.lines().any(|line| line.contains(name)))
     }
 
@@ -245,9 +225,7 @@ impl TargetCliProvisioner {
                 "failed to create iSCSI backstore '{}' for '{}'",
                 lun.backstore, device
             )
-        })?;
-
-        Ok(())
+        })
     }
 
     fn remove_backstore(&self, backstore: &str) -> Result<()> {
@@ -258,28 +236,18 @@ impl TargetCliProvisioner {
         let path = Self::backstore_path(backstore);
 
         self.execute(["targetcli", &path, "delete"])
-            .with_context(|| format!("failed to remove iSCSI backstore '{}'", backstore))?;
-
-        Ok(())
+            .with_context(|| format!("failed to remove iSCSI backstore '{}'", backstore))
     }
 
     fn backstore_points_to_device(&self, backstore: &str, device: &Path) -> Result<bool> {
         let output = self.output(["targetcli", &Self::backstore_path(backstore), "ls"])?;
-
         let device_string = device.to_string_lossy();
-
         Ok(output.contains(device_string.as_ref()))
     }
 
-    // ========================================================================
-    // LUN
-    // ========================================================================
-
     fn lun_exists(&self, target_iqn: &str, lun_number: u32) -> Result<bool> {
         let output = self.output(["targetcli", &Self::lun_path(target_iqn), "ls"])?;
-
         let expected = format!("lun{lun_number}");
-
         Ok(output.lines().any(|line| line.contains(&expected)))
     }
 
@@ -303,9 +271,7 @@ impl TargetCliProvisioner {
                 "failed to attach backstore '{}' as LUN {}",
                 lun.backstore, lun.lun
             )
-        })?;
-
-        Ok(())
+        })
     }
 
     fn remove_lun(&self, target_iqn: &str, lun_number: u32) -> Result<()> {
@@ -324,15 +290,9 @@ impl TargetCliProvisioner {
             })
     }
 
-    // ========================================================================
-    // PORTAL
-    // ========================================================================
-
     fn portal_exists(&self, spec: &IscsiTargetSpec) -> Result<bool> {
         let output = self.output(["targetcli", &Self::portal_path(&spec.target_iqn), "ls"])?;
-
         let portal = format!("{}:{}", spec.portal_address, spec.portal_port);
-
         Ok(output.lines().any(|line| line.contains(&portal)))
     }
 
@@ -353,9 +313,7 @@ impl TargetCliProvisioner {
                 "failed to create iSCSI portal {}:{}",
                 spec.portal_address, spec.portal_port
             )
-        })?;
-
-        Ok(())
+        })
     }
 
     fn remove_portal(&self, spec: &IscsiTargetSpec) -> Result<()> {
@@ -375,20 +333,12 @@ impl TargetCliProvisioner {
                 "failed to remove iSCSI portal {}:{}",
                 spec.portal_address, spec.portal_port
             )
-        })?;
-
-        Ok(())
+        })
     }
-
-    // ========================================================================
-    // INSPECTION
-    // ========================================================================
 
     fn inspect_lun(&self, target_iqn: &str, lun: &IscsiLunSpec) -> Result<IscsiLunState> {
         let exists = self.lun_exists(target_iqn, lun.lun)?;
-
         let backstore_exists = self.backstore_exists(&lun.backstore)?;
-
         let block_device_matches = if backstore_exists {
             self.backstore_points_to_device(&lun.backstore, &lun.block_device)?
         } else {
@@ -404,18 +354,10 @@ impl TargetCliProvisioner {
         })
     }
 
-    // ========================================================================
-    // SAVE
-    // ========================================================================
-
     fn save(&self) -> Result<()> {
         self.execute(["targetcli", "saveconfig"])
             .context("failed to save targetcli configuration")
     }
-
-    // ========================================================================
-    // TRANSACTION ROLLBACK
-    // ========================================================================
 
     fn rollback_transaction(
         &self,
@@ -424,18 +366,11 @@ impl TargetCliProvisioner {
     ) -> Result<()> {
         let mut rollback_error: Option<anyhow::Error> = None;
 
-        // If the target itself was created by this transaction,
-        // deleting it removes its LUN associations and portal.
-        //
-        // Existing targets must never be deleted merely because a
-        // provisioning transaction failed.
         if created.target_created {
             if let Err(error) = self.remove_target(&spec.target_iqn) {
                 rollback_error = Some(error);
             }
         } else {
-            // Existing target: remove only LUNs created by this
-            // transaction.
             for lun_number in created.luns_created.iter().rev() {
                 if let Err(error) = self.remove_lun(&spec.target_iqn, *lun_number) {
                     tracing::warn!(
@@ -451,7 +386,6 @@ impl TargetCliProvisioner {
                 }
             }
 
-            // Only remove a portal if this transaction created it.
             if created.portal_created {
                 if let Err(error) = self.remove_portal(spec) {
                     tracing::warn!(
@@ -467,10 +401,6 @@ impl TargetCliProvisioner {
             }
         }
 
-        // Only transaction-created backstores are owned by the
-        // transaction.
-        //
-        // Shared game-disk backstores are therefore never removed.
         for backstore in created.backstores_created.iter().rev() {
             if let Err(error) = self.remove_backstore(backstore) {
                 tracing::warn!(
@@ -494,15 +424,10 @@ impl TargetCliProvisioner {
 
         match rollback_error {
             Some(error) => Err(error).context("iSCSI transaction rollback failed"),
-
             None => Ok(()),
         }
     }
 }
-
-// ============================================================================
-// PROVISIONER IMPLEMENTATION
-// ============================================================================
 
 impl IscsiProvisioner for TargetCliProvisioner {
     fn create_target(&self, spec: &IscsiTargetSpec) -> Result<()> {
@@ -515,10 +440,6 @@ impl IscsiProvisioner for TargetCliProvisioner {
         let mut created = IscsiProvisionResult::new();
 
         let operation = (|| -> Result<()> {
-            // ------------------------------------------------------------
-            // 1. Target
-            // ------------------------------------------------------------
-
             let target_existed = self.target_exists(&spec.target_iqn)?;
 
             self.create_target_object(spec)?;
@@ -527,22 +448,12 @@ impl IscsiProvisioner for TargetCliProvisioner {
                 created.target_created = true;
             }
 
-            // ------------------------------------------------------------
-            // 2. Configure TPG
-            // ------------------------------------------------------------
-
             self.configure_tpg(spec)?;
-
-            // ------------------------------------------------------------
-            // 3. Backstores
-            // ------------------------------------------------------------
 
             for lun in &spec.luns {
                 let existed = self.backstore_exists(&lun.backstore)?;
 
                 if existed {
-                    // Never silently reuse a backstore that points
-                    // to another block device.
                     if !self.backstore_points_to_device(&lun.backstore, &lun.block_device)? {
                         bail!(
                             "existing iSCSI backstore '{}' points to a different block device",
@@ -551,49 +462,32 @@ impl IscsiProvisioner for TargetCliProvisioner {
                     }
                 } else {
                     self.create_backstore(lun)?;
-
                     created.backstores_created.push(lun.backstore.clone());
                 }
             }
-
-            // ------------------------------------------------------------
-            // 4. LUNs
-            // ------------------------------------------------------------
 
             for lun in &spec.luns {
                 let existed = self.lun_exists(&spec.target_iqn, lun.lun)?;
 
                 if !existed {
                     self.create_lun(&spec.target_iqn, lun)?;
-
                     created.luns_created.push(lun.lun);
                 }
             }
 
-            // ------------------------------------------------------------
-            // 5. Portal
-            // ------------------------------------------------------------
-
             let portal_existed = self.portal_exists(spec)?;
-
             self.create_portal(spec)?;
 
             if !portal_existed {
                 created.portal_created = true;
             }
 
-            // ------------------------------------------------------------
-            // 6. Persist
-            // ------------------------------------------------------------
-
             self.save()?;
-
             Ok(())
         })();
 
         match operation {
             Ok(()) => Ok(created),
-
             Err(error) => {
                 if let Err(rollback_error) = self.rollback_transaction(spec, &created) {
                     tracing::error!(
@@ -622,23 +516,55 @@ impl IscsiProvisioner for TargetCliProvisioner {
             .with_context(|| format!("failed to remove iSCSI target '{}'", target_iqn))?;
 
         self.save()?;
-
         Ok(())
     }
 
     fn remove_target_with_backstores(&self, target_iqn: &str, backstores: &[String]) -> Result<()> {
-        // Remove the target first so all LUN references are
-        // detached.
-        self.remove_target(target_iqn)?;
-
-        // Only delete explicitly-owned backstores.
-        //
-        // Shared game backstores must never be supplied here.
-        for backstore in backstores {
-            if backstore.trim().is_empty() {
-                continue;
+        if !self.target_exists(target_iqn)? {
+            for backstore in backstores {
+                if !backstore.trim().is_empty() {
+                    self.remove_backstore(backstore).with_context(|| {
+                        format!(
+                            "failed to remove owned backstore '{}' for target '{}'",
+                            backstore, target_iqn
+                        )
+                    })?;
+                }
             }
 
+            return self.save();
+        }
+
+        // Detach only the LUNs that point to backstores owned by this
+        // caller. Leave all unrelated LUNs on the target intact.
+        let mut owned_lun_numbers = Vec::new();
+        let lun_output = self.output(["targetcli", &Self::lun_path(target_iqn), "ls"])?;
+
+        for backstore in backstores.iter().filter(|item| !item.trim().is_empty()) {
+            let marker = format!("{backstore}]");
+            let marker_without_bracket = backstore.as_str();
+
+            for line in lun_output.lines() {
+                if line.contains(&marker) || line.contains(marker_without_bracket) {
+                    if let Some(number) = line
+                        .split_whitespace()
+                        .find_map(|token| token.strip_prefix("lun"))
+                        .and_then(|value| value.trim_matches(|c: char| !c.is_ascii_digit()).parse::<u32>().ok())
+                    {
+                        owned_lun_numbers.push(number);
+                    }
+                }
+            }
+        }
+
+        owned_lun_numbers.sort_unstable();
+        owned_lun_numbers.dedup();
+
+        for lun_number in owned_lun_numbers.into_iter().rev() {
+            self.remove_lun(target_iqn, lun_number)?;
+        }
+
+        for backstore in backstores.iter().filter(|item| !item.trim().is_empty()) {
             self.remove_backstore(backstore).with_context(|| {
                 format!(
                     "failed to remove owned backstore '{}' for target '{}'",
@@ -648,13 +574,11 @@ impl IscsiProvisioner for TargetCliProvisioner {
         }
 
         self.save()?;
-
         Ok(())
     }
 
     fn target_exists(&self, target_iqn: &str) -> Result<bool> {
         let output = self.output(["targetcli", "/iscsi", "ls"])?;
-
         Ok(output.lines().any(|line| line.contains(target_iqn)))
     }
 
