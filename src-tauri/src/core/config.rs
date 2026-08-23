@@ -74,11 +74,12 @@ where
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            interface: vec!["eth0".to_string()],
-            ip_address: "192.168.1.1".to_string(),
+            // Production PXE server interface.
+            interface: vec!["eno2".to_string()],
+            ip_address: "192.168.1.250".to_string(),
             netmask: "255.255.255.0".to_string(),
-            gateway: "192.168.1.1".to_string(),
-            dns: vec!["8.8.8.8".to_string(), "1.1.1.1".to_string()],
+            gateway: "192.168.1.254".to_string(),
+            dns: vec!["192.168.1.254".to_string(), "9.9.9.9".to_string()],
             hostname: "pxeserver".to_string(),
             domain: "local".to_string(),
         }
@@ -112,9 +113,9 @@ impl Default for DhcpConfig {
             start_ip: "192.168.1.100".to_string(),
             end_ip: "192.168.1.200".to_string(),
             subnet_mask: "255.255.255.0".to_string(),
-            gateway_ip: "192.168.1.1".to_string(),
-            dns_server1: "1.1.1.1".to_string(),
-            dns_server2: "1.0.0.1".to_string(),
+            gateway_ip: "192.168.1.254".to_string(),
+            dns_server1: "192.168.1.254".to_string(),
+            dns_server2: "9.9.9.9".to_string(),
             broadcast_ip: "192.168.1.255".to_string(),
             next_server_ip: "192.168.1.250".to_string(),
             boot_server_ip: "192.168.1.250".to_string(),
@@ -127,7 +128,6 @@ impl Default for DhcpConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-
 pub struct HttpConfig {
     pub enabled: bool,
     pub root_dir: String,
@@ -140,7 +140,7 @@ impl Default for HttpConfig {
         Self {
             enabled: true,
             root_dir: PathBuf::from("/srv/tftp").display().to_string(),
-            server_ip: "192.168.1.1".to_string(),
+            server_ip: "192.168.1.250".to_string(),
             port: 80,
         }
     }
@@ -160,7 +160,7 @@ impl Default for TftpConfig {
         Self {
             enabled: true,
             root_dir: PathBuf::from("/srv/tftp").display().to_string(),
-            server_ip: "192.168.1.1".to_string(),
+            server_ip: "192.168.1.250".to_string(),
             port: 69,
             options: "--secure --verbose".to_string(),
         }
