@@ -22,7 +22,7 @@ pub fn client_script_slug(client_name: &str) -> String {
 /// Returns the relative HTTP/TFTP path for a client-specific boot script.
 #[must_use]
 pub fn client_script_path(client_name: &str) -> String {
-    format!("clients/{}.ipxe", client_script_slug(client_name))
+    format!("{}.ipxe", client_script_slug(client_name))
 }
 
 /// Builds a client-specific iPXE script from the persisted target IQN.
@@ -51,7 +51,6 @@ dhcp
 set client {slug}
 set target-iqn {target_iqn}
 set initiator-iqn {initiator_iqn}
-set http-port {port_suffix}
 set boot-url http://${{next-server}}{port_suffix}
 set keep-san 1
 
@@ -203,7 +202,7 @@ mod tests {
     #[test]
     fn slug_is_deterministic_and_safe() {
         assert_eq!(client_script_slug("PC 001/West"), "pc_001_west");
-        assert_eq!(client_script_path("PC 001/West"), "clients/pc_001_west.ipxe");
+        assert_eq!(client_script_path("PC 001/West"), "pc_001_west.ipxe");
     }
 
     #[test]
@@ -229,7 +228,7 @@ mod tests {
     #[test]
     fn managed_path_rejects_escape() {
         let root = Path::new("/srv/tftp");
-        assert!(is_managed_script_path(root, "clients/pc001.ipxe"));
+        assert!(is_managed_script_path(root, "pc001.ipxe"));
         assert!(!is_managed_script_path(root, "../pc001.ipxe"));
         assert!(!is_managed_script_path(root, "/etc/passwd"));
     }
