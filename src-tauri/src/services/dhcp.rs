@@ -135,7 +135,9 @@ include "/etc/dhcp/clients.conf";
                 .map_err(|e| anyhow::anyhow!("Failed to create directory: {}", e))?;
         }
 
-        write_with_sudo_tee("/etc/dhcp/dhcpd.conf", &dhcp_config).await?;
+        crate::dhcp::replace_dhcp_config(&dhcp_config)
+            .await
+            .map_err(anyhow::Error::msg)?;
 
         let interfaces = self.settings.server.interface.join(" ");
         let default_config = format!(
@@ -198,7 +200,7 @@ option ipxe.privkey code 92 = string;
 option ipxe.crosscert code 93 = string;
 option ipxe.no-pxedhcp code 176 = unsigned integer 8;
 option ipxe.bus-id code 177 = string;
-option ipxe.san-filename code 188 = string;
+option ipxe.san-filename code 188 = unsigned integer 8;
 option ipxe.bios-drive code 189 = unsigned integer 8;
 option ipxe.username code 190 = string;
 option ipxe.password code 191 = string;
