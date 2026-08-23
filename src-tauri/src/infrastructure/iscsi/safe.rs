@@ -46,11 +46,7 @@ impl IscsiProvisioner for SafeIscsiProvisioner {
         self.inner.remove_target(target_iqn)
     }
 
-    fn remove_target_with_backstores(
-        &self,
-        target_iqn: &str,
-        backstores: &[String],
-    ) -> Result<()> {
+    fn remove_target_with_backstores(&self, target_iqn: &str, backstores: &[String]) -> Result<()> {
         self.ensure_disconnected(target_iqn)?;
         self.inner
             .remove_target_with_backstores(target_iqn, backstores)

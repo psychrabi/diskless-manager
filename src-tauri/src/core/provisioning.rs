@@ -469,8 +469,7 @@ pub async fn add_client_provisioning(
     // Step 5: Restart DHCP.
     // -----------------------------------------------------------------
 
-    if let Err(error) =
-        run_command_async(["systemctl", "restart", "isc-dhcp-server.service"]).await
+    if let Err(error) = run_command_async(["systemctl", "restart", "isc-dhcp-server.service"]).await
     {
         warn!(
             "Failed to restart DHCP service after adding client {}: {}",
@@ -499,10 +498,7 @@ mod tests {
     fn client_storage_paths_build_expected_target_iqn() {
         let paths = ClientStoragePaths::new("client_1", "00:11:22:33:44:55");
 
-        assert_eq!(
-            paths.target_iqn,
-            "iqn.2024-01.com.diskless:client.client_1"
-        );
+        assert_eq!(paths.target_iqn, "iqn.2024-01.com.diskless:client.client_1");
     }
 
     #[test]
@@ -519,10 +515,7 @@ mod tests {
 
         assert_eq!(paths.dataset, "tank/writeback/CLIENT_1-disk");
 
-        assert_eq!(
-            paths.target_iqn,
-            "iqn.2024-01.com.diskless:client.client_1"
-        );
+        assert_eq!(paths.target_iqn, "iqn.2024-01.com.diskless:client.client_1");
 
         assert_eq!(paths.backstore, "block_client_1");
     }

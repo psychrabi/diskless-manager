@@ -70,20 +70,14 @@ mod tests {
 
     #[test]
     fn target_iqn_uses_configured_prefix_and_client_name() {
-        let iqn = TargetIqn::for_client_name(
-            "iqn.2024-01.com.diskless",
-            "PC001",
-        );
+        let iqn = TargetIqn::for_client_name("iqn.2024-01.com.diskless", "PC001");
 
         assert_eq!(iqn.as_str(), "iqn.2024-01.com.diskless:client.pc001");
     }
 
     #[test]
     fn target_iqn_trims_prefix_separator_and_client_whitespace() {
-        let iqn = TargetIqn::for_client_name(
-            " iqn.2024-01.com.diskless: ",
-            " PC001 ",
-        );
+        let iqn = TargetIqn::for_client_name(" iqn.2024-01.com.diskless: ", " PC001 ");
 
         assert_eq!(iqn.as_str(), "iqn.2024-01.com.diskless:client.pc001");
     }
