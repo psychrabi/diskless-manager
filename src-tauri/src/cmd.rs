@@ -206,6 +206,10 @@ where
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+#[expect(
+    dead_code,
+    reason = "Reserved for legacy network diagnostics; DHCP reservations use configured settings"
+)]
 pub fn get_server_ip() -> String {
     // More robust parsing using regex for IP extraction
     let output = match Command::new("ip").args(["route", "get", "1"]).output() {

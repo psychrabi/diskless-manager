@@ -6,7 +6,7 @@ use crate::core::provisioning::{
     get_client_paths, get_client_paths_with_master, save_client_config,
     AddClientProvisioningRequest,
 };
-use crate::dhcp::{create_dhcp_entry, update_dhcp_config};
+use crate::dhcp::{create_dhcp_entry_for_server, update_dhcp_config};
 use crate::domain::storage::{ClientStorageSpec, StorageSource};
 use crate::error::AppError;
 use crate::middleware::validate_auth;
@@ -310,7 +310,14 @@ pub async fn edit_client(
 
         client_info.last_modified = Some(Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
 
-        let dhcp_entry = create_dhcp_entry(&new_name, &new_mac, &new_ip, &current_paths.target_iqn);
+        let server_ip = state.settings.read().await.dhcp.next_server_ip.clone();
+        let dhcp_entry = create_dhcp_entry_for_server(
+            &new_name,
+            &new_mac,
+            &new_ip,
+            &current_paths.target_iqn,
+            &server_ip,
+        );
 
         update_dhcp_config(&client_id, &dhcp_entry, false)
             .await
@@ -928,11 +935,13 @@ pub async fn reset_client(
 
     client_info.status = None;
 
-    let dhcp_entry = create_dhcp_entry(
+    let server_ip = state.settings.read().await.dhcp.next_server_ip.clone();
+    let dhcp_entry = create_dhcp_entry_for_server(
         &client_info.name,
         &client_info.mac,
         &client_info.ip,
         &target_iqn,
+        &server_ip,
     );
 
     if let Err(error) = update_dhcp_config(&client_id, &dhcp_entry, false).await {

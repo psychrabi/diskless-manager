@@ -2,7 +2,7 @@ use crate::cmd::{run_command, run_command_async, run_command_output_no_sudo};
 use crate::config::{get_config, get_zpool_name};
 use crate::core::client::Client;
 use crate::core::provisioning_transaction::ProvisioningTransaction;
-use crate::dhcp::{create_dhcp_entry, update_dhcp_config};
+use crate::dhcp::{create_dhcp_entry_for_server, update_dhcp_config};
 use crate::domain::provisioning::TargetIqn;
 use crate::domain::storage::{ClientStorageSpec, StorageSource};
 use crate::error::AppError;
@@ -389,7 +389,8 @@ pub async fn add_client_provisioning(
     // Step 3: Update DHCP.
     // -----------------------------------------------------------------
 
-    let dhcp_entry = create_dhcp_entry(&name, &mac, &ip, &paths.target_iqn);
+    let server_ip = state.settings.read().await.dhcp.next_server_ip.clone();
+    let dhcp_entry = create_dhcp_entry_for_server(&name, &mac, &ip, &paths.target_iqn, &server_ip);
 
     if let Err(error) = update_dhcp_config(&name, &dhcp_entry, true).await {
         let provisioning_error =

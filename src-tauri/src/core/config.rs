@@ -116,12 +116,12 @@ impl Default for DhcpConfig {
             dns_server1: "1.1.1.1".to_string(),
             dns_server2: "1.0.0.1".to_string(),
             broadcast_ip: "192.168.1.255".to_string(),
-            next_server_ip: "192.168.1.1".to_string(),
-            boot_server_ip: "192.168.1.1".to_string(),
+            next_server_ip: "192.168.1.250".to_string(),
+            boot_server_ip: "192.168.1.250".to_string(),
             boot_script: "autoexec.ipxe".to_string(),
             boot_file_legacy: "undionly.kpxe".to_string(),
             boot_file_uefi32: "ipxe.efi".to_string(),
-            boot_file_uefi64: "ipxe.efi".to_string(),
+            boot_file_uefi64: "snponly.efi".to_string(),
         }
     }
 }

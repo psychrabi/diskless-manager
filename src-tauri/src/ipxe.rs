@@ -38,9 +38,7 @@ pub fn render_client_script(client_name: &str, target_iqn: &str, http_port: u16)
     } else {
         format!(":{http_port}")
     };
-    let root = format!(
-        "/dev/disk/by-path/ip-${{next-server}}:3260-iscsi-{target_iqn}-lun-0-part2"
-    );
+    let root = format!("/dev/disk/by-path/ip-${{next-server}}:3260-iscsi-{target_iqn}-lun-0-part2");
     let initiator_iqn = format!("iqn.2026-01.client:client.{slug}");
 
     format!(
@@ -207,11 +205,7 @@ mod tests {
 
     #[test]
     fn script_uses_persisted_target_and_not_hard_coded_pc001() {
-        let script = render_client_script(
-            "PC002",
-            "iqn.2024-01.com.diskless:client.pc002",
-            4433,
-        );
+        let script = render_client_script("PC002", "iqn.2024-01.com.diskless:client.pc002", 4433);
         assert!(script.contains("set target-iqn iqn.2024-01.com.diskless:client.pc002"));
         assert!(script.contains("iscsi_target_name=${target-iqn}"));
         assert!(script.contains("http://${next-server}:4433"));

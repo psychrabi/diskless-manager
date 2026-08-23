@@ -319,6 +319,7 @@ impl ServiceManager {
     #[expect(dead_code, reason = "Utility function for DHCP-only regeneration")]
     pub async fn regenerate_dhcp_config(&self) -> anyhow::Result<()> {
         self.dhcp.generate_config().await?;
+        self.dhcp.validate_config().await?;
         self.dhcp.reload().await
     }
 

@@ -211,8 +211,18 @@ async fn refresh_dhcp(state: &AppState, settings: &crate::core::config::Settings
             operation,
             e
         );
+        return;
     } else {
         info!("DHCP client configuration regenerated after {}", operation);
+    }
+
+    if let Err(e) = dhcp_service.validate_config().await {
+        tracing::warn!(
+            "DHCP configuration validation failed after {}; service was not reloaded: {}",
+            operation,
+            e
+        );
+        return;
     }
 
     if let Err(e) = dhcp_service.reload().await {

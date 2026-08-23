@@ -1,7 +1,4 @@
-use crate::{
-    cmd::{get_server_ip, run_command},
-    DHCP_CLIENTS_PATH,
-};
+use crate::{cmd::run_command, DHCP_CLIENTS_PATH, DHCP_CONFIG_PATH};
 use log::{error, info};
 use regex::Regex;
 use tokio::fs as async_fs;
@@ -9,121 +6,130 @@ use tokio::fs as async_fs;
 pub async fn update_dhcp_config(
     client_id: &str,
     dhcp_entry: &str,
-    is_new: bool,
+    _is_new: bool,
 ) -> Result<(), String> {
-    info!(
-        "update_dhcp_config: client_id={}, is_new={}",
-        client_id, is_new
+    info!("update_dhcp_config: client_id={}", client_id);
+
+    let _lock = lock_dhcp_config()?;
+    let content = std::fs::read_to_string(DHCP_CLIENTS_PATH).unwrap_or_default();
+    let reconciled = reconcile_client_entry(
+        &content,
+        client_id,
+        (!dhcp_entry.trim().is_empty()).then_some(dhcp_entry),
     );
 
-    let lock_path = std::env::temp_dir().join("diskless-manager-dhcp.lock");
+    install_dhcp_config_file(&reconciled, DHCP_CLIENTS_PATH, "dhcp_clients").await
+}
 
+/// Atomically replace the manager-owned static client file, validate the
+/// complete ISC DHCP configuration, and restore the previous file if the
+/// staged configuration is invalid. Callers reload only after this succeeds.
+pub async fn replace_dhcp_clients_config(content: &str) -> Result<(), String> {
+    let _lock = lock_dhcp_config()?;
+    install_dhcp_config_file(content, DHCP_CLIENTS_PATH, "dhcp_clients").await
+}
+
+/// Atomically replace the primary ISC DHCP configuration and restore it when
+/// `dhcpd -t` rejects the staged content.
+pub async fn replace_dhcp_config(content: &str) -> Result<(), String> {
+    let _lock = lock_dhcp_config()?;
+    install_dhcp_config_file(content, DHCP_CONFIG_PATH, "dhcpd_config").await
+}
+
+fn lock_dhcp_config() -> Result<std::fs::File, String> {
+    let lock_path = std::env::temp_dir().join("diskless-manager-dhcp.lock");
     let lock_file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(true)
         .open(&lock_path)
-        .map_err(|error| format!("Failed to open lock file: {}", error))?;
+        .map_err(|error| format!("Failed to open lock file: {error}"))?;
 
     use fs2::FileExt;
-
     lock_file
         .lock_exclusive()
-        .map_err(|error| format!("Failed to acquire lock: {}", error))?;
+        .map_err(|error| format!("Failed to acquire lock: {error}"))?;
 
-    let mut content = std::fs::read_to_string(DHCP_CLIENTS_PATH).unwrap_or_default();
+    Ok(lock_file)
+}
 
+async fn install_dhcp_config_file(
+    content: &str,
+    destination: &str,
+    backup_stem: &str,
+) -> Result<(), String> {
+    let original = std::fs::read_to_string(destination).unwrap_or_default();
     let backup_dir = "/srv/tftp/backups";
-
     async_fs::create_dir_all(backup_dir)
         .await
-        .map_err(|error| format!("Failed to create backup dir: {}", error))?;
+        .map_err(|error| format!("Failed to create backup dir: {error}"))?;
 
     let pid = std::process::id();
-
-    let dhcp_backup_path = format!("{}/dhcp_clients_{}.bak", backup_dir, pid);
-
-    async_fs::write(&dhcp_backup_path, &content)
+    let backup_path = format!("{backup_dir}/{backup_stem}_{pid}.bak");
+    let temp_path = format!("{backup_dir}/{backup_stem}_{pid}.tmp");
+    async_fs::write(&backup_path, &original)
         .await
-        .map_err(|error| format!("Backup failed: {}", error))?;
+        .map_err(|error| format!("Backup failed: {error}"))?;
+    async_fs::write(&temp_path, content)
+        .await
+        .map_err(|error| format!("Temp write failed: {error}"))?;
 
-    if !is_new {
-        let formatted_name = format_client_name(client_id);
-
-        let host_block_re = Regex::new(&format!(
-            concat!(
-                r#"host\s+{}\s*\{{\s*"#,
-                r#"hardware\s+ethernet\s+[^;]+\s*;\s+"#,
-                r#"fixed-address\s+[^;]+\s*;\s+"#,
-                r#"option\s+host-name\s+"[^"]*"\s*;\s+"#,
-                r#"option\s+root-path\s+"[^"]*"\s*;\s*\}}"#
-            ),
-            regex::escape(&formatted_name)
-        ))
-        .map_err(|error| format!("Regex error: {}", error))?;
-
-        content = host_block_re.replace_all(&content, "").to_string();
-
-        let blank_re = Regex::new(r"\n\s*\n{2,}")
-            .map_err(|error| format!("Failed to compile blank line regex: {}", error))?;
-
-        content = blank_re.replace_all(&content, "\n\n").to_string();
+    if let Err(error) = run_command(["mv", &temp_path, destination]) {
+        let _ = async_fs::remove_file(&backup_path).await;
+        return Err(format!("Failed to install DHCP configuration: {error}"));
     }
 
-    if !is_new && dhcp_entry.trim().is_empty() {
-        let temp_path = format!("{}/dhcp_clients_{}.tmp", backup_dir, pid);
-
-        async_fs::write(&temp_path, content.trim_end())
+    if let Err(error) = run_command(["dhcpd", "-t", "-cf", crate::DHCP_CONFIG_PATH]) {
+        error!("DHCP configuration validation failed; restoring {destination}: {error}");
+        async_fs::write(&temp_path, &original)
             .await
-            .map_err(|error| format!("Temp write failed: {}", error))?;
-
-        if let Err(error) = run_command(["mv", &temp_path, DHCP_CLIENTS_PATH]) {
-            let message = format!("Sudo mv failed: {}", error);
-
-            error!("{}", message);
-
-            let _ = async_fs::remove_file(&dhcp_backup_path).await;
-            let _ = async_fs::remove_file(&temp_path).await;
-
-            return Err(message);
-        }
-
-        info!("DHCP entry removed for {}", client_id);
-
-        let _ = async_fs::remove_file(&dhcp_backup_path).await;
-
-        return Ok(());
+            .map_err(|restore_error| {
+                format!(
+                    "DHCP validation failed ({error}) and restoring clients.conf failed: {restore_error}"
+                )
+            })?;
+        run_command(["mv", &temp_path, destination]).map_err(|restore_error| {
+            format!(
+                "DHCP validation failed ({error}) and restoring clients.conf failed: {restore_error}"
+            )
+        })?;
+        let _ = async_fs::remove_file(&backup_path).await;
+        return Err(format!("DHCP configuration validation failed: {error}"));
     }
 
-    content = if content.trim().is_empty() {
-        dhcp_entry.to_string()
-    } else {
-        format!("{}\n\n{}", content.trim_end(), dhcp_entry)
-    };
-
-    let temp_path = format!("{}/dhcp_clients_{}.tmp", backup_dir, pid);
-
-    async_fs::write(&temp_path, &content)
-        .await
-        .map_err(|error| format!("Temp write failed: {}", error))?;
-
-    if let Err(error) = run_command(["mv", &temp_path, DHCP_CLIENTS_PATH]) {
-        let message = format!("Sudo mv failed: {}", error);
-
-        error!("{}", message);
-
-        let _ = async_fs::remove_file(&dhcp_backup_path).await;
-        let _ = async_fs::remove_file(&temp_path).await;
-
-        return Err(message);
-    }
-
-    info!("DHCP updated for {}", client_id);
-
-    let _ = async_fs::remove_file(&dhcp_backup_path).await;
-
+    let _ = async_fs::remove_file(&backup_path).await;
+    info!("DHCP configuration {} validated and installed", destination);
     Ok(())
+}
+
+/// Replace or remove one manager-owned DHCP host block without disturbing
+/// comments or host blocks owned by an operator. The result always has a
+/// stable trailing newline so applying the same desired entry twice is a no-op.
+pub fn reconcile_client_entry(
+    content: &str,
+    client_name: &str,
+    desired_entry: Option<&str>,
+) -> String {
+    let formatted_name = format_client_name(client_name);
+    let host_block_re = Regex::new(&format!(
+        r#"(?ms)^[ \t]*host\s+{}\s*\{{.*?^[ \t]*\}}[ \t]*(?:\n|$)"#,
+        regex::escape(&formatted_name)
+    ))
+    .expect("formatted DHCP host name must produce a valid regex");
+
+    let remaining = host_block_re.replace_all(content, "");
+    let remaining = remaining.trim_end();
+
+    match desired_entry
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+    {
+        Some(entry) if remaining.is_empty() => format!("{entry}\n"),
+        Some(entry) => format!("{remaining}\n\n{entry}\n"),
+        None if remaining.is_empty() => String::new(),
+        None => format!("{remaining}\n"),
+    }
 }
 
 pub fn format_client_name(name: &str) -> String {
@@ -133,9 +139,16 @@ pub fn format_client_name(name: &str) -> String {
         .unwrap_or_else(|| name.to_uppercase())
 }
 
-pub fn create_dhcp_entry(name: &str, mac: &str, ip: &str, target_iqn: &str) -> String {
+/// Build a static host entry using the configured iSCSI portal rather than
+/// discovering an unrelated host interface at reconciliation time.
+pub fn create_dhcp_entry_for_server(
+    name: &str,
+    mac: &str,
+    ip: &str,
+    target_iqn: &str,
+    server_ip: &str,
+) -> String {
     let formatted_name = format_client_name(name);
-    let server_ip = get_server_ip();
 
     let entry = format!(
         r#"host {formatted_name} {{
@@ -148,7 +161,7 @@ option root-path "iscsi:{server_ip}::::{target_iqn}";
         mac = mac,
         ip = ip,
         target_iqn = target_iqn,
-        server_ip = server_ip,
+        server_ip = server_ip.trim(),
     );
 
     info!("DHCP entry for {}: {} bytes", name, entry.len());
@@ -201,15 +214,16 @@ mod tests {
     }
 
     #[test]
-    fn test_create_dhcp_entry() {
-        let entry = create_dhcp_entry("client_1", "00:11:22:33:44:55", "192.168.1.100", "iqn.test");
+    fn configured_server_is_used_for_the_iscsi_root_path() {
+        let entry = create_dhcp_entry_for_server(
+            "client_1",
+            "00:11:22:33:44:55",
+            "192.168.1.100",
+            "iqn.test",
+            "192.168.1.250",
+        );
 
-        assert!(entry.contains("host PC001 {"));
-        assert!(entry.contains("hardware ethernet 00:11:22:33:44:55;"));
-        assert!(entry.contains("fixed-address 192.168.1.100;"));
-        assert!(entry.contains("option host-name \"PC001\";"));
-        assert!(entry.contains("option root-path \"iscsi:"));
-        assert!(entry.contains("::::iqn.test\";"));
+        assert!(entry.contains("option root-path \"iscsi:192.168.1.250::::iqn.test\";"));
     }
 
     #[test]
@@ -238,5 +252,70 @@ option root-path "iscsi:192.168.1.1::::iqn.test";
         let drifted = desired.replace("192.168.1.100", "192.168.1.101");
 
         assert!(!dhcp_entry_matches(&drifted, "client_1", desired));
+    }
+
+    #[test]
+    fn reconcile_client_entry_replaces_only_the_managed_host_block() {
+        let current = r#"# operator-maintained comment
+host PC001 {
+hardware ethernet 00:11:22:33:44:55;
+fixed-address 192.168.1.101;
+}
+
+host PC002 {
+hardware ethernet 00:11:22:33:44:66;
+fixed-address 192.168.1.102;
+}
+"#;
+        let desired = r#"host PC001 {
+hardware ethernet 00:11:22:33:44:55;
+fixed-address 192.168.1.100;
+option host-name "PC001";
+option root-path "iscsi:192.168.1.250::::iqn.test";
+}"#;
+
+        let reconciled = reconcile_client_entry(current, "client_1", Some(desired));
+
+        assert!(reconciled.contains("# operator-maintained comment"));
+        assert!(reconciled.contains(desired));
+        assert!(reconciled.contains("host PC002 {"));
+        assert!(!reconciled.contains("fixed-address 192.168.1.101;"));
+    }
+
+    #[test]
+    fn reconcile_client_entry_is_idempotent() {
+        let desired = r#"host PC001 {
+hardware ethernet 00:11:22:33:44:55;
+fixed-address 192.168.1.100;
+option host-name "PC001";
+option root-path "iscsi:192.168.1.250::::iqn.test";
+}"#;
+
+        let once = reconcile_client_entry("", "client_1", Some(desired));
+        let twice = reconcile_client_entry(&once, "client_1", Some(desired));
+
+        assert_eq!(twice, once);
+        assert_eq!(twice.matches("host PC001 {").count(), 1);
+    }
+
+    #[test]
+    fn reconcile_client_entry_removes_the_managed_host_and_preserves_other_content() {
+        let current = r#"# operator-maintained comment
+host PC001 {
+hardware ethernet 00:11:22:33:44:55;
+fixed-address 192.168.1.100;
+}
+
+host PC002 {
+hardware ethernet 00:11:22:33:44:66;
+fixed-address 192.168.1.102;
+}
+"#;
+
+        let reconciled = reconcile_client_entry(current, "client_1", None);
+
+        assert!(reconciled.contains("# operator-maintained comment"));
+        assert!(reconciled.contains("host PC002 {"));
+        assert!(!reconciled.contains("host PC001 {"));
     }
 }

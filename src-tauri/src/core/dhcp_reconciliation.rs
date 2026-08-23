@@ -1,6 +1,6 @@
 use crate::{
     core::client::ClientManager,
-    dhcp::{create_dhcp_entry, dhcp_entry_matches, format_client_name},
+    dhcp::{create_dhcp_entry_for_server, dhcp_entry_matches, format_client_name},
     state::AppState,
     DHCP_CLIENTS_PATH,
 };
@@ -99,6 +99,7 @@ pub async fn inspect_dhcp(state: &AppState) -> anyhow::Result<DhcpReconciliation
         .await
         .unwrap_or_default();
 
+    let server_ip = state.settings.read().await.dhcp.next_server_ip.clone();
     let mut summary = DhcpReconciliationSummary::new();
 
     for client in clients {
@@ -125,7 +126,13 @@ pub async fn inspect_dhcp(state: &AppState) -> anyhow::Result<DhcpReconciliation
             }
         };
 
-        let desired = create_dhcp_entry(&client.name, &client.mac, &client.ip, target_iqn);
+        let desired = create_dhcp_entry_for_server(
+            &client.name,
+            &client.mac,
+            &client.ip,
+            target_iqn,
+            &server_ip,
+        );
         let outcome = classify_dhcp_entry(&content, &client.name, &desired);
 
         let message = match outcome {
@@ -169,11 +176,25 @@ pub async fn repair_client_dhcp(
             anyhow::anyhow!("client '{}' has no persisted iSCSI target IQN", client_id)
         })?;
 
-    let desired = create_dhcp_entry(&client.name, &client.mac, &client.ip, target_iqn);
+    let server_ip = state.settings.read().await.dhcp.next_server_ip.clone();
+    let desired = create_dhcp_entry_for_server(
+        &client.name,
+        &client.mac,
+        &client.ip,
+        target_iqn,
+        &server_ip,
+    );
 
     crate::dhcp::update_dhcp_config(&client.name, &desired, false)
         .await
         .map_err(anyhow::Error::msg)?;
+
+    let settings = state.settings.read().await.clone();
+    if settings.dhcp.enabled {
+        crate::services::DhcpService::new(settings, state.db_pool.clone())
+            .reload()
+            .await?;
+    }
 
     Ok(DhcpReconciliationEntry {
         client_id: client.id,

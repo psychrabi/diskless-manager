@@ -17,6 +17,10 @@ const SERVICE_CONFIG_FILES: &[(&str, &str)] = &[
     ("samba", "/etc/samba/smb.conf"),
 ];
 
+fn requires_dhcp_validation(service_name: &str) -> bool {
+    matches!(service_name, "dhcp" | "dhcp-clients")
+}
+
 pub async fn list_services(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<crate::core::service::ServiceInfo>>, StatusCode> {
@@ -249,12 +253,28 @@ pub async fn configure_service(
                 StatusCode::NOT_FOUND
             })?;
 
-        write_with_sudo_tee(config_path, &content)
-            .await
-            .map_err(|e| {
-                log::error!("Failed to write config for {}: {}", name, e);
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?;
+        if name == "dhcp" {
+            crate::dhcp::replace_dhcp_config(&content)
+                .await
+                .map_err(|e| {
+                    log::error!("Failed to safely write config for {}: {}", name, e);
+                    StatusCode::INTERNAL_SERVER_ERROR
+                })?;
+        } else if name == "dhcp-clients" {
+            crate::dhcp::replace_dhcp_clients_config(&content)
+                .await
+                .map_err(|e| {
+                    log::error!("Failed to safely write config for {}: {}", name, e);
+                    StatusCode::INTERNAL_SERVER_ERROR
+                })?;
+        } else {
+            write_with_sudo_tee(config_path, &content)
+                .await
+                .map_err(|e| {
+                    log::error!("Failed to write config for {}: {}", name, e);
+                    StatusCode::INTERNAL_SERVER_ERROR
+                })?;
+        }
 
         log::info!("Raw configuration saved for service: {}", name);
     } else {
@@ -278,7 +298,21 @@ pub async fn configure_service(
     // Reload the service to pick up new config
     let settings = state.settings.read().await;
     let service_manager = ServiceManager::new(settings.clone(), state.db_pool.clone());
-    let _ = service_manager.reload(&name).await;
+    if requires_dhcp_validation(&name) {
+        service_manager.dhcp.validate_config().await.map_err(|e| {
+            log::error!(
+                "DHCP configuration validation failed; service was not reloaded: {}",
+                e
+            );
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+        service_manager.reload(&name).await.map_err(|e| {
+            log::error!("Failed to reload validated DHCP configuration: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    } else {
+        let _ = service_manager.reload(&name).await;
+    }
 
     Ok(Json(format!("Service {} configured successfully", name)))
 }
@@ -297,5 +331,17 @@ pub async fn install_service(
             log::error!("Failed to install service '{}': {}", service, e);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dhcp_configuration_changes_require_validation_before_reload() {
+        assert!(requires_dhcp_validation("dhcp"));
+        assert!(requires_dhcp_validation("dhcp-clients"));
+        assert!(!requires_dhcp_validation("tftp"));
     }
 }

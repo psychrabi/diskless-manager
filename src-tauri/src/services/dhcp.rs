@@ -170,6 +170,13 @@ INTERFACESv6=""
         Ok(())
     }
 
+    /// Validate the complete ISC DHCP configuration, including clients.conf,
+    /// before a caller reloads the service.
+    pub async fn validate_config(&self) -> anyhow::Result<()> {
+        run_sudo_command(["dhcpd", "-t", "-cf", "/etc/dhcp/dhcpd.conf"]).await?;
+        Ok(())
+    }
+
     pub async fn get_config(&self) -> anyhow::Result<String> {
         let config_path = PathBuf::from("/etc/dhcp/dhcpd.conf");
         if config_path.exists() {
@@ -308,101 +315,40 @@ include "/etc/dhcp/clients.conf";
     }
 
     pub async fn generate_client_configs(&self) -> anyhow::Result<()> {
-        run_sudo_command(["rm", "/var/lib/dhcp/dhcpd.leases"]).await?;
-
         let client_manager = ClientManager::new(self.db_pool.clone());
         let clients = client_manager.list().await?;
+        let server_ip = self.settings.dhcp.next_server_ip.trim();
+        let server_ip = if server_ip.is_empty() {
+            self.settings.server.ip_address.trim()
+        } else {
+            server_ip
+        };
+        let client_config = clients
+            .into_iter()
+            .filter(|client| client.enabled && !client.ip.is_empty() && client.ip != "N/A")
+            .filter_map(|client| {
+                client
+                    .target_iqn
+                    .as_deref()
+                    .filter(|iqn| !iqn.trim().is_empty())
+                    .map(|iqn| {
+                        crate::dhcp::create_dhcp_entry_for_server(
+                            &client.name,
+                            &client.mac,
+                            &client.ip,
+                            iqn,
+                            server_ip,
+                        )
+                    })
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
 
-        let mut client_config = String::new();
+        crate::dhcp::replace_dhcp_clients_config(&format!("{client_config}\n"))
+            .await
+            .map_err(anyhow::Error::msg)?;
 
-        for client in clients {
-            if !client.ip.is_empty() && client.ip != "N/A" {
-                if let Some(ref target_iqn) = client.target_iqn {
-                    let server_ip = crate::cmd::get_server_ip();
-                    let script_path = crate::ipxe::client_script_path(&client.name);
-                    let script = crate::ipxe::render_client_script(
-                        &client.name,
-                        target_iqn,
-                        self.settings.http.port,
-                    );
-                    let script_root = PathBuf::from(&self.settings.http.root_dir);
-                    let script_destination = script_root.join(&script_path);
-
-                    if !crate::ipxe::is_managed_script_path(&script_root, &script_path) {
-                        return Err(anyhow::anyhow!(
-                            "Generated iPXE path escaped the managed HTTP root: {}",
-                            script_path
-                        ));
-                    }
-
-                    if let Some(parent) = script_destination.parent() {
-                        std::fs::create_dir_all(parent)?;
-                    }
-                    write_with_sudo_tee(&script_destination.to_string_lossy(), &script).await?;
-
-                    let boot_server = self.settings.http.server_ip.trim();
-                    let boot_server = if boot_server.is_empty() {
-                        &server_ip
-                    } else {
-                        boot_server
-                    };
-                    let boot_port = self.settings.http.port;
-                    let boot_port_suffix = if boot_port == 80 {
-                        String::new()
-                    } else {
-                        format!(":{boot_port}")
-                    };
-                    let boot_url = format!(
-                        "http://{}{}{}/",
-                        boot_server,
-                        boot_port_suffix,
-                        script_path
-                    );
-                    let boot_url = boot_url.trim_end_matches('/').to_string();
-
-                    client_config.push_str(&format!(
-                        r#"
-host {name} {{
-    hardware ethernet {mac};
-    fixed-address {ip};
-    option host-name "{name}";
-    option root-path "iscsi:{server_ip}::::{target_iqn}";
-    filename "{boot_url}";
-}}
-"#,
-                        name = client.name,
-                        mac = client.mac,
-                        ip = client.ip,
-                        server_ip = server_ip,
-                        target_iqn = target_iqn,
-                        boot_url = boot_url,
-                    ));
-                } else {
-                    client_config.push_str(&format!(
-                        r#"
-host {name} {{
-    hardware ethernet {mac};
-    fixed-address {ip};
-    option host-name "{name}";
-}}
-"#,
-                        name = client.name,
-                        mac = client.mac,
-                        ip = client.ip,
-                    ));
-                }
-            }
-        }
-
-        let config_path = PathBuf::from("/etc/dhcp/clients.conf");
-        if let Some(parent) = config_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| anyhow::anyhow!("Failed to create directory: {}", e))?;
-        }
-
-        write_with_sudo_tee("/etc/dhcp/clients.conf", &client_config).await?;
-
-        info!("Client configuration written to {}", config_path.display());
+        info!("Static DHCP client configuration validated and written");
         Ok(())
     }
 }
