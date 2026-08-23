@@ -3,6 +3,7 @@ pub mod client;
 mod config;
 mod dhcp;
 mod disks;
+pub mod ipxe;
 mod error;
 mod license;
 mod logs;
@@ -185,5 +186,5 @@ pub async fn run() {
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .expect("error while running Tauri application");
 }
