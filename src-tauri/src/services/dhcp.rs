@@ -86,19 +86,6 @@ class "pxeclients" {{
   match if substring(option vendor-class-identifier, 0, 9) = "PXEClient";
 }}
 
-#on commit {{
-#  set clip = binary-to-ascii(10, 8, ".", leased-address);
-#  set clmac = concat(
-#    suffix(concat("0", binary-to-ascii(16, 8, "", substring(hardware, 1, 1))), 2), ":",
-#    suffix(concat("0", binary-to-ascii(16, 8, "", substring(hardware, 2, 1))), 2), ":",
-#    suffix(concat("0", binary-to-ascii(16, 8, "", substring(hardware, 3, 1))), 2), ":",
-#    suffix(concat("0", binary-to-ascii(16, 8, "", substring(hardware, 4, 1))), 2), ":",
-#    suffix(concat("0", binary-to-ascii(16, 8, "", substring(hardware, 5, 1))), 2), ":",
-#    suffix(concat("0", binary-to-ascii(16, 8, "", substring(hardware, 6, 1))), 2)
-#  );
-#  execute("/usr/bin/diskless-manager", "auto-add-client", "--mac", clmac, "--ip", clip);
-#}}
-
 # DHCP Configuration
 subnet {} netmask {} {{
     # Only hand out dynamic leases to PXE clients
@@ -145,8 +132,6 @@ include "/etc/dhcp/clients.conf";
         // Write configuration to default DHCP config path
         let dhcp_path = PathBuf::from("/etc/dhcp/dhcpd.conf");
         if let Some(parent) = dhcp_path.parent() {
-            // Create parent directory with proper permissions using std::fs
-            // The actual file writing will use sudo
             std::fs::create_dir_all(parent)
                 .map_err(|e| anyhow::anyhow!("Failed to create directory: {}", e))?;
         }
@@ -229,7 +214,6 @@ option ipxe.dns code 23 = unsigned integer 8;
 option ipxe.bzimage code 24 = unsigned integer 8;
 option ipxe.multiboot code 25 = unsigned integer 8;
 option ipxe.slam code 26 = unsigned integer 8;
-option ipxe.srp code 27 = unsigned integer 8;
 option ipxe.nbi code 32 = unsigned integer 8;
 option ipxe.pxe code 33 = unsigned integer 8;
 option ipxe.elf code 34 = unsigned integer 8;
@@ -255,19 +239,6 @@ one-lease-per-client true;
 class "pxeclients" {{
   match if substring(option vendor-class-identifier, 0, 9) = "PXEClient";
 }}
-
-#on commit {{
-#  set clip = binary-to-ascii(10, 8, ".", leased-address);
-#  set clmac = concat(
-#    suffix(concat("0", binary-to-ascii(16, 8, "", substring(hardware, 1, 1))), 2), ":",
-#    suffix(concat("0", binary-to-ascii(16, 8, "", substring(hardware, 2, 1))), 2), ":",
-#    suffix(concat("0", binary-to-ascii(16, 8, "", substring(hardware, 3, 1))), 2), ":",
-#    suffix(concat("0", binary-to-ascii(16, 8, "", substring(hardware, 4, 1))), 2), ":",
-#    suffix(concat("0", binary-to-ascii(16, 8, "", substring(hardware, 5, 1))), 2), ":",
-#    suffix(concat("0", binary-to-ascii(16, 8, "", substring(hardware, 6, 1))), 2)
-#  );
-#  execute("/usr/bin/diskless-manager", "auto-add-client", "--mac", clmac, "--ip", clip);
-#}}
 
 # DHCP Configuration
 subnet {} netmask {} {{
@@ -333,7 +304,6 @@ include "/etc/dhcp/clients.conf";
         run_sudo_command(["rm", "/var/lib/dhcp/dhcpd.leases"]).await?;
         info!("DHCP leases cleared");
 
-        // Add static host entries for registered clients
         let client_manager = ClientManager::new(self.db_pool.clone());
         let clients = client_manager.list().await?;
 
@@ -341,9 +311,52 @@ include "/etc/dhcp/clients.conf";
 
         for client in clients {
             if !client.ip.is_empty() && client.ip != "N/A" {
-                // Only add root-path if target_iqn is available
                 if let Some(ref target_iqn) = client.target_iqn {
-                    let server_ip = crate::cmd::get_server_ip(); // Get server IP for iSCSI
+                    let server_ip = crate::cmd::get_server_ip();
+                    let script_path = crate::ipxe::client_script_path(&client.name);
+                    let script = crate::ipxe::render_client_script(
+                        &client.name,
+                        target_iqn,
+                        self.settings.http.port,
+                    );
+                    let script_root = PathBuf::from(&self.settings.http.root_dir);
+                    let script_destination = script_root.join(&script_path);
+
+                    if !crate::ipxe::is_managed_script_path(&script_root, &script_path) {
+                        return Err(anyhow::anyhow!(
+                            "Generated iPXE path escaped the managed HTTP root: {}",
+                            script_path
+                        ));
+                    }
+
+                    if let Some(parent) = script_destination.parent() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                    write_with_sudo_tee(
+                        &script_destination.to_string_lossy(),
+                        &script,
+                    )
+                    .await?;
+
+                    let boot_server = self.settings.http.server_ip.trim();
+                    let boot_server = if boot_server.is_empty() {
+                        &server_ip
+                    } else {
+                        boot_server
+                    };
+                    let boot_port = self.settings.http.port;
+                    let boot_port_suffix = if boot_port == 80 {
+                        String::new()
+                    } else {
+                        format!(":{boot_port}")
+                    };
+                    let boot_url = format!(
+                        "http://{}{}{}",
+                        boot_server,
+                        boot_port_suffix,
+                        format!("/{script_path}")
+                    );
+
                     client_config.push_str(&format!(
                         r#"
 host {name} {{
@@ -351,6 +364,7 @@ host {name} {{
     fixed-address {ip};
     option host-name "{name}";
     option root-path "iscsi:{server_ip}::::{target_iqn}";
+    filename "{boot_url}";
 }}
 "#,
                         name = client.name,
@@ -358,9 +372,9 @@ host {name} {{
                         ip = client.ip,
                         server_ip = server_ip,
                         target_iqn = target_iqn,
+                        boot_url = boot_url,
                     ));
                 } else {
-                    // Fallback to basic host entry if no target_iqn
                     client_config.push_str(&format!(
                         r#"
 host {name} {{
@@ -377,11 +391,8 @@ host {name} {{
             }
         }
 
-        // Write configuration to default DHCP config path
         let config_path = PathBuf::from("/etc/dhcp/clients.conf");
         if let Some(parent) = config_path.parent() {
-            // Create parent directory with proper permissions using std::fs
-            // The actual file writing will use sudo
             std::fs::create_dir_all(parent)
                 .map_err(|e| anyhow::anyhow!("Failed to create directory: {}", e))?;
         }
