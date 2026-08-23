@@ -266,13 +266,21 @@ fn validate_dhcp_config(config: &DhcpConfig) -> anyhow::Result<()> {
     let mask = parse_ipv4("subnet_mask", &config.subnet_mask)?;
     let mask_u32 = u32::from(mask);
 
-    if mask_u32 == 0 || (mask_u32 & (mask_u32 + 1)) != 0 {
+    // A valid IPv4 netmask consists of contiguous 1-bits followed by
+    // contiguous 0-bits. Checking the inverted mask makes the condition
+    // straightforward: x & (x + 1) must be zero.
+    let inverted_mask = !mask_u32;
+    if mask_u32 == 0 || (inverted_mask & (inverted_mask + 1)) != 0 {
         anyhow::bail!("subnet_mask must be a contiguous non-zero IPv4 netmask");
     }
 
     let network = u32::from(subnet) & mask_u32;
     if network != u32::from(subnet) {
-        anyhow::bail!("subnet_ip {} is not the network address for {}", subnet, mask);
+        anyhow::bail!(
+            "subnet_ip {} is not the network address for {}",
+            subnet,
+            mask
+        );
     }
 
     let broadcast = network | !mask_u32;
@@ -292,7 +300,9 @@ fn validate_dhcp_config(config: &DhcpConfig) -> anyhow::Result<()> {
         anyhow::bail!("start_ip must not be greater than end_ip");
     }
     if u32::from(start) <= network || u32::from(end) >= broadcast {
-        anyhow::bail!("DHCP pool must be inside the subnet and exclude network/broadcast addresses");
+        anyhow::bail!(
+            "DHCP pool must be inside the subnet and exclude network/broadcast addresses"
+        );
     }
     if !in_subnet(u32::from(start), network, mask_u32)
         || !in_subnet(u32::from(end), network, mask_u32)
@@ -375,9 +385,9 @@ fn validate_interface_name(value: &str) -> anyhow::Result<()> {
     let value = value.trim();
     if value.is_empty()
         || value.len() > 15
-        || !value
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.' | ':'))
+        || !value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.' | ':')
+        })
     {
         anyhow::bail!("invalid network interface name: {value:?}");
     }
@@ -465,30 +475,38 @@ mod tests {
 
     #[test]
     fn invalid_broadcast_is_rejected() {
-        let mut config = DhcpConfig::default();
-        config.broadcast_ip = "192.168.1.254".to_string();
+        let config = DhcpConfig {
+            broadcast_ip: "192.168.1.254".to_string(),
+            ..DhcpConfig::default()
+        };
         assert!(validate_dhcp_config(&config).is_err());
     }
 
     #[test]
     fn invalid_pool_order_is_rejected() {
-        let mut config = DhcpConfig::default();
-        config.start_ip = "192.168.1.200".to_string();
-        config.end_ip = "192.168.1.100".to_string();
+        let config = DhcpConfig {
+            start_ip: "192.168.1.200".to_string(),
+            end_ip: "192.168.1.100".to_string(),
+            ..DhcpConfig::default()
+        };
         assert!(validate_dhcp_config(&config).is_err());
     }
 
     #[test]
     fn non_contiguous_mask_is_rejected() {
-        let mut config = DhcpConfig::default();
-        config.subnet_mask = "255.0.255.0".to_string();
+        let config = DhcpConfig {
+            subnet_mask: "255.0.255.0".to_string(),
+            ..DhcpConfig::default()
+        };
         assert!(validate_dhcp_config(&config).is_err());
     }
 
     #[test]
     fn unsafe_boot_filename_is_rejected() {
-        let mut config = DhcpConfig::default();
-        config.boot_script = "../../autoexec.ipxe".to_string();
+        let config = DhcpConfig {
+            boot_script: "../../autoexec.ipxe".to_string(),
+            ..DhcpConfig::default()
+        };
         assert!(validate_dhcp_config(&config).is_err());
     }
 
