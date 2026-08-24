@@ -57,6 +57,7 @@ MASK=255.255.255.0
 DHCP_START=192.168.1.100
 DHCP_END=192.168.1.200
 GATEWAY=192.168.1.254
+WINPE_URL="http://${SERVER_IP}:4433/boot/winpe"
 
 printf '%s\n' '--- DHCP syntax ---'
 if command -v dhcpd >/dev/null 2>&1; then
@@ -102,16 +103,37 @@ if command -v curl >/dev/null 2>&1; then
         else
             fail 'HTTP autoexec.ipxe does not contain an iPXE shebang'
         fi
-        if grep -Fq 'sanboot ${root-path}' /tmp/diskless-manager-autoexec.ipxe; then
-            pass 'autoexec.ipxe boots the DHCP-provided root-path'
+        if grep -Fq 'sanhook ${root-path}' /tmp/diskless-manager-autoexec.ipxe; then
+            pass 'autoexec.ipxe attaches the DHCP-provided root-path'
         else
-            fail 'autoexec.ipxe does not boot the DHCP-provided root-path'
+            fail 'autoexec.ipxe does not attach the DHCP-provided root-path'
         fi
-        expect_absent 'windows-boot' /tmp/diskless-manager-autoexec.ipxe
-        expect_absent '4433' /tmp/diskless-manager-autoexec.ipxe
+        if grep -Fq 'sanboot --no-describe || goto winpe' /tmp/diskless-manager-autoexec.ipxe; then
+            pass 'autoexec.ipxe attempts Windows SAN boot before WinPE'
+        else
+            fail 'autoexec.ipxe does not contain the Windows SAN boot fallback'
+        fi
+        if grep -Fq ':winpe' /tmp/diskless-manager-autoexec.ipxe \
+            && grep -Fq 'boot.wim boot.wim' /tmp/diskless-manager-autoexec.ipxe; then
+            pass 'autoexec.ipxe contains the WinPE wimboot fallback'
+        else
+            fail 'autoexec.ipxe is missing the WinPE wimboot fallback'
+        fi
         expect_absent 'client.pc001' /tmp/diskless-manager-autoexec.ipxe
     else
         fail "HTTP could not retrieve http://${SERVER_IP}/autoexec.ipxe"
+    fi
+
+    if curl --fail --silent --show-error --max-time 5 -o /dev/null "${WINPE_URL}/wimboot"; then
+        pass "WinPE wimboot is served from ${WINPE_URL}"
+    else
+        fail "WinPE wimboot is not reachable at ${WINPE_URL}/wimboot"
+    fi
+
+    if curl --fail --silent --show-error --max-time 10 -o /dev/null "${WINPE_URL}/boot.wim"; then
+        pass "WinPE boot.wim is served from ${WINPE_URL}"
+    else
+        fail "WinPE boot.wim is not reachable at ${WINPE_URL}/boot.wim"
     fi
 else
     warn 'curl is not installed; HTTP verification skipped'
@@ -129,6 +151,12 @@ if command -v ss >/dev/null 2>&1; then
         pass 'TCP/80 is listening'
     else
         fail 'TCP/80 is not listening'
+    fi
+
+    if ss -ltn | grep -Eq '(^|:)4433[[:space:]]'; then
+        pass 'TCP/4433 is listening for WinPE/boot assets'
+    else
+        fail 'TCP/4433 is not listening for WinPE/boot assets'
     fi
 
     if ss -ltn | grep -Eq '(^|:)3260[[:space:]]'; then
