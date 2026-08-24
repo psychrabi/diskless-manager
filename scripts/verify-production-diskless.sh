@@ -160,6 +160,29 @@ if command -v targetcli >/dev/null 2>&1; then
         else
             warn 'targetcli is accessible but no 3260 portal was detected in its output'
         fi
+
+        incomplete_targets=$(awk '
+            /^  \| o- iqn\..*:client\./ {
+                if (target != "" && incomplete) print target
+                target = $0
+                incomplete = 1
+                next
+            }
+            /^  \| | o- luns / {
+                if ($0 ~ /\[LUNs: [1-9][0-9]*\]/) incomplete = 0
+                next
+            }
+            END {
+                if (target != "" && incomplete) print target
+            }
+        ' /tmp/diskless-manager-targetcli.out)
+
+        if [[ -n "$incomplete_targets" ]]; then
+            fail 'managed iSCSI target(s) exist without a complete LUN configuration'
+            printf '%s\n' "$incomplete_targets"
+        else
+            pass 'no incomplete managed client iSCSI targets detected'
+        fi
     else
         warn 'targetcli exists but sudo -n targetcli ls could not be executed'
     fi
