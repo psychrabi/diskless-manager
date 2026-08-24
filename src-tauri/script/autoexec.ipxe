@@ -2,64 +2,23 @@
 set dhcp-timeout 5000
 set dhcp-max-retries 3
 dhcp
+set keep-san 1
+
+# The DHCP root-path is the client's persistent iSCSI disk.
+# First boot attempts Windows SAN boot. If the disk is empty or Windows is
+# not bootable yet, keep the SAN attached and load WinPE for installation.
+isset ${root-path} || goto no_target
+set net0/gateway 0.0.0.0
+sanhook ${root-path} || goto failed
+
+echo Attempting Windows SAN boot from ${root-path}...
+sanboot --no-describe || goto winpe
+
+:winpe
+echo Windows SAN boot is unavailable.
+echo Loading WinPE; the iSCSI disk remains attached for Windows Setup.
 set boot-url http://${next-server}:4433/boot/winpe
-set menu-timeout 3000
-set keep-san 1
-
-:start
-menu Diskless Boot Menu (Server IP: ${next-server})
-item --gap --             ------------------------- Operating systems ------------------------------
-item --key d boot_debian    Diskless boot Debian 13.1
-item --key b boot_ubuntu    Diskless boot Ubuntu 25.10
-item --key a boot_anduinos  Diskless boot Anduin OS 25.04
-item --key w boot_windows   Diskless boot Windows 11
-item --key i boot_pe        Boot from WinPE (WIM)
-item --key i boot_pe_iso    Boot from WinPE (ISO)
-
-item --gap --             ------------------------- Advanced options ------------------------------
-item --key c config       Configure settings
-item shell                Drop to iPXE shell
-item reboot               Reboot computer
-item --key x exit         Exit iPXE and continue BIOS boot
-choose --timeout ${menu-timeout} --default ${menu-default} selected || goto cancel
-set menu-timeout 0
-goto ${selected}
-
-:cancel
-echo You cancelled the menu, dropping you to a shell
-
-:shell
-echo Type 'exit' to get the back to the menu
-shell
-goto start
-
-:failed
-echo Booting failed, dropping to shell
-goto shell
-
-:reboot
-reboot
-
-:exit
-exit
-
-:config
-config
-goto start
-
-:boot_windows
-set keep-san 1
-sanboot --no-describe ${root-path} || goto failed
-
-:boot_pe_iso
-set keep-san 1
-sanhook ${root-path} || goto failed
-sanboot --no-describe --drive 0x81 http://${next-server}:4433/winpe.iso || goto failed
-
-:boot_pe
-set keep-san 1
-sanhook ${root-path} || goto failed
-kernel ${boot-url}/wimboot
+kernel ${boot-url}/wimboot || goto failed
 initrd ${boot-url}/bootx64.efi bootx64.efi || goto failed
 initrd ${boot-url}/bootmgr bootmgr || goto failed
 initrd ${boot-url}/BCD BCD || goto failed
@@ -67,59 +26,12 @@ initrd ${boot-url}/boot.sdi boot.sdi || goto failed
 initrd ${boot-url}/boot.wim boot.wim || goto failed
 boot || goto failed
 
-:boot_debian
-kernel http://${next-server}:4433/debian/vmlinuz \
-    ip=${net0/ip}::${net0/gateway}:${net0/netmask}::enp2s0:none \
-    iscsi_initiator=iqn.2026-01.client:client.pc001 \
-    iscsi_target_name=iqn.2026-01.local.diskless:client.pc001 \
-    iscsi_target_ip=${next-server} \
-    root=/dev/disk/by-path/ip-${next-server}:3260-iscsi-iqn.2026-01.local.diskless:client.pc001-lun-0-part2 \
-    rw \
-    rd.iscsi.waitnet=0 \
-    rd.iscsi.ibft=1 \
-    rd.iscsi.param=node.conn[0].iscsi.MaxRecvDataSegmentLength:262144 \
-    rd.iscsi.param=node.conn[0].iscsi.MaxXmitDataSegmentLength:262144 \
-    rd.iscsi.param=node.conn[0].iscsi.FirstBurstLength:262144 \
-    rd.iscsi.param=node.conn[0].iscsi.MaxBurstLength:4194304 \
-    rd.net.ifnames=0 \
+:failed
+echo Diskless boot failed.
+echo Verify the iSCSI target and WinPE HTTP files on the server.
+shell
 
-initrd http://${next-server}:4433/debian/initrd.img
-boot || goto failed
-
-:boot_ubuntu
-kernel http://${next-server}:4433/ubuntu/vmlinuz \
-    ip=${net0/ip}::${net0/gateway}:${net0/netmask}::enp2s0:none \
-    iscsi_initiator=iqn.2026-01.client:client.pc001 \
-    iscsi_target_name=iqn.2026-01.local.diskless:client.pc001 \
-    iscsi_target_ip=${next-server} \
-    root=/dev/disk/by-path/ip-${next-server}:3260-iscsi-iqn.2026-01.local.diskless:client.pc001-lun-0-part2 \
-    rw \
-    rd.iscsi.waitnet=0 \
-    rd.iscsi.ibft=1 \
-    rd.iscsi.param=node.conn[0].iscsi.MaxRecvDataSegmentLength:262144 \
-    rd.iscsi.param=node.conn[0].iscsi.MaxXmitDataSegmentLength:262144 \
-    rd.iscsi.param=node.conn[0].iscsi.FirstBurstLength:262144 \
-    rd.iscsi.param=node.conn[0].iscsi.MaxBurstLength:4194304 \
-    rd.net.ifnames=0 \
-
-initrd http://${next-server}:4433/ubuntu/initrd.img
-boot || goto failed
-
-:boot_anduinos
-kernel http://${next-server}:4433/anduinos/vmlinuz \
-    ip=${net0/ip}::${net0/gateway}:${net0/netmask}::enp2s0:none \
-    iscsi_initiator=iqn.2026-01.client:client.pc001 \
-    iscsi_target_name=iqn.2026-01.local.diskless:client.pc001 \
-    iscsi_target_ip=${next-server} \
-    root=/dev/disk/by-path/ip-${next-server}:3260-iscsi-iqn.2026-01.local.diskless:client.pc001-lun-0-part2 \
-    rw \
-    rd.iscsi.waitnet=0 \
-    rd.iscsi.ibft=1 \
-    rd.net.ifnames=0 \
-    rd.iscsi.param=node.conn[0].iscsi.MaxRecvDataSegmentLength:262144 \
-    rd.iscsi.param=node.conn[0].iscsi.MaxXmitDataSegmentLength:262144 \
-    rd.iscsi.param=node.conn[0].iscsi.FirstBurstLength:262144 \
-    rd.iscsi.param=node.conn[0].iscsi.MaxBurstLength:4194304 \
-    
-initrd http://${next-server}:4433/anduinos/initrd.img
-boot || goto failed
+:no_target
+echo No iSCSI root-path was supplied by DHCP.
+echo This machine is not registered as a diskless client.
+shell
