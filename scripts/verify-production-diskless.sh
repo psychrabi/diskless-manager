@@ -32,6 +32,16 @@ expect_line() {
     fi
 }
 
+expect_absent() {
+    local pattern="$1"
+    local path="$2"
+    if grep -Fq -- "$pattern" "$path" 2>/dev/null; then
+        fail "$path contains stale/forbidden content: $pattern"
+    else
+        pass "$path does not contain: $pattern"
+    fi
+}
+
 printf '%s\n' '=== diskless-manager production verification ==='
 printf '%s\n' "Host: $(hostname 2>/dev/null || printf unknown)"
 printf '%s\n' "Date: $(date -Is 2>/dev/null || printf unknown)"
@@ -92,6 +102,14 @@ if command -v curl >/dev/null 2>&1; then
         else
             fail 'HTTP autoexec.ipxe does not contain an iPXE shebang'
         fi
+        if grep -Fq 'sanboot ${root-path}' /tmp/diskless-manager-autoexec.ipxe; then
+            pass 'autoexec.ipxe boots the DHCP-provided root-path'
+        else
+            fail 'autoexec.ipxe does not boot the DHCP-provided root-path'
+        fi
+        expect_absent 'windows-boot' /tmp/diskless-manager-autoexec.ipxe
+        expect_absent '4433' /tmp/diskless-manager-autoexec.ipxe
+        expect_absent 'client.pc001' /tmp/diskless-manager-autoexec.ipxe
     else
         fail "HTTP could not retrieve http://${SERVER_IP}/autoexec.ipxe"
     fi
@@ -149,7 +167,7 @@ else
     warn 'targetcli is not installed; iSCSI target verification skipped'
 fi
 
-printf '\n%s\n' '=== verification summary ===\n'
+printf '\n%s\n' '=== verification summary ==='
 printf 'PASS: %d\nFAIL: %d\nWARN: %d\n' "$PASS" "$FAIL" "$WARN"
 
 rm -f /tmp/diskless-manager-dhcp-test.out /tmp/diskless-manager-autoexec.ipxe /tmp/diskless-manager-targetcli.out
