@@ -1,5 +1,6 @@
 use crate::application::ApplicationServices;
 use crate::core::config::Settings;
+use crate::metrics::MetricsCollector;
 use crate::ssh_executor::SshExecutor;
 use log::info;
 use sqlx::sqlite::SqlitePool;
@@ -13,6 +14,8 @@ pub struct AppState {
     pub db_pool: SqlitePool,
     pub config_path: PathBuf,
     pub client_ips: Arc<RwLock<Vec<String>>>,
+    /// Shared source of truth for REST and WebSocket traffic measurements.
+    pub metrics_collector: Arc<MetricsCollector>,
     pub ssh_executor: Arc<SshExecutor>,
     pub application: Arc<ApplicationServices>,
 }
@@ -61,6 +64,7 @@ impl AppState {
             db_pool: pool,
             config_path,
             client_ips: Arc::new(RwLock::new(client_ips)),
+            metrics_collector: Arc::new(MetricsCollector::default()),
             ssh_executor: Arc::new(SshExecutor::new()),
             application,
         })

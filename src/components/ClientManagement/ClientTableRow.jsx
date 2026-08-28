@@ -85,16 +85,30 @@ const ClientTableRow = ({ client, clientMetrics }) => {
       <TableCell className="font-mono text-xs text-center">{client.ip}</TableCell>
       <TableCell className="hidden lg:table-cell font-mono">
         <SpeedCell
-          metricValue={clientMetrics?.read_speed_mbps}
+          metricValue={clientMetrics?.network?.read_speed_mbps}
           icon={MoveUp}
           iconClassName="text-info"
         />
       </TableCell>
       <TableCell className="hidden lg:table-cell font-mono">
         <SpeedCell
-          metricValue={clientMetrics?.write_speed_mbps}
+          metricValue={clientMetrics?.network?.write_speed_mbps}
           icon={MoveDown}
           iconClassName="text-warning"
+        />
+      </TableCell>
+      <TableCell className="hidden xl:table-cell font-mono">
+        <SpeedCell
+          metricValue={clientMetrics?.iscsi?.read_speed_mbps}
+          icon={MoveUp}
+          iconClassName="text-primary"
+        />
+      </TableCell>
+      <TableCell className="hidden xl:table-cell font-mono">
+        <SpeedCell
+          metricValue={clientMetrics?.iscsi?.write_speed_mbps}
+          icon={MoveDown}
+          iconClassName="text-secondary"
         />
       </TableCell>
       <TableCell className="hidden xl:table-cell text-xs font-mono break-all text-center">

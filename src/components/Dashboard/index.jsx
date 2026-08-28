@@ -6,6 +6,7 @@ import MasterImageOverviewCard from "./MasterImageOverviewCard";
 import MetricsCard from "./MetricsCard";
 import ServerInfoCard from "./ServerInfoCard";
 import ServicesStatus from "./ServicesStatus";
+import StorageThroughputCard from "./StorageThroughputCard";
 import ZfsPoolCard from "./ZfsPoolCard";
 
 export default function Dashboard() {
@@ -45,6 +46,7 @@ export default function Dashboard() {
         <ServerInfoCard />
         <ServicesStatus />
         <ZfsPoolCard />
+        <StorageThroughputCard />
         <ClientOverviewCard />
         <MasterImageOverviewCard />
       </div>

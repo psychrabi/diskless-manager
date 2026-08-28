@@ -7,6 +7,7 @@ mod error;
 pub mod ipxe;
 mod license;
 mod logs;
+pub mod metrics;
 mod middleware;
 mod service;
 pub mod types;

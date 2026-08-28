@@ -141,7 +141,10 @@ impl HttpService {
             running,
             pid,
             message: if running {
-                format!("Apache2 HTTP server is running on port {}", self.settings.http.port)
+                format!(
+                    "Apache2 HTTP server is running on port {}",
+                    self.settings.http.port
+                )
             } else {
                 "Apache2 HTTP server is not running".to_string()
             },
