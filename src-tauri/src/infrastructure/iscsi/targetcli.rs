@@ -233,9 +233,7 @@ impl TargetCliProvisioner {
             return Ok(());
         }
 
-        let path = Self::backstore_path(backstore);
-
-        self.execute(["targetcli", &path, "delete"])
+        self.execute(["targetcli", "/backstores/block", "delete", backstore])
             .with_context(|| format!("failed to remove iSCSI backstore '{}'", backstore))
     }
 
@@ -279,24 +277,46 @@ impl TargetCliProvisioner {
             return Ok(());
         }
 
-        let path = format!("{}/lun{}", Self::lun_path(target_iqn), lun_number);
+        let lun_name = format!("lun{lun_number}");
 
-        self.execute(["targetcli", &path, "delete"])
-            .with_context(|| {
-                format!(
-                    "failed to remove LUN {} from target '{}'",
-                    lun_number, target_iqn
-                )
-            })
+        self.execute([
+            "targetcli",
+            &Self::lun_path(target_iqn),
+            "delete",
+            &lun_name,
+        ])
+        .with_context(|| {
+            format!(
+                "failed to remove LUN {} from target '{}'",
+                lun_number, target_iqn
+            )
+        })
     }
 
     fn portal_exists(&self, spec: &IscsiTargetSpec) -> Result<bool> {
         let output = self.output(["targetcli", &Self::portal_path(&spec.target_iqn), "ls"])?;
-        let portal = format!("{}:{}", spec.portal_address, spec.portal_port);
-        Ok(output.lines().any(|line| line.contains(&portal)))
+
+        let configured_portal = format!("{}:{}", spec.portal_address, spec.portal_port);
+
+        let default_ipv6_portal = format!("[::0]:{}", spec.portal_port);
+
+        let wildcard_ipv6_portal = format!("[::]:{}", spec.portal_port);
+
+        let wildcard_ipv4_portal = format!("0.0.0.0:{}", spec.portal_port);
+
+        Ok(output.lines().any(|line| {
+            line.contains(&configured_portal)
+                || line.contains(&default_ipv6_portal)
+                || line.contains(&wildcard_ipv6_portal)
+                || line.contains(&wildcard_ipv4_portal)
+        }))
     }
 
     fn create_portal(&self, spec: &IscsiTargetSpec) -> Result<()> {
+        // targetcli-fb may automatically create [::0]:3260 when
+        // auto_add_default_portal=true. That wildcard portal already
+        // provides the listener required by iSCSI clients, so creating
+        // 0.0.0.0:3260 again is unnecessary and fails on targetcli-fb.
         if self.portal_exists(spec)? {
             return Ok(());
         }

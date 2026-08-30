@@ -298,6 +298,7 @@ pub async fn setup_privileged_access() -> Result<String, String> {
         "/usr/bin/mv",
         "/usr/bin/cp",
         "/usr/sbin/netplan",
+        "/usr/sbin/dhcpd",
     ];
 
     let commands_str = commands.join(", ");
