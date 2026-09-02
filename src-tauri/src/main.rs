@@ -35,6 +35,25 @@ enum Commands {
     },
 }
 
+fn init_cli_logging() {
+    let log_path = app_lib::log_file_path();
+    if let Some(parent) = log_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let file_appender = tracing_appender::rolling::never(
+        log_path.parent().unwrap_or(std::path::Path::new(".")),
+        log_path.file_name().unwrap_or_default(),
+    );
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+    tracing_subscriber::fmt()
+        .with_writer(non_blocking)
+        .with_level(true)
+        .with_target(true)
+        .init();
+    // Leak the guard so the background writer lives for the process lifetime.
+    Box::leak(Box::new(_guard));
+}
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -49,6 +68,7 @@ async fn main() {
         use_game_disk,
     }) = cli.command
     {
+        init_cli_logging();
         info!("Auto adding client: {}", name);
         let req = AddClientRequest {
             name,

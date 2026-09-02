@@ -1,7 +1,6 @@
 use crate::error::AppError;
 use crate::types::disk::{Disk, MemoryStats, RamUsage};
 use std::fs::{self, OpenOptions};
-use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 
 #[derive(thiserror::Error, Debug)]
@@ -206,57 +205,6 @@ where
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-pub fn get_server_ip() -> String {
-    // More robust parsing using regex for IP extraction
-    let output = match Command::new("ip").args(["route", "get", "1"]).output() {
-        Ok(o) if o.status.success() => o,
-        Ok(o) => {
-            eprintln!(
-                "Warning: Failed to get server IP: {}",
-                String::from_utf8_lossy(&o.stderr)
-            );
-            return "192.168.1.200".to_string();
-        }
-        Err(e) => {
-            eprintln!("Warning: Failed to detect server IP: {}", e);
-            return "192.168.1.200".to_string();
-        }
-    };
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let Ok(re) = regex::Regex::new(r"src\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})") else {
-        eprintln!("Warning: Failed to compile IP regex");
-        return "192.168.1.200".to_string();
-    };
-    if let Some(caps) = re.captures(&stdout) {
-        let ip = &caps[1];
-        if ip.starts_with("192.168.")
-            || ip.starts_with("10.")
-            || ip.starts_with("172.16.")
-            || ip.starts_with("172.17.")
-            || ip.starts_with("172.18.")
-            || ip.starts_with("172.19.")
-            || ip.starts_with("172.20.")
-            || ip.starts_with("172.21.")
-            || ip.starts_with("172.22.")
-            || ip.starts_with("172.23.")
-            || ip.starts_with("172.24.")
-            || ip.starts_with("172.25.")
-            || ip.starts_with("172.26.")
-            || ip.starts_with("172.27.")
-            || ip.starts_with("172.28.")
-            || ip.starts_with("172.29.")
-            || ip.starts_with("172.30.")
-            || ip.starts_with("172.31.")
-        {
-            return ip.to_string();
-        }
-    }
-
-    eprintln!("Warning: Could not find valid server IP address in output");
-    "192.168.1.200".to_string()
-}
-
 pub fn list_disks() -> Result<Vec<Disk>, AppError> {
     let output = Command::new("lsblk")
         .args(["-dn", "-o", "NAME,SIZE,TYPE"])
@@ -352,31 +300,8 @@ pub async fn clear_ram_cache() -> Result<serde_json::Value, AppError> {
     Ok(serde_json::json!({ "message": "RAM cache cleared successfully" }))
 }
 
-pub fn get_service_logs(service_name: String, lines: Option<u32>) -> Result<String, AppError> {
-    let service = match service_name.as_str() {
-        "http" => "apache2",
-        "samba" => "smbd",
-        "tftp" => "tftpd-hpa",
-        "dhcp" => "isc-dhcp-server",
-        "nfs" => "nfs-kernel-server",
-        "iscsi" => "rtslib-fb-targetctl",
-        _ => "/etc/default/config",
-    };
-
-    let num = lines.unwrap_or(200).to_string();
-    let args_vec: Vec<_> = vec!["journalctl", "-u", &service, "-n", &num, "--no-pager"];
-    let output = run_command_output(args_vec.iter())?;
-    Ok(output)
-}
-
-pub fn log_file_path() -> PathBuf {
-    let mut base = dirs::config_dir()
-        .or_else(dirs::home_dir)
-        .unwrap_or_else(|| PathBuf::from("."));
-    base.push("com.diskless.local");
-    let _ = std::fs::create_dir_all(&base);
-    base.push("diskless-manager.log");
-    base
+pub fn log_file_path() -> std::path::PathBuf {
+    crate::log_file_path()
 }
 
 /// Read the whole log file as a string (returns empty string on error)

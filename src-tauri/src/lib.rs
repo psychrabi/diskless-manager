@@ -8,7 +8,6 @@ pub mod ipxe {
     pub use crate::infrastructure::pxe::*;
 }
 mod license;
-mod logs;
 pub mod metrics;
 mod middleware;
 mod service;
@@ -46,30 +45,14 @@ const DHCP_CONFIG_PATH: &str = "/etc/dhcp/dhcpd.conf";
 const DHCP_CLIENTS_PATH: &str = "/etc/dhcp/clients.conf";
 pub const TFTP_AUTOEXEC_PATH: &str = "/srv/tftp/autoexec.ipxe";
 
-#[expect(dead_code, reason = "Reserved for future init use - currently unused")]
-fn setup_logging() -> Result<(), Box<dyn std::error::Error>> {
-    // Get the log file path
-    let mut log_dir = dirs::config_dir()
+/// Resolve the canonical log file path used by both the Tauri GUI and CLI.
+pub fn log_file_path() -> std::path::PathBuf {
+    let base = dirs::config_dir()
         .or_else(dirs::home_dir)
         .unwrap_or_else(|| std::path::PathBuf::from("."));
-    log_dir.push("com.diskless.local");
-    let _ = std::fs::create_dir_all(&log_dir);
-
-    // Create file appender
-    let file_appender = tracing_appender::rolling::never(&log_dir, "diskless-manager.log");
-    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
-
-    // Set up tracing subscriber with both file and stdout
-    use tracing_subscriber::fmt::format::FmtSpan;
-    tracing_subscriber::fmt()
-        .with_writer(non_blocking)
-        .with_span_events(FmtSpan::CLOSE)
-        .with_level(true)
-        .with_target(true)
-        .with_thread_ids(true)
-        .init();
-
-    Ok(())
+    let dir = base.join("com.diskless.local");
+    let _ = std::fs::create_dir_all(&dir);
+    dir.join("diskless-manager.log")
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -90,18 +73,23 @@ pub async fn run() -> anyhow::Result<()> {
 
     // Start Tauri application
     let app = tauri::Builder::default()
-        .plugin(
+        .plugin({
+            let log_dir = log_file_path()
+                .parent()
+                .expect("log file must have a parent directory")
+                .to_path_buf();
             tauri_plugin_log::Builder::default()
                 .targets([
                     tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
-                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Folder {
+                        path: log_dir,
                         file_name: Some("diskless-manager.log".into()),
                     }),
                     tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Webview),
                 ])
                 .level(log::LevelFilter::Info)
-                .build(),
-        )
+                .build()
+        })
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_notification::init())
