@@ -1,3 +1,5 @@
+import { cn } from "@/lib/utils";
+
 export const Select = ({
   label,
   id,
@@ -14,7 +16,7 @@ export const Select = ({
   const { onChange: regOnChange, ...regRest } = register || {};
 
   return (
-    <fieldset className={`fieldset ${className}`}>
+    <fieldset className={cn("fieldset", className)}>
       {label && <legend className="fieldset-legend">{label}</legend>}
       <select
         id={id}

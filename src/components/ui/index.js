@@ -9,6 +9,7 @@ import { Loading } from "./Loading.jsx";
 import { Modal } from "./Modal.jsx";
 import { Select } from "./Select.jsx";
 import { StatusBadge } from "./StatusBadge.jsx";
+import { ToastContainer } from "./ToastContainer.jsx";
 
 export * from "./Table";
 
@@ -26,4 +27,5 @@ export {
   Select,
   StatusBadge,
   TableSkeleton,
+  ToastContainer,
 };

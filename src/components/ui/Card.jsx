@@ -1,4 +1,5 @@
 import { createElement } from "react";
+import { cn } from "@/lib/utils";
 
 export const Card = ({
   title,
@@ -27,7 +28,7 @@ export const Card = ({
   };
 
   return (
-    <div className={`${variants[variant]} ${sizes[size]} ${className}`}>
+    <div className={cn(variants[variant], sizes[size], className)}>
       {title && (
         <div className={`card-header-professional ${headerClass} pb-0`}>
           <div className="flex justify-between items-center flex-col md:flex-row">

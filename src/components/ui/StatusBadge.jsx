@@ -1,4 +1,5 @@
 import { AlertCircle, CheckCircle, Clock, Minus, XCircle } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 export const StatusBadge = ({
   status,
@@ -66,12 +67,7 @@ export const StatusBadge = ({
   const Icon = config.icon;
 
   return (
-    <span className={`
-      status-indicator 
-      ${config.className} 
-      ${sizeClasses[size]}
-      ${className} text-base-content
-    `}>
+    <span className={cn("status-indicator", config.className, sizeClasses[size], className, "text-base-content")}>
       {showIcon && <Icon className={`${iconSizes[size]} mr-1.5`} />}
       {config.label}
     </span>

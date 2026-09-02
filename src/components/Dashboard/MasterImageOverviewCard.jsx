@@ -2,7 +2,7 @@ import { useToastStore } from "@/store/useToastStore";
 import { getDefaultImageOverview } from "@/api/modules/dashboard";
 import { HardDrive, RefreshCw } from "lucide-react"; // Add Refresh icon
 import { useCallback, useEffect, useState } from "react";
-import { Button, Card } from "@/components/ui"; // Assume Button component
+import { Button, Card, LoadingSkeleton } from "@/components/ui"; // Assume Button component
 
 const MasterImageOverviewCard = () => {
   const [overview, setOverview] = useState(null);
@@ -58,9 +58,9 @@ const MasterImageOverviewCard = () => {
     <Card title="Default Image Overview" icon={HardDrive}>
       {loading ? (
         <div className="space-y-3" aria-hidden="true">
-          <div className="h-5 bg-base-200 rounded animate-pulse w-3/4" />
-          <div className="h-5 bg-base-200 rounded animate-pulse w-1/2" />
-          <div className="h-5 bg-base-200 rounded animate-pulse w-2/3" />
+          <LoadingSkeleton variant="text" width="3/4" />
+          <LoadingSkeleton variant="text" width="1/2" />
+          <LoadingSkeleton variant="text" width="2/3" />
         </div>
       ) : error ? (
         <div className="text-center py-4 space-y-2">

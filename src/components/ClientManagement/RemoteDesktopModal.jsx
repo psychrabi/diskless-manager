@@ -4,6 +4,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useToastStore } from "@/store/useToastStore";
 import { remoteDesktopClient } from "@/api/modules/control";
+import { Button } from "@/components/ui";
 
 const remoteDesktopSchema = z.object({
   username: z.string().min(1, "Username is required"),
@@ -106,28 +107,21 @@ const RemoteDesktopModal = ({ client, isOpen, onClose, onSuccess }) => {
           </div>
 
           <div className="modal-action">
-            <button
+            <Button
               type="button"
-              className="btn btn-ghost"
+              variant="ghost"
               onClick={handleClose}
               disabled={isLoading}
             >
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button
               type="submit"
-              className="btn btn-primary"
-              disabled={isLoading}
+              variant="primary"
+              loading={isLoading}
             >
-              {isLoading ? (
-                <>
-                  <span className="loading loading-spinner loading-sm"></span>
-                  Connecting...
-                </>
-              ) : (
-                "Connect"
-              )}
-            </button>
+              {isLoading ? "Connecting…" : "Connect"}
+            </Button>
           </div>
         </form>
       </div>

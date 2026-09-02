@@ -1,3 +1,5 @@
+import { cn } from "@/lib/utils";
+
 export const LoadingSkeleton = ({ 
   variant = "text", 
   count = 1, 
@@ -30,12 +32,12 @@ export const LoadingSkeleton = ({
     xl: "h-12"
   };
 
-  const skeletonClass = `
-    ${variants[variant]} 
-    ${widthClasses[width] || width} 
-    ${heightClasses[height]}
-    ${className}
-  `;
+  const skeletonClass = cn(
+    variants[variant],
+    widthClasses[width] || width,
+    heightClasses[height],
+    className
+  );
 
   if (count === 1) {
     return <div className={skeletonClass} aria-hidden="true" />;

@@ -29,61 +29,53 @@ async fn upsert_config_value(
     pool: &sqlx::SqlitePool,
     key: &str,
     value: &str,
-) -> Result<(), String> {
+) -> anyhow::Result<()> {
     sqlx::query("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)")
         .bind(key)
         .bind(value)
         .execute(pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
     Ok(())
 }
 
-pub async fn write_config(pool: &sqlx::SqlitePool, config: &AppConfig) -> Result<(), String> {
+pub async fn write_config(pool: &sqlx::SqlitePool, config: &AppConfig) -> anyhow::Result<()> {
     set_config(config);
 
     // 1. Persist masters and services to app_config
     upsert_config_value(
         pool,
         "masters",
-        &serde_json::to_string(&config.masters).map_err(|e| e.to_string())?,
+        &serde_json::to_string(&config.masters)?,
     )
     .await?;
 
     upsert_config_value(
         pool,
         "services",
-        &serde_json::to_string(&config.services).map_err(|e| e.to_string())?,
+        &serde_json::to_string(&config.services)?,
     )
     .await?;
 
     // 2. Persist each setting under its own key in the app_config table
     if let Some(obj) = config.settings.as_object() {
         for (k, v) in obj {
-            upsert_config_value(
-                pool,
-                k,
-                &serde_json::to_string(v).map_err(|e| e.to_string())?,
-            )
-            .await?;
+            upsert_config_value(pool, k, &serde_json::to_string(v)?).await?;
         }
     }
 
     // 3. Persist clients using ClientManager's upsert function
     for client in &config.clients {
-        crate::core::client::ClientManager::upsert_client(pool, client)
-            .await
-            .map_err(|e| e.to_string())?;
+        crate::core::client::ClientManager::upsert_client(pool, client).await?;
     }
 
     Ok(())
 }
 
-pub async fn read_config(state: State<'_, AppState>) -> Result<AppConfig, String> {
+pub async fn read_config(state: State<'_, AppState>) -> anyhow::Result<AppConfig> {
     read_config_db(&state.db_pool).await
 }
 
-pub async fn read_config_db(pool: &sqlx::SqlitePool) -> Result<AppConfig, String> {
+pub async fn read_config_db(pool: &sqlx::SqlitePool) -> anyhow::Result<AppConfig> {
     info!("read_config_db called");
 
     let mut config = AppConfig::default();
@@ -91,8 +83,7 @@ pub async fn read_config_db(pool: &sqlx::SqlitePool) -> Result<AppConfig, String
     // Fetch all configuration keys from app_config
     let rows: Vec<(String, String)> = sqlx::query_as("SELECT key, value FROM app_config")
         .fetch_all(pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
 
     let mut settings_map = serde_json::Map::new();
 
@@ -154,8 +145,7 @@ pub async fn read_config_db(pool: &sqlx::SqlitePool) -> Result<AppConfig, String
         "#,
     )
     .fetch_all(pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
 
     for c in clients {
         config.clients.push(crate::core::client::Client {
@@ -199,7 +189,7 @@ pub async fn read_config_db(pool: &sqlx::SqlitePool) -> Result<AppConfig, String
     dead_code,
     reason = "Old Tauri command - config saving handled by Axum"
 )]
-pub async fn save_config(state: State<'_, AppState>, pool_name: String) -> Result<(), String> {
+pub async fn save_config(state: State<'_, AppState>, pool_name: String) -> anyhow::Result<()> {
     let mut cfg = get_config();
     // Ensure settings is an object
     let mut settings = cfg.settings.as_object().cloned().unwrap_or_else(|| {

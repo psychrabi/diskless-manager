@@ -1,27 +1,10 @@
-import {
-  Folder,
-  FolderOpen,
-  FolderOpenDot,
-  Globe,
-  Network,
-  RefreshCw,
-  Save,
-  Settings,
-} from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { useShallow } from "zustand/shallow";
 import { useAppStore } from "../../store/useAppStore";
 import { Button, Card, StatusBadge } from "@/components/ui";
 import { restartAllServices } from "@/api/modules/services";
 import { useConfirm } from "@/contexts/confirmDialog";
-
-const serviceIcons = {
-  dhcp: Network,
-  tftp: FolderOpen,
-  iscsi: Save,
-  nfs: FolderOpenDot,
-  samba: Folder,
-  http: Globe,
-};
+import { getServiceIcon } from "@/constants/serviceIcons";
 
 export default function ServicesStatus() {
   const confirm = useConfirm();
@@ -59,7 +42,7 @@ export default function ServicesStatus() {
       {services.length > 0 ? (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {services.map((service) => {
-            const Icon = serviceIcons[service.name] || Settings;
+            const Icon = getServiceIcon(service.name);
             return (
               <div
                 key={service.name}

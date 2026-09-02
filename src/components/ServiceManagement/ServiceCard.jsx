@@ -1,28 +1,13 @@
 import { useToastStore } from "@/store/useToastStore";
 import {
   Eye,
-  Folder,
-  FolderOpen,
-  FolderOpenDot,
-  Globe,
-  Network,
   Play,
   RefreshCcw,
-  Save,
-  Settings,
   StopCircle,
 } from "lucide-react";
 import { useState } from "react";
 import { Button, Card, StatusBadge } from "@/components/ui";
-
-const serviceIcons = {
-  dhcp: Network,
-  tftp: FolderOpen,
-  iscsi: Save,
-  nfs: FolderOpenDot,
-  samba: Folder,
-  http: Globe,
-};
+import { getServiceIcon } from "@/constants/serviceIcons";
 
 const serviceDescriptions = {
   dhcp: "Provides IP addresses and PXE boot parameters to network clients.",
@@ -56,7 +41,7 @@ export default function ServiceCard({
     }
   };
 
-  const Icon = serviceIcons[service.name] || Settings;
+  const Icon = getServiceIcon(service.name);
 
   return (
     <Card icon={Icon} title={service.display_name} subtitle={service.name}>

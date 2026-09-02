@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { testSshConnection, executeSshCommand, getWindowsSystemInfo } from "../../api/modules/ssh";
+import { Button } from "@/components/ui";
 
 const DEFAULT_USERNAME = "Administrator";
 
@@ -194,20 +195,22 @@ const SshTester = () => {
           </div>
 
           <div className="card-actions justify-end mt-4">
-            <button
-              className={`btn btn-primary ${loading ? "loading" : ""}`}
+            <Button
+              variant="primary"
+              loading={loading}
               onClick={testConnection}
               disabled={!canUseConnectionActions}
             >
               Test Connection
-            </button>
-            <button
-              className={`btn btn-secondary ${loading ? "loading" : ""}`}
+            </Button>
+            <Button
+              variant="secondary"
+              loading={loading}
               onClick={getSystemInfo}
               disabled={!canUseConnectionActions}
             >
               Get System Info
-            </button>
+            </Button>
           </div>
 
           <ResultAlert title="Connection Test Result" result={testResult} />
@@ -320,13 +323,14 @@ const SshTester = () => {
           </div>
 
           <div className="card-actions justify-end">
-            <button
-              className={`btn btn-primary ${loading ? "loading" : ""}`}
+            <Button
+              variant="primary"
+              loading={loading}
               onClick={executeCommand}
               disabled={!canExecuteCommand}
             >
               Execute Command
-            </button>
+            </Button>
           </div>
 
           <ResultAlert
@@ -342,9 +346,10 @@ const SshTester = () => {
           <h2 className="card-title">Quick Commands</h2>
           <div className="flex flex-wrap gap-2">
             {QUICK_COMMANDS.map((entry) => (
-              <button
+              <Button
                 key={entry.label}
-                className="btn btn-sm btn-outline"
+                size="sm"
+                variant="outline"
                 onClick={() =>
                   setCommandForm({
                     ...commandForm,
@@ -353,7 +358,7 @@ const SshTester = () => {
                 }
               >
                 {entry.label}
-              </button>
+              </Button>
             ))}
           </div>
         </div>

@@ -1,8 +1,9 @@
 import { Button } from "@/components/ui";
 import { useAuth } from "@/contexts/auth";
 import { useTheme } from "@/contexts/theme";
-import { LogOut, Menu, Moon, Shield, Sun, User } from "lucide-react";
+import { LogOut, Menu, Moon, Sun, User } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import Brand from "./Brand";
 
 const Header = ({ onToggleSidebar }) => {
   const navigate = useNavigate();
@@ -27,19 +28,11 @@ const Header = ({ onToggleSidebar }) => {
           </Button>
 
           {/* Brand and title */}
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
-              <Shield className="h-5 w-5 text-primary-content" />
-            </div>
-            <div>
-              <h1 className="text-heading-md font-bold text-base-content">
-                Diskless Manager
-              </h1>
-              <p className="text-body-sm text-base-content/60 hidden sm:block">
-                Boot Server Control Panel
-              </p>
-            </div>
-          </div>
+          <Brand
+            subtitle="Boot Server Control Panel"
+            titleClassName="text-heading-md"
+            subtitleClassName="hidden sm:block text-body-sm"
+          />
         </div>
 
         {/* Actions */}

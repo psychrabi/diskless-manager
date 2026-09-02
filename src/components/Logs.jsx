@@ -3,6 +3,7 @@ import { RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useAppStore } from "../store/useAppStore";
 import AppLogs from "./Logs/AppLogs";
+import LogViewer from "./Logs/LogViewer";
 import { Activity, Button, Card, Select } from "./ui";
 
 const Logs = () => {
@@ -67,9 +68,7 @@ const Logs = () => {
           headerClass="p-4"
           bodyClass="border-t-1"
         >
-          <pre className="bg-base-300 p-2 rounded  overflow-auto text-xs whitespace-pre-wrap max-h-[calc(100vh-20rem)]">
-            {logs}
-          </pre>
+          <LogViewer content={logs} emptyText="" />
         </Card>
       </Activity>
       <Activity mode={logUnit === "app_log" ? "visible" : "hidden"}>

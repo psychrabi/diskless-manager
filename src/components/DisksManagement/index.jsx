@@ -54,7 +54,7 @@ export default function DisksManagement() {
         )
       }
     >
-      <div className="min-h-[calc(100vh-15rem)]">
+      <div className="min-h-[50vh]">
         {datasets.length === 0 ? (
           <div className="card bg-base-100 shadow-xl border border-base-200/50">
             <div className="card-body items-center text-center p-12">
@@ -65,12 +65,12 @@ export default function DisksManagement() {
               <p className="text-base-content/60 max-w-md mb-6">
                 Create your first Boot image for clients to boot from.
               </p>
-              <button
-                className="btn btn-primary"
+              <Button
+                variant="primary"
                 onClick={handleDiskFormModalOpen}
               >
                 Add Disk
-              </button>
+              </Button>
             </div>
           </div>
         ) : (

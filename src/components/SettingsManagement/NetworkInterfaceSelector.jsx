@@ -1,4 +1,5 @@
 import { RefreshCcw, Network } from "lucide-react";
+import { Button } from "@/components/ui";
 
 const NetworkInterfaceSelector = ({
   loading,
@@ -14,15 +15,17 @@ const NetworkInterfaceSelector = ({
         <label className="text-sm font-semibold text-base-content/70 uppercase tracking-tight flex items-center gap-2">
           <Network size={14} /> Network Interfaces
         </label>
-        <button
+        <Button
           type="button"
           onClick={onRefresh}
-          className="btn btn-ghost btn-xs gap-1 opacity-70 hover:opacity-100"
+          variant="ghost"
+          size="xs"
+          className="gap-1 opacity-70 hover:opacity-100"
           disabled={loading}
         >
           <RefreshCcw size={12} className={loading ? "animate-spin" : ""} />
           Refresh
-        </button>
+        </Button>
       </div>
       <div className="border border-base-300 rounded-xl bg-base-200/30 overflow-hidden">
         <div className="max-h-[200px] overflow-y-auto p-2 space-y-1">

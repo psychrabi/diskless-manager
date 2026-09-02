@@ -118,13 +118,18 @@ pub struct AuditLogsResponse {
 /// Error response
 #[derive(Debug, Serialize)]
 pub struct ErrorResponse {
+    pub status: u16,
     pub error: String,
     pub details: Option<String>,
 }
 
 impl IntoResponse for ErrorResponse {
     fn into_response(self) -> Response {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(self)).into_response()
+        (
+            StatusCode::from_u16(self.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            Json(serde_json::json!({ "error": self.error, "details": self.details })),
+        )
+            .into_response()
     }
 }
 
@@ -149,6 +154,7 @@ pub async fn shutdown_client(
         (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
+                status: StatusCode::NOT_FOUND.as_u16(),
                 error: format!("Client not found: {}", client_id),
                 details: None,
             }),
@@ -162,6 +168,7 @@ pub async fn shutdown_client(
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
+                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
                 error: error_msg,
                 details: None,
             }),
@@ -172,21 +179,23 @@ pub async fn shutdown_client(
         .unwrap_or_default()
         .to_lowercase();
     let (success, message) = if master_os.contains("linux") {
-        let output = Command::new("ssh")
-            .args([
-                "-o",
-                "StrictHostKeyChecking=no",
-                "-o",
-                "ConnectTimeout=5",
-                &format!("root@{}", ip),
-                "poweroff",
-            ])
-            .output()
+        let mut cmd = Command::new("ssh");
+        cmd.args([
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "ConnectTimeout=5",
+            &format!("root@{}", ip),
+            "poweroff",
+        ]);
+        let output = crate::api::util::run_command(&mut cmd)
+            .await
             .map_err(|e| {
                 error!("Failed to execute SSH: {}", e);
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(ErrorResponse {
+                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
                         error: format!("Failed to execute SSH: {}", e),
                         details: None,
                     }),
@@ -206,24 +215,26 @@ pub async fn shutdown_client(
             (true, msg)
         }
     } else {
-        let output = Command::new("net")
-            .args([
-                "rpc",
-                "shutdown",
-                "-I",
-                ip,
-                "-U",
-                "diskless%1",
-                "-f",
-                "-t",
-                "0",
-            ])
-            .output()
+        let mut cmd = Command::new("net");
+        cmd.args([
+            "rpc",
+            "shutdown",
+            "-I",
+            ip,
+            "-U",
+            "diskless%1",
+            "-f",
+            "-t",
+            "0",
+        ]);
+        let output = crate::api::util::run_command(&mut cmd)
+            .await
             .map_err(|e| {
                 error!("Failed to execute SSH: {}", e);
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(ErrorResponse {
+                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
                         error: format!("Failed to execute SSH: {}", e),
                         details: None,
                     }),
@@ -296,6 +307,7 @@ pub async fn reboot_client(
         (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
+                status: StatusCode::NOT_FOUND.as_u16(),
                 error: format!("Client not found: {}", client_id),
                 details: None,
             }),
@@ -309,6 +321,7 @@ pub async fn reboot_client(
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
+                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
                 error: error_msg,
                 details: None,
             }),
@@ -319,21 +332,23 @@ pub async fn reboot_client(
         .unwrap_or_default()
         .to_lowercase();
     let (success, message) = if master_os.contains("linux") {
-        let output = Command::new("ssh")
-            .args([
-                "-o",
-                "StrictHostKeyChecking=no",
-                "-o",
-                "ConnectTimeout=5",
-                &format!("root@{}", ip),
-                "reboot",
-            ])
-            .output()
+        let mut cmd = Command::new("ssh");
+        cmd.args([
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "ConnectTimeout=5",
+            &format!("root@{}", ip),
+            "reboot",
+        ]);
+        let output = crate::api::util::run_command(&mut cmd)
+            .await
             .map_err(|e| {
                 error!("Failed to execute SSH: {}", e);
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(ErrorResponse {
+                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
                         error: format!("Failed to execute SSH: {}", e),
                         details: None,
                     }),
@@ -353,25 +368,27 @@ pub async fn reboot_client(
             (true, msg)
         }
     } else {
-        let output = Command::new("net")
-            .args([
-                "rpc",
-                "shutdown",
-                "-r",
-                "-I",
-                ip,
-                "-U",
-                "diskless%1",
-                "-f",
-                "-t",
-                "0",
-            ])
-            .output()
+        let mut cmd = Command::new("net");
+        cmd.args([
+            "rpc",
+            "shutdown",
+            "-r",
+            "-I",
+            ip,
+            "-U",
+            "diskless%1",
+            "-f",
+            "-t",
+            "0",
+        ]);
+        let output = crate::api::util::run_command(&mut cmd)
+            .await
             .map_err(|e| {
                 error!("Failed to execute SSH: {}", e);
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(ErrorResponse {
+                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
                         error: format!("Failed to execute SSH: {}", e),
                         details: None,
                     }),
@@ -439,6 +456,7 @@ pub async fn remote_desktop_client(
         (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
+                status: StatusCode::NOT_FOUND.as_u16(),
                 error: format!("Client not found: {}", client_id),
                 details: None,
             }),
@@ -452,6 +470,7 @@ pub async fn remote_desktop_client(
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
+                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
                 error: error_msg,
                 details: None,
             }),
@@ -757,6 +776,7 @@ pub async fn cancel_operation(
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
+                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
                 error: "Failed to query scheduled operation".to_string(),
                 details: Some(e.to_string()),
             }),
@@ -767,6 +787,7 @@ pub async fn cancel_operation(
         return Err((
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
+                status: StatusCode::NOT_FOUND.as_u16(),
                 error: format!("Scheduled operation {} not found", operation_id),
                 details: None,
             }),
@@ -780,6 +801,8 @@ pub async fn cancel_operation(
         return Err((
             StatusCode::CONFLICT,
             Json(ErrorResponse {
+                status: StatusCode::CONFLICT.as_u16(),
+
                 error: format!(
                     "Scheduled operation {} is already finalized and cannot be cancelled",
                     operation_id
@@ -809,6 +832,7 @@ pub async fn cancel_operation(
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
+                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
                     error: "Failed to cancel scheduled operation".to_string(),
                     details: Some(e.to_string()),
                 }),
@@ -845,6 +869,7 @@ pub async fn get_audit_logs(
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
+                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
                 error: "Failed to query audit logs".to_string(),
                 details: Some(e.to_string()),
             }),
@@ -885,6 +910,7 @@ pub async fn get_scheduled_operations(
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
+                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
                 error: "Failed to query scheduled operations".to_string(),
                 details: Some(e.to_string()),
             }),

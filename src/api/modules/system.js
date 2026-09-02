@@ -1,4 +1,18 @@
 import { apiRequest } from "../client";
+import { checkZfsPoolExists } from "./disks";
+
+/**
+ * Run the setup preflight check shared by the public and admin layouts.
+ * Returns the normalized dependency list and whether all services are
+ * installed and the ZFS pool exists.
+ */
+export async function runPreflightCheck() {
+  const res = await checkDependencies();
+  const list = Array.isArray(res) ? res : res ? Object.values(res) : [];
+  const allServicesInstalled = list.every((svc) => svc?.installed);
+  const poolExists = await checkZfsPoolExists();
+  return { list, allServicesInstalled, poolExists };
+}
 
 export async function getSystemInfo() {
   return apiRequest("/api/system/info");

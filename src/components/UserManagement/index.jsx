@@ -18,7 +18,7 @@ export default function UserManagement() {
 
   const { listUsers, deleteUser, loading } = useUserManagement();
   const { success, error } = useToastStore();
-  const { confirm } = useConfirm();
+  const confirm = useConfirm();
 
   const loadUsers = useCallback(async () => {
     try {
@@ -51,10 +51,13 @@ export default function UserManagement() {
   };
 
   const handleDeleteUser = async (user) => {
-    const confirmed = await confirm(
-      'Delete User',
-      `Are you sure you want to delete user "${user.username}"? This action cannot be undone.`
-    );
+    const confirmed = await confirm({
+      title: "Delete User",
+      description: `Are you sure you want to delete user "${user.username}"? This action cannot be undone.`,
+      confirmText: "Delete",
+      cancelText: "Cancel",
+      confirmVariant: "destructive",
+    });
 
     if (!confirmed) return;
 
@@ -92,7 +95,7 @@ export default function UserManagement() {
           </Button>}
       >   
 
-    <div className="bg-base-100 rounded-lg h-[calc(100vh-20rem)] w-full border border-base-200">
+    <div className="bg-base-100 rounded-lg max-h-[70vh] w-full border border-base-200 overflow-auto">
           <table className="table table-zebra w-full">
             <thead>
               <tr>

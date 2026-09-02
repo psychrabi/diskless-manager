@@ -1,6 +1,6 @@
 import { Monitor, RefreshCw } from "lucide-react";
 import { useAppStore } from "../../store/useAppStore";
-import { Card, Button } from "@/components/ui";
+import { Card, Button, LoadingSkeleton } from "@/components/ui";
 import { clearRamCache } from "@/api/modules/system";
 
 const InfoRow = ({ label, value, className = "" }) => (
@@ -17,12 +17,12 @@ const ServerInfoCard = () => {
     return (
       <Card title="System Information" icon={Monitor}>
         <div className="space-y-3" aria-hidden="true">
-          <div className="h-5 bg-base-200 rounded animate-pulse w-full" />
-          <div className="h-5 bg-base-200 rounded animate-pulse w-5/6" />
-          <div className="h-5 bg-base-200 rounded animate-pulse w-4/5" />
-          <div className="h-5 bg-base-200 rounded animate-pulse w-3/4" />
-          <div className="h-5 bg-base-200 rounded animate-pulse w-2/3" />
-          <div className="h-5 bg-base-200 rounded animate-pulse w-5/6" />
+          <LoadingSkeleton variant="text" width="full" />
+          <LoadingSkeleton variant="text" width="5/6" />
+          <LoadingSkeleton variant="text" width="4/5" />
+          <LoadingSkeleton variant="text" width="3/4" />
+          <LoadingSkeleton variant="text" width="2/3" />
+          <LoadingSkeleton variant="text" width="5/6" />
         </div>
       </Card>
     );

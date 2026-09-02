@@ -1,8 +1,9 @@
 import { useToastStore } from "@/store/useToastStore";
 import { getLogs, clearLogs } from "@/api/modules/logs";
-import { BrushCleaning, Loader, RefreshCw } from "lucide-react";
+import { BrushCleaning, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Button, Card } from "@/components/ui";
+import LogViewer from "./LogViewer";
 
 export default function AppLogs() {
   const [logs, setLogs] = useState("");
@@ -55,28 +56,24 @@ export default function AppLogs() {
         <>
           <Button
             onClick={load}
-            className="btn btn-info btn-sm"
-            disabled={loading}
-          >
-            {loading ? (
-              <Loader className="animate-spin" size={16} />
-            ) : (
-              <RefreshCw size={16} />
-            )}
-          </Button>
+            variant="info"
+            size="sm"
+            icon={RefreshCw}
+            loading={loading}
+            title="Refresh logs"
+          />
           <Button
             onClick={handleClearLogs}
-            className="btn btn-error btn-sm"
+            variant="destructive"
+            size="sm"
+            icon={BrushCleaning}
             disabled={loading}
-          >
-            <BrushCleaning size={16} />
-          </Button>
+            title="Clear logs"
+          />
         </>
       }
     >
-      <pre className="bg-base-300 p-2 rounded overflow-auto text-xs whitespace-pre-wrap max-h-[calc(100vh-20rem)]">
-        {logs || "(no logs yet)"}
-      </pre>
+      <LogViewer content={logs} />
     </Card>
   );
 }

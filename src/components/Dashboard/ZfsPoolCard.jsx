@@ -1,9 +1,5 @@
 import { useAppStore } from "@/store/useAppStore";
-import { Card, StatusBadge } from "@/components/ui";
-
-const SkeletonRow = ({ width = "w-full" }) => (
-  <div className={`h-4 bg-base-200 rounded animate-pulse ${width}`} aria-hidden="true" />
-);
+import { Card, LoadingSkeleton, StatusBadge } from "@/components/ui";
 
 const ZfsPoolCard = ({ loading }) => {
   const zpoolStats = useAppStore((state) => state.zpoolStats);
@@ -11,11 +7,11 @@ const ZfsPoolCard = ({ loading }) => {
     <Card title="Disk Usage">
       {loading ? (
         <div className="space-y-3" aria-hidden="true">
-          <SkeletonRow width="w-3/4" />
-          <SkeletonRow width="w-1/2" />
-          <SkeletonRow width="w-2/3" />
-          <SkeletonRow width="w-3/4" />
-          <SkeletonRow width="w-1/3" />
+          <LoadingSkeleton variant="text" width="3/4" />
+          <LoadingSkeleton variant="text" width="1/2" />
+          <LoadingSkeleton variant="text" width="2/3" />
+          <LoadingSkeleton variant="text" width="3/4" />
+          <LoadingSkeleton variant="text" width="1/3" />
         </div>
       ) : zpoolStats ? (
         <div className="grid grid-cols-2 gap-x-10 gap-y-2">

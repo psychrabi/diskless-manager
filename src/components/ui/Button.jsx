@@ -1,4 +1,5 @@
 import { forwardRef } from "react";
+import { cn } from "@/lib/utils";
 
 export const Button = forwardRef(
   (
@@ -61,14 +62,14 @@ export const Button = forwardRef(
         title={title}
         aria-label={ariaLabel}
         aria-disabled={disabled || loading}
-        className={[
+        className={cn(
           variantClasses[variant] || "btn btn-professional",
           sizeClasses[size] || "",
-          fullWidth ? "w-full" : "",
-          loading ? "btn-disabled" : "",
-          disabled ? "opacity-50 cursor-not-allowed" : "",
-          className,
-        ].join(" ")}
+          fullWidth && "w-full",
+          loading && "btn-disabled",
+          disabled && "opacity-50 cursor-not-allowed",
+          className
+        )}
       >
         {loading ? (
           <>

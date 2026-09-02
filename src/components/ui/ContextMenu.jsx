@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useLayoutEffect, useRef, useState } from "react";
 import { useOnClickOutside } from "../../hooks/useOnClickOutside";
+import { cn } from "@/lib/utils";
 
 const MenuItem = ({
   icon: Icon,
@@ -43,7 +44,11 @@ const MenuItem = ({
         type="button"
         onClick={onClick}
         onKeyDown={handleKeyDown}
-        className={`w-full text-left flex items-center gap-3 px-3 py-2 text-sm transition-all duration-200 ${variants[variant]} ${className}`}
+        className={cn(
+          "w-full text-left flex items-center gap-3 px-3 py-2 text-sm transition-all duration-200",
+          variants[variant],
+          className
+        )}
       >
         <Icon
           className={`w-4 h-4 shrink-0 ${

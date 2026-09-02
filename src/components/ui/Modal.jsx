@@ -1,6 +1,7 @@
 import { X } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { Button } from "./Button.jsx";
+import { cn } from "@/lib/utils";
 
 export const Modal = ({
   isOpen,
@@ -88,7 +89,7 @@ export const Modal = ({
       onKeyDown={handleKeyDown}
       onClose={onClose}
     >
-      <div className={`modal-box ${sizeClasses[size]} ${className}`}>
+      <div className={cn("modal-box", sizeClasses[size], className)}>
         {/* Header */}
         {(title || showCloseButton) && (
           <div className="flex items-center justify-between mb-6 pb-4 border-b border-base-200/30">

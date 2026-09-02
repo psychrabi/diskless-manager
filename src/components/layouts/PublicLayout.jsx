@@ -1,32 +1,27 @@
 import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
-import { checkDependencies } from "@/api/modules/system";
-import { checkZfsPoolExists } from "@/api/modules/disks";
+import { runPreflightCheck } from "@/api/modules/system";
 import { getLicenseInfo } from "@/api/modules/license";
 import { useEffect, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
-import { Loading } from "@/components/ui";
-import Toast from "../ui/Toast";
+import { Loading, ToastContainer } from "@/components/ui";
 
 const PublicLayout = () => {
   const { setDependencies } = useAppStore();
   const [preflightLoading, setPreflightLoading] = useState(true);
   const navigate = useNavigate();
   const location = useLocation();
-  const { toasts, error } = useToastStore();
+  const { error } = useToastStore();
 
   // Preflight check before showing login
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const res = await checkDependencies();
-        const list = Array.isArray(res) ? res : res ? Object.values(res) : [];
+        const { list, allServicesInstalled, poolExists } =
+          await runPreflightCheck();
         if (!cancelled) {
           setDependencies(list);
-          const allServicesInstalled = list.every((svc) => svc?.installed);
-          const poolExists = await checkZfsPoolExists();
-
           // Only redirect to setup if services are not installed OR pool missing
           // AND we are not already on setup page
           if (
@@ -68,11 +63,7 @@ const PublicLayout = () => {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary/5 via-base-200 to-secondary/5 text-base-content p-4">
       <Outlet />
-      <div className="fixed bottom-4 right-4 z-50 space-y-2">
-        {toasts.map((toast) => (
-          <Toast key={toast.id} toast={toast} />
-        ))}
-      </div>
+      <ToastContainer />
     </div>
   );
 };

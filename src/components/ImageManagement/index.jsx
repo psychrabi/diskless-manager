@@ -57,7 +57,7 @@ const ImageManagement = () => {
         )
       }
     >
-      <div className="space-y-6 min-h-[calc(100vh-14rem)]">
+      <div className="space-y-6 min-h-[50vh]">
         {masters.length === 0 ? (
           <div className="card bg-base-100 shadow-xl border border-base-200/50">
             <div className="card-body items-center text-center p-12">

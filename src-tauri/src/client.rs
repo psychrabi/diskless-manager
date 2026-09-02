@@ -34,7 +34,7 @@ pub async fn get_clients(
     timed_execution!("get_clients", {
         let mut config = crate::config::read_config(state)
             .await
-            .map_err(AppError::Config)?;
+            .map_err(|e| AppError::Config(e.to_string()))?;
 
         if let Some(id) = client_id {
             let client = config

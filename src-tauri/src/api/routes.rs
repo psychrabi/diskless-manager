@@ -1,7 +1,12 @@
 use axum::{
+    extract::DefaultBodyLimit,
+    http::StatusCode,
+    response::IntoResponse,
     routing::{delete, get, post, put},
     Router,
 };
+use serde_json::json;
+use std::time::Duration;
 
 // API routes configuration
 use crate::api::handlers::{
@@ -44,19 +49,52 @@ use crate::api::handlers::{
     ws::ws_metrics_handler,
     zfs::{create_dataset, delete_dataset, get_zpool_stats, list_datasets, list_zpools},
 };
-use crate::api::middleware::{cors_layer, require_auth};
+use crate::api::middleware::{cors_layer, rate_limit_auth, require_auth, AuthRateLimiter};
 use tower::limit::ConcurrencyLimitLayer;
+use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 
 pub fn create_app(state: crate::state::AppState) -> Router {
     let cors = cors_layer();
+    let rate_limiter = AuthRateLimiter::new();
 
+    // Periodically purge stale rate-limit entries.
+    {
+        let limiter = rate_limiter.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                limiter.cleanup().await;
+            }
+        });
+    }
+
+    // Health check checks DB connectivity.
+    let health_pool = state.db_pool.clone();
     let public_router = Router::new()
-        .route("/health", get(|| async { "OK" }))
+        .route(
+            "/health",
+            get(move || {
+                let pool = health_pool.clone();
+                async move {
+                    match sqlx::query("SELECT 1").execute(&pool).await {
+                        Ok(_) => (StatusCode::OK, "OK").into_response(),
+                        Err(_) => (
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            axum::Json(json!({ "error": "database unavailable" })),
+                        )
+                            .into_response(),
+                    }
+                }
+            }),
+        )
         .route("/api/auth/login", post(login))
         .route("/api/auth/validate", post(validate_auth_token))
         .route("/api/auth/bootstrap", post(bootstrap_first_admin))
         .route("/api/auth/admin/exists", get(check_admin_exists))
+        .layer(DefaultBodyLimit::max(16 * 1024 * 1024))
+        .layer(TimeoutLayer::with_status_code(axum::http::StatusCode::REQUEST_TIMEOUT, Duration::from_secs(300)))
         .with_state(state.clone());
 
     let ws_router = Router::new()
@@ -205,7 +243,20 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .merge(public_router)
         .merge(ws_router)
         .merge(api_router)
+        .fallback(|| async {
+            (
+                StatusCode::NOT_FOUND,
+                axum::Json(json!({ "error": "route not found" })),
+            )
+        })
         .layer(cors)
+        .layer(axum::middleware::from_fn_with_state(
+            rate_limiter,
+            rate_limit_auth,
+        ))
         .layer(TraceLayer::new_for_http())
         .layer(ConcurrencyLimitLayer::new(100))
+        .layer(DefaultBodyLimit::max(16 * 1024 * 1024))
+        .layer(TimeoutLayer::with_status_code(axum::http::StatusCode::REQUEST_TIMEOUT, Duration::from_secs(300)))
+        .with_state(state)
 }

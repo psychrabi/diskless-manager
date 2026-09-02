@@ -1,9 +1,7 @@
 import ErrorBoundary from "@/components/ErrorBoundary";
-import { Activity, Error, Loading } from "@/components/ui";
+import { Activity, Error, Loading, ToastContainer } from "@/components/ui";
 import { useAppStore } from "@/store/useAppStore";
-import { useToastStore } from "@/store/useToastStore";
-import { checkDependencies } from "@/api/modules/system";
-import { checkZfsPoolExists } from "@/api/modules/disks";
+import { runPreflightCheck } from "@/api/modules/system";
 import { useEffect, useRef, useState } from "react";
 import {
   Outlet,
@@ -11,7 +9,6 @@ import {
   useNavigate,
   useNavigation,
 } from "react-router-dom";
-import Toast from "../ui/Toast";
 
 import Sidebar from "@/components/layouts/Sidebar";
 import Header from "@/components/layouts/Header";
@@ -23,7 +20,6 @@ const AdminLayout = () => {
   const isNavigating = Boolean(navigation.location);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
-  const { toasts } = useToastStore();
 
   const toggleSidebarCollapse = () => {
     setIsSidebarCollapsed((prevState) => !prevState);
@@ -52,10 +48,7 @@ const AdminLayout = () => {
     let cancelled = false;
     (async () => {
       try {
-        const res = await checkDependencies();
-        const list = Array.isArray(res) ? res : res ? Object.values(res) : [];
-        const allServicesInstalled = list.every((svc) => svc?.installed);
-        const poolExists = await checkZfsPoolExists();
+        const { allServicesInstalled, poolExists } = await runPreflightCheck();
 
         if (!cancelled && (!allServicesInstalled || !poolExists)) {
           navigate("/setup");
@@ -128,7 +121,7 @@ const AdminLayout = () => {
           className="flex-1 overflow-y-auto bg-base-200"
           tabIndex={-1}
         >
-          <div className="p-6 relative">
+          <div className="p-4 md:p-6 relative">
             {/* Global Loading Overlay */}
             {loading && (
               <div
@@ -151,11 +144,7 @@ const AdminLayout = () => {
           </div>
         </main>
       </div>
-      <div className="fixed bottom-4 right-4 z-50 space-y-2">
-        {toasts.map((toast) => (
-          <Toast key={toast.id} toast={toast} />
-        ))}
-      </div>
+      <ToastContainer />
     </div>
   );
 };

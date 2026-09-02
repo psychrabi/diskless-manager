@@ -15,13 +15,13 @@ import {
   Power,
   Server,
   Settings,
-  Shield,
   SlidersHorizontal,
   SquareLibrary,
   Terminal,
   Users2,
 } from "lucide-react";
 import { NavLink, useNavigate } from "react-router-dom";
+import Brand from "./Brand";
 
 const navSections = [
   {
@@ -114,22 +114,10 @@ const Sidebar = ({
       <div
         className={cn(
           "flex h-16 items-center border-b border-base-200/30 bg-base-100/50",
-          isCollapsed ? "justify-center px-2" : "px-6 gap-3",
+          isCollapsed ? "px-2" : "px-6",
         )}
       >
-        <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center shrink-0">
-          <Shield className="h-5 w-5 text-primary-content" />
-        </div>
-        {!isCollapsed && (
-          <div>
-            <h1 className="text-heading-sm font-bold text-base-content">
-              Diskless Manager
-            </h1>
-            <p className="text-caption text-base-content/60">
-              Boot Server Control
-            </p>
-          </div>
-        )}
+        <Brand collapsed={isCollapsed} />
       </div>
 
       {/* Navigation */}

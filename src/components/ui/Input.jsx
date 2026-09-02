@@ -1,3 +1,5 @@
+import { cn } from "@/lib/utils";
+
 export const Input = ({
   label,
   id,
@@ -28,7 +30,7 @@ export const Input = ({
   };
 
   return (
-    <div className={`form-group ${className}`}>
+    <div className={cn("form-group", className)}>
       {label && (
         <label htmlFor={id} className="form-label">
           {label}
@@ -49,12 +51,12 @@ export const Input = ({
         aria-describedby={
           error ? `${id}-error` : helperText ? `${id}-helper` : undefined
         }
-        className={`
-          ${variantClasses[variant]}
-          ${sizeClasses[size]}
-          ${error ? "border-error! focus:border-error! focus:ring-error/20!" : ""}
-          ${disabled ? "opacity-50 cursor-not-allowed" : ""}
-        `}
+        className={cn(
+          variantClasses[variant],
+          sizeClasses[size],
+          error && "border-error! focus:border-error! focus:ring-error/20!",
+          disabled && "opacity-50 cursor-not-allowed"
+        )}
       />
       {error && (
         <span id={`${id}-error`} role="alert" className="form-error">

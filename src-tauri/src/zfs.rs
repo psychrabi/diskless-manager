@@ -223,7 +223,13 @@ pub async fn save_master_config(pool: &sqlx::SqlitePool, master_data: &MasterDat
         config.masters = json!({});
     }
     config.masters[&master_data.name] =
-        serde_json::to_value(master_data).expect("Failed to serialize master data");
+        match serde_json::to_value(master_data) {
+            Ok(value) => value,
+            Err(e) => {
+                error!("Failed to serialize master data for {}: {}", master_data.name, e);
+                json!({})
+            }
+        };
     match crate::config::write_config(pool, &config).await {
         Ok(_) => true,
         Err(e) => {
@@ -732,10 +738,15 @@ pub async fn create_snapshot(
         crate::validation::validate_snapshot_name(snap_part)?;
     }
 
-    let master_name = snapshot_name
-        .split('@')
-        .next()
-        .expect("Invalid snapshot name format: missing '@'");
+    let master_name = match snapshot_name.split('@').next() {
+        Some(name) if !name.is_empty() => name,
+        _ => {
+            return Err(AppError::Validation(format!(
+                "Invalid snapshot name. Expected {}/master@snapname",
+                zpool_name
+            )));
+        }
+    };
     let status_code = run_command_check(&["zfs", "list", "-H", master_name]);
     if status_code != 0 {
         return Err(AppError::NotFound(format!(
@@ -768,16 +779,17 @@ pub async fn create_snapshot(
             if master.get("snapshots").and_then(|s| s.as_array()).is_none() {
                 master["snapshots"] = json!([]);
             }
+            let mut fallback_snapshots = Vec::new();
             let snapshots = master
                 .get_mut("snapshots")
                 .and_then(|s| s.as_array_mut())
-                .expect("snapshots should be an array after initialization");
+                .unwrap_or(&mut fallback_snapshots);
             if !snapshots.iter().any(|v| v == &json!(snapshot_name)) {
                 snapshots.push(json!(snapshot_name));
             }
             write_config(&state.db_pool, &config)
                 .await
-                .map_err(AppError::Config)?;
+                .map_err(|e| AppError::Config(e.to_string()))?;
         }
     }
 
@@ -894,7 +906,7 @@ pub async fn set_default_image(
     config.settings["default_master"] = json!(master_name);
     write_config(&state.db_pool, &config)
         .await
-        .map_err(AppError::Config)?;
+        .map_err(|e| AppError::Config(e.to_string()))?;
     Ok(json!({"message": "Successfully set default image"}))
 }
 

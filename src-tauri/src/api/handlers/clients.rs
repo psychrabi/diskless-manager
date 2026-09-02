@@ -38,12 +38,17 @@ pub struct Pagination {
 
 #[derive(Debug, Serialize)]
 pub struct ErrorResponse {
+    pub status: u16,
     pub error: String,
 }
 
 impl IntoResponse for ErrorResponse {
     fn into_response(self) -> Response {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(self)).into_response()
+        (
+            StatusCode::from_u16(self.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            Json(serde_json::json!({ "error": self.error })),
+        )
+            .into_response()
     }
 }
 
@@ -338,6 +343,7 @@ pub async fn update_client(
             return Err((
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
+                    status: StatusCode::BAD_REQUEST.as_u16(),
                     error: "Invalid IPv4 address".to_string(),
                 }),
             ));
@@ -349,6 +355,7 @@ pub async fn update_client(
             return Err((
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
+                    status: StatusCode::BAD_REQUEST.as_u16(),
                     error: "Invalid MAC address".to_string(),
                 }),
             ));
@@ -361,6 +368,7 @@ pub async fn update_client(
         (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
+                status: StatusCode::NOT_FOUND.as_u16(),
                 error: "Client not found".to_string(),
             }),
         )
@@ -383,7 +391,9 @@ pub async fn update_client(
                     existing_client.name, mac
                 );
 
-                let result = Command::new("wakeonlan").arg(mac).output();
+                let mut wake_cmd = Command::new("wakeonlan");
+                wake_cmd.arg(mac);
+                let result = crate::api::util::run_command(&mut wake_cmd).await;
 
                 match result {
                     Ok(output) => {
@@ -414,7 +424,11 @@ pub async fn update_client(
                 }
 
                 // Fallback to etherwake.
-                match Command::new("etherwake").arg("-b").arg(mac).output() {
+                let mut ether_cmd = Command::new("etherwake");
+                ether_cmd.args(["-b", mac]);
+                let ether_result = crate::api::util::run_command(&mut ether_cmd).await;
+
+                match ether_result {
                     Ok(output) => {
                         let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -440,7 +454,7 @@ pub async fn update_client(
 
                         return Err((
                             StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ErrorResponse { error: error_msg }),
+                            Json(ErrorResponse { status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(), error: error_msg }),
                         ));
                     }
 
@@ -454,7 +468,7 @@ pub async fn update_client(
 
                         return Err((
                             StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ErrorResponse { error: error_msg }),
+                            Json(ErrorResponse { status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(), error: error_msg }),
                         ));
                     }
                 }
@@ -471,7 +485,7 @@ pub async fn update_client(
 
                     return Err((
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(ErrorResponse { error: error_msg }),
+                        Json(ErrorResponse { status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(), error: error_msg }),
                     ));
                 }
 
@@ -480,21 +494,22 @@ pub async fn update_client(
                     .to_lowercase();
 
                 if master_os.contains("linux") {
-                    let output = Command::new("ssh")
-                        .args([
-                            "-o",
-                            "StrictHostKeyChecking=no",
-                            "-o",
-                            "ConnectTimeout=5",
-                            &format!("root@{}", ip),
-                            "reboot",
-                        ])
-                        .output()
+                    let mut cmd = Command::new("ssh");
+                    cmd.args([
+                        "-o",
+                        "StrictHostKeyChecking=no",
+                        "-o",
+                        "ConnectTimeout=5",
+                        &format!("root@{}", ip),
+                        "reboot",
+                    ]);
+                    let output = crate::api::util::run_command(&mut cmd).await
                         .map_err(|e| {
                             (
                                 StatusCode::INTERNAL_SERVER_ERROR,
                                 Json(ErrorResponse {
-                                    error: format!("Failed to execute SSH: {}", e),
+                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                    error: format!("Failed to execute SSH: {}", e),
                                 }),
                             )
                         })?;
@@ -507,29 +522,30 @@ pub async fn update_client(
 
                         return Err((
                             StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ErrorResponse { error: error_msg }),
+                            Json(ErrorResponse { status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(), error: error_msg }),
                         ));
                     }
                 } else {
-                    let output = Command::new("net")
-                        .args([
-                            "rpc",
-                            "shutdown",
-                            "-r",
-                            "-I",
-                            ip,
-                            "-U",
-                            "diskless%1",
-                            "-f",
-                            "-t",
-                            "0",
-                        ])
-                        .output()
+                    let mut cmd = Command::new("net");
+                    cmd.args([
+                        "rpc",
+                        "shutdown",
+                        "-r",
+                        "-I",
+                        ip,
+                        "-U",
+                        "diskless%1",
+                        "-f",
+                        "-t",
+                        "0",
+                    ]);
+                    let output = crate::api::util::run_command(&mut cmd).await
                         .map_err(|e| {
                             (
                                 StatusCode::INTERNAL_SERVER_ERROR,
                                 Json(ErrorResponse {
-                                    error: format!("Failed to execute net rpc: {}", e),
+                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                    error: format!("Failed to execute net rpc: {}", e),
                                 }),
                             )
                         })?;
@@ -542,7 +558,7 @@ pub async fn update_client(
 
                         return Err((
                             StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ErrorResponse { error: error_msg }),
+                            Json(ErrorResponse { status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(), error: error_msg }),
                         ));
                     }
                 }
@@ -563,7 +579,7 @@ pub async fn update_client(
 
                     return Err((
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(ErrorResponse { error: error_msg }),
+                        Json(ErrorResponse { status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(), error: error_msg }),
                     ));
                 }
 
@@ -572,21 +588,22 @@ pub async fn update_client(
                     .to_lowercase();
 
                 if master_os.contains("linux") {
-                    let output = Command::new("ssh")
-                        .args([
-                            "-o",
-                            "StrictHostKeyChecking=no",
-                            "-o",
-                            "ConnectTimeout=5",
-                            &format!("root@{}", ip),
-                            "poweroff",
-                        ])
-                        .output()
+                    let mut cmd = Command::new("ssh");
+                    cmd.args([
+                        "-o",
+                        "StrictHostKeyChecking=no",
+                        "-o",
+                        "ConnectTimeout=5",
+                        &format!("root@{}", ip),
+                        "poweroff",
+                    ]);
+                    let output = crate::api::util::run_command(&mut cmd).await
                         .map_err(|e| {
                             (
                                 StatusCode::INTERNAL_SERVER_ERROR,
                                 Json(ErrorResponse {
-                                    error: format!("Failed to execute SSH: {}", e),
+                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                    error: format!("Failed to execute SSH: {}", e),
                                 }),
                             )
                         })?;
@@ -599,28 +616,29 @@ pub async fn update_client(
 
                         return Err((
                             StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ErrorResponse { error: error_msg }),
+                            Json(ErrorResponse { status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(), error: error_msg }),
                         ));
                     }
                 } else {
-                    let output = Command::new("net")
-                        .args([
-                            "rpc",
-                            "shutdown",
-                            "-I",
-                            ip,
-                            "-U",
-                            "diskless%1",
-                            "-f",
-                            "-t",
-                            "0",
-                        ])
-                        .output()
+                    let mut cmd = Command::new("net");
+                    cmd.args([
+                        "rpc",
+                        "shutdown",
+                        "-I",
+                        ip,
+                        "-U",
+                        "diskless%1",
+                        "-f",
+                        "-t",
+                        "0",
+                    ]);
+                    let output = crate::api::util::run_command(&mut cmd).await
                         .map_err(|e| {
                             (
                                 StatusCode::INTERNAL_SERVER_ERROR,
                                 Json(ErrorResponse {
-                                    error: format!("Failed to execute net rpc: {}", e),
+                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                    error: format!("Failed to execute net rpc: {}", e),
                                 }),
                             )
                         })?;
@@ -633,7 +651,7 @@ pub async fn update_client(
 
                         return Err((
                             StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ErrorResponse { error: error_msg }),
+                            Json(ErrorResponse { status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(), error: error_msg }),
                         ));
                     }
                 }
@@ -687,7 +705,8 @@ pub async fn update_client(
                         (
                             StatusCode::INTERNAL_SERVER_ERROR,
                             Json(ErrorResponse {
-                                error: format!("Failed to update client mode: {}", e),
+                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                    error: format!("Failed to update client mode: {}", e),
                             }),
                         )
                     })?;
@@ -711,6 +730,7 @@ pub async fn update_client(
                         return Err((
                             StatusCode::BAD_REQUEST,
                             Json(ErrorResponse {
+                                status: StatusCode::BAD_REQUEST.as_u16(),
                                 error: "Cannot reset writeback: client has no snapshot configured"
                                     .to_string(),
                             }),
@@ -728,7 +748,7 @@ pub async fn update_client(
                     Some(snapshot),
                     existing_client.use_game_disk.unwrap_or(false),
                 )
-                .map_err(|error| (StatusCode::BAD_REQUEST, Json(ErrorResponse { error })))?;
+                .map_err(|error| (StatusCode::BAD_REQUEST, Json(ErrorResponse { status: StatusCode::BAD_REQUEST.as_u16(), error })))?;
 
                 preserve_persisted_target_iqn(&mut spec, &existing_client);
 
@@ -736,7 +756,7 @@ pub async fn update_client(
                     storage_from_client(&settings, &existing_client).map_err(|error| {
                         (
                             StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ErrorResponse { error }),
+                            Json(ErrorResponse { status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(), error }),
                         )
                     })?;
 
@@ -748,7 +768,8 @@ pub async fn update_client(
                         (
                             StatusCode::INTERNAL_SERVER_ERROR,
                             Json(ErrorResponse {
-                                error: format!("Failed to reset client storage: {}", error),
+                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                    error: format!("Failed to reset client storage: {}", error),
                             }),
                         )
                     })?;
@@ -782,7 +803,7 @@ pub async fn update_client(
                     source,
                     existing_client.use_game_disk.unwrap_or(false),
                 )
-                .map_err(|error| (StatusCode::BAD_REQUEST, Json(ErrorResponse { error })))?;
+                .map_err(|error| (StatusCode::BAD_REQUEST, Json(ErrorResponse { status: StatusCode::BAD_REQUEST.as_u16(), error })))?;
 
                 preserve_persisted_target_iqn(&mut spec, &existing_client);
 
@@ -790,7 +811,7 @@ pub async fn update_client(
                     storage_from_client(&settings, &existing_client).map_err(|error| {
                         (
                             StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ErrorResponse { error }),
+                            Json(ErrorResponse { status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(), error }),
                         )
                     })?;
 
@@ -802,7 +823,8 @@ pub async fn update_client(
                         (
                             StatusCode::INTERNAL_SERVER_ERROR,
                             Json(ErrorResponse {
-                                error: format!("Failed to reset client storage: {}", error),
+                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                    error: format!("Failed to reset client storage: {}", error),
                             }),
                         )
                     })?;
@@ -852,7 +874,7 @@ pub async fn update_client(
     let current_storage = storage_from_client(&settings, &existing_client).map_err(|error| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse { error }),
+            Json(ErrorResponse { status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(), error }),
         )
     })?;
 
@@ -883,7 +905,7 @@ pub async fn update_client(
             .or(existing_client.use_game_disk)
             .unwrap_or(false),
     )
-    .map_err(|error| (StatusCode::BAD_REQUEST, Json(ErrorResponse { error })))?;
+    .map_err(|error| (StatusCode::BAD_REQUEST, Json(ErrorResponse { status: StatusCode::BAD_REQUEST.as_u16(), error })))?;
 
     preserve_persisted_target_iqn(&mut storage_spec, &existing_client);
 
@@ -895,6 +917,7 @@ pub async fn update_client(
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
+                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
                     error: format!("Failed to provision new client storage: {}", error),
                 }),
             )
@@ -918,7 +941,8 @@ pub async fn update_client(
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
-                error: format!("Failed to update client: {}", e),
+                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                    error: format!("Failed to update client: {}", e),
             }),
         )
     })?;

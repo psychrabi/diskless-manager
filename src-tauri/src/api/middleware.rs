@@ -6,9 +6,86 @@ use axum::{
 };
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use log::info;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
 
 use crate::state::AppState;
+
+/// Simple in-memory auth attempt limiter (10 attempts per 60 seconds per IP).
+#[derive(Clone, Default)]
+pub struct AuthRateLimiter {
+    attempts: Arc<RwLock<HashMap<String, Vec<Instant>>>>,
+}
+
+impl AuthRateLimiter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Returns true if the request is allowed, false if rate-limited.
+    async fn check(&self, ip: &str) -> bool {
+        let now = Instant::now();
+        let window = Duration::from_secs(60);
+        let max_attempts = 10;
+
+        let mut map = self.attempts.write().await;
+        let entries = map.entry(ip.to_string()).or_default();
+
+        // Drop failed attempts older than the window.
+        entries.retain(|t| now.duration_since(*t) < window);
+
+        if entries.len() >= max_attempts {
+            return false;
+        }
+        entries.push(now);
+        true
+    }
+
+    /// Purge stale entries to avoid unbounded growth.
+    pub async fn cleanup(&self) {
+        let now = Instant::now();
+        let window = Duration::from_secs(60);
+        let mut map = self.attempts.write().await;
+        map.retain(|_, v| {
+            v.retain(|t| now.duration_since(*t) < window);
+            !v.is_empty()
+        });
+    }
+}
+
+/// Read the client IP from headers, falling back to a socket-addr hint.
+fn client_ip(request: &Request<axum::body::Body>) -> String {
+    if let Some(header) = request
+        .headers()
+        .get("x-forwarded-for")
+        .and_then(|h| h.to_str().ok())
+    {
+        if let Some(ip) = header.split(',').next() {
+            return ip.trim().to_string();
+        }
+    }
+    "unknown".to_string()
+}
+
+/// Rate-limit login endpoints by IP.
+pub async fn rate_limit_auth(
+    State(limiter): State<AuthRateLimiter>,
+    request: Request<axum::body::Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    let path = request.uri().path();
+    if path == "/api/auth/login" || path == "/api/auth/bootstrap" {
+        let ip = client_ip(&request);
+        if !limiter.check(&ip).await {
+            return Err(StatusCode::TOO_MANY_REQUESTS);
+        }
+    }
+
+    Ok(next.run(request).await)
+}
 
 pub async fn logger(
     request: Request<axum::body::Body>,

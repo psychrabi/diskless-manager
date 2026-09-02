@@ -9,16 +9,15 @@
     "dialog:default",
     {
       "identifier": "fs:scope",
-      "allow": ["/srv/**"]
+      "allow": ["$APPDATA/com.diskless.local/**"]
     },
-    "fs:allow-read-dir",
     "fs:allow-read-file",
     "fs:allow-read-text-file",
     "fs:allow-write-text-file",
-    "fs:allow-write-file",
     "fs:allow-mkdir",
     "notification:default",
     "os:default",
-    "shell:default"
+    "shell:default",
+    "log:default"
   ]
 }

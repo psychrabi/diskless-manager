@@ -127,22 +127,38 @@ impl SshExecutor {
         // Establish connection
         let session = self.get_or_create_connection(host).await?;
 
-        // Execute command with timeout
-        let result = tokio::time::timeout(
-            Duration::from_secs(self.config.command_timeout),
-            self.execute_command_internal(&session, command),
+        // Execute command with timeout.
+        let host_owned = host.to_string();
+        let command_owned = command.to_string();
+        let timeout_secs = self.config.command_timeout;
+
+        // All blocking channel/read operations run inside spawn_blocking so a
+        // slow remote host cannot stall the async runtime.
+        let spawned = tokio::time::timeout(
+            Duration::from_secs(timeout_secs),
+            tokio::task::spawn_blocking(move || {
+                Self::execute_command_internal_blocking(&session, &command_owned)
+            }),
         )
         .await
         .map_err(|_| {
-            error!("SSH command timeout on {}", host);
+            error!("SSH command timeout on {}", host_owned);
             AppError::SshTimeout
-        })??;
+        })?;
+
+        let result = spawned
+            .map_err(|e| {
+                error!("SSH worker task failed on {}: {}", host_owned, e);
+                AppError::SshCommand(format!("SSH worker task failed: {}", e))
+            })??;
 
         let duration_ms = start_time.elapsed().as_millis() as u64;
 
         info!(
             "SSH command completed on {} with exit code {} ({}ms)",
-            host, result.exit_code, duration_ms
+            host_owned,
+            result.exit_code,
+            duration_ms
         );
 
         Ok(CommandResult {
@@ -210,18 +226,37 @@ impl SshExecutor {
     async fn create_connection(&self, host: &str) -> Result<Session, AppError> {
         debug!("Creating new SSH connection to {}", host);
 
+        let host_owned = host.to_string();
+        let user = self.config.username.clone();
+        let timeout = self.config.connection_timeout;
+
+        // All blocking libssh2 / network calls must run off the async runtime.
+        tokio::task::spawn_blocking(move || Self::create_connection_blocking(&host_owned, &user, timeout))
+            .await
+            .map_err(|e| {
+                error!("SSH connection task panicked: {}", e);
+                AppError::SshConnection(format!("SSH worker task error: {}", e))
+            })?
+    }
+
+    /// Blocking-only SSH connection logic (runs in spawn_blocking).
+    fn create_connection_blocking(
+        host: &str,
+        username: &str,
+        connection_timeout: u64,
+    ) -> Result<Session, AppError> {
         let tcp = TcpStream::connect(format!("{}:22", host)).map_err(|e| {
             error!("Failed to connect to SSH server at {}: {}", host, e);
             AppError::SshConnection(format!("Failed to connect to {}: {}", host, e))
         })?;
 
-        tcp.set_read_timeout(Some(Duration::from_secs(self.config.connection_timeout)))
+        tcp.set_read_timeout(Some(Duration::from_secs(connection_timeout)))
             .map_err(|e| {
                 error!("Failed to set read timeout: {}", e);
                 AppError::SshConnection(format!("Failed to set read timeout: {}", e))
             })?;
 
-        tcp.set_write_timeout(Some(Duration::from_secs(self.config.connection_timeout)))
+        tcp.set_write_timeout(Some(Duration::from_secs(connection_timeout)))
             .map_err(|e| {
                 error!("Failed to set write timeout: {}", e);
                 AppError::SshConnection(format!("Failed to set write timeout: {}", e))
@@ -240,21 +275,11 @@ impl SshExecutor {
             AppError::SshConnection(format!("SSH handshake failed: {}", e))
         })?;
 
-        // Disable host key verification if configured.
-        // NOTE: ssh2 0.9's safe API doesn't expose host key bypass.
-        // LIBSSH2_FLAG_SKIP_HOSTKEY_CHECK requires a newer libssh2-sys.
-        // In practice, libssh2 skips host key checking when no known_hosts
-        // file is loaded, which is the default here.
-        if self.config.disable_host_key_verification {
-            debug!("Host key verification bypass is requested but not fully supported in ssh2 0.9");
-        }
-
-        // Authenticate with public key (no password)
-        // For diskless clients, we use key-based auth
-        session.userauth_agent(&self.config.username).map_err(|e| {
+        // Authenticate with agent (public key)
+        session.userauth_agent(username).map_err(|e| {
             error!(
                 "SSH authentication failed for user {} on {}: {}",
-                self.config.username, host, e
+                username, host, e
             );
             AppError::SshAuth(format!("SSH authentication failed: {}", e))
         })?;
@@ -262,7 +287,7 @@ impl SshExecutor {
         if !session.authenticated() {
             error!(
                 "SSH authentication not successful for {} on {}",
-                self.config.username, host
+                username, host
             );
             return Err(AppError::SshAuth(
                 "SSH authentication not successful".to_string(),
@@ -274,9 +299,8 @@ impl SshExecutor {
         Ok(session)
     }
 
-    /// Internal command execution
-    async fn execute_command_internal(
-        &self,
+    /// Internal command execution (blocking-only, runs inside spawn_blocking).
+    fn execute_command_internal_blocking(
         session: &Session,
         command: &str,
     ) -> Result<CommandResult, AppError> {

@@ -76,7 +76,7 @@ const ClientTable = ({ handleClientContextMenu }) => {
   }, [clients, metrics?.clients, metricsMap, setClients]);
 
   return (
-    <div className="bg-base-100 rounded-lg h-[calc(100vh-27.5rem)] w-full border border-base-200">
+    <div className="bg-base-100 rounded-lg h-[70vh] w-full border border-base-200 overflow-auto">
       {clients.length === 0 ? (
         <ClientTableEmptyState />
       ) : (

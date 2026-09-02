@@ -1,10 +1,10 @@
 import { useToastStore } from "@/store/useToastStore";
 
 const typeStyles = {
-  success: "bg-green-500 text-white",
-  error: "bg-red-500 text-white",
-  warning: "bg-yellow-500 text-white",
-  info: "bg-blue-500 text-white",
+  success: "bg-success text-success-content",
+  error: "bg-error text-error-content",
+  warning: "bg-warning text-warning-content",
+  info: "bg-info text-info-content",
 };
 
 const typeIcons = {
@@ -19,7 +19,7 @@ export default function Toast({ toast }) {
 
   return (
     <div
-      className={`flex items-start gap-3 px-4 py-3 rounded-lg shadow-lg min-w-75 max-w-lg animate-in slide-in-from-right fade-in duration-200 ${
+      className={`flex items-start gap-3 px-4 py-3 rounded-lg shadow-lg w-full max-w-full animate-in slide-in-from-right fade-in duration-200 ${
         typeStyles[toast.type]
       }`}
     >

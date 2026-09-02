@@ -37,9 +37,9 @@ const Setup = () => {
   } = wizard;
 
   return (
-    <div className="max-w-3xl min-w-3xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+    <div className="w-full max-w-3xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 px-2 sm:px-0">
       <div className="text-center space-y-2">
-        <h1 className="text-4xl font-black tracking-tight bg-linear-to-r from-primary to-secondary bg-clip-text text-transparent">
+        <h1 className="text-3xl sm:text-4xl font-black tracking-tight bg-linear-to-r from-primary to-secondary bg-clip-text text-transparent">
           System Setup
         </h1>
         <p className="text-base-content/60 text-lg">
@@ -48,11 +48,11 @@ const Setup = () => {
       </div>
 
       {/* Modern Stepper */}
-      <div className="flex justify-between items-center px-4 relative">
+      <div className="flex justify-between items-center px-4 relative overflow-x-auto">
         {steps.map((step) => (
           <div
             key={step.id}
-            className="relative z-10 flex flex-col items-center cursor-pointer group"
+            className="relative z-10 flex flex-col items-center cursor-pointer group shrink-0 px-3"
             onClick={() => setActiveStep(step.id)}
           >
             <div
@@ -67,7 +67,7 @@ const Setup = () => {
               <step.icon size={20} />
             </div>
             <span
-              className={`mt-2 text-sm font-bold ${
+              className={`mt-2 text-xs sm:text-sm font-bold whitespace-nowrap ${
                 activeStep === step.id
                   ? "text-primary"
                   : step.status === "upcoming"
@@ -81,7 +81,7 @@ const Setup = () => {
         ))}
       </div>
 
-      <div className="min-h-[calc(100vh-32rem)]">
+      <div className="min-h-[50vh]">
         {activeStep === 1 && <AuthorizeStep onAuthorized={handleAuthorized} />}
 
         {activeStep === 2 && (

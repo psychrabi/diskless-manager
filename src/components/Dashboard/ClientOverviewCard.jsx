@@ -2,7 +2,7 @@ import { useToastStore } from "@/store/useToastStore";
 import { getClientOverview } from "@/api/modules/dashboard";
 import { Users } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Card } from "@/components/ui";
+import { Card, LoadingSkeleton } from "@/components/ui";
 
 const ClientOverviewCard = () => {
   const [overview, setOverview] = useState(null);
@@ -32,9 +32,9 @@ const ClientOverviewCard = () => {
     <Card title="Client Overview" icon={Users}>
       {loading ? (
         <div className="space-y-3" aria-hidden="true">
-          <div className="h-5 bg-base-200 rounded animate-pulse w-2/3" />
-          <div className="h-5 bg-base-200 rounded animate-pulse w-1/2" />
-          <div className="h-5 bg-base-200 rounded animate-pulse w-3/5" />
+          <LoadingSkeleton variant="text" width="2/3" />
+          <LoadingSkeleton variant="text" width="1/2" />
+          <LoadingSkeleton variant="text" width="3/5" />
         </div>
       ) : overview ? (
         <div className="space-y-2">
