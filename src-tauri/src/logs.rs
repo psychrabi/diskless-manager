@@ -1,5 +1,5 @@
-use crate::cmd;
 use crate::error::AppError;
+use crate::infrastructure::command as cmd;
 use crate::middleware::validate_auth;
 use log::info;
 

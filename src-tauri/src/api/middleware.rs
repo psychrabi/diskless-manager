@@ -59,6 +59,17 @@ pub fn cors_layer() -> CorsLayer {
         .max_age(Duration::from_secs(86400)) // Cache preflight requests for 24 hours
 }
 
+fn is_public_endpoint(method: &Method, path: &str) -> bool {
+    matches!(
+        (method, path),
+        (&Method::GET, "/health")
+            | (&Method::POST, "/api/auth/login")
+            | (&Method::POST, "/api/auth/validate")
+            | (&Method::GET, "/api/auth/admin/exists")
+            | (&Method::POST, "/api/auth/bootstrap")
+    )
+}
+
 pub async fn require_auth(
     State(_state): State<AppState>,
     request: Request<axum::body::Body>,
@@ -72,22 +83,7 @@ pub async fn require_auth(
     let path = request.uri().path();
 
     // Skip auth for public endpoints
-    if path == "/health"
-        || path == "/api/auth/login"
-        || path == "/api/auth/validate"
-        || path == "/api/auth/admin/exists"
-        || path == "/api/auth/admin/password"
-        || path == "/api/system/dependencies"
-        || path == "/api/system/privileged-access"
-        || path == "/api/services/install"
-        || path == "/api/services/dhcp/configure"
-        || path == "/api/services/tftp/configure"
-        || path == "/api/services/http/configure"
-        || path == "/api/services/samba/configure"
-        || path == "/api/license/info"
-        || path == "/api/disks/pool/exists"
-        || path == "/api/config"
-    {
+    if is_public_endpoint(request.method(), path) {
         return Ok(next.run(request).await);
     }
 
@@ -150,4 +146,27 @@ pub async fn require_auth(
     request.extensions_mut().insert(token_data.claims);
 
     Ok(next.run(request).await)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_public_endpoint;
+    use axum::http::Method;
+
+    #[test]
+    fn only_bootstrap_and_session_endpoints_are_public() {
+        assert!(is_public_endpoint(&Method::GET, "/health"));
+        assert!(is_public_endpoint(&Method::POST, "/api/auth/login"));
+        assert!(is_public_endpoint(&Method::POST, "/api/auth/bootstrap"));
+
+        assert!(!is_public_endpoint(&Method::GET, "/api/config"));
+        assert!(!is_public_endpoint(
+            &Method::GET,
+            "/api/system/dependencies"
+        ));
+        assert!(!is_public_endpoint(
+            &Method::PUT,
+            "/api/auth/admin/password"
+        ));
+    }
 }

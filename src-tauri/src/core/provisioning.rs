@@ -1,13 +1,13 @@
-use crate::cmd::{run_command, run_command_async, run_command_output_no_sudo};
 use crate::config::{get_config, get_zpool_name};
 use crate::core::client::Client;
 use crate::core::provisioning_transaction::ProvisioningTransaction;
-use crate::dhcp::{create_dhcp_entry_for_server, update_dhcp_config};
 use crate::domain::provisioning::TargetIqn;
 use crate::domain::storage::{ClientStorageSpec, StorageSource};
 use crate::error::AppError;
+use crate::infrastructure::command::{run_command, run_command_async, run_command_output_no_sudo};
+use crate::infrastructure::dhcp::{create_dhcp_entry_for_server, update_dhcp_config};
+use crate::infrastructure::zfs::legacy::get_writeback_or_default_dataset;
 use crate::state::AppState;
-use crate::zfs::get_writeback_or_default_dataset;
 use log::{info, warn};
 use sqlx::SqlitePool;
 

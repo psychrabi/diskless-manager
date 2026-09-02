@@ -48,8 +48,8 @@ impl StorageService {
     /// <zpool>/games/
     /// ```
     fn get_game_disks() -> Result<Vec<String>> {
-        use crate::cmd::run_command_output_no_sudo;
         use crate::config::get_zpool_name;
+        use crate::infrastructure::command::run_command_output_no_sudo;
 
         let zpool = get_zpool_name();
         let games_parent = format!("{zpool}/games");

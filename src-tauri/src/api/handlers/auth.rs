@@ -1,11 +1,11 @@
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{extract::State, http::StatusCode, Extension, Json};
 use log::info;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    auth::{authenticate_user, validate_token},
+    auth::{authenticate_user, bootstrap_admin, validate_token, BootstrapAdminError},
     state::AppState,
-    types::{LoginRequest, LoginResponse},
+    types::{Claims, LoginRequest, LoginResponse},
 };
 
 pub async fn login(
@@ -70,14 +70,43 @@ pub struct UpdateAdminPasswordResponse {
     pub message: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BootstrapAdminRequest {
+    pub username: String,
+    pub password: String,
+}
+
+pub async fn bootstrap_first_admin(
+    State(state): State<AppState>,
+    Json(request): Json<BootstrapAdminRequest>,
+) -> Result<StatusCode, StatusCode> {
+    bootstrap_admin(&state.db_pool, &request.username, &request.password)
+        .await
+        .map_err(|error| match error {
+            BootstrapAdminError::InvalidCredentials => StatusCode::BAD_REQUEST,
+            BootstrapAdminError::AlreadyInitialized => StatusCode::CONFLICT,
+            BootstrapAdminError::PasswordHash | BootstrapAdminError::Database(_) => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        })?;
+
+    info!("first administrator created: user={}", request.username);
+    Ok(StatusCode::CREATED)
+}
+
 pub async fn update_admin_password(
     State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
     Json(request): Json<UpdateAdminPasswordRequest>,
 ) -> Result<Json<UpdateAdminPasswordResponse>, StatusCode> {
     use bcrypt::{hash, verify, DEFAULT_COST};
     use chrono::Utc;
 
-    // Fetch admin user from database
+    if claims.role != "admin" {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    // Fetch the authenticated administrator from database
     let admin_user = sqlx::query_as::<_, crate::types::User>(
         r#"
         SELECT id, username, password_hash, role
@@ -85,7 +114,7 @@ pub async fn update_admin_password(
         WHERE username = ?
         "#,
     )
-    .bind("admin")
+    .bind(&claims.username)
     .fetch_one(&state.db_pool)
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -132,15 +161,12 @@ pub struct AdminExistsResponse {
 pub async fn check_admin_exists(
     State(state): State<AppState>,
 ) -> Result<Json<AdminExistsResponse>, StatusCode> {
-    // Check if any admin user exists in the database
-    let count: i64 = sqlx::query_scalar(
-        r#"
-        SELECT COUNT(*) FROM users WHERE role = 'admin'
-        "#,
-    )
-    .fetch_one(&state.db_pool)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // Any existing user means bootstrap is closed, preventing account takeover
+    // if an older installation has inconsistent role data.
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+        .fetch_one(&state.db_pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(AdminExistsResponse { exists: count > 0 }))
 }

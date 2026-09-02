@@ -1,8 +1,10 @@
 // New ZFS management commands: list_zpools, list_datasets, create_zfs_dataset
 
 use crate::{
-    cmd::{run_command, run_command_check, run_command_output, run_command_output_no_sudo},
     error::AppError,
+    infrastructure::command::{
+        run_command, run_command_check, run_command_output, run_command_output_no_sudo,
+    },
     types::{CreateDatasetRequest, DatasetInfo},
     validation::{validate_pool_name, validate_size, validate_zfs_name},
 };

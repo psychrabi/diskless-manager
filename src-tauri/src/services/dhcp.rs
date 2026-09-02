@@ -44,7 +44,7 @@ impl DhcpService {
                 .map_err(|e| anyhow::anyhow!("Failed to create directory: {}", e))?;
         }
 
-        crate::dhcp::replace_dhcp_config(&dhcp_config)
+        crate::infrastructure::dhcp::replace_dhcp_config(&dhcp_config)
             .await
             .map_err(anyhow::Error::msg)?;
 
@@ -132,7 +132,7 @@ impl DhcpService {
                     .as_deref()
                     .filter(|iqn| !iqn.trim().is_empty())
                     .map(|iqn| {
-                        crate::dhcp::create_dhcp_entry_for_server(
+                        crate::infrastructure::dhcp::create_dhcp_entry_for_server(
                             &client.name,
                             &client.mac,
                             &client.ip,
@@ -144,7 +144,7 @@ impl DhcpService {
             .collect::<Vec<_>>()
             .join("\n\n");
 
-        crate::dhcp::replace_dhcp_clients_config(&format!("{client_config}\n"))
+        crate::infrastructure::dhcp::replace_dhcp_clients_config(&format!("{client_config}\n"))
             .await
             .map_err(anyhow::Error::msg)?;
 

@@ -254,14 +254,14 @@ pub async fn configure_service(
             })?;
 
         if name == "dhcp" {
-            crate::dhcp::replace_dhcp_config(&content)
+            crate::infrastructure::dhcp::replace_dhcp_config(&content)
                 .await
                 .map_err(|e| {
                     log::error!("Failed to safely write config for {}: {}", name, e);
                     StatusCode::INTERNAL_SERVER_ERROR
                 })?;
         } else if name == "dhcp-clients" {
-            crate::dhcp::replace_dhcp_clients_config(&content)
+            crate::infrastructure::dhcp::replace_dhcp_clients_config(&content)
                 .await
                 .map_err(|e| {
                     log::error!("Failed to safely write config for {}: {}", name, e);

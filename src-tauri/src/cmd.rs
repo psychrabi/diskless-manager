@@ -206,10 +206,6 @@ where
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-#[expect(
-    dead_code,
-    reason = "Reserved for legacy network diagnostics; DHCP reservations use configured settings"
-)]
 pub fn get_server_ip() -> String {
     // More robust parsing using regex for IP extraction
     let output = match Command::new("ip").args(["route", "get", "1"]).output() {
@@ -261,7 +257,6 @@ pub fn get_server_ip() -> String {
     "192.168.1.200".to_string()
 }
 
-#[expect(dead_code, reason = "May be used for disk selection in setup wizard")]
 pub fn list_disks() -> Result<Vec<Disk>, AppError> {
     let output = Command::new("lsblk")
         .args(["-dn", "-o", "NAME,SIZE,TYPE"])
@@ -287,10 +282,6 @@ pub fn list_disks() -> Result<Vec<Disk>, AppError> {
 }
 
 /// Get current RAM usage statistics
-#[expect(
-    dead_code,
-    reason = "Dashboard telemetry - unused while dashboard not integrated"
-)]
 pub fn get_ram_usage() -> Result<RamUsage, AppError> {
     let output = Command::new("free")
         .arg("-h")
@@ -328,10 +319,6 @@ pub fn get_ram_usage() -> Result<RamUsage, AppError> {
 }
 
 /// Clear RAM cache (sync and drop caches)
-#[expect(
-    dead_code,
-    reason = "System maintenance - unused while UI not integrated"
-)]
 pub async fn clear_ram_cache() -> Result<serde_json::Value, AppError> {
     // Run sync using sudo -n
     run_command_async(["sync"]).await?;
@@ -365,7 +352,6 @@ pub async fn clear_ram_cache() -> Result<serde_json::Value, AppError> {
     Ok(serde_json::json!({ "message": "RAM cache cleared successfully" }))
 }
 
-#[expect(dead_code, reason = "Replaced by read_service_logs which takes &str")]
 pub fn get_service_logs(service_name: String, lines: Option<u32>) -> Result<String, AppError> {
     let service = match service_name.as_str() {
         "http" => "apache2",

@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use std::path::Path;
 
-use crate::cmd::{run_command, run_command_output};
+use crate::infrastructure::command::{run_command, run_command_output};
 
 use super::model::{
     IscsiLunSpec, IscsiLunState, IscsiProvisionResult, IscsiTargetSpec, IscsiTargetState,

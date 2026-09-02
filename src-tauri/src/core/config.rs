@@ -22,15 +22,13 @@ pub struct Settings {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ServerConfig {
     #[serde(deserialize_with = "deserialize_interface")]
     pub interface: Vec<String>,
     pub ip_address: String,
-    #[serde(default)]
     pub netmask: String,
-    #[serde(default)]
     pub gateway: String,
-    #[serde(default)]
     pub dns: Vec<String>,
     pub hostname: String,
     pub domain: String,
@@ -87,6 +85,7 @@ impl Default for ServerConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct DhcpConfig {
     pub enabled: bool,
     pub subnet_ip: String,
@@ -128,6 +127,7 @@ impl Default for DhcpConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct HttpConfig {
     pub enabled: bool,
     pub root_dir: String,
@@ -147,6 +147,7 @@ impl Default for HttpConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct TftpConfig {
     pub enabled: bool,
     pub root_dir: String,
@@ -168,6 +169,7 @@ impl Default for TftpConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct IscsiConfig {
     pub enabled: bool,
     pub target_prefix: String,
@@ -187,6 +189,7 @@ impl Default for IscsiConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct NfsConfig {
     pub enabled: bool,
     pub exports_dir: PathBuf,
@@ -202,6 +205,7 @@ impl Default for NfsConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SambaConfig {
     pub enabled: bool,
     pub workgroup: String,
@@ -225,6 +229,7 @@ impl Default for SambaConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct StorageConfig {
     pub images_dir: PathBuf,
     pub snapshots_dir: PathBuf,
@@ -259,5 +264,26 @@ impl Settings {
         }
         std::fs::write(path, content)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod compatibility_tests {
+    use super::Settings;
+
+    #[test]
+    fn partial_legacy_network_config_inherits_production_defaults() {
+        let settings: Settings = serde_json::from_value(serde_json::json!({
+            "server": { "interface": "eno9", "ip_address": "10.20.0.10" },
+            "dhcp": { "start_ip": "10.20.0.100", "end_ip": "10.20.0.200" }
+        }))
+        .expect("partial legacy settings should remain readable");
+
+        assert_eq!(settings.server.interface, vec!["eno9"]);
+        assert_eq!(settings.server.ip_address, "10.20.0.10");
+        assert_eq!(settings.server.netmask, "255.255.255.0");
+        assert_eq!(settings.dhcp.start_ip, "10.20.0.100");
+        assert_eq!(settings.dhcp.end_ip, "10.20.0.200");
+        assert_eq!(settings.dhcp.boot_file_uefi64, "snponly.efi");
     }
 }

@@ -1,9 +1,5 @@
 //! ZFS-related logic for dataset, snapshot, and pool management.
 
-#![expect(
-    dead_code,
-    reason = "Many ZFS utility functions are only used by old Tauri commands or conditionally"
-)]
 use crate::infrastructure::zfs::{ZfsCloneOperations, ZfsCommand};
 
 use chrono::Local;
@@ -14,7 +10,7 @@ use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::process::Command;
 
-use crate::cmd::{run_command, run_command_check, run_command_output_no_sudo};
+use crate::infrastructure::command::{run_command, run_command_check, run_command_output_no_sudo};
 use crate::types::image::CreateImageRequest;
 use crate::types::{CreateZpoolRequest, Master, MasterData, Snapshot};
 use crate::{

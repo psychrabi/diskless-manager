@@ -39,6 +39,13 @@ export async function updateAdminPassword(passwordData) {
   });
 }
 
+export async function bootstrapAdmin(username, password) {
+  return apiRequest("/api/auth/bootstrap", {
+    method: "POST",
+    body: JSON.stringify({ username, password }),
+  });
+}
+
 export async function checkAdminExists() {
   return apiRequest("/api/auth/admin/exists");
 }

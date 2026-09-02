@@ -5,7 +5,10 @@ use axum::{
 
 // API routes configuration
 use crate::api::handlers::{
-    auth::{check_admin_exists, login, update_admin_password, validate_auth_token},
+    auth::{
+        bootstrap_first_admin, check_admin_exists, login, update_admin_password,
+        validate_auth_token,
+    },
     clients::{create_client, delete_client, get_client_boot_history, update_client},
     clients_v2::{get_client, list_clients},
     config::get_config,
@@ -52,13 +55,8 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route("/health", get(|| async { "OK" }))
         .route("/api/auth/login", post(login))
         .route("/api/auth/validate", post(validate_auth_token))
-        .route("/api/auth/admin/password", put(update_admin_password))
+        .route("/api/auth/bootstrap", post(bootstrap_first_admin))
         .route("/api/auth/admin/exists", get(check_admin_exists))
-        .route("/api/license/info", get(get_license_info_handler))
-        .route("/api/disks/pool/exists", get(pool_exists))
-        .route("/api/disks", get(list_disks))
-        .route("/api/system/dependencies", get(check_dependencies))
-        .route("/api/config", get(get_config))
         .with_state(state.clone());
 
     let ws_router = Router::new()
@@ -71,6 +69,11 @@ pub fn create_app(state: crate::state::AppState) -> Router {
 
     let api_router = Router::new()
         .route("/api/clients", get(list_clients).post(create_client))
+        .route("/api/config", get(get_config))
+        .route("/api/license/info", get(get_license_info_handler))
+        .route("/api/disks", get(list_disks))
+        .route("/api/disks/pool/exists", get(pool_exists))
+        .route("/api/system/dependencies", get(check_dependencies))
         .route(
             "/api/clients/{id}",
             get(get_client).put(update_client).delete(delete_client),
@@ -188,6 +191,7 @@ pub fn create_app(state: crate::state::AppState) -> Router {
             get(get_user).put(update_user).delete(delete_user),
         )
         .route("/api/users/{id}/password", put(update_user_password))
+        .route("/api/auth/admin/password", put(update_admin_password))
         .route("/api/ssh/test-connection", post(test_ssh_connection))
         .route("/api/ssh/execute-command", post(execute_ssh_command))
         .route("/api/ssh/system-info", post(get_windows_system_info))

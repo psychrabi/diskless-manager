@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::core::config::Settings;
-use crate::ipxe::render_autoexec_ipxe;
+use crate::infrastructure::pxe::render_autoexec_ipxe;
 use crate::services::{
     get_service_pid, is_systemd_service_running, run_sudo_command, write_with_sudo_tee,
     ServiceStatus,

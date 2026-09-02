@@ -1,7 +1,7 @@
-use crate::dhcp::update_dhcp_config;
 use crate::error::AppError;
+use crate::infrastructure::dhcp::update_dhcp_config;
+use crate::infrastructure::zfs::legacy::zfs_destroy;
 use crate::state::AppState;
-use crate::zfs::zfs_destroy;
 
 use log::{error, info, warn};
 

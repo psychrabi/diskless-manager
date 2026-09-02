@@ -2,7 +2,7 @@ import { Button, Card, Input } from "@/components/ui";
 import { useAuth } from "@/contexts/auth";
 import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { updateAdminPassword, login } from "@/api/modules/auth";
+import { bootstrapAdmin, login } from "@/api/modules/auth";
 import { useForm } from "react-hook-form";
 import { useNavigate } from "react-router-dom";
 import { z } from "zod";
@@ -53,26 +53,7 @@ const InitialSetup = () => {
 
   const onSubmit = async (data) => {
     try {
-      // Try to update password with default password first
-      try {
-        await updateAdminPassword({
-          old_password: "admin123",
-          new_password: data.password
-        });
-        console.log("Password updated successfully");
-      } catch {
-        // Password might already be changed, try with the new password as old
-        console.log("Default password failed, password might already be set");
-        try {
-          await updateAdminPassword({
-            old_password: data.password,
-            new_password: data.password
-          });
-        } catch {
-          // Ignore - password is likely already set correctly
-          console.log("Password already set, proceeding to login");
-        }
-      }
+      await bootstrapAdmin(data.username, data.password);
 
       // Now attempt to log in with the password
       const loginResponse = await login(data.username, data.password);

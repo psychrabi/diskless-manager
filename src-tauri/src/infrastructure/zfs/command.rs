@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use std::ffi::OsStr;
 
-use crate::cmd::{run_command, run_command_check, run_command_output_no_sudo};
+use crate::infrastructure::command::{run_command, run_command_check, run_command_output_no_sudo};
 
 /// Low-level ZFS command adapter.
 ///

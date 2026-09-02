@@ -1,8 +1,12 @@
 use std::sync::Arc;
 
+use super::ProvisioningService;
 use super::StorageService;
+use crate::persistence::ClientRepository;
+use sqlx::SqlitePool;
 
 use crate::infrastructure::{
+    dhcp::IscDhcpPublisher,
     image::{ImageBackend, ZfsImageBackend},
     iscsi::{IscsiProvisioner, SafeIscsiProvisioner},
 };
@@ -12,24 +16,27 @@ use crate::infrastructure::{
 /// Infrastructure implementations are constructed here and injected
 /// into application services.
 pub struct ApplicationServices {
-    pub storage: StorageService,
+    pub storage: Arc<StorageService>,
+    pub provisioning: ProvisioningService,
 }
 
 impl ApplicationServices {
-    pub fn new() -> Self {
+    pub fn new(pool: SqlitePool) -> Self {
         let image_backend: Arc<dyn ImageBackend> = Arc::new(ZfsImageBackend::new());
 
         let iscsi: Arc<dyn IscsiProvisioner> = Arc::new(SafeIscsiProvisioner::new());
 
-        let storage = StorageService::new(image_backend, iscsi);
+        let storage = Arc::new(StorageService::new(image_backend, iscsi));
+        let provisioning = ProvisioningService::new(
+            storage.clone(),
+            ClientRepository::new(pool),
+            Arc::new(IscDhcpPublisher),
+        );
 
-        Self { storage }
-    }
-}
-
-impl Default for ApplicationServices {
-    fn default() -> Self {
-        Self::new()
+        Self {
+            storage,
+            provisioning,
+        }
     }
 }
 

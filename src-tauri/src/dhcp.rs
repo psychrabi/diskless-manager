@@ -1,4 +1,4 @@
-use crate::{cmd::run_command, DHCP_CLIENTS_PATH, DHCP_CONFIG_PATH};
+use crate::{infrastructure::command::run_command, DHCP_CLIENTS_PATH, DHCP_CONFIG_PATH};
 use log::{error, info};
 use regex::Regex;
 use tokio::fs as async_fs;

@@ -1,4 +1,3 @@
-use crate::cmd::{run_command, run_command_async, run_command_output_no_sudo};
 use crate::config::get_config;
 use crate::core::client::ClientManager;
 use crate::core::provisioning::{
@@ -6,9 +5,13 @@ use crate::core::provisioning::{
     get_client_paths, get_client_paths_with_master, save_client_config,
     AddClientProvisioningRequest,
 };
-use crate::dhcp::{create_dhcp_entry_for_server, update_dhcp_config};
 use crate::domain::storage::{ClientStorageSpec, StorageSource};
 use crate::error::AppError;
+use crate::infrastructure::command::{run_command, run_command_async, run_command_output_no_sudo};
+use crate::infrastructure::dhcp::{create_dhcp_entry_for_server, update_dhcp_config};
+use crate::infrastructure::zfs::legacy::{
+    get_latest_snapshot, get_master_os, zfs_clone, zfs_destroy, zfs_exists,
+};
 use crate::middleware::validate_auth;
 use crate::state::AppState;
 use crate::timed_execution;
@@ -16,7 +19,6 @@ use crate::types::{AddClientRequest, ControlRequest, EditClientRequest};
 use crate::utils::network::{get_client_status_realtime, ping_host};
 use crate::utils::remote::{launch_remote_desktop, launch_vnc_viewer};
 use crate::validation::validate_client_id;
-use crate::zfs::{get_latest_snapshot, get_master_os, zfs_clone, zfs_destroy, zfs_exists};
 use chrono::Local;
 use log::{debug, error, info, warn};
 use std::process::Command;
@@ -212,19 +214,81 @@ pub async fn add_client_impl(
         return Err(AppError::Validation(duplicate));
     }
 
-    add_client_provisioning(
-        state,
-        AddClientProvisioningRequest {
-            name,
-            mac,
-            ip,
-            master,
-            snapshot,
-            keep_writeback: req.keep_writeback,
-            use_game_disk: req.use_game_disk,
-        },
-    )
-    .await
+    // Preserve the legacy "inventory only" mode when no image is selected.
+    // No infrastructure is provisioned in this branch.
+    if master.is_empty() {
+        return add_client_provisioning(
+            state,
+            AddClientProvisioningRequest {
+                name,
+                mac,
+                ip,
+                master,
+                snapshot,
+                keep_writeback: req.keep_writeback,
+                use_game_disk: req.use_game_disk,
+            },
+        )
+        .await;
+    }
+
+    let settings = state.settings.read().await.clone();
+    let source = if snapshot.is_empty() {
+        StorageSource::ExistingVolume(master.clone())
+    } else {
+        StorageSource::Snapshot(snapshot.clone())
+    };
+    let dataset = if snapshot.is_empty() {
+        master.clone()
+    } else {
+        crate::infrastructure::zfs::legacy::get_writeback_or_default_dataset(&name)
+    };
+    let storage_spec = ClientStorageSpec {
+        client_id: name.clone(),
+        source,
+        dataset,
+        backstore: format!("block_{}", name.to_lowercase()),
+        target_iqn: crate::domain::provisioning::TargetIqn::for_client_name(
+            &settings.iscsi.target_prefix,
+            &name,
+        )
+        .as_str()
+        .to_string(),
+        lun: 0,
+        use_game_disk: req.use_game_disk.unwrap_or(false),
+    };
+    let client = state
+        .application
+        .provisioning
+        .create_client(
+            crate::domain::CreateClient {
+                name: name.clone(),
+                mac,
+                ip,
+                master,
+                snapshot: (!snapshot.is_empty()).then_some(snapshot),
+                block_store: None,
+                block_device: None,
+                target_iqn: None,
+                pxe_mode: crate::domain::PxeMode::Uefi,
+                keep_writeback: req.keep_writeback.unwrap_or(true),
+                use_game_disk: req.use_game_disk.unwrap_or(false),
+            },
+            storage_spec,
+            &settings.dhcp.next_server_ip,
+        )
+        .await
+        .map_err(|error| AppError::Config(error.to_string()))?;
+
+    state
+        .refresh_client_ips()
+        .await
+        .map_err(|error| AppError::Config(error.to_string()))?;
+
+    Ok(serde_json::json!({
+        "message": format!("Client {} added successfully", client.name),
+        "client": client,
+    }))
 }
 
 pub async fn edit_client(

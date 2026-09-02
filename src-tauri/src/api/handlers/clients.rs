@@ -102,7 +102,8 @@ fn build_storage_spec(
 
     match snapshot {
         Some(snapshot) if !snapshot.trim().is_empty() => {
-            let dataset = crate::zfs::get_writeback_or_default_dataset(client_name);
+            let dataset =
+                crate::infrastructure::zfs::legacy::get_writeback_or_default_dataset(client_name);
 
             Ok(ClientStorageSpec {
                 client_id: client_id.to_string(),
@@ -141,16 +142,6 @@ fn preserve_persisted_target_iqn(spec: &mut ClientStorageSpec, client: &Client) 
     {
         spec.target_iqn = target_iqn.to_string();
     }
-}
-
-/// Convert application storage information into the legacy client fields
-/// stored in the clients table.
-fn apply_storage_to_request(request: &mut CreateClientRequest, storage: &ClientStorage) {
-    request.block_store = Some(format!("/dev/zvol/{}", storage.dataset()));
-
-    request.block_device = Some(storage.block_device().display().to_string());
-
-    request.target_iqn = Some(storage.target_iqn().to_string());
 }
 
 /// Convert application storage information into the legacy client fields
@@ -260,15 +251,15 @@ pub async fn get_client(
 
 pub async fn create_client(
     State(state): State<AppState>,
-    Json(mut request): Json<CreateClientRequest>,
-) -> Result<Json<Client>, StatusCode> {
+    Json(request): Json<CreateClientRequest>,
+) -> Result<Json<crate::domain::Client>, StatusCode> {
     if validate_ip_address(&request.ip).is_err() || validate_mac_address(&request.mac).is_err() {
         return Err(StatusCode::BAD_REQUEST);
     }
 
     info!("Creating client: {:?}", request);
 
-    let settings = state.settings.read().await;
+    let settings = state.settings.read().await.clone();
 
     // ------------------------------------------------------------------------
     // Build desired storage state.
@@ -292,60 +283,34 @@ pub async fn create_client(
     })?;
 
     // ------------------------------------------------------------------------
-    // Provision storage through the application service.
+    // Provision storage and persist the client through one application
+    // transaction shared by every transport adapter.
     // ------------------------------------------------------------------------
 
-    let storage = state
+    let create = crate::domain::CreateClient {
+        name: request.name.clone(),
+        mac: request.mac.clone(),
+        ip: request.ip.clone(),
+        master: request.master.clone(),
+        snapshot: request.snapshot.clone(),
+        block_store: None,
+        block_device: None,
+        target_iqn: None,
+        pxe_mode: crate::domain::PxeMode::Uefi,
+        keep_writeback: request.keep_writeback.unwrap_or(true),
+        use_game_disk: request.use_game_disk.unwrap_or(false),
+    };
+
+    let client = state
         .application
-        .storage
-        .create_client_storage(&storage_spec)
+        .provisioning
+        .create_client(create, storage_spec, &settings.dhcp.next_server_ip)
+        .await
         .map_err(|error| {
-            error!(
-                "Failed to provision storage for client '{}': {}",
-                request.name, error
-            );
+            error!("Failed to create client '{}': {}", request.name, error);
 
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
-
-    apply_storage_to_request(&mut request, &storage);
-
-    info!(
-        "Provisioned storage for client '{}': dataset={}, block_device={}, target_iqn={}",
-        request.name,
-        storage.dataset(),
-        storage.block_device().display(),
-        storage.target_iqn()
-    );
-
-    // ------------------------------------------------------------------------
-    // Persist client.
-    //
-    // If persistence fails, rollback storage so that we don't leave orphaned
-    // ZFS/iSCSI resources behind.
-    // ------------------------------------------------------------------------
-
-    let manager = ClientManager::new(state.db_pool.clone());
-
-    let client = match manager.create(request).await {
-        Ok(client) => client,
-
-        Err(error) => {
-            error!(
-                "Failed to persist client after storage provisioning: {}",
-                error
-            );
-
-            if let Err(cleanup_error) = state.application.storage.destroy_client_storage(&storage) {
-                error!(
-                    "Failed to rollback storage after client creation failure: {}",
-                    cleanup_error
-                );
-            }
-
-            return Err(StatusCode::INTERNAL_SERVER_ERROR);
-        }
-    };
 
     info!("Created client: {}", client.name);
 
@@ -353,9 +318,6 @@ pub async fn create_client(
     if let Err(e) = state.refresh_client_ips().await {
         tracing::warn!("Failed to refresh client IPs cache: {}", e);
     }
-
-    // DHCP configuration.
-    refresh_dhcp(&state, &settings, "adding client").await;
 
     Ok(Json(client))
 }

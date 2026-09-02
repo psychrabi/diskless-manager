@@ -1,6 +1,6 @@
 use crate::{
     core::client::ClientManager,
-    dhcp::{create_dhcp_entry_for_server, dhcp_entry_matches, format_client_name},
+    infrastructure::dhcp::{create_dhcp_entry_for_server, dhcp_entry_matches, format_client_name},
     state::AppState,
     DHCP_CLIENTS_PATH,
 };
@@ -185,7 +185,7 @@ pub async fn repair_client_dhcp(
         &server_ip,
     );
 
-    crate::dhcp::update_dhcp_config(&client.name, &desired, false)
+    crate::infrastructure::dhcp::update_dhcp_config(&client.name, &desired, false)
         .await
         .map_err(anyhow::Error::msg)?;
 

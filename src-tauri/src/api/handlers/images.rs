@@ -423,15 +423,16 @@ pub async fn rollback_snapshot(
 
     let snapshot_full_path = format!("{}@{}", master.name, snapshot_name);
 
-    crate::cmd::run_command(&["zfs", "rollback", "-r", &snapshot_full_path]).map_err(|error| {
-        log::error!(
-            "Failed to rollback snapshot '{}': {}",
-            snapshot_full_path,
-            error
-        );
+    crate::infrastructure::command::run_command(&["zfs", "rollback", "-r", &snapshot_full_path])
+        .map_err(|error| {
+            log::error!(
+                "Failed to rollback snapshot '{}': {}",
+                snapshot_full_path,
+                error
+            );
 
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     if !newer_snapshots.is_empty() {
         let placeholders = newer_snapshots

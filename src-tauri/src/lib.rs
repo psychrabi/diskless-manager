@@ -1,10 +1,12 @@
 mod auth;
 pub mod client;
 mod config;
-mod dhcp;
 mod disks;
 mod error;
-pub mod ipxe;
+pub mod ipxe {
+    //! Compatibility export. New code should use `infrastructure::pxe`.
+    pub use crate::infrastructure::pxe::*;
+}
 mod license;
 mod logs;
 pub mod metrics;
@@ -19,20 +21,17 @@ pub mod persistence;
 
 pub mod audit_logger;
 pub mod command_builder;
+mod commands;
 pub mod control_handler;
+pub mod core;
 pub mod error_logger;
 pub mod os_detector;
 pub mod remote_desktop_launcher;
-pub mod ssh_executor;
-pub mod validation;
-mod zfs;
-
-mod cmd;
-mod commands;
-pub mod core;
 mod services;
+pub mod ssh_executor;
 pub mod state;
 pub mod utils;
+pub mod validation;
 
 pub mod api;
 
@@ -74,27 +73,23 @@ fn setup_logging() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub async fn run() {
+pub async fn run() -> anyhow::Result<()> {
     // Initialize application state
-    let state = AppState::new()
-        .await
-        .expect("Failed to initialize AppState");
+    let state = AppState::new().await?;
 
-    // Start Axum API server in a separate task
+    // Bind before opening the UI so startup cannot appear successful when the
+    // configured API address is unavailable.
     let api_state = state.clone();
-    tokio::spawn(async move {
-        let addr = "127.0.0.1:8080"
-            .parse()
-            .expect("Invalid API server address");
-        let api_server = crate::api::server::ApiServer::new(api_state, addr);
-
-        if let Err(e) = api_server.start().await {
-            tracing::error!("API server error: {}", e);
-        }
-    });
+    let configured_addr = std::env::var("DISKLESS_API_ADDR").ok();
+    let addr = crate::api::server::api_address(configured_addr.as_deref())?;
+    let api_server = crate::api::server::ApiServer::new(api_state, addr)
+        .bind()
+        .await?;
+    let (api_shutdown_tx, api_shutdown_rx) = tokio::sync::oneshot::channel();
+    let api_task = tokio::spawn(api_server.serve_with_shutdown(api_shutdown_rx));
 
     // Start Tauri application
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(
             tauri_plugin_log::Builder::default()
                 .targets([
@@ -186,6 +181,19 @@ pub async fn run() {
             info!("Tauri setup completed");
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running Tauri application");
+        .build(tauri::generate_context!())?;
+
+    let mut api_shutdown_tx = Some(api_shutdown_tx);
+    app.run(move |_app_handle, event| {
+        if matches!(event, tauri::RunEvent::Exit) {
+            if let Some(sender) = api_shutdown_tx.take() {
+                let _ = sender.send(());
+            }
+        }
+    });
+
+    api_task
+        .await
+        .map_err(|error| anyhow::anyhow!("API server task failed: {error}"))??;
+    Ok(())
 }

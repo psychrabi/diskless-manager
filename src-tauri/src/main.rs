@@ -74,5 +74,8 @@ async fn main() {
         return;
     }
 
-    app_lib::run().await;
+    if let Err(error) = app_lib::run().await {
+        log::error!("Application startup failed: {error:#}");
+        std::process::exit(1);
+    }
 }

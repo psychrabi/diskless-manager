@@ -28,6 +28,7 @@ impl AppState {
             .unwrap_or_else(|| PathBuf::from("./config"));
 
         std::fs::create_dir_all(&config_dir)?;
+        crate::auth::initialize_jwt_secret(&config_dir)?;
 
         let config_path = config_dir.join("config.json");
 
@@ -39,9 +40,9 @@ impl AppState {
 
         let pool = SqlitePool::connect(&db_url).await?;
 
-        let application = Arc::new(ApplicationServices::new());
         // Run migrations
         Self::init_database(&pool).await?;
+        let application = Arc::new(ApplicationServices::new(pool.clone()));
 
         // Load config from database and populate the cache
         if let Ok(config) = crate::config::read_config_db(&pool).await {
@@ -87,6 +88,27 @@ impl AppState {
     }
 
     async fn init_database(pool: &SqlitePool) -> anyhow::Result<()> {
+        static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+        MIGRATOR.run(pool).await?;
+
+        // Databases created before versioned migrations may already contain a
+        // narrow clients table. Expand it in place without rewriting rows.
+        for (column, definition) in [
+            ("snapshot", "TEXT"),
+            ("block_store", "TEXT"),
+            ("target_iqn", "TEXT"),
+            ("writeback", "TEXT"),
+            ("last_modified", "TEXT"),
+            ("block_device", "TEXT"),
+            ("status", "TEXT DEFAULT 'Offline'"),
+            ("mode", "TEXT DEFAULT 'read-only'"),
+            ("pxe_mode", "TEXT DEFAULT 'uefi'"),
+            ("keep_writeback", "INTEGER NOT NULL DEFAULT 1"),
+            ("use_game_disk", "INTEGER NOT NULL DEFAULT 0"),
+        ] {
+            Self::ensure_column(pool, "clients", column, definition).await?;
+        }
+
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS images (
@@ -399,45 +421,136 @@ impl AppState {
             .execute(pool)
             .await?;
 
-        // Seed default admin user if no users exist
-        Self::seed_default_admin(pool).await?;
-
         Ok(())
     }
 
-    /// Seed default admin user if no users exist
-    async fn seed_default_admin(pool: &SqlitePool) -> anyhow::Result<()> {
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+    async fn ensure_column(
+        pool: &SqlitePool,
+        table: &str,
+        column: &str,
+        definition: &str,
+    ) -> anyhow::Result<()> {
+        let query = format!("SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = ?");
+        let exists: i64 = sqlx::query_scalar(&query)
+            .bind(column)
             .fetch_one(pool)
             .await?;
-
-        if count == 0 {
-            use bcrypt::{hash, DEFAULT_COST};
-            use chrono::Utc;
-            use uuid::Uuid;
-
-            let password_hash = hash("admin123", DEFAULT_COST)?;
-            let now = Utc::now().to_rfc3339();
-            let id = Uuid::new_v4().to_string();
-
-            sqlx::query(
-                r#"
-                INSERT INTO users (id, username, password_hash, role, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                "#,
-            )
-            .bind(&id)
-            .bind("admin")
-            .bind(&password_hash)
-            .bind("admin")
-            .bind(&now)
-            .bind(&now)
+        if exists == 0 {
+            sqlx::query(&format!(
+                "ALTER TABLE {table} ADD COLUMN {column} {definition}"
+            ))
             .execute(pool)
             .await?;
-
-            info!("Default admin user created (username: admin, password: admin123)");
         }
-
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::AppState;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    async fn memory_pool() -> sqlx::SqlitePool {
+        SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory database should open")
+    }
+
+    #[tokio::test]
+    async fn fresh_database_contains_the_complete_runtime_schema() {
+        let pool = memory_pool().await;
+
+        AppState::init_database(&pool)
+            .await
+            .expect("fresh database should migrate");
+
+        let required = [
+            "clients",
+            "images",
+            "users",
+            "app_config",
+            "_sqlx_migrations",
+        ];
+        for table in required {
+            let exists: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?",
+            )
+            .bind(table)
+            .fetch_one(&pool)
+            .await
+            .expect("schema should be readable");
+            assert_eq!(exists, 1, "missing table: {table}");
+        }
+    }
+
+    #[tokio::test]
+    async fn migration_preserves_existing_clients_and_image_identity() {
+        let pool = memory_pool().await;
+        sqlx::query(
+            r#"
+            CREATE TABLE clients (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL, mac TEXT NOT NULL, ip TEXT NOT NULL,
+                master TEXT NOT NULL, enabled INTEGER NOT NULL, created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("legacy clients table should be created");
+        sqlx::query(
+            "INSERT INTO clients (id, name, mac, ip, master, enabled, created_at, updated_at) VALUES ('client-1', 'PC-01', '00:11:22:33:44:55', '192.168.1.101', 'win11', 1, 'now', 'now')",
+        )
+        .execute(&pool)
+        .await
+        .expect("legacy client should be inserted");
+        sqlx::query(
+            r#"
+            CREATE TABLE images (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, os_type TEXT NOT NULL,
+                size_gb INTEGER NOT NULL, path TEXT NOT NULL, format TEXT NOT NULL,
+                status TEXT NOT NULL, description TEXT, parent_id TEXT, tags TEXT,
+                checksum TEXT, is_default INTEGER NOT NULL, created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("legacy images table should be created");
+        sqlx::query("INSERT INTO images VALUES ('image-1', 'Windows 11', 'windows', 64, '/tank/win11', 'raw', 'ready', NULL, NULL, NULL, NULL, 1, 'now', 'now')")
+            .execute(&pool)
+            .await
+            .expect("legacy image should be inserted");
+
+        AppState::init_database(&pool)
+            .await
+            .expect("legacy database should migrate");
+
+        let client_name: String =
+            sqlx::query_scalar("SELECT name FROM clients WHERE id = 'client-1'")
+                .fetch_one(&pool)
+                .await
+                .expect("client should remain");
+        let image_name: String = sqlx::query_scalar("SELECT name FROM images WHERE id = 'image-1'")
+            .fetch_one(&pool)
+            .await
+            .expect("image should remain");
+        assert_eq!(client_name, "PC-01");
+        assert_eq!(image_name, "Windows 11");
+
+        for column in ["snapshot", "target_iqn", "pxe_mode", "keep_writeback"] {
+            let exists: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM pragma_table_info('clients') WHERE name = ?",
+            )
+            .bind(column)
+            .fetch_one(&pool)
+            .await
+            .expect("client schema should be readable");
+            assert_eq!(exists, 1, "missing migrated client column: {column}");
+        }
     }
 }

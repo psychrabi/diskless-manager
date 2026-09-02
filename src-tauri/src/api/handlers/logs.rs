@@ -16,17 +16,17 @@ pub async fn get_logs(
 
     let logs = if let Some(unit) = unit {
         // Fetch logs for a specific systemd unit
-        crate::cmd::read_service_logs(unit, lines).unwrap_or_default()
+        crate::infrastructure::command::read_service_logs(unit, lines).unwrap_or_default()
     } else {
         // Fetch app logs
-        crate::cmd::read_logs()
+        crate::infrastructure::command::read_logs()
     };
 
     Ok(Json(json!({ "text": logs })))
 }
 
 pub async fn clear_logs() -> Result<Json<serde_json::Value>, StatusCode> {
-    match crate::cmd::clear_logs() {
+    match crate::infrastructure::command::clear_logs() {
         Ok(_) => {
             log::info!("Logs cleared by user");
             Ok(Json(json!({ "message": "Logs cleared successfully" })))
