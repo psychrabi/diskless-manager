@@ -1,0 +1,15 @@
+#!ipxe
+# Embedded by the diskless-manager NVMe/TCP firmware build.
+# Marks this iPXE process as NVMe/TCP-capable, then re-enters the normal
+# diskless-manager dispatcher. The flag remains set while scripts are chained
+# inside this firmware instance, preventing a chain loop.
+set diskless-nvmeof 1
+
+dhcp || goto failed
+set boot-url http://${next-server}
+echo Diskless Manager experimental NVMe/TCP firmware active
+chain ${boot-url}/autoexec.ipxe || goto failed
+
+:failed
+echo Failed to return to diskless-manager boot dispatcher.
+shell
