@@ -51,8 +51,6 @@ pub fn ensure_export(nqn: &str, block_device: &Path) -> Result<NvmeOfExportStatu
         sudo_command(["mkdir", path_str(&subsystem)?])?;
     }
 
-    // Initial Windows boot experiment: do not require host authentication yet.
-    // This keeps firmware/Windows handoff testing separate from DH-HMAC-CHAP.
     write_attr(&subsystem.join("attr_allow_any_host"), "1")?;
 
     let namespace = subsystem.join("namespaces/1");
@@ -249,12 +247,15 @@ fn write_attr(path: &Path, value: &str) -> Result<(), String> {
         .spawn()
         .map_err(|e| format!("failed to spawn privileged write for {path}: {e}"))?;
 
-    child
-        .stdin
-        .as_mut()
-        .ok_or_else(|| format!("failed to open stdin for privileged write to {path}"))?
-        .write_all(value.as_bytes())
-        .map_err(|e| format!("failed to write NVMe target attribute {path}: {e}"))?;
+    {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| format!("failed to open stdin for privileged write to {path}"))?;
+        stdin
+            .write_all(value.as_bytes())
+            .map_err(|e| format!("failed to write NVMe target attribute {path}: {e}"))?;
+    }
 
     let output = child
         .wait_with_output()
