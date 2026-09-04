@@ -9,6 +9,7 @@ pub mod disks;
 pub mod images;
 pub mod license;
 pub mod logs;
+pub mod nvmeof;
 pub mod reconciliation;
 pub mod services;
 pub mod ssh;
