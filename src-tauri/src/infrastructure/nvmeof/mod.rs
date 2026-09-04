@@ -134,6 +134,65 @@ pub fn remove_export(nqn: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Remove every diskless-manager NVMe-oF export backed by `block_device`.
+///
+/// Storage reset/delete paths call this before destroying a ZVOL so an
+/// enabled nvmet namespace cannot keep the block device busy. Only managed
+/// NQNs are considered, and the namespace device path must match exactly.
+pub fn remove_exports_for_block_device(block_device: &Path) -> Result<Vec<String>, String> {
+    let requested = block_device.to_string_lossy().into_owned();
+    if !requested.starts_with("/dev/zvol/") {
+        return Ok(Vec::new());
+    }
+
+    let subsystems = Path::new(NVMET_ROOT).join("subsystems");
+    if !subsystems.exists() {
+        return Ok(Vec::new());
+    }
+
+    let entries = fs::read_dir(&subsystems).map_err(|error| {
+        format!(
+            "failed to inspect NVMe target subsystems in {}: {error}",
+            subsystems.display()
+        )
+    })?;
+
+    let mut matching_nqns = Vec::new();
+
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            format!(
+                "failed to inspect an NVMe target subsystem in {}: {error}",
+                subsystems.display()
+            )
+        })?;
+
+        let Some(nqn) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+
+        if !nqn.starts_with(NQN_PREFIX) {
+            continue;
+        }
+
+        let status = inspect_export(&nqn)?;
+        if status.block_device.as_deref() == Some(requested.as_str()) {
+            matching_nqns.push(nqn);
+        }
+    }
+
+    for nqn in &matching_nqns {
+        tracing::info!(
+            nqn = %nqn,
+            block_device = %requested,
+            "removing NVMe-oF export before ZVOL destruction"
+        );
+        remove_export(nqn)?;
+    }
+
+    Ok(matching_nqns)
+}
+
 fn validate_nqn(nqn: &str) -> Result<(), String> {
     if !nqn.starts_with(NQN_PREFIX) || nqn.len() <= NQN_PREFIX.len() {
         return Err(format!("refusing unmanaged NQN; expected prefix {NQN_PREFIX}"));
