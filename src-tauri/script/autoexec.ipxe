@@ -1,37 +1,25 @@
 #!ipxe
+# Common diskless-manager dispatcher.
+# Per-client boot policy is generated under clients/<12-hex-mac>.ipxe.
+
 set dhcp-timeout 5000
 set dhcp-max-retries 3
-dhcp
-set keep-san 1
+dhcp || goto failed
 
-# The DHCP root-path is the client's persistent iSCSI disk.
-# First boot attempts Windows SAN boot. If the disk is empty or Windows is
-# not bootable yet, keep the SAN attached and load WinPE for installation.
-isset ${root-path} || goto no_target
-set net0/gateway 0.0.0.0
-sanhook ${root-path} || goto failed
+# The production HTTP service currently defaults to port 4433. Runtime
+# generation uses the configured HTTP port, so this file is a packaged fallback.
+set boot-url http://${next-server}:4433
+set client-mac ${net0/mac:hexraw}
 
-echo Attempting Windows SAN boot from ${root-path}...
-sanboot --no-describe || goto winpe
+echo Diskless Manager client MAC: ${net0/mac}
+echo Loading ${boot-url}/clients/${client-mac}.ipxe
+chain ${boot-url}/clients/${client-mac}.ipxe || goto unknown_client
 
-:winpe
-echo Windows SAN boot is unavailable.
-echo Loading WinPE; the iSCSI disk remains attached for Windows Setup.
-set boot-url http://${next-server}:4433/boot/winpe
-kernel ${boot-url}/wimboot || goto failed
-initrd ${boot-url}/bootx64.efi bootx64.efi || goto failed
-initrd ${boot-url}/bootmgr bootmgr || goto failed
-initrd ${boot-url}/BCD BCD || goto failed
-initrd ${boot-url}/boot.sdi boot.sdi || goto failed
-initrd ${boot-url}/boot.wim boot.wim || goto failed
-boot || goto failed
-
-:failed
-echo Diskless boot failed.
-echo Verify the iSCSI target and WinPE HTTP files on the server.
+:unknown_client
+echo No generated client menu exists for ${net0/mac}.
+echo Expected: clients/${client-mac}.ipxe
 shell
 
-:no_target
-echo No iSCSI root-path was supplied by DHCP.
-echo This machine is not registered as a diskless client.
+:failed
+echo DHCP failed; cannot locate the diskless-manager boot server.
 shell
