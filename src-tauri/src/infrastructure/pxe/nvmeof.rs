@@ -9,13 +9,18 @@ pub fn nvme_tcp_uri(server_ip: &str, nqn: &str) -> String {
 pub fn render_windows_nvmeof_boot(nqn: &str) -> String {
     format!(
         r##"# Experimental Windows Server NVMe/TCP boot path.
-# Requires an iPXE build with NVMe/TCP initiator support.
+# Stock iPXE first chains snponly-nvmeof.efi. Its embedded startup script sets
+# diskless-nvmeof=1 and re-enters the normal per-client menu.
 set nvme-nqn {nqn}
+isset ${{diskless-nvmeof}} || goto load_nvmeof_firmware
 set nvme-root nvme://${{next-server}}:{port}/${{nvme-nqn}}
 set keep-san 1
 set net0/gateway 0.0.0.0
 echo NVMe/TCP target: ${{nvme-root}}
 sanboot ${{nvme-root}} || goto failed
+
+:load_nvmeof_firmware
+chain http://${{next-server}}/snponly-nvmeof.efi || goto failed
 "##,
         port = NVMET_TCP_PORT,
     )
@@ -75,10 +80,12 @@ mod tests {
     }
 
     #[test]
-    fn script_uses_next_server_and_keeps_san() {
+    fn script_chains_custom_firmware_before_nvme_sanboot() {
         let script = render_windows_nvmeof_boot(
             "nqn.2026-09.local.diskless:client.pc001"
         );
+        assert!(script.contains("isset ${diskless-nvmeof} || goto load_nvmeof_firmware"));
+        assert!(script.contains("chain http://${next-server}/snponly-nvmeof.efi"));
         assert!(script.contains("nvme://${next-server}:4420/${nvme-nqn}"));
         assert!(script.contains("set keep-san 1"));
         assert!(script.contains("sanboot ${nvme-root}"));
