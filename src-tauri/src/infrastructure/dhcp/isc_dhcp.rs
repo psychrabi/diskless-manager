@@ -37,7 +37,12 @@ fn runtime_settings() -> crate::core::config::Settings {
         })
 }
 
-async fn publish_client_ipxe(reservation: &BootReservation) -> Result<PathBuf> {
+/// Generate or replace the MAC-specific iPXE menu for a client.
+///
+/// This is public within the crate so reconciliation/experimental boot flows
+/// can repair menu files for clients that existed before per-client dispatch
+/// was introduced.
+pub(crate) async fn publish_client_ipxe(reservation: &BootReservation) -> Result<PathBuf> {
     let settings = runtime_settings();
     let root = PathBuf::from(&settings.http.root_dir);
     let relative = crate::infrastructure::pxe::client_mac_script_path(&reservation.mac);
