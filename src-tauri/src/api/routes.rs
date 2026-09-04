@@ -31,6 +31,7 @@ use crate::api::handlers::{
     },
     license::{activate_license_handler, get_license_info_handler},
     logs::{clear_logs, get_logs},
+    nvmeof::{inspect_nvmeof_boot, prepare_nvmeof_boot, remove_nvmeof_boot},
     reconciliation::{inspect_storage_reconciliation, repair_storage_reconciliation},
     services::{
         configure_service, get_service_config, get_service_status, install_service, list_services,
@@ -122,6 +123,14 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route(
             "/api/clients/{id}/boot-history",
             get(get_client_boot_history),
+        )
+        .route(
+            "/api/clients/{id}/nvmeof",
+            get(inspect_nvmeof_boot).delete(remove_nvmeof_boot),
+        )
+        .route(
+            "/api/clients/{id}/nvmeof/prepare",
+            post(prepare_nvmeof_boot),
         )
         .route("/api/clients/{id}/shutdown", post(shutdown_client))
         .route("/api/clients/{id}/reboot", post(reboot_client))
