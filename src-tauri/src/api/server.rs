@@ -46,9 +46,14 @@ impl ApiServer {
         info!("Starting Axum API server on {}", self.addr);
 
         let bound = self.bind().await?;
-        axum::serve(bound.listener, bound.app)
-            .await
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+        axum::serve(
+            bound.listener,
+            bound
+                .app
+                .into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
     }
 
     pub async fn start_with_shutdown(
@@ -61,7 +66,12 @@ impl ApiServer {
         );
 
         let bound = self.bind().await?;
-        let server = axum::serve(bound.listener, bound.app);
+        let server = axum::serve(
+            bound.listener,
+            bound
+                .app
+                .into_make_service_with_connect_info::<SocketAddr>(),
+        );
 
         let graceful = server.with_graceful_shutdown(async {
             shutdown_rx.await.ok();
@@ -78,11 +88,14 @@ impl BoundApiServer {
         self,
         shutdown_rx: oneshot::Receiver<()>,
     ) -> anyhow::Result<()> {
-        axum::serve(self.listener, self.app)
-            .with_graceful_shutdown(async {
-                let _ = shutdown_rx.await;
-            })
-            .await?;
+        axum::serve(
+            self.listener,
+            self.app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(async {
+            let _ = shutdown_rx.await;
+        })
+        .await?;
         Ok(())
     }
 }

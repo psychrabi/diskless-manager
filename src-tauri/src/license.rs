@@ -57,7 +57,9 @@ pub async fn activate_license(state: State<'_, AppState>, key: &str) -> Result<S
         // special case for trial license
         let mut cfg = config::read_config(state.clone())
             .await
-            .map_err(|e| AuthError { message: e.to_string() })?;
+            .map_err(|e| AuthError {
+                message: e.to_string(),
+            })?;
         let mut settings = cfg.settings.as_object().cloned().unwrap_or_default();
         // set trial license
         settings.insert(
@@ -88,8 +90,9 @@ pub async fn activate_license(state: State<'_, AppState>, key: &str) -> Result<S
         Ok("Trial License activated".to_string())
     } else {
         // verify with remote
-        let res: LicenseVerifyResponse =
-            verify_license_remote(key).map_err(|e| AuthError { message: e.to_string() })?;
+        let res: LicenseVerifyResponse = verify_license_remote(key).map_err(|e| AuthError {
+            message: e.to_string(),
+        })?;
         if !res.valid {
             return Err(AuthError {
                 message: res
@@ -101,7 +104,9 @@ pub async fn activate_license(state: State<'_, AppState>, key: &str) -> Result<S
         // write license key and status to config
         let mut cfg = config::read_config(state.clone())
             .await
-            .map_err(|e| AuthError { message: e.to_string() })?;
+            .map_err(|e| AuthError {
+                message: e.to_string(),
+            })?;
         let mut settings = cfg.settings.as_object().cloned().unwrap_or_default();
         settings.insert(
             "license_key".to_string(),

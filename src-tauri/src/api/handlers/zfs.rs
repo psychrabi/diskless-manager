@@ -107,7 +107,7 @@ pub async fn list_datasets(
             "list",
             "-H",
             "-o",
-            "name,used,avail,refer,mountpoint",
+            "name,used,avail,refer,mountpoint,origin",
             "-r",
             &params.zpool,
         ])
@@ -121,10 +121,9 @@ pub async fn list_datasets(
                 .filter(|l| !l.is_empty())
                 .filter_map(|line| {
                     let parts: Vec<&str> = line.split('\t').collect();
-                    if parts.len() >= 5 {
+                    if parts.len() >= 6 {
                         let name = parts[0];
-                        // Only include datasets that have a '-' in their name
-                        if name.contains('-') {
+                        if should_include_managed_disk(name, parts[5]) {
                             // Get the custom property org.diskless:type
                             let disk_type = match Command::new("zfs")
                                 .args(["get", "-H", "-o", "value", "org.diskless:type", name])
@@ -181,6 +180,11 @@ pub async fn list_datasets(
         }
         _ => Ok(Json(vec![])),
     }
+}
+
+fn should_include_managed_disk(name: &str, origin: &str) -> bool {
+    let origin = origin.trim();
+    name.contains('-') && (origin.is_empty() || origin == "-")
 }
 
 pub async fn create_dataset(
@@ -265,5 +269,23 @@ pub async fn delete_dataset(
             tracing::error!("Failed to execute zfs destroy for {}: {}", dataset, e);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
+    }
+}
+
+#[cfg(test)]
+mod disk_listing_tests {
+    use super::should_include_managed_disk;
+
+    #[test]
+    fn client_snapshot_clones_are_not_managed_disks() {
+        assert!(!should_include_managed_disk(
+            "diskless/PC001-disk",
+            "diskless/image-disk/windows11@ready"
+        ));
+    }
+
+    #[test]
+    fn independent_managed_disks_remain_visible() {
+        assert!(should_include_managed_disk("diskless/image-disk", "-"));
     }
 }

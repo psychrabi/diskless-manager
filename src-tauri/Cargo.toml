@@ -60,7 +60,6 @@ axum = { version = "0.8.4", features = ["ws"] }
 tower-http = { version = "0.6", features = ["cors", "trace", "timeout"] }
 tower = { version = "0.5.2", features = ["limit"] }
 tokio-tungstenite = "0.23"
-urlencoding = "2.1"
 ssh2 = "0.9"
 parking_lot = "0.12"
 

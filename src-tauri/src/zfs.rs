@@ -222,14 +222,16 @@ pub async fn save_master_config(pool: &sqlx::SqlitePool, master_data: &MasterDat
     if !config.masters.is_object() {
         config.masters = json!({});
     }
-    config.masters[&master_data.name] =
-        match serde_json::to_value(master_data) {
-            Ok(value) => value,
-            Err(e) => {
-                error!("Failed to serialize master data for {}: {}", master_data.name, e);
-                json!({})
-            }
-        };
+    config.masters[&master_data.name] = match serde_json::to_value(master_data) {
+        Ok(value) => value,
+        Err(e) => {
+            error!(
+                "Failed to serialize master data for {}: {}",
+                master_data.name, e
+            );
+            return false;
+        }
+    };
     match crate::config::write_config(pool, &config).await {
         Ok(_) => true,
         Err(e) => {

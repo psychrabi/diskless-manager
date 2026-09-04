@@ -89,6 +89,7 @@ struct RawCounters {
 pub struct LinuxMetricsReader {
     proc_root: PathBuf,
     zfs_kstat_root: PathBuf,
+    target_core_root: PathBuf,
 }
 
 impl Default for LinuxMetricsReader {
@@ -96,6 +97,7 @@ impl Default for LinuxMetricsReader {
         Self {
             proc_root: PathBuf::from("/proc"),
             zfs_kstat_root: PathBuf::from("/proc/spl/kstat/zfs"),
+            target_core_root: PathBuf::from("/sys/kernel/config/target/core"),
         }
     }
 }
@@ -104,9 +106,38 @@ impl LinuxMetricsReader {
     #[cfg(test)]
     fn with_roots(proc_root: PathBuf, zfs_kstat_root: PathBuf) -> Self {
         Self {
+            target_core_root: proc_root.join("missing-target-core"),
             proc_root,
             zfs_kstat_root,
         }
+    }
+
+    fn read_lio_backstore(&self, backstore: &str) -> Result<DirectionalCounters, String> {
+        let plugins = fs::read_dir(&self.target_core_root).map_err(|error| error.to_string())?;
+        for plugin in plugins {
+            let plugin = plugin.map_err(|error| error.to_string())?;
+            let statistics = plugin.path().join(backstore).join("statistics/scsi_lu");
+            if !statistics.is_dir() {
+                continue;
+            }
+            let read_mbytes = fs::read_to_string(statistics.join("read_mbytes"))
+                .map_err(|error| error.to_string())?
+                .trim()
+                .parse::<u64>()
+                .map_err(|error| error.to_string())?;
+            let write_mbytes = fs::read_to_string(statistics.join("write_mbytes"))
+                .map_err(|error| error.to_string())?
+                .trim()
+                .parse::<u64>()
+                .map_err(|error| error.to_string())?;
+            return Ok(DirectionalCounters {
+                from_client_bytes: write_mbytes.saturating_mul(1024 * 1024),
+                to_client_bytes: read_mbytes.saturating_mul(1024 * 1024),
+            });
+        }
+        Err(format!(
+            "LIO backstore statistics not found for {backstore}"
+        ))
     }
 
     fn read(&self, clients: &[IpAddr], iscsi_port: u16) -> RawCounters {
@@ -184,10 +215,13 @@ impl LinuxMetricsReader {
         let mut found_pool = false;
         for entry in entries {
             let entry = entry.map_err(|error| error.to_string())?;
-            let io_path = entry.path().join("io");
-            if !io_path.is_file() {
+            let pool_path = entry.path();
+            let io_path = [pool_path.join("io"), pool_path.join("iostats")]
+                .into_iter()
+                .find(|candidate| candidate.is_file());
+            let Some(io_path) = io_path else {
                 continue;
-            }
+            };
             let content = fs::read_to_string(&io_path).map_err(|error| error.to_string())?;
             let counters = parse_zfs_kstat(&content)
                 .ok_or_else(|| format!("invalid ZFS kstat {}", io_path.display()))?;
@@ -207,6 +241,7 @@ impl LinuxMetricsReader {
 pub struct MetricsCollector {
     reader: LinuxMetricsReader,
     previous: Mutex<Option<(Instant, RawCounters)>>,
+    previous_lio: Mutex<Option<(Instant, HashMap<String, DirectionalCounters>)>>,
 }
 
 impl Default for MetricsCollector {
@@ -214,6 +249,7 @@ impl Default for MetricsCollector {
         Self {
             reader: LinuxMetricsReader::default(),
             previous: Mutex::new(None),
+            previous_lio: Mutex::new(None),
         }
     }
 }
@@ -231,6 +267,39 @@ impl MetricsCollector {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let raw = self.reader.read(&valid_clients, iscsi_port);
         Self::finish_sample_with_previous(client_ips, raw, &mut previous)
+    }
+
+    /// Collect per-client iSCSI traffic from LIO's authoritative backstore counters.
+    pub fn collect_lio(&self, clients: &[(String, String)]) -> HashMap<String, Throughput> {
+        let now = Instant::now();
+        let current = clients
+            .iter()
+            .filter_map(|(ip, backstore)| {
+                self.reader
+                    .read_lio_backstore(backstore)
+                    .ok()
+                    .map(|counters| (ip.clone(), counters))
+            })
+            .collect::<HashMap<_, _>>();
+        let mut previous = self
+            .previous_lio
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let rates = previous
+            .as_ref()
+            .map(|(previous_time, old)| {
+                let elapsed = now.duration_since(*previous_time).as_secs_f64();
+                current
+                    .iter()
+                    .filter_map(|(ip, counters)| {
+                        old.get(ip)
+                            .map(|old| (ip.clone(), throughput(*counters, *old, elapsed)))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        *previous = Some((now, current));
+        rates
     }
 
     #[cfg(test)]
@@ -420,14 +489,27 @@ fn parse_zfs_kstat(content: &str) -> Option<ZfsCounters> {
     let mut found_read = false;
     let mut found_write = false;
     for line in content.lines() {
-        let mut fields = line.split_whitespace();
-        let Some(name) = fields.next() else { continue };
-        if name == "nread" {
-            result.read_bytes = fields.nth(2)?.parse().ok()?;
-            found_read = true;
-        } else if name == "nwritten" {
-            result.write_bytes = fields.nth(2)?.parse().ok()?;
-            found_write = true;
+        let fields = line.split_whitespace().collect::<Vec<_>>();
+        let Some(name) = fields.first() else { continue };
+        let value = fields.last().and_then(|value| value.parse::<u64>().ok());
+        match *name {
+            "nread" => {
+                result.read_bytes = value?;
+                found_read = true;
+            }
+            "nwritten" => {
+                result.write_bytes = value?;
+                found_write = true;
+            }
+            "arc_read_bytes" | "direct_read_bytes" => {
+                result.read_bytes = result.read_bytes.saturating_add(value?);
+                found_read = true;
+            }
+            "arc_write_bytes" | "direct_write_bytes" => {
+                result.write_bytes = result.write_bytes.saturating_add(value?);
+                found_write = true;
+            }
+            _ => {}
         }
     }
     (found_read && found_write).then_some(result)
@@ -464,6 +546,28 @@ mod tests {
                 write_bytes: 250
             }
         );
+    }
+
+    #[test]
+    fn parses_current_three_column_zfs_kstats() {
+        let counters = parse_zfs_kstat(
+            "13 1 0x01 2 320 0 0\nname type data\nnread 4 1048576\nnwritten 4 2097152\n",
+        )
+        .unwrap();
+
+        assert_eq!(counters.read_bytes, 1_048_576);
+        assert_eq!(counters.write_bytes, 2_097_152);
+    }
+
+    #[test]
+    fn parses_current_pool_iostats_counters() {
+        let counters = parse_zfs_kstat(
+            "name type data\narc_read_bytes 4 100\narc_write_bytes 4 200\ndirect_read_bytes 4 30\ndirect_write_bytes 4 40\n",
+        )
+        .unwrap();
+
+        assert_eq!(counters.read_bytes, 130);
+        assert_eq!(counters.write_bytes, 240);
     }
 
     #[test]
@@ -504,6 +608,27 @@ mod tests {
             2
         );
         assert_eq!(raw.zfs.unwrap().write_bytes, 4);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn reads_lio_backstore_counters_with_client_directions() {
+        let root =
+            std::env::temp_dir().join(format!("diskless-lio-metrics-{}", uuid::Uuid::new_v4()));
+        let statistics = root.join("core/iblock_0/block_pc001/statistics/scsi_lu");
+        std::fs::create_dir_all(&statistics).unwrap();
+        std::fs::write(statistics.join("read_mbytes"), "12\n").unwrap();
+        std::fs::write(statistics.join("write_mbytes"), "3\n").unwrap();
+        let reader = LinuxMetricsReader {
+            proc_root: root.join("proc"),
+            zfs_kstat_root: root.join("zfs"),
+            target_core_root: root.join("core"),
+        };
+
+        let counters = reader.read_lio_backstore("block_pc001").unwrap();
+
+        assert_eq!(counters.to_client_bytes, 12 * 1024 * 1024);
+        assert_eq!(counters.from_client_bytes, 3 * 1024 * 1024);
         let _ = std::fs::remove_dir_all(root);
     }
 

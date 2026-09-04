@@ -42,19 +42,9 @@ pub async fn write_config(pool: &sqlx::SqlitePool, config: &AppConfig) -> anyhow
     set_config(config);
 
     // 1. Persist masters and services to app_config
-    upsert_config_value(
-        pool,
-        "masters",
-        &serde_json::to_string(&config.masters)?,
-    )
-    .await?;
+    upsert_config_value(pool, "masters", &serde_json::to_string(&config.masters)?).await?;
 
-    upsert_config_value(
-        pool,
-        "services",
-        &serde_json::to_string(&config.services)?,
-    )
-    .await?;
+    upsert_config_value(pool, "services", &serde_json::to_string(&config.services)?).await?;
 
     // 2. Persist each setting under its own key in the app_config table
     if let Some(obj) = config.settings.as_object() {

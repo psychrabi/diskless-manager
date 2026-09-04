@@ -1,10 +1,7 @@
 use crate::error::AppError;
-use parking_lot::Mutex;
 use ssh2::Session;
-use std::collections::HashMap;
 use std::io::Read;
-use std::net::TcpStream;
-use std::sync::Arc;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
 
@@ -44,16 +41,9 @@ impl Default for SshConfig {
     }
 }
 
-/// SSH connection pool entry
-struct PooledConnection {
-    session: Session,
-    last_used: std::time::Instant,
-}
-
-/// SSH executor with connection pooling and retry logic
+/// SSH executor with isolated command sessions and retry logic.
 pub struct SshExecutor {
     pub config: SshConfig,
-    connection_pool: Arc<Mutex<HashMap<String, PooledConnection>>>,
 }
 
 impl SshExecutor {
@@ -64,10 +54,7 @@ impl SshExecutor {
 
     /// Create a new SSH executor with custom configuration
     pub fn with_config(config: SshConfig) -> Self {
-        Self {
-            config,
-            connection_pool: Arc::new(Mutex::new(HashMap::new())),
-        }
+        Self { config }
     }
 
     /// Execute a command on a remote host with retry logic
@@ -124,19 +111,25 @@ impl SshExecutor {
 
         debug!("Executing SSH command on {}: {}", host, command);
 
-        // Establish connection
-        let session = self.get_or_create_connection(host).await?;
-
-        // Execute command with timeout.
         let host_owned = host.to_string();
+        let worker_host = host_owned.clone();
         let command_owned = command.to_string();
+        let username = self.config.username.clone();
+        let connection_timeout = self.config.connection_timeout;
         let timeout_secs = self.config.command_timeout;
 
-        // All blocking channel/read operations run inside spawn_blocking so a
-        // slow remote host cannot stall the async runtime.
+        // Each worker owns its SSH session. If the async timeout fires, the
+        // blocking worker may take until its socket deadline to unwind, but it
+        // cannot race with a retry or mutate a shared session.
         let spawned = tokio::time::timeout(
             Duration::from_secs(timeout_secs),
             tokio::task::spawn_blocking(move || {
+                let session = Self::create_connection_blocking(
+                    &worker_host,
+                    &username,
+                    connection_timeout,
+                    timeout_secs,
+                )?;
                 Self::execute_command_internal_blocking(&session, &command_owned)
             }),
         )
@@ -146,19 +139,16 @@ impl SshExecutor {
             AppError::SshTimeout
         })?;
 
-        let result = spawned
-            .map_err(|e| {
-                error!("SSH worker task failed on {}: {}", host_owned, e);
-                AppError::SshCommand(format!("SSH worker task failed: {}", e))
-            })??;
+        let result = spawned.map_err(|e| {
+            error!("SSH worker task failed on {}: {}", host_owned, e);
+            AppError::SshCommand(format!("SSH worker task failed: {}", e))
+        })??;
 
         let duration_ms = start_time.elapsed().as_millis() as u64;
 
         info!(
             "SSH command completed on {} with exit code {} ({}ms)",
-            host_owned,
-            result.exit_code,
-            duration_ms
+            host_owned, result.exit_code, duration_ms
         );
 
         Ok(CommandResult {
@@ -173,7 +163,7 @@ impl SshExecutor {
     pub async fn check_connectivity(&self, host: &str) -> Result<bool, AppError> {
         debug!("Checking SSH connectivity to {}", host);
 
-        match self.get_or_create_connection(host).await {
+        match self.create_connection(host).await {
             Ok(_) => {
                 info!("SSH connectivity check passed for {}", host);
                 Ok(true)
@@ -185,58 +175,28 @@ impl SshExecutor {
         }
     }
 
-    /// Get or create a connection from the pool
-    async fn get_or_create_connection(&self, host: &str) -> Result<Session, AppError> {
-        // Check if we have a pooled connection
-        {
-            let mut pool = self.connection_pool.lock();
-            if let Some(pooled) = pool.get_mut(host) {
-                // Check if connection is still valid (simple check)
-                if pooled.last_used.elapsed() < Duration::from_secs(300) {
-                    debug!("Reusing pooled SSH connection to {}", host);
-                    pooled.last_used = std::time::Instant::now();
-                    // Session::clone shares the underlying connection via Arc
-                    return Ok(pooled.session.clone());
-                } else {
-                    // Connection expired, remove and recreate
-                    pool.remove(host);
-                }
-            }
-        }
-
-        // Create new connection
-        let session = self.create_connection(host).await?;
-
-        // Store in pool for future reuse
-        {
-            let mut pool = self.connection_pool.lock();
-            pool.insert(
-                host.to_string(),
-                PooledConnection {
-                    session: session.clone(),
-                    last_used: std::time::Instant::now(),
-                },
-            );
-        }
-
-        Ok(session)
-    }
-
     /// Create a new SSH connection
     async fn create_connection(&self, host: &str) -> Result<Session, AppError> {
         debug!("Creating new SSH connection to {}", host);
 
         let host_owned = host.to_string();
         let user = self.config.username.clone();
-        let timeout = self.config.connection_timeout;
+        let connection_timeout = self.config.connection_timeout;
 
         // All blocking libssh2 / network calls must run off the async runtime.
-        tokio::task::spawn_blocking(move || Self::create_connection_blocking(&host_owned, &user, timeout))
-            .await
-            .map_err(|e| {
-                error!("SSH connection task panicked: {}", e);
-                AppError::SshConnection(format!("SSH worker task error: {}", e))
-            })?
+        tokio::task::spawn_blocking(move || {
+            Self::create_connection_blocking(
+                &host_owned,
+                &user,
+                connection_timeout,
+                connection_timeout,
+            )
+        })
+        .await
+        .map_err(|e| {
+            error!("SSH connection task panicked: {}", e);
+            AppError::SshConnection(format!("SSH worker task error: {}", e))
+        })?
     }
 
     /// Blocking-only SSH connection logic (runs in spawn_blocking).
@@ -244,19 +204,26 @@ impl SshExecutor {
         host: &str,
         username: &str,
         connection_timeout: u64,
+        io_timeout: u64,
     ) -> Result<Session, AppError> {
-        let tcp = TcpStream::connect(format!("{}:22", host)).map_err(|e| {
-            error!("Failed to connect to SSH server at {}: {}", host, e);
-            AppError::SshConnection(format!("Failed to connect to {}: {}", host, e))
-        })?;
+        let address = format!("{}:22", host)
+            .to_socket_addrs()
+            .map_err(|e| AppError::SshConnection(format!("Failed to resolve {}: {}", host, e)))?
+            .next()
+            .ok_or_else(|| AppError::SshConnection(format!("No address found for {}", host)))?;
+        let tcp = TcpStream::connect_timeout(&address, Duration::from_secs(connection_timeout))
+            .map_err(|e| {
+                error!("Failed to connect to SSH server at {}: {}", host, e);
+                AppError::SshConnection(format!("Failed to connect to {}: {}", host, e))
+            })?;
 
-        tcp.set_read_timeout(Some(Duration::from_secs(connection_timeout)))
+        tcp.set_read_timeout(Some(Duration::from_secs(io_timeout)))
             .map_err(|e| {
                 error!("Failed to set read timeout: {}", e);
                 AppError::SshConnection(format!("Failed to set read timeout: {}", e))
             })?;
 
-        tcp.set_write_timeout(Some(Duration::from_secs(connection_timeout)))
+        tcp.set_write_timeout(Some(Duration::from_secs(io_timeout)))
             .map_err(|e| {
                 error!("Failed to set write timeout: {}", e);
                 AppError::SshConnection(format!("Failed to set write timeout: {}", e))
@@ -346,11 +313,9 @@ impl SshExecutor {
         })
     }
 
-    /// Clear the connection pool
+    /// Retained for API compatibility; sessions are no longer shared.
     pub fn clear_pool(&self) {
-        let mut pool = self.connection_pool.lock();
-        pool.clear();
-        debug!("SSH connection pool cleared");
+        debug!("SSH sessions are isolated; there is no connection pool to clear");
     }
 }
 

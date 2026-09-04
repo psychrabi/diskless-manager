@@ -36,17 +36,31 @@ pub struct Pagination {
     pub offset: Option<i32>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 pub struct ErrorResponse {
     pub status: u16,
     pub error: String,
+}
+
+impl Serialize for ErrorResponse {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        crate::api::error::serialize_api_error(
+            self.status,
+            &self.error,
+            serde_json::json!({}),
+            serializer,
+        )
+    }
 }
 
 impl IntoResponse for ErrorResponse {
     fn into_response(self) -> Response {
         (
             StatusCode::from_u16(self.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-            Json(serde_json::json!({ "error": self.error })),
+            Json(self),
         )
             .into_response()
     }
@@ -454,7 +468,10 @@ pub async fn update_client(
 
                         return Err((
                             StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ErrorResponse { status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(), error: error_msg }),
+                            Json(ErrorResponse {
+                                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                                error: error_msg,
+                            }),
                         ));
                     }
 
@@ -468,7 +485,10 @@ pub async fn update_client(
 
                         return Err((
                             StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ErrorResponse { status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(), error: error_msg }),
+                            Json(ErrorResponse {
+                                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                                error: error_msg,
+                            }),
                         ));
                     }
                 }
@@ -485,7 +505,10 @@ pub async fn update_client(
 
                     return Err((
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(ErrorResponse { status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(), error: error_msg }),
+                        Json(ErrorResponse {
+                            status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                            error: error_msg,
+                        }),
                     ));
                 }
 
@@ -503,16 +526,15 @@ pub async fn update_client(
                         &format!("root@{}", ip),
                         "reboot",
                     ]);
-                    let output = crate::api::util::run_command(&mut cmd).await
-                        .map_err(|e| {
-                            (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                Json(ErrorResponse {
-                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                    error: format!("Failed to execute SSH: {}", e),
-                                }),
-                            )
-                        })?;
+                    let output = crate::api::util::run_command(&mut cmd).await.map_err(|e| {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(ErrorResponse {
+                                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                                error: format!("Failed to execute SSH: {}", e),
+                            }),
+                        )
+                    })?;
 
                     if !output.status.success() {
                         let error_msg = format!(
@@ -522,7 +544,10 @@ pub async fn update_client(
 
                         return Err((
                             StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ErrorResponse { status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(), error: error_msg }),
+                            Json(ErrorResponse {
+                                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                                error: error_msg,
+                            }),
                         ));
                     }
                 } else {
@@ -539,16 +564,15 @@ pub async fn update_client(
                         "-t",
                         "0",
                     ]);
-                    let output = crate::api::util::run_command(&mut cmd).await
-                        .map_err(|e| {
-                            (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                Json(ErrorResponse {
-                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                    error: format!("Failed to execute net rpc: {}", e),
-                                }),
-                            )
-                        })?;
+                    let output = crate::api::util::run_command(&mut cmd).await.map_err(|e| {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(ErrorResponse {
+                                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                                error: format!("Failed to execute net rpc: {}", e),
+                            }),
+                        )
+                    })?;
 
                     if !output.status.success() {
                         let error_msg = format!(
@@ -558,7 +582,10 @@ pub async fn update_client(
 
                         return Err((
                             StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ErrorResponse { status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(), error: error_msg }),
+                            Json(ErrorResponse {
+                                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                                error: error_msg,
+                            }),
                         ));
                     }
                 }
@@ -579,7 +606,10 @@ pub async fn update_client(
 
                     return Err((
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(ErrorResponse { status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(), error: error_msg }),
+                        Json(ErrorResponse {
+                            status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                            error: error_msg,
+                        }),
                     ));
                 }
 
@@ -597,16 +627,15 @@ pub async fn update_client(
                         &format!("root@{}", ip),
                         "poweroff",
                     ]);
-                    let output = crate::api::util::run_command(&mut cmd).await
-                        .map_err(|e| {
-                            (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                Json(ErrorResponse {
-                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                    error: format!("Failed to execute SSH: {}", e),
-                                }),
-                            )
-                        })?;
+                    let output = crate::api::util::run_command(&mut cmd).await.map_err(|e| {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(ErrorResponse {
+                                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                                error: format!("Failed to execute SSH: {}", e),
+                            }),
+                        )
+                    })?;
 
                     if !output.status.success() {
                         let error_msg = format!(
@@ -616,7 +645,10 @@ pub async fn update_client(
 
                         return Err((
                             StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ErrorResponse { status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(), error: error_msg }),
+                            Json(ErrorResponse {
+                                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                                error: error_msg,
+                            }),
                         ));
                     }
                 } else {
@@ -632,16 +664,15 @@ pub async fn update_client(
                         "-t",
                         "0",
                     ]);
-                    let output = crate::api::util::run_command(&mut cmd).await
-                        .map_err(|e| {
-                            (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                Json(ErrorResponse {
-                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                    error: format!("Failed to execute net rpc: {}", e),
-                                }),
-                            )
-                        })?;
+                    let output = crate::api::util::run_command(&mut cmd).await.map_err(|e| {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(ErrorResponse {
+                                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                                error: format!("Failed to execute net rpc: {}", e),
+                            }),
+                        )
+                    })?;
 
                     if !output.status.success() {
                         let error_msg = format!(
@@ -651,7 +682,10 @@ pub async fn update_client(
 
                         return Err((
                             StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ErrorResponse { status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(), error: error_msg }),
+                            Json(ErrorResponse {
+                                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                                error: error_msg,
+                            }),
                         ));
                     }
                 }
@@ -705,8 +739,8 @@ pub async fn update_client(
                         (
                             StatusCode::INTERNAL_SERVER_ERROR,
                             Json(ErrorResponse {
-                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                    error: format!("Failed to update client mode: {}", e),
+                                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                                error: format!("Failed to update client mode: {}", e),
                             }),
                         )
                     })?;
@@ -748,7 +782,15 @@ pub async fn update_client(
                     Some(snapshot),
                     existing_client.use_game_disk.unwrap_or(false),
                 )
-                .map_err(|error| (StatusCode::BAD_REQUEST, Json(ErrorResponse { status: StatusCode::BAD_REQUEST.as_u16(), error })))?;
+                .map_err(|error| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        Json(ErrorResponse {
+                            status: StatusCode::BAD_REQUEST.as_u16(),
+                            error,
+                        }),
+                    )
+                })?;
 
                 preserve_persisted_target_iqn(&mut spec, &existing_client);
 
@@ -756,7 +798,10 @@ pub async fn update_client(
                     storage_from_client(&settings, &existing_client).map_err(|error| {
                         (
                             StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ErrorResponse { status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(), error }),
+                            Json(ErrorResponse {
+                                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                                error,
+                            }),
                         )
                     })?;
 
@@ -768,8 +813,8 @@ pub async fn update_client(
                         (
                             StatusCode::INTERNAL_SERVER_ERROR,
                             Json(ErrorResponse {
-                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                    error: format!("Failed to reset client storage: {}", error),
+                                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                                error: format!("Failed to reset client storage: {}", error),
                             }),
                         )
                     })?;
@@ -803,7 +848,15 @@ pub async fn update_client(
                     source,
                     existing_client.use_game_disk.unwrap_or(false),
                 )
-                .map_err(|error| (StatusCode::BAD_REQUEST, Json(ErrorResponse { status: StatusCode::BAD_REQUEST.as_u16(), error })))?;
+                .map_err(|error| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        Json(ErrorResponse {
+                            status: StatusCode::BAD_REQUEST.as_u16(),
+                            error,
+                        }),
+                    )
+                })?;
 
                 preserve_persisted_target_iqn(&mut spec, &existing_client);
 
@@ -811,7 +864,10 @@ pub async fn update_client(
                     storage_from_client(&settings, &existing_client).map_err(|error| {
                         (
                             StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ErrorResponse { status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(), error }),
+                            Json(ErrorResponse {
+                                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                                error,
+                            }),
                         )
                     })?;
 
@@ -823,8 +879,8 @@ pub async fn update_client(
                         (
                             StatusCode::INTERNAL_SERVER_ERROR,
                             Json(ErrorResponse {
-                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                    error: format!("Failed to reset client storage: {}", error),
+                                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                                error: format!("Failed to reset client storage: {}", error),
                             }),
                         )
                     })?;
@@ -874,7 +930,10 @@ pub async fn update_client(
     let current_storage = storage_from_client(&settings, &existing_client).map_err(|error| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse { status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(), error }),
+            Json(ErrorResponse {
+                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                error,
+            }),
         )
     })?;
 
@@ -905,7 +964,15 @@ pub async fn update_client(
             .or(existing_client.use_game_disk)
             .unwrap_or(false),
     )
-    .map_err(|error| (StatusCode::BAD_REQUEST, Json(ErrorResponse { status: StatusCode::BAD_REQUEST.as_u16(), error })))?;
+    .map_err(|error| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                status: StatusCode::BAD_REQUEST.as_u16(),
+                error,
+            }),
+        )
+    })?;
 
     preserve_persisted_target_iqn(&mut storage_spec, &existing_client);
 
@@ -941,8 +1008,8 @@ pub async fn update_client(
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
-                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                    error: format!("Failed to update client: {}", e),
+                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                error: format!("Failed to update client: {}", e),
             }),
         )
     })?;
@@ -1047,4 +1114,27 @@ pub async fn get_client_boot_history(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(history))
+}
+
+#[cfg(test)]
+mod error_contract_tests {
+    use super::ErrorResponse;
+    use axum::{body::to_bytes, http::StatusCode, response::IntoResponse};
+
+    #[tokio::test]
+    async fn client_errors_use_the_shared_structured_contract() {
+        let response = ErrorResponse {
+            status: StatusCode::BAD_REQUEST.as_u16(),
+            error: "invalid client".to_string(),
+        }
+        .into_response();
+        let body = to_bytes(response.into_body(), 4096).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(payload["code"], "invalid_request");
+        assert_eq!(payload["message"], "invalid client");
+        assert!(payload["operation_id"].as_str().is_some());
+        assert_eq!(payload["details"], serde_json::json!({}));
+        assert!(payload.get("error").is_none());
+    }
 }

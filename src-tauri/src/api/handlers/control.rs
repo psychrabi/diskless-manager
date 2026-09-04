@@ -116,18 +116,35 @@ pub struct AuditLogsResponse {
 }
 
 /// Error response
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 pub struct ErrorResponse {
     pub status: u16,
     pub error: String,
     pub details: Option<String>,
 }
 
+impl Serialize for ErrorResponse {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        crate::api::error::serialize_api_error(
+            self.status,
+            &self.error,
+            self.details.as_ref().map_or_else(
+                || serde_json::json!({}),
+                |details| serde_json::json!({ "reason": details }),
+            ),
+            serializer,
+        )
+    }
+}
+
 impl IntoResponse for ErrorResponse {
     fn into_response(self) -> Response {
         (
             StatusCode::from_u16(self.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-            Json(serde_json::json!({ "error": self.error, "details": self.details })),
+            Json(self),
         )
             .into_response()
     }
@@ -188,19 +205,17 @@ pub async fn shutdown_client(
             &format!("root@{}", ip),
             "poweroff",
         ]);
-        let output = crate::api::util::run_command(&mut cmd)
-            .await
-            .map_err(|e| {
-                error!("Failed to execute SSH: {}", e);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                        error: format!("Failed to execute SSH: {}", e),
-                        details: None,
-                    }),
-                )
-            })?;
+        let output = crate::api::util::run_command(&mut cmd).await.map_err(|e| {
+            error!("Failed to execute SSH: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                    error: format!("Failed to execute SSH: {}", e),
+                    details: None,
+                }),
+            )
+        })?;
 
         if !output.status.success() {
             let msg = format!(
@@ -227,19 +242,17 @@ pub async fn shutdown_client(
             "-t",
             "0",
         ]);
-        let output = crate::api::util::run_command(&mut cmd)
-            .await
-            .map_err(|e| {
-                error!("Failed to execute SSH: {}", e);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                        error: format!("Failed to execute SSH: {}", e),
-                        details: None,
-                    }),
-                )
-            })?;
+        let output = crate::api::util::run_command(&mut cmd).await.map_err(|e| {
+            error!("Failed to execute SSH: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                    error: format!("Failed to execute SSH: {}", e),
+                    details: None,
+                }),
+            )
+        })?;
 
         if !output.status.success() {
             let msg = format!(
@@ -341,19 +354,17 @@ pub async fn reboot_client(
             &format!("root@{}", ip),
             "reboot",
         ]);
-        let output = crate::api::util::run_command(&mut cmd)
-            .await
-            .map_err(|e| {
-                error!("Failed to execute SSH: {}", e);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                        error: format!("Failed to execute SSH: {}", e),
-                        details: None,
-                    }),
-                )
-            })?;
+        let output = crate::api::util::run_command(&mut cmd).await.map_err(|e| {
+            error!("Failed to execute SSH: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                    error: format!("Failed to execute SSH: {}", e),
+                    details: None,
+                }),
+            )
+        })?;
 
         if !output.status.success() {
             let msg = format!(
@@ -381,19 +392,17 @@ pub async fn reboot_client(
             "-t",
             "0",
         ]);
-        let output = crate::api::util::run_command(&mut cmd)
-            .await
-            .map_err(|e| {
-                error!("Failed to execute SSH: {}", e);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                        error: format!("Failed to execute SSH: {}", e),
-                        details: None,
-                    }),
-                )
-            })?;
+        let output = crate::api::util::run_command(&mut cmd).await.map_err(|e| {
+            error!("Failed to execute SSH: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                    error: format!("Failed to execute SSH: {}", e),
+                    details: None,
+                }),
+            )
+        })?;
 
         if !output.status.success() {
             let msg = format!(
@@ -832,7 +841,7 @@ pub async fn cancel_operation(
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
-                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
                     error: "Failed to cancel scheduled operation".to_string(),
                     details: Some(e.to_string()),
                 }),

@@ -94,7 +94,10 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route("/api/auth/bootstrap", post(bootstrap_first_admin))
         .route("/api/auth/admin/exists", get(check_admin_exists))
         .layer(DefaultBodyLimit::max(16 * 1024 * 1024))
-        .layer(TimeoutLayer::with_status_code(axum::http::StatusCode::REQUEST_TIMEOUT, Duration::from_secs(300)))
+        .layer(TimeoutLayer::with_status_code(
+            axum::http::StatusCode::REQUEST_TIMEOUT,
+            Duration::from_secs(300),
+        ))
         .with_state(state.clone());
 
     let ws_router = Router::new()
@@ -257,6 +260,9 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .layer(TraceLayer::new_for_http())
         .layer(ConcurrencyLimitLayer::new(100))
         .layer(DefaultBodyLimit::max(16 * 1024 * 1024))
-        .layer(TimeoutLayer::with_status_code(axum::http::StatusCode::REQUEST_TIMEOUT, Duration::from_secs(300)))
+        .layer(TimeoutLayer::with_status_code(
+            axum::http::StatusCode::REQUEST_TIMEOUT,
+            Duration::from_secs(300),
+        ))
         .with_state(state)
 }

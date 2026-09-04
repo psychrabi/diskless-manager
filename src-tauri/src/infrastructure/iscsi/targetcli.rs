@@ -1,5 +1,6 @@
 use anyhow::{bail, Context, Result};
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use crate::infrastructure::command::{run_command, run_command_output};
 
@@ -96,6 +97,22 @@ impl TargetCliProvisioner {
         format!("/backstores/block/{backstore}")
     }
 
+    fn wait_for_block_device(path: &Path) -> bool {
+        const DEVICE_TIMEOUT: Duration = Duration::from_secs(5);
+        const POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+        let deadline = Instant::now() + DEVICE_TIMEOUT;
+        loop {
+            if path.exists() {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(POLL_INTERVAL);
+        }
+    }
+
     fn validate_spec(spec: &IscsiTargetSpec) -> Result<()> {
         if spec.target_iqn.trim().is_empty() {
             bail!("iSCSI target IQN cannot be empty");
@@ -140,7 +157,7 @@ impl TargetCliProvisioner {
                 );
             }
 
-            if !Path::new(&lun.block_device).exists() {
+            if !Self::wait_for_block_device(&lun.block_device) {
                 bail!(
                     "iSCSI block device does not exist: {}",
                     lun.block_device.display()
@@ -657,5 +674,35 @@ impl IscsiProvisioner for TargetCliProvisioner {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TargetCliProvisioner;
+    use crate::infrastructure::iscsi::IscsiTargetSpec;
+    use std::{fs, thread, time::Duration};
+
+    #[test]
+    fn validation_waits_for_a_delayed_zvol_device_node() {
+        let path =
+            std::env::temp_dir().join(format!("diskless-delayed-zvol-{}", uuid::Uuid::new_v4()));
+        let delayed_path = path.clone();
+        let creator = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            fs::write(delayed_path, []).unwrap();
+        });
+
+        let spec = IscsiTargetSpec::new(
+            "iqn.2024-01.com.diskless:client.pc001",
+            "block_pc001",
+            &path,
+            0,
+        );
+        let result = TargetCliProvisioner::validate_spec(&spec);
+
+        creator.join().unwrap();
+        let _ = fs::remove_file(path);
+        assert!(result.is_ok(), "{result:?}");
     }
 }

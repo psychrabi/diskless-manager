@@ -18,9 +18,24 @@ use crate::{
     state::AppState,
 };
 
-// Track when clients came online for uptime calculation
+// Track when clients established their current iSCSI session.
 lazy_static::lazy_static! {
-    static ref CLIENT_ONLINE_TIMES: Arc<Mutex<HashMap<String, i64>>> = Arc::new(Mutex::new(HashMap::new()));
+    static ref CLIENT_SESSION_START_TIMES: Arc<Mutex<HashMap<String, i64>>> = Arc::new(Mutex::new(HashMap::new()));
+}
+
+fn session_uptime(
+    session_starts: &mut HashMap<String, i64>,
+    client_ip: &str,
+    connected: bool,
+    now: i64,
+) -> i64 {
+    if connected {
+        let started = session_starts.entry(client_ip.to_string()).or_insert(now);
+        now.saturating_sub(*started)
+    } else {
+        session_starts.remove(client_ip);
+        0
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -55,7 +70,7 @@ pub async fn ws_metrics_handler(
     State(state): State<AppState>,
 ) -> impl IntoResponse {
     log::info!("WebSocket upgrade request received");
-    ws.on_upgrade(|socket| {
+    ws.protocols(["diskless-auth"]).on_upgrade(|socket| {
         log::info!("WebSocket connection established");
         handle_metrics_socket(socket, state)
     })
@@ -119,35 +134,59 @@ async fn handle_metrics_socket(socket: WebSocket, state: AppState) {
 
 pub(crate) async fn fetch_metrics(state: &AppState) -> Result<MetricsUpdate, String> {
     let client_ips = state.client_ips.read().await.clone();
-    let iscsi_port = state.settings.read().await.iscsi.portal_port;
-    let collector = Arc::clone(&state.metrics_collector);
-    let snapshot = tokio::task::spawn_blocking(move || collector.collect(&client_ips, iscsi_port))
+    let settings = state.settings.read().await.clone();
+    let iscsi_port = settings.iscsi.portal_port;
+    let registered_clients = crate::core::client::ClientManager::new(state.db_pool.clone())
+        .list()
         .await
-        .map_err(|error| format!("metrics collection task failed: {error}"))?;
+        .map_err(|error| format!("failed to load clients for metrics: {error}"))?;
+    let mut target_by_ip = HashMap::new();
+    let mut lio_sources = Vec::new();
+    for client in registered_clients {
+        let normalized_name = client.name.trim().to_lowercase();
+        let target_iqn = client.target_iqn.unwrap_or_else(|| {
+            format!(
+                "{}:client.{}",
+                settings.iscsi.target_prefix, normalized_name
+            )
+        });
+        lio_sources.push((client.ip.clone(), format!("block_{normalized_name}")));
+        target_by_ip.insert(client.ip, target_iqn);
+    }
+    let collector = Arc::clone(&state.metrics_collector);
+    let (snapshot, lio_rates) = tokio::task::spawn_blocking(move || {
+        let snapshot = collector.collect(&client_ips, iscsi_port);
+        let lio_rates = collector.collect_lio(&lio_sources);
+        (snapshot, lio_rates)
+    })
+    .await
+    .map_err(|error| format!("metrics collection task failed: {error}"))?;
 
     let mut clients = Vec::new();
-    let mut online_times = CLIENT_ONLINE_TIMES.lock().await;
+    let mut session_starts = CLIENT_SESSION_START_TIMES.lock().await;
     let now = chrono::Utc::now().timestamp();
 
-    for sample in snapshot.clients {
+    for mut sample in snapshot.clients {
         let ip = sample.ip;
-        // Determine status in real-time by pinging
-        let status = crate::utils::network::get_client_status_realtime(ip.clone());
-        let is_online = status == "Online";
-
-        // Track online time
-        let uptime_seconds = if is_online {
-            // If client just came online, record the time
-            if !online_times.contains_key(&ip) {
-                online_times.insert(ip.clone(), now);
-            }
-            // Calculate uptime from when it came online
-            now - online_times.get(&ip).copied().unwrap_or(now)
-        } else {
-            // Client is offline, remove from tracking
-            online_times.remove(&ip);
-            0
-        };
+        if let Some(lio) = lio_rates.get(&ip).cloned() {
+            sample.iscsi = Some(lio.clone());
+            // When conntrack accounting is unavailable, LIO still provides a
+            // measured lower bound for this client's network traffic.
+            sample.network.get_or_insert(lio);
+        }
+        let connected = target_by_ip
+            .get(&ip)
+            .map(|target_iqn| {
+                crate::infrastructure::iscsi::target_has_active_sessions(target_iqn).unwrap_or_else(
+                    |error| {
+                        tracing::warn!(%target_iqn, %error, "failed to inspect iSCSI session");
+                        false
+                    },
+                )
+            })
+            .unwrap_or(false);
+        let status = if connected { "Online" } else { "Offline" }.to_string();
+        let uptime_seconds = session_uptime(&mut session_starts, &ip, connected, now);
 
         clients.push(ClientMetric {
             read_speed_mbps: sample.iscsi.as_ref().map(|metric| metric.read_speed_mbps),
@@ -167,4 +206,20 @@ pub(crate) async fn fetch_metrics(state: &AppState) -> Result<MetricsUpdate, Str
         warnings: snapshot.warnings,
         timestamp: snapshot.timestamp,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::session_uptime;
+    use std::collections::HashMap;
+
+    #[test]
+    fn uptime_tracks_the_current_iscsi_connection_only() {
+        let mut starts = HashMap::new();
+
+        assert_eq!(session_uptime(&mut starts, "192.168.1.101", true, 100), 0);
+        assert_eq!(session_uptime(&mut starts, "192.168.1.101", true, 115), 15);
+        assert_eq!(session_uptime(&mut starts, "192.168.1.101", false, 120), 0);
+        assert_eq!(session_uptime(&mut starts, "192.168.1.101", true, 130), 0);
+    }
 }

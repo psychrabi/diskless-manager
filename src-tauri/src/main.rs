@@ -95,6 +95,8 @@ async fn main() {
     }
 
     if let Err(error) = app_lib::run().await {
+        // The GUI logger may not have initialized when startup fails.
+        eprintln!("Application startup failed: {error:#}");
         log::error!("Application startup failed: {error:#}");
         std::process::exit(1);
     }

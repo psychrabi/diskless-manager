@@ -7,9 +7,23 @@ use crate::commands::system::{
 };
 use crate::state::AppState;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 pub struct ErrorResponse {
     pub error: String,
+}
+
+impl Serialize for ErrorResponse {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        crate::api::error::serialize_api_error(
+            StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+            &self.error,
+            serde_json::json!({}),
+            serializer,
+        )
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -83,5 +97,24 @@ pub async fn get_windows_system_info(
                 error: format!("Failed to get system info: {}", e),
             }),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ErrorResponse;
+
+    #[test]
+    fn ssh_errors_use_the_shared_structured_contract() {
+        let payload = serde_json::to_value(ErrorResponse {
+            error: "SSH unavailable".to_string(),
+        })
+        .unwrap();
+
+        assert_eq!(payload["code"], "internal_error");
+        assert_eq!(payload["message"], "SSH unavailable");
+        assert!(payload["operation_id"].as_str().is_some());
+        assert_eq!(payload["details"], serde_json::json!({}));
+        assert!(payload.get("error").is_none());
     }
 }
