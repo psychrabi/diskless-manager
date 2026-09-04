@@ -52,14 +52,14 @@ export const MetricsProvider = ({ children }) => {
 
       // Connect to WebSocket
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const wsUrl = `${protocol}//127.0.0.1:8080/ws/metrics?token=${encodeURIComponent(token)}`;
+      const wsUrl = `${protocol}//127.0.0.1:8080/ws/metrics`;
 
       console.log(
         `Establishing global WebSocket connection (attempt ${reconnectAttemptsRef.current + 1}/${maxReconnectAttempts})`
       );
 
       try {
-        const ws = new WebSocket(wsUrl);
+        const ws = new WebSocket(wsUrl, ["diskless-auth", token]);
 
         ws.onopen = () => {
           if (unmounted) {

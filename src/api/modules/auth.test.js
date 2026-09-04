@@ -4,7 +4,7 @@ import {
   checkAdminExists,
   updateAdminPassword,
 } from "./auth";
-import { setAuthToken } from "../client";
+import { apiRequest, setAuthToken } from "../client";
 
 function response(body, status = 200) {
   return {
@@ -60,5 +60,23 @@ describe("authentication API contracts", () => {
     fetch.mockResolvedValue(response({ exists: true }));
 
     await expect(checkAdminExists()).resolves.toEqual({ exists: true });
+  });
+
+  it("surfaces the message from the structured API error contract", async () => {
+    fetch.mockResolvedValue(
+      response(
+        {
+          code: "state_conflict",
+          message: "Client has an active session",
+          operation_id: "operation-123",
+          details: {},
+        },
+        409
+      )
+    );
+
+    await expect(apiRequest("/api/clients/client-1")).rejects.toThrow(
+      "Client has an active session"
+    );
   });
 });

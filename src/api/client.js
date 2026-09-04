@@ -41,8 +41,8 @@ export async function apiRequest(endpoint, options = {}) {
       const contentType = response.headers.get("content-type");
       if (contentType?.includes("application/json")) {
         const errorData = await response.json();
-        if (errorData?.error) {
-          errorMessage = errorData.error;
+        if (errorData?.message || errorData?.error) {
+          errorMessage = errorData.message || errorData.error;
         }
       }
     } catch {

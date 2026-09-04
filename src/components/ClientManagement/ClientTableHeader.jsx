@@ -15,17 +15,11 @@ const ClientTableHeader = ({ fixed = false }) => {
         MAC Address
       </TableHead>
       <TableHead className={headerCellClass("w-36", fixed)}>IP Address</TableHead>
-      <TableHead className={headerCellClass("hidden lg:table-cell w-20", fixed)}>
-        Network ↓ <span className="hidden">(MB/s)</span>
+      <TableHead className={headerCellClass("hidden lg:table-cell w-24", fixed)}>
+        Disk Read <span className="hidden">(MB/s)</span>
       </TableHead>
-      <TableHead className={headerCellClass("hidden lg:table-cell w-20", fixed)}>
-        Network ↑ <span className="hidden">(MB/s)</span>
-      </TableHead>
-      <TableHead className={headerCellClass("hidden xl:table-cell w-20", fixed)}>
-        iSCSI ↓ <span className="hidden">(MB/s)</span>
-      </TableHead>
-      <TableHead className={headerCellClass("hidden xl:table-cell w-20", fixed)}>
-        iSCSI ↑ <span className="hidden">(MB/s)</span>
+      <TableHead className={headerCellClass("hidden lg:table-cell w-24", fixed)}>
+        Disk Write <span className="hidden">(MB/s)</span>
       </TableHead>
       <TableHead className={headerCellClass("hidden xl:table-cell", fixed)}>
         Image
