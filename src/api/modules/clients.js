@@ -32,3 +32,20 @@ export async function getClientBootHistory(clientId, limit) {
   const params = limit ? `?limit=${limit}` : "";
   return apiRequest(`/api/clients/${clientId}/boot-history${params}`);
 }
+
+export async function getClientNvmeOfStatus(clientId) {
+  return apiRequest(`/api/clients/${clientId}/nvmeof`);
+}
+
+export async function prepareClientNvmeOf(clientId, serverIp) {
+  return apiRequest(`/api/clients/${clientId}/nvmeof/prepare`, {
+    method: "POST",
+    body: JSON.stringify({ server_ip: serverIp }),
+  });
+}
+
+export async function removeClientNvmeOf(clientId) {
+  return apiRequest(`/api/clients/${clientId}/nvmeof`, {
+    method: "DELETE",
+  });
+}
