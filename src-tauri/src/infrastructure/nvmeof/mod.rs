@@ -2,9 +2,8 @@ use serde::Serialize;
 use std::{
     fs,
     io::Write,
-    os::unix::fs::symlink,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
 };
 
 pub const NVMET_ROOT: &str = "/sys/kernel/config/nvmet";
@@ -49,8 +48,7 @@ pub fn ensure_export(nqn: &str, block_device: &Path) -> Result<NvmeOfExportStatu
 
     let subsystem = subsystem_path(nqn);
     if !subsystem.exists() {
-        fs::create_dir(&subsystem)
-            .map_err(|e| format!("failed to create NVMe subsystem {nqn}: {e}"))?;
+        sudo_command(["mkdir", path_str(&subsystem)?])?;
     }
 
     // Initial Windows boot experiment: do not require host authentication yet.
@@ -59,8 +57,7 @@ pub fn ensure_export(nqn: &str, block_device: &Path) -> Result<NvmeOfExportStatu
 
     let namespace = subsystem.join("namespaces/1");
     if !namespace.exists() {
-        fs::create_dir_all(&namespace)
-            .map_err(|e| format!("failed to create namespace for {nqn}: {e}"))?;
+        sudo_command(["mkdir", "-p", path_str(&namespace)?])?;
     }
 
     let requested = block_device.to_string_lossy().into_owned();
@@ -81,8 +78,12 @@ pub fn ensure_export(nqn: &str, block_device: &Path) -> Result<NvmeOfExportStatu
 
     let link = port_link(nqn);
     if link.symlink_metadata().is_err() {
-        symlink(&subsystem, &link)
-            .map_err(|e| format!("failed to attach {nqn} to NVMe/TCP port: {e}"))?;
+        sudo_command([
+            "ln",
+            "-s",
+            path_str(&subsystem)?,
+            path_str(&link)?,
+        ])?;
     }
 
     inspect_export(nqn)
@@ -111,8 +112,7 @@ pub fn remove_export(nqn: &str) -> Result<(), String> {
 
     let link = port_link(nqn);
     if link.symlink_metadata().is_ok() {
-        fs::remove_file(&link)
-            .map_err(|e| format!("failed to detach {nqn} from NVMe/TCP port: {e}"))?;
+        sudo_command(["rm", "-f", path_str(&link)?])?;
     }
 
     let subsystem = subsystem_path(nqn);
@@ -121,18 +121,16 @@ pub fn remove_export(nqn: &str) -> Result<(), String> {
         if namespace.join("enable").exists() {
             write_attr(&namespace.join("enable"), "0")?;
         }
-        fs::remove_dir(&namespace)
-            .map_err(|e| format!("failed to remove namespace for {nqn}: {e}"))?;
+        sudo_command(["rmdir", path_str(&namespace)?])?;
     }
 
     let namespaces = subsystem.join("namespaces");
     if namespaces.exists() {
-        let _ = fs::remove_dir(&namespaces);
+        let _ = sudo_command(["rmdir", path_str(&namespaces)?]);
     }
 
     if subsystem.exists() {
-        fs::remove_dir(&subsystem)
-            .map_err(|e| format!("failed to remove NVMe subsystem {nqn}: {e}"))?;
+        sudo_command(["rmdir", path_str(&subsystem)?])?;
     }
 
     Ok(())
@@ -163,13 +161,7 @@ fn validate_block_device(path: &Path) -> Result<(), String> {
 
 fn ensure_kernel_support() -> Result<(), String> {
     for module in ["nvmet", "nvmet-tcp"] {
-        let status = Command::new("modprobe")
-            .arg(module)
-            .status()
-            .map_err(|e| format!("failed to execute modprobe {module}: {e}"))?;
-        if !status.success() {
-            return Err(format!("modprobe {module} failed with status {status}"));
-        }
+        sudo_command(["modprobe", module])?;
     }
     Ok(())
 }
@@ -187,8 +179,7 @@ fn ensure_nvmet_root() -> Result<(), String> {
 fn ensure_tcp_port() -> Result<(), String> {
     let port = Path::new(NVMET_ROOT).join("ports").join(NVMET_PORT_ID);
     if !port.exists() {
-        fs::create_dir(&port)
-            .map_err(|e| format!("failed to create nvmet port {NVMET_PORT_ID}: {e}"))?;
+        sudo_command(["mkdir", path_str(&port)?])?;
     }
 
     let current_type = read_attr(&port.join("addr_trtype")).unwrap_or_default();
@@ -225,13 +216,58 @@ fn port_link(nqn: &str) -> PathBuf {
         .join(nqn)
 }
 
+fn path_str(path: &Path) -> Result<&str, String> {
+    path.to_str()
+        .ok_or_else(|| format!("path is not valid UTF-8: {}", path.display()))
+}
+
+fn sudo_command<const N: usize>(args: [&str; N]) -> Result<(), String> {
+    let status = Command::new("sudo")
+        .arg("-n")
+        .args(args)
+        .status()
+        .map_err(|e| format!("failed to execute privileged NVMe target command: {e}"))?;
+
+    if !status.success() {
+        return Err(format!(
+            "privileged NVMe target command failed with status {status}; ensure diskless-manager has passwordless sudo for nvmet setup commands"
+        ));
+    }
+
+    Ok(())
+}
+
 fn write_attr(path: &Path, value: &str) -> Result<(), String> {
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .open(path)
-        .map_err(|e| format!("failed to open {}: {e}", path.display()))?;
-    file.write_all(value.as_bytes())
-        .map_err(|e| format!("failed to write {}: {e}", path.display()))
+    let path = path_str(path)?;
+    let mut child = Command::new("sudo")
+        .arg("-n")
+        .arg("tee")
+        .arg(path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("failed to spawn privileged write for {path}: {e}"))?;
+
+    child
+        .stdin
+        .as_mut()
+        .ok_or_else(|| format!("failed to open stdin for privileged write to {path}"))?
+        .write_all(value.as_bytes())
+        .map_err(|e| format!("failed to write NVMe target attribute {path}: {e}"))?;
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("failed waiting for privileged write to {path}: {e}"))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "failed to write NVMe target attribute {path}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+
+    Ok(())
 }
 
 fn read_attr(path: &Path) -> Option<String> {
