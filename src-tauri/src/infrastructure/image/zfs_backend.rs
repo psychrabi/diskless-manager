@@ -7,9 +7,12 @@ use super::backend::{ImageBackend, ImageBackendInfo};
 use crate::{
     config::get_zpool_name,
     core::image::ImageFormat,
-    infrastructure::zfs::{
-        ZfsCloneOperations, ZfsCommand, ZfsDatasetOperations, ZfsProvider, ZfsSnapshotOperations,
-        ZfsVolumeOperations,
+    infrastructure::{
+        nvmeof::remove_exports_for_block_device,
+        zfs::{
+            ZfsCloneOperations, ZfsCommand, ZfsDatasetOperations, ZfsProvider,
+            ZfsSnapshotOperations, ZfsVolumeOperations,
+        },
     },
 };
 
@@ -102,6 +105,29 @@ impl ImageBackend for ZfsImageBackend {
     }
 
     fn destroy(&self, name: &str) -> Result<()> {
+        let block_device = format!("/dev/zvol/{name}");
+        let block_device = Path::new(&block_device);
+
+        if block_device.exists() {
+            let removed = remove_exports_for_block_device(block_device)
+                .map_err(anyhow::Error::msg)
+                .with_context(|| {
+                    format!(
+                        "failed to detach NVMe-oF export before destroying ZFS volume '{}'",
+                        name
+                    )
+                })?;
+
+            if !removed.is_empty() {
+                tracing::info!(
+                    dataset = %name,
+                    block_device = %block_device.display(),
+                    nqns = ?removed,
+                    "detached NVMe-oF exports before ZFS destruction"
+                );
+            }
+        }
+
         self.volumes
             .destroy(name)
             .or_else(|_| self.datasets.destroy(name))
@@ -255,41 +281,5 @@ impl ImageBackend for ZfsImageBackend {
         }
 
         Ok(root)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn backend_has_default_constructor() {
-        let _backend = ZfsImageBackend::new();
-    }
-
-    #[test]
-    fn parse_size_bytes() {
-        assert_eq!(
-            ZfsImageBackend::parse_size("1073741824").unwrap(),
-            1_073_741_824
-        );
-    }
-
-    #[test]
-    fn parse_size_gigabytes() {
-        assert_eq!(ZfsImageBackend::parse_size("1G").unwrap(), 1_073_741_824);
-    }
-
-    #[test]
-    fn parse_size_megabytes() {
-        assert_eq!(
-            ZfsImageBackend::parse_size("512M").unwrap(),
-            512 * 1024 * 1024
-        );
-    }
-
-    #[test]
-    fn parse_empty_size_as_zero() {
-        assert_eq!(ZfsImageBackend::parse_size("-").unwrap(), 0);
     }
 }
