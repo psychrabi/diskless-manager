@@ -27,7 +27,7 @@ elif [[ $# -gt 0 ]]; then
   exit 2
 fi
 
-for cmd in git make gcc sha256sum; do
+for cmd in git make gcc sha256sum bash; do
   command -v "$cmd" >/dev/null || {
     echo "Missing required command: $cmd" >&2
     exit 1
@@ -51,7 +51,7 @@ cp "${EMBED_SCRIPT}" "${KURRENT_DIR}/embed/auto.ipxe"
 
 (
   cd "${KURRENT_DIR}"
-  ./build/build.sh
+  bash ./build/build.sh
 )
 
 SOURCE="${KURRENT_DIR}/dist/direct-uefi/snponly.efi"
