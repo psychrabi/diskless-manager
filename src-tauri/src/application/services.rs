@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use super::NvmeOfBootService;
 use super::ProvisioningService;
 use super::StorageService;
 use crate::persistence::ClientRepository;
@@ -18,6 +19,7 @@ use crate::infrastructure::{
 pub struct ApplicationServices {
     pub storage: Arc<StorageService>,
     pub provisioning: ProvisioningService,
+    pub nvmeof_boot: NvmeOfBootService,
 }
 
 impl ApplicationServices {
@@ -27,15 +29,18 @@ impl ApplicationServices {
         let iscsi: Arc<dyn IscsiProvisioner> = Arc::new(SafeIscsiProvisioner::new());
 
         let storage = Arc::new(StorageService::new(image_backend, iscsi));
+        let clients = ClientRepository::new(pool);
         let provisioning = ProvisioningService::new(
             storage.clone(),
-            ClientRepository::new(pool),
+            clients.clone(),
             Arc::new(IscDhcpPublisher),
         );
+        let nvmeof_boot = NvmeOfBootService::new(clients);
 
         Self {
             storage,
             provisioning,
+            nvmeof_boot,
         }
     }
 }
