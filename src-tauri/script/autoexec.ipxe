@@ -6,9 +6,9 @@ set dhcp-timeout 5000
 set dhcp-max-retries 3
 dhcp || goto failed
 
-# The production HTTP service currently defaults to port 4433. Runtime
-# generation uses the configured HTTP port, so this file is a packaged fallback.
-set boot-url http://${next-server}:4433
+# Packaged fallback for the production default HTTP port (80).
+# Runtime generation always uses the configured HTTP port.
+set boot-url http://${next-server}
 set client-mac ${net0/mac:hexraw}
 
 echo Diskless Manager client MAC: ${net0/mac}
