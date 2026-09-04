@@ -2,7 +2,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::core::config::Settings;
-use crate::infrastructure::pxe::render_client_dispatcher_autoexec;
+use crate::infrastructure::{
+    dhcp::{publish_client_ipxe, BootReservation},
+    pxe::render_client_dispatcher_autoexec,
+};
 use crate::services::{
     get_service_pid, is_systemd_service_running, run_sudo_command, write_with_sudo_tee,
     ServiceStatus,
@@ -62,6 +65,7 @@ impl HttpService {
         .await?;
 
         self.publish_autoexec().await?;
+        self.publish_cached_client_menus().await?;
         info!("Apache2 configuration written to {}", config_path.display());
 
         run_sudo_command(["a2ensite", "diskless-server"]).await?;
@@ -80,6 +84,63 @@ impl HttpService {
 
         write_with_sudo_tee(path, &autoexec).await?;
         info!("Published client-dispatching iPXE autoexec to {}", path);
+        Ok(())
+    }
+
+    /// Rebuild MAC-specific boot menus for clients loaded from the database
+    /// into the runtime configuration cache during AppState startup.
+    ///
+    /// This repairs existing installations automatically when the HTTP service
+    /// is generated, started, or reloaded. New clients are also generated
+    /// transactionally by `IscDhcpPublisher` during provisioning.
+    async fn publish_cached_client_menus(&self) -> anyhow::Result<()> {
+        let config = crate::config::get_config();
+        let server_ip = if self.settings.dhcp.next_server_ip.trim().is_empty() {
+            self.settings.server.ip_address.trim()
+        } else {
+            self.settings.dhcp.next_server_ip.trim()
+        };
+
+        let mut published = 0usize;
+        for client in config.clients {
+            if !client.enabled {
+                continue;
+            }
+
+            let Some(target_iqn) = client
+                .target_iqn
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                tracing::warn!(
+                    client = %client.name,
+                    "skipping per-client iPXE menu because no target IQN is persisted"
+                );
+                continue;
+            };
+
+            let reservation = BootReservation {
+                client_name: client.name.clone(),
+                mac: client.mac.clone(),
+                ip: client.ip.clone(),
+                target_iqn: target_iqn.to_string(),
+                server_ip: server_ip.to_string(),
+            };
+
+            publish_client_ipxe(&reservation)
+                .await
+                .map_err(|error| {
+                    anyhow::anyhow!(
+                        "failed to regenerate iPXE menu for client '{}': {}",
+                        client.name,
+                        error
+                    )
+                })?;
+            published += 1;
+        }
+
+        info!("Regenerated {} per-client iPXE menu file(s)", published);
         Ok(())
     }
 
