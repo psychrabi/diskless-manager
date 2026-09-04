@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::core::config::Settings;
-use crate::infrastructure::pxe::render_autoexec_ipxe;
+use crate::infrastructure::pxe::render_client_dispatcher_autoexec;
 use crate::services::{
     get_service_pid, is_systemd_service_running, run_sudo_command, write_with_sudo_tee,
     ServiceStatus,
@@ -71,7 +71,7 @@ impl HttpService {
     }
 
     async fn publish_autoexec(&self) -> anyhow::Result<()> {
-        let autoexec = render_autoexec_ipxe(self.settings.http.port);
+        let autoexec = render_client_dispatcher_autoexec(self.settings.http.port);
         let root_dir = PathBuf::from(&self.settings.http.root_dir);
         let path = root_dir.join("autoexec.ipxe");
         let path = path
@@ -79,7 +79,7 @@ impl HttpService {
             .ok_or_else(|| anyhow::anyhow!("HTTP root directory is not valid UTF-8"))?;
 
         write_with_sudo_tee(path, &autoexec).await?;
-        info!("Published generic iPXE autoexec to {}", path);
+        info!("Published client-dispatching iPXE autoexec to {}", path);
         Ok(())
     }
 
