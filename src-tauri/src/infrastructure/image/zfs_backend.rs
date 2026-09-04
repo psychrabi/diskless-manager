@@ -283,3 +283,39 @@ impl ImageBackend for ZfsImageBackend {
         Ok(root)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backend_has_default_constructor() {
+        let _backend = ZfsImageBackend::new();
+    }
+
+    #[test]
+    fn parse_size_bytes() {
+        assert_eq!(
+            ZfsImageBackend::parse_size("1073741824").unwrap(),
+            1_073_741_824
+        );
+    }
+
+    #[test]
+    fn parse_size_gigabytes() {
+        assert_eq!(ZfsImageBackend::parse_size("1G").unwrap(), 1_073_741_824);
+    }
+
+    #[test]
+    fn parse_size_megabytes() {
+        assert_eq!(
+            ZfsImageBackend::parse_size("512M").unwrap(),
+            512 * 1024 * 1024
+        );
+    }
+
+    #[test]
+    fn parse_empty_size_as_zero() {
+        assert_eq!(ZfsImageBackend::parse_size("-").unwrap(), 0);
+    }
+}
