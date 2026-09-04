@@ -106,6 +106,7 @@ shell
 
     let root = format!("/dev/disk/by-path/ip-${{next-server}}:3260-iscsi-{target_iqn}-lun-0-part2");
     let initiator_iqn = format!("iqn.2026-01.client:client.{slug}");
+    let nvme_nqn = format!("nqn.2026-09.local.diskless:client.{slug}");
 
     format!(
         r##"#!ipxe
@@ -114,6 +115,7 @@ dhcp
 set client {slug}
 set target-iqn {target_iqn}
 set initiator-iqn {initiator_iqn}
+set nvme-nqn {nvme_nqn}
 set boot-url http://${{next-server}}{port_suffix}
 set keep-san 1
 
@@ -122,7 +124,8 @@ menu Diskless Boot Menu (Client: ${{client}} - Server IP: ${{next-server}})
 item --key b boot_ubuntu    Diskless boot Ubuntu 25.10
 item --key a boot_anduinos  Diskless boot Anduin OS 25.04
 item --key d boot_debian    Diskless boot Debian 13.2
-item --key w boot_windows   Diskless boot Windows 11
+item --key w boot_windows   Diskless boot Windows 11 (iSCSI)
+item --key n boot_windows_nvme Windows Server NVMe/TCP (Experimental)
 item --key i boot_pe       Boot from WinPE (WIM)
 item --gap --             ------------------------- Advanced options ------------------------------
 item shell               Drop to iPXE shell
@@ -148,6 +151,16 @@ reboot
 set keep-san 1
 set net0/gateway 0.0.0.0
 sanboot ${{root-path}} || goto failed
+
+:boot_windows_nvme
+# Experimental path. The server-side export must first be enabled through
+# POST /api/clients/<id>/nvmeof/prepare.
+# Requires an iPXE build with NVMe/TCP initiator support.
+set keep-san 1
+set net0/gateway 0.0.0.0
+set nvme-root nvme://${{next-server}}:4420/${{nvme-nqn}}
+echo Experimental NVMe/TCP boot: ${{nvme-root}}
+sanboot ${{nvme-root}} || goto failed
 
 :boot_pe
 set keep-san 1
@@ -287,20 +300,14 @@ mod tests {
         );
 
         assert!(script.contains("sanhook ${root-path}"));
-
-        // The port belongs in boot-url; the WinPE path is appended by each
-        // kernel/initrd directive.
         assert!(script.contains("set boot-url http://${next-server}:4433"));
-
         assert!(script.contains("kernel ${boot-url}/boot/winpe/wimboot"));
-        // assert!(script.contains("initrd ${boot-url}/boot/winpe/bootx64.efi bootx64.efi"));
-        // assert!(script.contains("initrd ${boot-url}/boot/winpe/bootmgr bootmgr"));
         assert!(script.contains("initrd ${boot-url}/boot/winpe/BCD BCD"));
         assert!(script.contains("initrd ${boot-url}/boot/winpe/boot.sdi boot.sdi"));
         assert!(script.contains("initrd ${boot-url}/boot/winpe/boot.wim boot.wim"));
-
         assert!(script.contains("boot || goto failed"));
         assert!(!script.contains("sanboot ${root-path}"));
+        assert!(!script.contains("boot_windows_nvme"));
     }
 
     #[test]
@@ -312,6 +319,22 @@ mod tests {
             true,
         );
         assert!(script.contains("sanboot ${root-path}"));
+    }
+
+    #[test]
+    fn ready_script_offers_experimental_nvme_tcp_boot_without_changing_default() {
+        let script = render_client_script_with_mode(
+            "PC001",
+            "iqn.2024-01.com.diskless:client.pc001",
+            4433,
+            true,
+        );
+
+        assert!(script.contains("Windows Server NVMe/TCP (Experimental)"));
+        assert!(script.contains("set nvme-nqn nqn.2026-09.local.diskless:client.pc001"));
+        assert!(script.contains("nvme://${next-server}:4420/${nvme-nqn}"));
+        assert!(script.contains("sanboot ${nvme-root}"));
+        assert!(script.contains("--default boot_windows"));
     }
 
     #[test]
