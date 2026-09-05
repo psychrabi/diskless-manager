@@ -128,15 +128,13 @@ impl HttpService {
                 server_ip: server_ip.to_string(),
             };
 
-            publish_client_ipxe(&reservation)
-                .await
-                .map_err(|error| {
-                    anyhow::anyhow!(
-                        "failed to regenerate iPXE menu for client '{}': {}",
-                        client.name,
-                        error
-                    )
-                })?;
+            publish_client_ipxe(&reservation).await.map_err(|error| {
+                anyhow::anyhow!(
+                    "failed to regenerate iPXE menu for client '{}': {}",
+                    client.name,
+                    error
+                )
+            })?;
             published += 1;
         }
 

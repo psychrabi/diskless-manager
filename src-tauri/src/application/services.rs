@@ -30,11 +30,8 @@ impl ApplicationServices {
 
         let storage = Arc::new(StorageService::new(image_backend, iscsi));
         let clients = ClientRepository::new(pool);
-        let provisioning = ProvisioningService::new(
-            storage.clone(),
-            clients.clone(),
-            Arc::new(IscDhcpPublisher),
-        );
+        let provisioning =
+            ProvisioningService::new(storage.clone(), clients.clone(), Arc::new(IscDhcpPublisher));
         let nvmeof_boot = NvmeOfBootService::new(clients);
 
         Self {

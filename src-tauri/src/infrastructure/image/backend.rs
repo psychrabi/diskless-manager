@@ -29,6 +29,14 @@ impl From<ImageBackendInfo> for ImageInfo {
 }
 
 pub trait ImageBackend: Send + Sync {
+    /// Wait until device names reflect completed storage changes.
+    fn settle_device_changes(&self) -> Result<()> {
+        anyhow::bail!("device settling is unavailable")
+    }
+    /// Authoritative immutable origin; unknown backends cannot auto-reset safely.
+    fn clone_origin(&self, _name: &str) -> Result<Option<String>> {
+        anyhow::bail!("clone origin inspection is unavailable")
+    }
     fn exists(&self, name: &str) -> Result<bool>;
 
     fn create_volume(&self, name: &str, size_gb: u64) -> Result<()>;

@@ -305,6 +305,15 @@ impl ClientRepository {
         Ok(exists != 0)
     }
 
+    pub async fn exists_by_ip(&self, ip: &IpAddr) -> Result<bool> {
+        let exists: i64 = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM clients WHERE ip = ?)")
+            .bind(ip.to_string())
+            .fetch_one(&self.pool)
+            .await
+            .context("failed to check client IP address")?;
+        Ok(exists != 0)
+    }
+
     fn row_to_domain(row: ClientRow) -> Result<Client> {
         let id = ClientId::from_string(row.id).map_err(|error| anyhow::anyhow!(error))?;
 

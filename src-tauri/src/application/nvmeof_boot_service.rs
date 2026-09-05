@@ -2,7 +2,9 @@ use crate::{
     domain::ClientId,
     infrastructure::{
         dhcp::{publish_client_ipxe, BootReservation},
-        nvmeof::{ensure_export, inspect_export, nqn_for_client, remove_export, NvmeOfExportStatus},
+        nvmeof::{
+            ensure_export, inspect_export, nqn_for_client, remove_export, NvmeOfExportStatus,
+        },
         pxe::{nvme_tcp_uri, render_windows_nvmeof_boot},
     },
     persistence::ClientRepository,
@@ -53,13 +55,17 @@ impl NvmeOfBootService {
             .as_deref()
             .or(client.block_store.as_deref())
             .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| anyhow::anyhow!("client '{}' has no provisioned block device", client.name))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!("client '{}' has no provisioned block device", client.name)
+            })?;
 
         let target_iqn = client
             .target_iqn
             .as_deref()
             .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| anyhow::anyhow!("client '{}' has no persisted iSCSI target", client.name))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!("client '{}' has no persisted iSCSI target", client.name)
+            })?;
 
         // Repair/generate this client's MAC-specific menu as part of NVMe-oF
         // preparation. This makes existing clients compatible with the new
@@ -78,7 +84,9 @@ impl NvmeOfBootService {
         let nqn = nqn_for_client(&client.name);
         let export = ensure_export(&nqn, Path::new(block_device))
             .map_err(anyhow::Error::msg)
-            .with_context(|| format!("failed to export client '{}' through NVMe/TCP", client.name))?;
+            .with_context(|| {
+                format!("failed to export client '{}' through NVMe/TCP", client.name)
+            })?;
 
         Ok(NvmeOfBootPreparation {
             client_id: client.id.to_string(),

@@ -182,16 +182,25 @@ impl ClientManager {
         Self { pool }
     }
 
-    /// Public helper function to upsert a client (INSERT OR REPLACE)
+    /// Upsert without deleting the existing row or its lifecycle/history records.
     /// Used by create(), update() methods and config.rs
     pub async fn upsert_client(pool: &SqlitePool, client: &Client) -> anyhow::Result<()> {
         sqlx::query(
             r#"
-            INSERT OR REPLACE INTO clients (
+            INSERT INTO clients (
                 id, name, mac, ip, master, snapshot, block_store, target_iqn,
                 writeback, block_device, status, mode, pxe_mode, keep_writeback,
                 use_game_disk, created_at, last_modified, enabled, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name, mac = excluded.mac, ip = excluded.ip,
+                master = excluded.master, snapshot = excluded.snapshot,
+                block_store = excluded.block_store, target_iqn = excluded.target_iqn,
+                writeback = excluded.writeback, block_device = excluded.block_device,
+                status = excluded.status, mode = excluded.mode, pxe_mode = excluded.pxe_mode,
+                keep_writeback = excluded.keep_writeback, use_game_disk = excluded.use_game_disk,
+                created_at = excluded.created_at, last_modified = excluded.last_modified,
+                enabled = excluded.enabled, updated_at = excluded.updated_at
             "#,
         )
         .bind(&client.id)

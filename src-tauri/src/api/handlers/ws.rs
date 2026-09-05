@@ -168,6 +168,8 @@ pub(crate) async fn fetch_metrics(state: &AppState) -> Result<MetricsUpdate, Str
 
     for mut sample in snapshot.clients {
         let ip = sample.ip;
+        // Disk totals must come from storage counters, not TCP packet accounting.
+        sample.iscsi = lio_rates.get(&ip).cloned();
         if let Some(lio) = lio_rates.get(&ip).cloned() {
             sample.iscsi = Some(lio.clone());
             // When conntrack accounting is unavailable, LIO still provides a

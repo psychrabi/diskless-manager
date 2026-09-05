@@ -76,12 +76,7 @@ pub fn ensure_export(nqn: &str, block_device: &Path) -> Result<NvmeOfExportStatu
 
     let link = port_link(nqn);
     if link.symlink_metadata().is_err() {
-        sudo_command([
-            "ln",
-            "-s",
-            path_str(&subsystem)?,
-            path_str(&link)?,
-        ])?;
+        sudo_command(["ln", "-s", path_str(&subsystem)?, path_str(&link)?])?;
     }
 
     inspect_export(nqn)
@@ -193,9 +188,35 @@ pub fn remove_exports_for_block_device(block_device: &Path) -> Result<Vec<String
     Ok(matching_nqns)
 }
 
+/// Read-only guard for automatic resets. Inspect all exports, including ones
+/// created outside the manager; an unreadable namespace is not safe to reset.
+pub fn block_device_is_exported(block_device: &Path) -> std::io::Result<bool> {
+    let subsystems = Path::new(NVMET_ROOT).join("subsystems");
+    if !subsystems.try_exists()? {
+        return Ok(false);
+    }
+    for subsystem in fs::read_dir(subsystems)? {
+        for namespace in fs::read_dir(subsystem?.path().join("namespaces"))? {
+            let device = fs::read_to_string(namespace?.path().join("device_path"))?;
+            let device = Path::new(device.trim());
+            if device == block_device {
+                return Ok(true);
+            }
+            if let (Ok(left), Ok(right)) = (device.canonicalize(), block_device.canonicalize()) {
+                if left == right {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
 fn validate_nqn(nqn: &str) -> Result<(), String> {
     if !nqn.starts_with(NQN_PREFIX) || nqn.len() <= NQN_PREFIX.len() {
-        return Err(format!("refusing unmanaged NQN; expected prefix {NQN_PREFIX}"));
+        return Err(format!(
+            "refusing unmanaged NQN; expected prefix {NQN_PREFIX}"
+        ));
     }
     if nqn.contains('/') || nqn.contains("..") {
         return Err("invalid NQN path characters".into());
@@ -225,9 +246,16 @@ fn ensure_kernel_support() -> Result<(), String> {
 
 fn ensure_nvmet_root() -> Result<(), String> {
     let root = Path::new(NVMET_ROOT);
-    for required in [root.to_path_buf(), root.join("subsystems"), root.join("ports")] {
+    for required in [
+        root.to_path_buf(),
+        root.join("subsystems"),
+        root.join("ports"),
+    ] {
         if !required.exists() {
-            return Err(format!("required nvmet configfs path is missing: {}", required.display()));
+            return Err(format!(
+                "required nvmet configfs path is missing: {}",
+                required.display()
+            ));
         }
     }
     Ok(())
@@ -255,7 +283,10 @@ fn ensure_tcp_port() -> Result<(), String> {
     }
 
     if !port.join("subsystems").exists() {
-        return Err(format!("nvmet port {} has no subsystems directory", port.display()));
+        return Err(format!(
+            "nvmet port {} has no subsystems directory",
+            port.display()
+        ));
     }
 
     Ok(())
@@ -331,7 +362,9 @@ fn write_attr(path: &Path, value: &str) -> Result<(), String> {
 }
 
 fn read_attr(path: &Path) -> Option<String> {
-    fs::read_to_string(path).ok().map(|value| value.trim().to_owned())
+    fs::read_to_string(path)
+        .ok()
+        .map(|value| value.trim().to_owned())
 }
 
 #[cfg(test)]

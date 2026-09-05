@@ -16,19 +16,19 @@ const ClientTableHeader = ({ fixed = false }) => {
       </TableHead>
       <TableHead className={headerCellClass("w-36", fixed)}>IP Address</TableHead>
       <TableHead className={headerCellClass("hidden lg:table-cell w-24", fixed)}>
-        Disk Read <span className="hidden">(MB/s)</span>
+        Disk Read Speed (MB/s)
+      </TableHead>
+      <TableHead className={headerCellClass("hidden lg:table-cell", fixed)}>
+        Total Disk Read
       </TableHead>
       <TableHead className={headerCellClass("hidden lg:table-cell w-24", fixed)}>
-        Disk Write <span className="hidden">(MB/s)</span>
+        Disk Write Speed (MB/s)
+      </TableHead>
+      <TableHead className={headerCellClass("hidden lg:table-cell", fixed)}>
+        Total Disk Write
       </TableHead>
       <TableHead className={headerCellClass("hidden xl:table-cell", fixed)}>
         Image
-      </TableHead>
-      <TableHead className={headerCellClass("hidden 2xl:table-cell", fixed)}>
-        Restore Point
-      </TableHead>
-      <TableHead className={headerCellClass("hidden 2xl:table-cell", fixed)}>
-        Boot disk
       </TableHead>
       <TableHead className={headerCellClass("", fixed)}>Mode</TableHead>
       <TableHead className={headerCellClass("hidden lg:table-cell", fixed)}>

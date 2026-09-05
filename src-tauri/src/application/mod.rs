@@ -1,3 +1,4 @@
+pub mod client_lifecycle;
 pub mod client_service;
 pub mod image_service;
 pub mod nvmeof_boot_service;

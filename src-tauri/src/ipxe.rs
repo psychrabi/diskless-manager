@@ -280,7 +280,10 @@ mod tests {
     #[test]
     fn mac_slug_is_stable_and_safe() {
         assert_eq!(client_mac_slug("00:11:22:33:44:55"), "001122334455");
-        assert_eq!(client_mac_script_path("00:11:22:33:44:55"), "clients/001122334455.ipxe");
+        assert_eq!(
+            client_mac_script_path("00:11:22:33:44:55"),
+            "clients/001122334455.ipxe"
+        );
         assert_eq!(client_mac_slug("invalid"), "unknown");
     }
 

@@ -2,7 +2,12 @@ use crate::infrastructure::nvmeof::NVMET_TCP_PORT;
 
 #[must_use]
 pub fn nvme_tcp_uri(server_ip: &str, nqn: &str) -> String {
-    format!("nvme://{}:{}/{}", server_ip.trim(), NVMET_TCP_PORT, nqn.trim())
+    format!(
+        "nvme://{}:{}/{}",
+        server_ip.trim(),
+        NVMET_TCP_PORT,
+        nqn.trim()
+    )
 }
 
 #[must_use]
@@ -71,19 +76,14 @@ mod tests {
     #[test]
     fn builds_nvme_tcp_uri() {
         assert_eq!(
-            nvme_tcp_uri(
-                "192.168.1.250",
-                "nqn.2026-09.local.diskless:client.pc001"
-            ),
+            nvme_tcp_uri("192.168.1.250", "nqn.2026-09.local.diskless:client.pc001"),
             "nvme://192.168.1.250:4420/nqn.2026-09.local.diskless:client.pc001"
         );
     }
 
     #[test]
     fn script_chains_custom_firmware_before_nvme_sanboot() {
-        let script = render_windows_nvmeof_boot(
-            "nqn.2026-09.local.diskless:client.pc001"
-        );
+        let script = render_windows_nvmeof_boot("nqn.2026-09.local.diskless:client.pc001");
         assert!(script.contains("isset ${diskless-nvmeof} || goto load_nvmeof_firmware"));
         assert!(script.contains("chain http://${next-server}/snponly-nvmeof.efi"));
         assert!(script.contains("nvme://${next-server}:4420/${nvme-nqn}"));

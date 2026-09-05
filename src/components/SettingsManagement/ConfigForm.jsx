@@ -8,6 +8,7 @@ import { useForm } from "react-hook-form";
 import { Button, Card } from "@/components/ui";
 
 const UPDATE_MAP = {
+  client_lifecycle: "updateClientLifecycle",
   dhcp: "updateDhcp",
   tftp: "updateTftp",
   http: "updateHttp",
@@ -28,14 +29,14 @@ const ConfigForm = ({ schema, section, title, FormComponent }) => {
     reset,
   } = useForm({
     resolver: zodResolver(schema),
-    defaultValues: config?.settings?.[section] || {},
+    defaultValues: config?.settings?.[section] || (section === "client_lifecycle" ? { non_persistent_reset_delay_minutes: 5 } : {}),
   });
 
   useEffect(() => {
     if (config?.settings?.[section]) {
       reset(config.settings[section]);
     } else {
-      reset({});
+      reset(section === "client_lifecycle" ? { non_persistent_reset_delay_minutes: 5 } : {});
     }
   }, [config, section, reset]);
 
@@ -44,7 +45,7 @@ const ConfigForm = ({ schema, section, title, FormComponent }) => {
     await updateFn(data);
   };
 
-  const sectionKey = section.charAt(0).toUpperCase() + section.slice(1);
+  const sectionKey = section === "client_lifecycle" ? "Client Reset" : section.charAt(0).toUpperCase() + section.slice(1);
 
   return (
     <Card title={`${title} Configuration`} icon={Network} className="xl:col-span-2">

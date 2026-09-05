@@ -517,6 +517,38 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the ISC dhcpd binary; validates temporary files only"]
+    fn split_and_exhausted_pools_pass_real_dhcp_validation() {
+        let root =
+            std::env::temp_dir().join(format!("diskless-dhcp-syntax-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let clients_path = root.join("clients.conf");
+        let config_path = root.join("dhcpd.conf");
+        for reserved in [vec![100, 150, 200], (100..=200).collect::<Vec<_>>()] {
+            let clients = reserved.into_iter().map(|ip| format!("host PC{ip} {{ hardware ethernet 02:00:00:00:00:{ip:02x}; fixed-address 192.168.1.{ip}; }}\n")).collect::<String>();
+            let config = crate::infrastructure::dhcp::reconcile_dynamic_pool(
+                &render_dhcp_config(&DhcpConfig::default()),
+                &clients,
+            )
+            .unwrap()
+            .replace("/etc/dhcp/clients.conf", clients_path.to_str().unwrap());
+            std::fs::write(&clients_path, clients).unwrap();
+            std::fs::write(&config_path, config).unwrap();
+            let output = std::process::Command::new("/usr/sbin/dhcpd")
+                .args(["-t", "-cf"])
+                .arg(&config_path)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn canonical_renderer_contains_expected_pxe_flow() {
         let rendered = render_dhcp_config(&DhcpConfig::default());
         assert!(rendered.contains("option ipxe.san-filename code 188 = string;"));

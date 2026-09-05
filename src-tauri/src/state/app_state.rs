@@ -10,6 +10,8 @@ use tokio::sync::RwLock;
 
 #[derive(Clone)]
 pub struct AppState {
+    /// Serializes client configuration writes and automatic storage resets.
+    pub client_mutations: Arc<tokio::sync::Mutex<()>>,
     pub settings: Arc<RwLock<Settings>>,
     pub db_pool: SqlitePool,
     pub config_path: PathBuf,
@@ -61,6 +63,7 @@ impl AppState {
         info!("Loaded {} client IPs from database", client_ips.len());
 
         Ok(Self {
+            client_mutations: Arc::new(tokio::sync::Mutex::new(())),
             settings: Arc::new(RwLock::new(settings)),
             db_pool: pool,
             config_path,

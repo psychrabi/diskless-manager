@@ -94,6 +94,19 @@ impl Default for ZfsImageBackend {
 }
 
 impl ImageBackend for ZfsImageBackend {
+    fn settle_device_changes(&self) -> Result<()> {
+        crate::infrastructure::command::run_command_output_no_sudo([
+            "udevadm",
+            "settle",
+            "--timeout=10",
+        ])
+        .map(|_| ())
+        .map_err(anyhow::Error::from)
+        .context("failed to settle ZVOL device changes")
+    }
+    fn clone_origin(&self, name: &str) -> Result<Option<String>> {
+        self.command.get_property("origin", name)
+    }
     fn exists(&self, name: &str) -> Result<bool> {
         Ok(self.datasets.exists(name)? || self.volumes.exists(name))
     }

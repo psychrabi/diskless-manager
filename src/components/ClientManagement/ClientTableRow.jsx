@@ -3,6 +3,7 @@ import { TableCell } from "@/components/ui";
 import { formatUptime } from "@/utils/formatUptime";
 import { Clock, Monitor, MoveDown, MoveUp } from "lucide-react";
 import ControlActionButtons from "./ControlActionButtons";
+import { formatDiskBytes } from "@/utils/formatDiskBytes";
 
 const ClientStatusBadge = memo(({ status }) => {
   const currentStatus = status || "Offline";
@@ -90,6 +91,9 @@ const ClientTableRow = ({ client, clientMetrics }) => {
           iconClassName="text-primary"
         />
       </TableCell>
+      <TableCell className="hidden lg:table-cell font-mono text-center" title="Total since the disk counters last restarted">
+        {formatDiskBytes(clientMetrics?.iscsi?.total_read_bytes)}
+      </TableCell>
       <TableCell className="hidden lg:table-cell font-mono">
         <SpeedCell
           metricValue={clientMetrics?.iscsi?.write_speed_mbps}
@@ -97,14 +101,11 @@ const ClientTableRow = ({ client, clientMetrics }) => {
           iconClassName="text-secondary"
         />
       </TableCell>
+      <TableCell className="hidden lg:table-cell font-mono text-center" title="Total since the disk counters last restarted">
+        {formatDiskBytes(clientMetrics?.iscsi?.total_write_bytes)}
+      </TableCell>
       <TableCell className="hidden xl:table-cell text-xs font-mono break-all text-center">
         {client.master}
-      </TableCell>
-      <TableCell className="hidden 2xl:table-cell text-xs font-mono break-all text-center">
-        {client.snapshot ?? "-"}
-      </TableCell>
-      <TableCell className="hidden 2xl:table-cell text-xs font-mono break-all text-center">
-        {client.block_store}
       </TableCell>
       <TableCell className="text-center">
         <ClientModeBadge client={client} />

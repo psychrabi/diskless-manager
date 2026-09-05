@@ -46,6 +46,9 @@ impl ProvisioningService {
         if self.clients.exists_by_mac(&client.mac).await? {
             bail!("client MAC address already exists: {}", client.mac);
         }
+        if self.clients.exists_by_ip(&client.ip).await? {
+            bail!("client IP address already exists: {}", client.ip);
+        }
 
         storage_spec.client_id = client.id.to_string();
         let storage = self
@@ -76,11 +79,13 @@ impl ProvisioningService {
         }
 
         if let Err(error) = self.clients.insert(&client).await {
-            let boot_rollback = self.boot.remove(&client.name).await.err();
+            let boot_rollback = self.boot.remove(&reservation).await.err();
             let storage_rollback = self.storage.destroy_client_storage(&storage).err();
             let mut message = format!("failed to persist provisioned client: {error}");
             if let Some(error) = boot_rollback {
-                message.push_str(&format!("; DHCP rollback also failed: {error}"));
+                message.push_str(&format!(
+                    "; boot configuration rollback also failed: {error:#}"
+                ));
             }
             if let Some(error) = storage_rollback {
                 message.push_str(&format!("; storage rollback also failed: {error}"));
@@ -185,7 +190,7 @@ mod tests {
 
         fn remove<'a>(
             &'a self,
-            _: &'a str,
+            _: &'a BootReservation,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
             unreachable!()
         }
@@ -276,9 +281,11 @@ mod tests {
         }
         fn remove<'a>(
             &'a self,
-            _: &'a str,
+            reservation: &'a BootReservation,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
             Box::pin(async move {
+                assert_eq!(reservation.client_name, "PC-01");
+                assert_eq!(reservation.mac, "00:11:22:33:44:66");
                 self.removed.store(true, Ordering::SeqCst);
                 Ok(())
             })
@@ -367,16 +374,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn duplicate_ip_is_rejected_before_infrastructure_changes() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE clients (name TEXT NOT NULL, mac TEXT NOT NULL, ip TEXT NOT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO clients VALUES ('OTHER-PC', '00:11:22:33:44:55', '192.168.1.101')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let service = ProvisioningService::new(
+            Arc::new(StorageService::new(
+                Arc::new(UnexpectedImageBackend),
+                Arc::new(UnexpectedIscsi),
+            )),
+            ClientRepository::new(pool.clone()),
+            Arc::new(UnexpectedBootPublisher),
+        );
+        let (request, spec) = request_and_spec();
+        let error = service
+            .create_client(request, spec, "192.168.1.250")
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("IP address already exists"),
+            "{error:#}"
+        );
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM clients")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
     async fn persistence_failure_removes_boot_and_iscsi_but_preserves_shared_volume() {
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
             .await
             .unwrap();
-        sqlx::query("CREATE TABLE clients (name TEXT NOT NULL, mac TEXT NOT NULL)")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "CREATE TABLE clients (name TEXT NOT NULL, mac TEXT NOT NULL, ip TEXT NOT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         let iscsi_removed = Arc::new(AtomicBool::new(false));
         let boot_published = Arc::new(AtomicBool::new(false));
         let boot_removed = Arc::new(AtomicBool::new(false));

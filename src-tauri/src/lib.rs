@@ -70,6 +70,7 @@ pub async fn run() -> anyhow::Result<()> {
         .await?;
     let (api_shutdown_tx, api_shutdown_rx) = tokio::sync::oneshot::channel();
     let api_task = tokio::spawn(api_server.serve_with_shutdown(api_shutdown_rx));
+    let lifecycle_task = tokio::spawn(crate::application::client_lifecycle::run(state.clone()));
 
     // Start Tauri application
     let app = tauri::Builder::default()
@@ -180,6 +181,7 @@ pub async fn run() -> anyhow::Result<()> {
         }
     });
 
+    lifecycle_task.abort();
     api_task
         .await
         .map_err(|error| anyhow::anyhow!("API server task failed: {error}"))??;

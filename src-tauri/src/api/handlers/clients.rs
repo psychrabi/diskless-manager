@@ -173,6 +173,21 @@ fn apply_storage_to_update_request(request: &mut UpdateClientRequest, storage: &
     request.target_iqn = Some(storage.target_iqn().to_string());
 }
 
+fn storage_configuration_changed(client: &Client, request: &UpdateClientRequest) -> bool {
+    request
+        .name
+        .as_deref()
+        .is_some_and(|name| name != client.name)
+        || request
+            .master
+            .as_deref()
+            .is_some_and(|master| master != client.master)
+        || request.snapshot != client.snapshot
+        || request
+            .use_game_disk
+            .is_some_and(|enabled| enabled != client.use_game_disk.unwrap_or(false))
+}
+
 /// Reconstruct the application-level storage object from the persisted
 /// client record.
 ///
@@ -272,6 +287,7 @@ pub async fn create_client(
     State(state): State<AppState>,
     Json(request): Json<CreateClientRequest>,
 ) -> Result<Json<crate::domain::Client>, StatusCode> {
+    let _client_guard = state.client_mutations.lock().await;
     if validate_ip_address(&request.ip).is_err() || validate_mac_address(&request.mac).is_err() {
         return Err(StatusCode::BAD_REQUEST);
     }
@@ -347,6 +363,7 @@ pub async fn update_client(
     Json(mut request): Json<UpdateClientRequest>,
 ) -> Result<Json<Client>, (StatusCode, Json<ErrorResponse>)> {
     info!("Updating client: {:?}", request);
+    let _client_guard = state.client_mutations.lock().await;
 
     // ------------------------------------------------------------------------
     // Validate request.
@@ -387,6 +404,23 @@ pub async fn update_client(
             }),
         )
     })?;
+
+    if request.action.as_deref().map_or(true, |action| {
+        !matches!(action, "wake" | "reboot" | "shutdown")
+    }) {
+        let recovering: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM client_offline_resets WHERE client_id = ? AND operation IS NOT NULL")
+            .bind(&id).fetch_one(&state.db_pool).await.map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { status: 500, error: error.to_string() })))?;
+        if recovering != 0 {
+            return Err((
+                StatusCode::CONFLICT,
+                Json(ErrorResponse {
+                    status: 409,
+                    error: "Client storage recovery is pending; retry after recovery completes"
+                        .into(),
+                }),
+            ));
+        }
+    }
 
     // ========================================================================
     // Action-based requests
@@ -905,6 +939,32 @@ pub async fn update_client(
 
     let settings = state.settings.read().await;
 
+    // A persistence-only PATCH must retain the selected snapshot. A full form
+    // explicitly supplies master, allowing a null snapshot to select it directly.
+    if request.master.is_none() && request.snapshot.is_none() {
+        request.snapshot = existing_client.snapshot.clone();
+    }
+    if !storage_configuration_changed(&existing_client, &request) {
+        request.block_store = existing_client.block_store.clone();
+        request.block_device = existing_client.block_device.clone();
+        request.target_iqn = existing_client.target_iqn.clone();
+        let client = manager.update(&id, request).await.map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    status: 500,
+                    error: error.to_string(),
+                }),
+            )
+        })?;
+        sqlx::query("DELETE FROM client_offline_resets WHERE client_id = ? AND operation IS NULL AND ? <> ?")
+            .bind(&id).bind(client.keep_writeback).bind(existing_client.keep_writeback).execute(&state.db_pool).await
+            .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { status: 500, error: error.to_string() })))?;
+        let _ = state.refresh_client_ips().await;
+        refresh_dhcp(&state, &settings, "updating client").await;
+        return Ok(Json(client));
+    }
+
     let new_name = request.name.as_deref().unwrap_or(&existing_client.name);
 
     let new_master = request.master.as_deref().unwrap_or(&existing_client.master);
@@ -1035,6 +1095,17 @@ pub async fn delete_client(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<(), StatusCode> {
+    let _client_guard = state.client_mutations.lock().await;
+    let recovering: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM client_offline_resets WHERE client_id = ? AND operation IS NOT NULL",
+    )
+    .bind(&id)
+    .fetch_one(&state.db_pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if recovering != 0 {
+        return Err(StatusCode::CONFLICT);
+    }
     tracing::info!(
         "DELETE CLIENT CALLED - Starting deletion for client: {}",
         id
@@ -1120,6 +1191,17 @@ pub async fn get_client_boot_history(
 mod error_contract_tests {
     use super::ErrorResponse;
     use axum::{body::to_bytes, http::StatusCode, response::IntoResponse};
+
+    #[test]
+    fn persistence_change_does_not_request_storage_recreation() {
+        let client = super::Client::new(serde_json::from_value(serde_json::json!({
+            "name": "PC001", "mac": "00:11:22:33:44:55", "ip": "192.168.1.101", "master": "pool/master", "snapshot": "pool/master@ready", "keep_writeback": false
+        })).unwrap()).unwrap();
+        let mut request: super::UpdateClientRequest = serde_json::from_value(serde_json::json!({"name": "PC001", "master": "pool/master", "snapshot": "pool/master@ready", "keep_writeback": true})).unwrap();
+        assert!(!super::storage_configuration_changed(&client, &request));
+        request.snapshot = Some("pool/master@new".into());
+        assert!(super::storage_configuration_changed(&client, &request));
+    }
 
     #[tokio::test]
     async fn client_errors_use_the_shared_structured_contract() {

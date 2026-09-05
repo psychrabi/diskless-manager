@@ -11,6 +11,9 @@ use crate::{
 use anyhow::{bail, Context, Result};
 use std::sync::Arc;
 
+mod offline_replacement;
+pub use offline_replacement::OfflineReplacement;
+
 /// Application-level storage orchestration.
 ///
 /// `StorageService` knows what needs to happen for a diskless client,

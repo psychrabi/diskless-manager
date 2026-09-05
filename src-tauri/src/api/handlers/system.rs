@@ -293,11 +293,7 @@ pub async fn save_settings(
     State(state): State<AppState>,
     Json(settings): Json<crate::core::config::Settings>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    // Update the in-memory settings
-    {
-        let mut current = state.settings.write().await;
-        *current = settings.clone();
-    }
+    let _client_guard = state.client_mutations.lock().await;
 
     // Update the settings in the database (merging with existing fields to avoid losing zpool_name etc)
     let current_config = crate::config::get_config();
@@ -319,12 +315,25 @@ pub async fn save_settings(
         new_config.settings = new_settings_value;
     }
 
-    if crate::config::write_config(&state.db_pool, &new_config)
+    // Persist settings only. Rewriting cached client rows here could resurrect
+    // deleted clients or overwrite their persistence choice.
+    let mut transaction = state
+        .db_pool
+        .begin()
         .await
-        .is_err()
-    {
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if let Some(values) = new_config.settings.as_object() {
+        for (key, value) in values {
+            sqlx::query("INSERT INTO app_config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+                .bind(key).bind(value.to_string()).execute(&mut *transaction).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        }
     }
+    transaction
+        .commit()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    crate::config::set_config(&new_config);
+    *state.settings.write().await = settings.clone();
 
     // Also persist to config.toml for redundancy and manual editing support
     let toml_path = state.config_path.with_extension("toml");

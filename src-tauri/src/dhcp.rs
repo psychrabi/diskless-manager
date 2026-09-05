@@ -1,7 +1,7 @@
 use crate::{infrastructure::command::run_command, DHCP_CLIENTS_PATH, DHCP_CONFIG_PATH};
-use log::{error, info};
+use log::info;
 use regex::Regex;
-use tokio::fs as async_fs;
+use std::path::Path;
 
 pub async fn update_dhcp_config(
     client_id: &str,
@@ -11,14 +11,14 @@ pub async fn update_dhcp_config(
     info!("update_dhcp_config: client_id={}", client_id);
 
     let _lock = lock_dhcp_config()?;
-    let content = std::fs::read_to_string(DHCP_CLIENTS_PATH).unwrap_or_default();
+    let content = read_optional_config(DHCP_CLIENTS_PATH)?;
     let reconciled = reconcile_client_entry(
         &content,
         client_id,
         (!dhcp_entry.trim().is_empty()).then_some(dhcp_entry),
     );
 
-    install_dhcp_config_file(&reconciled, DHCP_CLIENTS_PATH, "dhcp_clients").await
+    install_reservations(&reconciled).await
 }
 
 /// Atomically replace the manager-owned static client file, validate the
@@ -26,14 +26,15 @@ pub async fn update_dhcp_config(
 /// staged configuration is invalid. Callers reload only after this succeeds.
 pub async fn replace_dhcp_clients_config(content: &str) -> Result<(), String> {
     let _lock = lock_dhcp_config()?;
-    install_dhcp_config_file(content, DHCP_CLIENTS_PATH, "dhcp_clients").await
+    install_reservations(content).await
 }
 
 /// Atomically replace the primary ISC DHCP configuration and restore it when
 /// `dhcpd -t` rejects the staged content.
 pub async fn replace_dhcp_config(content: &str) -> Result<(), String> {
     let _lock = lock_dhcp_config()?;
-    install_dhcp_config_file(content, DHCP_CONFIG_PATH, "dhcpd_config").await
+    let clients = read_optional_config(DHCP_CLIENTS_PATH)?;
+    install_configuration(content, &clients).await
 }
 
 fn lock_dhcp_config() -> Result<std::fs::File, String> {
@@ -54,52 +55,52 @@ fn lock_dhcp_config() -> Result<std::fs::File, String> {
     Ok(lock_file)
 }
 
-async fn install_dhcp_config_file(
-    content: &str,
-    destination: &str,
-    backup_stem: &str,
-) -> Result<(), String> {
-    let original = std::fs::read_to_string(destination).unwrap_or_default();
-    let backup_dir = "/srv/tftp/backups";
-    async_fs::create_dir_all(backup_dir)
-        .await
-        .map_err(|error| format!("Failed to create backup dir: {error}"))?;
-
-    let pid = std::process::id();
-    let backup_path = format!("{backup_dir}/{backup_stem}_{pid}.bak");
-    let temp_path = format!("{backup_dir}/{backup_stem}_{pid}.tmp");
-    async_fs::write(&backup_path, &original)
-        .await
-        .map_err(|error| format!("Backup failed: {error}"))?;
-    async_fs::write(&temp_path, content)
-        .await
-        .map_err(|error| format!("Temp write failed: {error}"))?;
-
-    if let Err(error) = run_command(["mv", &temp_path, destination]) {
-        let _ = async_fs::remove_file(&backup_path).await;
-        return Err(format!("Failed to install DHCP configuration: {error}"));
+fn read_optional_config(path: &str) -> Result<String, String> {
+    match std::fs::read_to_string(path) {
+        Ok(content) => Ok(content),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(error) => Err(format!("Cannot read {path}: {error}")),
     }
+}
 
-    if let Err(error) = run_command(["dhcpd", "-t", "-cf", crate::DHCP_CONFIG_PATH]) {
-        error!("DHCP configuration validation failed; restoring {destination}: {error}");
-        async_fs::write(&temp_path, &original)
-            .await
-            .map_err(|restore_error| {
-                format!(
-                    "DHCP validation failed ({error}) and restoring clients.conf failed: {restore_error}"
-                )
-            })?;
-        run_command(["mv", &temp_path, destination]).map_err(|restore_error| {
-            format!(
-                "DHCP validation failed ({error}) and restoring clients.conf failed: {restore_error}"
-            )
-        })?;
-        let _ = async_fs::remove_file(&backup_path).await;
-        return Err(format!("DHCP configuration validation failed: {error}"));
-    }
+async fn install_reservations(clients: &str) -> Result<(), String> {
+    let primary = std::fs::read_to_string(DHCP_CONFIG_PATH)
+        .map_err(|e| format!("Cannot read DHCP configuration: {e}"))?;
+    install_configuration(&primary, clients).await
+}
 
-    let _ = async_fs::remove_file(&backup_path).await;
-    info!("DHCP configuration {} validated and installed", destination);
+// Caller holds the shared DHCP lock through staging, validation, and rollback.
+async fn install_configuration(primary: &str, clients: &str) -> Result<(), String> {
+    let primary = super::reconcile_dynamic_pool(primary, clients).map_err(|e| format!("{e:#}"))?;
+    let staging = Path::new("/srv/tftp/backups").join(format!("dhcp-{}", uuid::Uuid::new_v4()));
+    super::config_install::install_files(
+        &[
+            (Path::new(DHCP_CONFIG_PATH), &primary),
+            (Path::new(DHCP_CLIENTS_PATH), clients),
+        ],
+        &staging,
+        |source, destination| {
+            run_command([
+                std::ffi::OsStr::new("mv"),
+                std::ffi::OsStr::new("--"),
+                source.as_os_str(),
+                destination.as_os_str(),
+            ])
+            .map_err(|e| e.to_string())
+        },
+        |path| {
+            run_command([
+                std::ffi::OsStr::new("rm"),
+                std::ffi::OsStr::new("-f"),
+                std::ffi::OsStr::new("--"),
+                path.as_os_str(),
+            ])
+            .map_err(|e| e.to_string())
+        },
+        || run_command(["dhcpd", "-t", "-cf", DHCP_CONFIG_PATH]).map_err(|e| e.to_string()),
+    )
+    .await?;
+    info!("DHCP reservations and dynamic ranges validated and installed");
     Ok(())
 }
 

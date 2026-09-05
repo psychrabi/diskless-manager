@@ -11,8 +11,11 @@ import SambaForm from "./Forms/SambaForm";
 import ISCSIForm from "./Forms/ISCSIForm";
 import BootProcessOverview from "./BootProcessOverview";
 import NetworkConfig from "./NetworkConfig";
+import { clientLifecycleSchema } from "@/schema";
+import ClientLifecycleForm from "./Forms/ClientLifecycleForm";
 
 const SECTIONS = [
+  { section: "client_lifecycle", title: "Client Reset", schema: clientLifecycleSchema, Form: ClientLifecycleForm },
   { section: "dhcp", title: "DHCP Server", schema: dhcpSchema, Form: DHCPForm },
   { section: "tftp", title: "TFTP", schema: tftpSchema, Form: TFTPForm },
   { section: "http", title: "HTTP", schema: httpSchema, Form: HTTPForm },

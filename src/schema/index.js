@@ -1,5 +1,9 @@
 import { z } from "zod";
 
+export const clientLifecycleSchema = z.object({
+  non_persistent_reset_delay_minutes: z.coerce.number().int().min(1).max(1440).default(5),
+});
+
 // Helper for IP address validation
 const ipSchema = z.ipv4();
 

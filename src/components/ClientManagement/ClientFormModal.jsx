@@ -14,10 +14,16 @@ import { useCallback, useEffect, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { Button, Input, Modal, Select } from "@/components/ui";
 
-const ClientFormModal = ({ client, masters, isOpen, onClose, refresh }) => {
+// Each opened client owns its form and asynchronous status state. Responses
+// belonging to an unmounted client cannot overwrite another client's dialog.
+const ClientFormModal = (props) => (
+  <ClientFormModalContent key={`${props.client?.id ?? "new"}:${props.isOpen}`} {...props} />
+);
+
+const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) => {
   const { success, error } = useToastStore();
   const [nvmeStatus, setNvmeStatus] = useState(null);
-  const [nvmeLoading, setNvmeLoading] = useState(false);
+  const [nvmeLoading, setNvmeLoading] = useState(Boolean(isOpen && client?.id));
   const [nvmeAction, setNvmeAction] = useState(null);
   const [nvmeError, setNvmeError] = useState("");
 
@@ -58,11 +64,27 @@ const ClientFormModal = ({ client, masters, isOpen, onClose, refresh }) => {
     } finally {
       setNvmeLoading(false);
     }
-  }, [client?.id, isOpen]);
+  }, [client, isOpen]);
 
   useEffect(() => {
-    loadNvmeStatus();
-  }, [loadNvmeStatus]);
+    if (!isOpen || !client?.id) return;
+    let cancelled = false;
+    getClientNvmeOfStatus(client.id).then(
+      (status) => {
+        if (cancelled) return;
+        setNvmeStatus(status);
+        setNvmeError("");
+        setNvmeLoading(false);
+      },
+      (failure) => {
+        if (cancelled) return;
+        setNvmeStatus(null);
+        setNvmeError(failure?.message || String(failure));
+        setNvmeLoading(false);
+      },
+    );
+    return () => { cancelled = true; };
+  }, [client?.id, isOpen]);
 
   const resolveNvmeServerIp = async () => {
     const config = await readConfig();
@@ -254,7 +276,7 @@ const ClientFormModal = ({ client, masters, isOpen, onClose, refresh }) => {
                 Keep Writeback (Persistent Mode)
               </span>
               <span className="label-text-alt text-base-content/60 text-wrap text-xs">
-                If unchecked, client will reset to clean state on every boot
+                If unchecked, the clone resets after the offline delay configured in Settings
                 (non-persistent mode)
               </span>
             </div>

@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Settings {
     #[serde(default)]
+    pub client_lifecycle: ClientLifecycleConfig,
+    #[serde(default)]
     pub server: ServerConfig,
     #[serde(default)]
     pub dhcp: DhcpConfig,
@@ -19,6 +21,33 @@ pub struct Settings {
     pub samba: SambaConfig,
     #[serde(default)]
     pub storage: StorageConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ClientLifecycleConfig {
+    #[serde(deserialize_with = "deserialize_reset_delay")]
+    pub non_persistent_reset_delay_minutes: u32,
+}
+
+impl Default for ClientLifecycleConfig {
+    fn default() -> Self {
+        Self {
+            non_persistent_reset_delay_minutes: 5,
+        }
+    }
+}
+
+fn deserialize_reset_delay<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<u32, D::Error> {
+    let minutes = u32::deserialize(deserializer)?;
+    if !(1..=1440).contains(&minutes) {
+        return Err(serde::de::Error::custom(
+            "offline reset delay must be between 1 and 1440 minutes",
+        ));
+    }
+    Ok(minutes)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -270,6 +299,34 @@ impl Settings {
 #[cfg(test)]
 mod compatibility_tests {
     use super::Settings;
+
+    #[test]
+    fn lifecycle_defaults_survive_legacy_settings_and_roundtrip() {
+        let mut settings: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(
+            settings.client_lifecycle.non_persistent_reset_delay_minutes,
+            5
+        );
+        settings.client_lifecycle.non_persistent_reset_delay_minutes = 15;
+        let encoded = toml::to_string(&settings).unwrap();
+        let loaded: Settings = toml::from_str(&encoded).unwrap();
+        assert_eq!(
+            loaded.client_lifecycle.non_persistent_reset_delay_minutes,
+            15
+        );
+    }
+
+    #[test]
+    fn lifecycle_rejects_unsafe_delays() {
+        for delay in [
+            serde_json::json!(0),
+            serde_json::json!(-1),
+            serde_json::json!(1.5),
+            serde_json::json!(1441),
+        ] {
+            assert!(serde_json::from_value::<Settings>(serde_json::json!({"client_lifecycle": {"non_persistent_reset_delay_minutes": delay}})).is_err());
+        }
+    }
 
     #[test]
     fn partial_legacy_network_config_inherits_production_defaults() {

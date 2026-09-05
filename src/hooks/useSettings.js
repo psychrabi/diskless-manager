@@ -30,6 +30,7 @@ export const useSettings = () => {
           const updatedSettings = {
             ...currentSettings,
             [section]: {
+              ...currentSettings[section],
               ...config,
             },
           };
@@ -194,6 +195,10 @@ export const useSettings = () => {
   );
 
   return {
+    updateClientLifecycle: (config) => updateSettingsSection({
+      section: "client_lifecycle", config, toastTitle: "Client Reset Settings",
+      successMessage: "Offline reset delay saved",
+    }),
     updateDhcp,
     updateTftp,
     updateHttp,

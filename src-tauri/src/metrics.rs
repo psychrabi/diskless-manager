@@ -10,6 +10,8 @@ use std::time::Instant;
 /// Traffic rates in megabytes per second, measured from kernel byte counters.
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct Throughput {
+    pub total_read_bytes: u64,
+    pub total_write_bytes: u64,
     /// Bytes sent by the server to the client (client read traffic).
     pub read_speed_mbps: f64,
     /// Bytes received by the server from the client (client write traffic).
@@ -248,8 +250,8 @@ impl Default for MetricsCollector {
     fn default() -> Self {
         Self {
             reader: LinuxMetricsReader::default(),
-            previous: Mutex::new(None),
-            previous_lio: Mutex::new(None),
+            previous: std::sync::Mutex::new(None),
+            previous_lio: std::sync::Mutex::new(None),
         }
     }
 }
@@ -285,19 +287,20 @@ impl MetricsCollector {
             .previous_lio
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let rates = previous
-            .as_ref()
-            .map(|(previous_time, old)| {
-                let elapsed = now.duration_since(*previous_time).as_secs_f64();
-                current
-                    .iter()
-                    .filter_map(|(ip, counters)| {
-                        old.get(ip)
-                            .map(|old| (ip.clone(), throughput(*counters, *old, elapsed)))
+        let rates = current
+            .iter()
+            .map(|(ip, counters)| {
+                let rate = previous
+                    .as_ref()
+                    .and_then(|(time, old)| {
+                        old.get(ip).map(|old| {
+                            throughput(*counters, *old, now.duration_since(*time).as_secs_f64())
+                        })
                     })
-                    .collect()
+                    .unwrap_or_else(|| throughput(*counters, *counters, 1.0));
+                (ip.clone(), rate)
             })
-            .unwrap_or_default();
+            .collect();
         *previous = Some((now, current));
         rates
     }
@@ -382,6 +385,8 @@ fn throughput(
     seconds: f64,
 ) -> Throughput {
     Throughput {
+        total_read_bytes: current.to_client_bytes,
+        total_write_bytes: current.from_client_bytes,
         read_speed_mbps: bytes_to_mbps(
             current
                 .to_client_bytes
@@ -398,6 +403,9 @@ fn throughput(
 }
 
 fn bytes_to_mbps(bytes: u64, seconds: f64) -> f64 {
+    if seconds <= 0.0 || !seconds.is_finite() {
+        return 0.0;
+    }
     bytes as f64 / (1024.0 * 1024.0) / seconds
 }
 
@@ -629,6 +637,19 @@ mod tests {
 
         assert_eq!(counters.to_client_bytes, 12 * 1024 * 1024);
         assert_eq!(counters.from_client_bytes, 3 * 1024 * 1024);
+        let collector = MetricsCollector {
+            reader,
+            previous: std::sync::Mutex::new(None),
+            previous_lio: std::sync::Mutex::new(None),
+        };
+        let first = collector.collect_lio(&[("192.168.1.101".into(), "block_pc001".into())]);
+        assert_eq!(first["192.168.1.101"].total_read_bytes, 12_582_912);
+        assert_eq!(first["192.168.1.101"].total_write_bytes, 3_145_728);
+        assert_eq!(first["192.168.1.101"].read_speed_mbps, 0.0);
+        std::fs::write(statistics.join("read_mbytes"), "1\n").unwrap();
+        let reset = collector.collect_lio(&[("192.168.1.101".into(), "block_pc001".into())]);
+        assert_eq!(reset["192.168.1.101"].total_read_bytes, 1_048_576);
+        assert_eq!(reset["192.168.1.101"].read_speed_mbps, 0.0);
         let _ = std::fs::remove_dir_all(root);
     }
 

@@ -44,6 +44,21 @@ pub async fn repair_storage_reconciliation(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<ReconciliationEntry>, ReconciliationApiError> {
+    let _client_guard = state.client_mutations.lock().await;
+    let pending: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM client_offline_resets WHERE client_id = ? AND operation IS NOT NULL",
+    )
+    .bind(&id)
+    .fetch_one(&state.db_pool)
+    .await
+    .map_err(|error| ReconciliationApiError {
+        error: error.to_string(),
+    })?;
+    if pending != 0 {
+        return Err(ReconciliationApiError {
+            error: "Automatic storage recovery is pending".into(),
+        });
+    }
     repair_client_storage(&state, &id)
         .await
         .map(Json)
