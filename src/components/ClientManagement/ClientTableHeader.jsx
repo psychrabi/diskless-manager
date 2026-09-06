@@ -16,16 +16,16 @@ const ClientTableHeader = ({ fixed = false }) => {
       </TableHead>
       <TableHead className={headerCellClass("w-36", fixed)}>IP Address</TableHead>
       <TableHead className={headerCellClass("hidden lg:table-cell w-24", fixed)}>
-        Disk Read Speed (MB/s)
+        Read Speed (MB/s)
       </TableHead>
       <TableHead className={headerCellClass("hidden lg:table-cell", fixed)}>
-        Total Disk Read
+        Total Read
       </TableHead>
       <TableHead className={headerCellClass("hidden lg:table-cell w-24", fixed)}>
-        Disk Write Speed (MB/s)
+        Write Speed (MB/s)
       </TableHead>
       <TableHead className={headerCellClass("hidden lg:table-cell", fixed)}>
-        Total Disk Write
+        Total Write
       </TableHead>
       <TableHead className={headerCellClass("hidden xl:table-cell", fixed)}>
         Image

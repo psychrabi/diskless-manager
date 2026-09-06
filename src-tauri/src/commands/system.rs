@@ -502,6 +502,7 @@ pub async fn test_ssh_connection(request: SshTestRequest) -> Result<SshTestResul
         connection_timeout: 10,
         command_timeout: 30,
         username: request.username,
+        password: request.password,
         disable_host_key_verification: true,
         max_retries: 1,
     };
@@ -561,6 +562,7 @@ pub async fn test_ssh_connection(request: SshTestRequest) -> Result<SshTestResul
 pub async fn execute_ssh_command(
     host: String,
     username: String,
+    password: Option<String>,
     command: String,
 ) -> Result<SshTestResult, String> {
     let start_time = std::time::Instant::now();
@@ -570,6 +572,7 @@ pub async fn execute_ssh_command(
         connection_timeout: 10,
         command_timeout: 60, // Longer timeout for custom commands
         username,
+        password,
         disable_host_key_verification: true,
         max_retries: 1,
     };
@@ -619,11 +622,13 @@ pub struct WindowsSystemInfo {
 pub async fn get_windows_system_info(
     host: String,
     username: String,
+    password: Option<String>,
 ) -> Result<WindowsSystemInfo, String> {
     let config = SshConfig {
         connection_timeout: 10,
         command_timeout: 30,
         username,
+        password,
         disable_host_key_verification: true,
         max_retries: 1,
     };
@@ -684,6 +689,7 @@ pub struct SshTestRequest {
     pub host: String,
     pub username: String,
     pub port: Option<u16>,
+    pub password: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

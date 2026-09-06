@@ -31,6 +31,8 @@ pub struct TestConnectionRequest {
     pub host: String,
     pub username: String,
     pub port: Option<u16>,
+    #[serde(default)]
+    pub password: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -38,12 +40,16 @@ pub struct ExecuteCommandRequest {
     pub host: String,
     pub username: String,
     pub command: String,
+    #[serde(default)]
+    pub password: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct GetSystemInfoRequest {
     pub host: String,
     pub username: String,
+    #[serde(default)]
+    pub password: Option<String>,
 }
 
 /// Test SSH connection to a remote host
@@ -55,6 +61,7 @@ pub async fn test_ssh_connection(
         host: request.host,
         username: request.username,
         port: request.port,
+        password: request.password,
     };
 
     match test_ssh_conn(ssh_request).await {
@@ -73,7 +80,7 @@ pub async fn execute_ssh_command(
     State(_state): State<AppState>,
     Json(request): Json<ExecuteCommandRequest>,
 ) -> Result<Json<SshTestResult>, (StatusCode, Json<ErrorResponse>)> {
-    match execute_ssh_cmd(request.host, request.username, request.command).await {
+    match execute_ssh_cmd(request.host, request.username, request.password, request.command).await {
         Ok(result) => Ok(Json(result)),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -89,7 +96,7 @@ pub async fn get_windows_system_info(
     State(_state): State<AppState>,
     Json(request): Json<GetSystemInfoRequest>,
 ) -> Result<Json<WindowsSystemInfo>, (StatusCode, Json<ErrorResponse>)> {
-    match get_windows_info(request.host, request.username).await {
+    match get_windows_info(request.host, request.username, request.password).await {
         Ok(result) => Ok(Json(result)),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,

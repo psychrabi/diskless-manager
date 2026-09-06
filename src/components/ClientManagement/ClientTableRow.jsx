@@ -113,7 +113,7 @@ const ClientTableRow = ({ client, clientMetrics }) => {
       <TableCell className="hidden lg:table-cell text-xs font-mono text-center">
         <UptimeCell uptimeSeconds={clientMetrics?.uptime_seconds} />
       </TableCell>
-      <TableCell>
+      <TableCell >
         <ControlActionButtons client={client} onActionComplete={() => {}} />
       </TableCell>
     </>

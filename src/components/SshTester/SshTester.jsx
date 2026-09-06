@@ -8,12 +8,14 @@ const INITIAL_CONNECTION_FORM = {
   host: "",
   username: DEFAULT_USERNAME,
   port: 22,
+  password: "",
 };
 
 const INITIAL_COMMAND_FORM = {
   host: "",
   username: DEFAULT_USERNAME,
   command: 'echo "Hello from Windows SSH"',
+  password: "",
 };
 
 const QUICK_COMMANDS = [
@@ -99,7 +101,8 @@ const SshTester = () => {
         testSshConnection(
           connectionForm.host,
           connectionForm.username,
-          connectionForm.port
+          connectionForm.port,
+          connectionForm.password
         ),
       onSuccess: (result) => setTestResult(result),
       onError: (error) => setTestResult(buildApiErrorResult(error)),
@@ -113,7 +116,8 @@ const SshTester = () => {
         executeSshCommand(
           commandForm.host,
           commandForm.username,
-          commandForm.command
+          commandForm.command,
+          commandForm.password
         ),
       onSuccess: (result) => setCommandResult(result),
       onError: (error) => setCommandResult(buildApiErrorResult(error)),
@@ -124,7 +128,11 @@ const SshTester = () => {
     await runWithLoading({
       before: () => setSystemInfo(null),
       action: () =>
-        getWindowsSystemInfo(connectionForm.host, connectionForm.username),
+        getWindowsSystemInfo(
+          connectionForm.host,
+          connectionForm.username,
+          connectionForm.password
+        ),
       onSuccess: (result) => setSystemInfo(result),
       onError: (error) =>
         setSystemInfo({
@@ -141,7 +149,7 @@ const SshTester = () => {
         <div className="card-body">
           <h2 className="card-title">Test SSH Connection</h2>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div className="form-control">
               <label className="label">
                 <span className="label-text">Host/IP Address</span>
@@ -170,6 +178,24 @@ const SshTester = () => {
                   setConnectionForm({
                     ...connectionForm,
                     username: e.target.value,
+                  })
+                }
+              />
+            </div>
+
+            <div className="form-control">
+              <label className="label">
+                <span className="label-text">Password</span>
+              </label>
+              <input
+                type="password"
+                placeholder="Leave blank for key auth"
+                className="input input-bordered"
+                value={connectionForm.password}
+                onChange={(e) =>
+                  setConnectionForm({
+                    ...connectionForm,
+                    password: e.target.value,
                   })
                 }
               />
@@ -268,7 +294,7 @@ const SshTester = () => {
         <div className="card-body">
           <h2 className="card-title">Execute SSH Command</h2>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="form-control">
               <label className="label">
                 <span className="label-text">Host/IP Address</span>
@@ -297,6 +323,24 @@ const SshTester = () => {
                   setCommandForm({
                     ...commandForm,
                     username: e.target.value,
+                  })
+                }
+              />
+            </div>
+
+            <div className="form-control">
+              <label className="label">
+                <span className="label-text">Password</span>
+              </label>
+              <input
+                type="password"
+                placeholder="Leave blank for key auth"
+                className="input input-bordered"
+                value={commandForm.password}
+                onChange={(e) =>
+                  setCommandForm({
+                    ...commandForm,
+                    password: e.target.value,
                   })
                 }
               />

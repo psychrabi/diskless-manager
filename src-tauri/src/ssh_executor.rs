@@ -23,6 +23,8 @@ pub struct SshConfig {
     pub command_timeout: u64,
     /// SSH username
     pub username: String,
+    /// Optional password for password-based authentication.
+    pub password: Option<String>,
     /// Whether to disable host key verification
     pub disable_host_key_verification: bool,
     /// Maximum number of retries on connection failure
@@ -35,6 +37,7 @@ impl Default for SshConfig {
             connection_timeout: 5,
             command_timeout: 30,
             username: "root".to_string(),
+            password: None,
             disable_host_key_verification: true,
             max_retries: 1,
         }
@@ -115,6 +118,7 @@ impl SshExecutor {
         let worker_host = host_owned.clone();
         let command_owned = command.to_string();
         let username = self.config.username.clone();
+        let password = self.config.password.clone();
         let connection_timeout = self.config.connection_timeout;
         let timeout_secs = self.config.command_timeout;
 
@@ -127,6 +131,7 @@ impl SshExecutor {
                 let session = Self::create_connection_blocking(
                     &worker_host,
                     &username,
+                    password.as_deref(),
                     connection_timeout,
                     timeout_secs,
                 )?;
@@ -181,6 +186,7 @@ impl SshExecutor {
 
         let host_owned = host.to_string();
         let user = self.config.username.clone();
+        let password = self.config.password.clone();
         let connection_timeout = self.config.connection_timeout;
 
         // All blocking libssh2 / network calls must run off the async runtime.
@@ -188,6 +194,7 @@ impl SshExecutor {
             Self::create_connection_blocking(
                 &host_owned,
                 &user,
+                password.as_deref(),
                 connection_timeout,
                 connection_timeout,
             )
@@ -203,6 +210,7 @@ impl SshExecutor {
     fn create_connection_blocking(
         host: &str,
         username: &str,
+        password: Option<&str>,
         connection_timeout: u64,
         io_timeout: u64,
     ) -> Result<Session, AppError> {
@@ -242,14 +250,18 @@ impl SshExecutor {
             AppError::SshConnection(format!("SSH handshake failed: {}", e))
         })?;
 
-        // Authenticate with agent (public key)
-        session.userauth_agent(username).map_err(|e| {
-            error!(
-                "SSH authentication failed for user {} on {}: {}",
-                username, host, e
-            );
-            AppError::SshAuth(format!("SSH authentication failed: {}", e))
-        })?;
+        // Authenticate. Prefer the password when provided; fall back to the
+        // SSH agent (public key) so existing key-based setups keep working.
+        let auth_result = match password {
+            Some(password) => session
+                .userauth_password(username, password)
+                .map_err(|e| AppError::SshAuth(format!("SSH password authentication failed: {e}"))),
+            None => session
+                .userauth_agent(username)
+                .map_err(|e| AppError::SshAuth(format!("SSH agent authentication failed: {e}"))),
+        };
+
+        auth_result?;
 
         if !session.authenticated() {
             error!(
@@ -365,6 +377,7 @@ mod tests {
             connection_timeout: 10,
             command_timeout: 60,
             username: "admin".to_string(),
+            password: Some("testpass".to_string()),
             disable_host_key_verification: false,
             max_retries: 2,
         };
@@ -372,6 +385,7 @@ mod tests {
         assert_eq!(executor.config.connection_timeout, 10);
         assert_eq!(executor.config.command_timeout, 60);
         assert_eq!(executor.config.username, "admin");
+        assert_eq!(executor.config.password.as_deref(), Some("testpass"));
         assert!(!executor.config.disable_host_key_verification);
         assert_eq!(executor.config.max_retries, 2);
     }
