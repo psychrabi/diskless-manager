@@ -31,7 +31,13 @@ use crate::api::handlers::{
     },
     license::{activate_license_handler, get_license_info_handler},
     logs::{clear_logs, get_logs},
+    network_drivers::{
+        import as import_network_driver, list as list_network_drivers,
+        rebuild as rebuild_network_drivers, remove as remove_network_driver,
+        status as network_driver_status,
+    },
     nvmeof::{inspect_nvmeof_boot, prepare_nvmeof_boot, remove_nvmeof_boot},
+    pxe::select_network_drivers,
     reconciliation::{inspect_storage_reconciliation, repair_storage_reconciliation},
     services::{
         configure_service, get_service_config, get_service_status, install_service, list_services,
@@ -245,6 +251,26 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route("/api/ssh/test-connection", post(test_ssh_connection))
         .route("/api/ssh/execute-command", post(execute_ssh_command))
         .route("/api/ssh/system-info", post(get_windows_system_info))
+        .route(
+            "/api/pxe/network-drivers",
+            get(list_network_drivers).post(import_network_driver),
+        )
+        .route(
+            "/api/pxe/network-drivers/status",
+            get(network_driver_status),
+        )
+        .route(
+            "/api/pxe/network-drivers/rebuild",
+            post(rebuild_network_drivers),
+        )
+        .route(
+            "/api/pxe/network-drivers/select",
+            post(select_network_drivers),
+        )
+        .route(
+            "/api/pxe/network-drivers/{id}",
+            delete(remove_network_driver),
+        )
         .with_state(state.clone())
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
