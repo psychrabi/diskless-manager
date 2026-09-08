@@ -44,25 +44,25 @@ const AuthorizeStep = ({ onAuthorized, authorized = false, checking = false }) =
           </div>
         </div>
         <h2 className="text-2xl font-bold text-primary">Authorize Application</h2>
-        <p className="text-base-content/70 mt-2">
+        <p className="text-muted-foreground mt-2">
           Grant privileged access for system management
         </p>
       </div>
 
       <div className="space-y-4">
-        <p className="text-sm text-base-content/60 leading-relaxed">
+        <p className="text-sm text-muted-foreground leading-relaxed">
           The application requires privileged access to manage system services,
           storage, and configuration files. This includes:
         </p>
 
-        <ul className="text-sm text-base-content/60 space-y-1.5 list-disc list-inside">
+        <ul className="text-sm text-muted-foreground space-y-1.5 list-disc list-inside">
           <li>Service management (DHCP, TFTP, HTTP, Samba)</li>
           <li>ZFS storage pool operations</li>
           <li>Package installation and updates</li>
           <li>Network configuration</li>
         </ul>
 
-        <div className="flex items-center gap-3 p-3 bg-warning/10 border border-warning/20 rounded-lg text-warning text-xs">
+        <div className="flex items-center gap-3 p-3 bg-amber-600/10 border border-amber-600/20 rounded-lg text-amber-600 text-xs">
           <ShieldAlert size={24} className="shrink-0" />
           <p>
             A one-time password prompt (Polkit) will appear to authorize this

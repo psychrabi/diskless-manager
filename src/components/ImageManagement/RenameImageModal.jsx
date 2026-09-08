@@ -1,3 +1,5 @@
+import { Field, FieldLabel } from "@/components/ui/field";
+import { Input as TextInput } from "@/components/ui/input";
 import { renameImage } from "@/api/modules/images";
 import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
@@ -74,23 +76,23 @@ const RenameImageModal = ({
           <p className="text-sm text-gray-600 dark:text-gray-400">
             Rename master image "{selectedImage.name}" to a new name.
           </p>
-          <fieldset className={`fieldset`}>
-            <legend htmlFor="newName" className="fieldset-legend">
+          <Field>
+            <FieldLabel htmlFor="newName">
               New Name
-            </legend>
-            <input
+            </FieldLabel>
+            <TextInput
               {...register("newName")}
               type="text"
               id="newName"
               placeholder="e.g., win11-enterprise (will create pool/name-master)"
-              className="input w-full"
+              className="w-full"
             />
             {errors.newName && (
-              <div className="text-red-500 text-xs">
+              <div className="text-destructive text-xs">
                 {errors.newName.message}
               </div>
             )}
-          </fieldset>
+          </Field>
         </div>
 
         <div className="mt-6 flex justify-end space-x-3">

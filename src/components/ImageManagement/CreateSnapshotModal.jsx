@@ -1,3 +1,5 @@
+import { Field, FieldLabel } from "@/components/ui/field";
+import { Input as TextInput } from "@/components/ui/input";
 import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -51,21 +53,21 @@ const CreateSnapshotModal = ({
       size="2xl"
     >
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-2">
-        <fieldset className={`fieldset`}>
-          <legend htmlFor="name" className="fieldset-legend">
+        <Field>
+          <FieldLabel htmlFor="name">
             Snapshot Name
-          </legend>
-          <input
+          </FieldLabel>
+          <TextInput
             {...register("name")}
             type="text"
             id="name"
             placeholder="Enter snapshot name (e.g., my-snapshot-name)"
-            className="input w-full"
+            className="w-full"
           />
           {errors.name && (
-            <div className="text-red-500 text-xs">{errors.name.message}</div>
+            <div className="text-destructive text-xs">{errors.name.message}</div>
           )}
-        </fieldset>
+        </Field>
         <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
           This operation will capture the current state of{" "}
           <strong className="font-semibold">{selectedImage.name}</strong>.

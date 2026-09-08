@@ -1,3 +1,4 @@
+import { Badge } from "@/components/ui/badge";
 import { useConfirm } from "@/contexts/confirmDialog";
 import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
@@ -47,7 +48,7 @@ const DiskTable = ({ datasets, onRefresh }) => {
 
   return (
     <>
-      <Table className="bg-base-100 rounded-lg" aria-label="ZFS datasets list">
+      <Table className="bg-background rounded-lg" aria-label="ZFS datasets list">
         <TableHeader>
           <TableRow>
             <TableHead>Name</TableHead>
@@ -64,14 +65,14 @@ const DiskTable = ({ datasets, onRefresh }) => {
             <TableRow key={dataset.name}>
               <TableCell>{dataset.name}</TableCell>
               <TableCell>
-                <span className="badge badge-primary badge-sm">
+                <Badge variant="default" className="">
                   {dataset.disk_type || "-"}
-                </span>
+                </Badge>
               </TableCell>
               <TableCell>{dataset.used}</TableCell>
               <TableCell>{dataset.available}</TableCell>
               <TableCell>{dataset.referenced}</TableCell>
-              <TableCell className="text-sm text-base-content/70">
+              <TableCell className="text-sm text-muted-foreground">
                 {dataset.mountpoint}
               </TableCell>
               <TableCell>

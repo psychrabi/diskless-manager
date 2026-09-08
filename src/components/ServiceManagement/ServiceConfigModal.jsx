@@ -1,3 +1,4 @@
+import { Textarea } from "@/components/ui/textarea";
 import { useState } from "react";
 import { useServiceManager } from "../../hooks/useServiceManager";
 import { Button, Modal } from "@/components/ui";
@@ -69,15 +70,16 @@ function ServiceConfigModal({
           <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-500"></div>
         </div>
       ) : editable ? (
-        <textarea
-          className="bg-base-100 p-4 rounded-md text-xs overflow-auto h-[80vh] w-full font-mono max-h-[80vh]"
+        <Textarea
+          aria-label="Service configuration"
+          className="bg-background p-4 rounded-md text-xs overflow-auto h-[80vh] w-full font-mono max-h-[80vh]"
           value={config}
           onChange={handleChange}
           disabled={saving}
           spellCheck={false}
         />
       ) : (
-        <pre className="bg-base-100 p-4 rounded-md text-xs overflow-auto h-[80vh] max-h-[80vh]">
+        <pre className="bg-background p-4 rounded-md text-xs overflow-auto h-[80vh] max-h-[80vh]">
           <code>{config}</code>
         </pre>
       )}

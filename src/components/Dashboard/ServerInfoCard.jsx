@@ -1,57 +1,47 @@
-import { Monitor, RefreshCw } from "lucide-react";
+import { Monitor } from "lucide-react";
 import { useAppStore } from "../../store/useAppStore";
-import { Card, Button, LoadingSkeleton } from "@/components/ui";
-import { clearRamCache } from "@/api/modules/system";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 
-const InfoRow = ({ label, value, className = "" }) => (
-  <div className={`flex justify-between items-center py-2.5 border-b border-base-200/50 last:border-0 ${className}`}>
-    <span className="text-sm text-base-content/60">{label}</span>
-    <span className="text-sm font-medium text-base-content text-right ml-4">{value}</span>
+const InfoRow = ({ label, value }) => (
+  <div className="flex justify-between items-center gap-4 py-2.5 border-b border-border last:border-0">
+    <span className="text-sm text-muted-foreground">{label}</span>
+    <span className="text-sm font-medium text-right">{value}</span>
   </div>
 );
 
 const ServerInfoCard = () => {
   const serverInfo = useAppStore((state) => state.serverInfo);
 
-  if (!serverInfo) {
-    return (
-      <Card title="System Information" icon={Monitor}>
-        <div className="space-y-3" aria-hidden="true">
-          <LoadingSkeleton variant="text" width="full" />
-          <LoadingSkeleton variant="text" width="5/6" />
-          <LoadingSkeleton variant="text" width="4/5" />
-          <LoadingSkeleton variant="text" width="3/4" />
-          <LoadingSkeleton variant="text" width="2/3" />
-          <LoadingSkeleton variant="text" width="5/6" />
-        </div>
-      </Card>
-    );
-  }
-
   return (
-    <Card
-      title="System Information"
-      icon={Monitor}
-      actions={
-        <Button
-          onClick={clearRamCache}
-          variant="ghost"
-          size="sm"
-          title="Clear RAM cache"
-        >
-          <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
-          Clear Cache
-        </Button>
-      }
-    >
-      <div>
-        <InfoRow label="Hostname" value={serverInfo.hostname} />
-        <InfoRow label="Operating System" value={serverInfo.os} />
-        <InfoRow label="Kernel" value={serverInfo.kernel} />
-        <InfoRow label="Uptime" value={serverInfo.uptime} />
-        <InfoRow label="CPU Cores" value={serverInfo.cpu_count} />
-        <InfoRow label="Total Memory" value={serverInfo.memory_total} />
-      </div>
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Monitor className="size-4" />
+          System Information
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {!serverInfo ? (
+          <div className="flex flex-col gap-3" aria-hidden="true">
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-5/6" />
+            <Skeleton className="h-4 w-4/5" />
+            <Skeleton className="h-4 w-3/4" />
+            <Skeleton className="h-4 w-2/3" />
+            <Skeleton className="h-4 w-5/6" />
+          </div>
+        ) : (
+          <div>
+            <InfoRow label="Hostname" value={serverInfo.hostname} />
+            <InfoRow label="Operating System" value={serverInfo.os} />
+            <InfoRow label="Kernel" value={serverInfo.kernel} />
+            <InfoRow label="Uptime" value={serverInfo.uptime} />
+            <InfoRow label="CPU Cores" value={serverInfo.cpu_count} />
+            <InfoRow label="Total Memory" value={serverInfo.memory_total} />
+          </div>
+        )}
+      </CardContent>
     </Card>
   );
 };

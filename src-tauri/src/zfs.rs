@@ -966,11 +966,11 @@ pub async fn get_zfs_arcstat() -> Result<ArcstatInfo, AppError> {
     let mut size = 0u64;
     for line in content.lines() {
         let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() >= 2 {
+        if parts.len() >= 3 {
             match parts[0] {
-                "hits" => hits = parts[1].parse().unwrap_or(0),
-                "misses" => misses = parts[1].parse().unwrap_or(0),
-                "size" => size = parts[1].parse().unwrap_or(0),
+                "hits" => hits = parts[2].parse().unwrap_or(0),
+                "misses" => misses = parts[2].parse().unwrap_or(0),
+                "size" => size = parts[2].parse().unwrap_or(0),
                 _ => {}
             }
         }

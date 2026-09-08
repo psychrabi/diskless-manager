@@ -1,5 +1,6 @@
-import { AlertCircle, CheckCircle, Clock, Minus, XCircle } from "lucide-react";
+import { AlertCircle, CheckCircle2, Clock, Minus, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
 
 export const StatusBadge = ({
   status,
@@ -9,67 +10,32 @@ export const StatusBadge = ({
   className = ""
 }) => {
   const statusConfig = {
-    success: {
-      className: "status-success",
-      icon: CheckCircle,
-      label: children || "Success"
-    },
-    error: {
-      className: "status-error",
-      icon: XCircle,
-      label: children || "Error"
-    },
-    warning: {
-      className: "status-warning",
-      icon: AlertCircle,
-      label: children || "Warning"
-    },
-    info: {
-      className: "status-info",
-      icon: Clock,
-      label: children || "Info"
-    },
-    neutral: {
-      className: "status-neutral",
-      icon: Minus,
-      label: children || "Neutral"
-    },
-    running: {
-      className: "status-success",
-      icon: CheckCircle,
-      label: children || "Running"
-    },
-    stopped: {
-      className: "status-error",
-      icon: XCircle,
-      label: children || "Stopped"
-    },
-    pending: {
-      className: "status-warning",
-      icon: Clock,
-      label: children || "Pending"
-    }
+    success: { variant: "outline", icon: CheckCircle2, label: children || "Success" },
+    error: { variant: "destructive", icon: XCircle, label: children || "Error" },
+    warning: { variant: "outline", icon: AlertCircle, label: children || "Warning" },
+    info: { variant: "outline", icon: Clock, label: children || "Info" },
+    neutral: { variant: "secondary", icon: Minus, label: children || "Neutral" },
+    running: { variant: "outline", icon: CheckCircle2, label: children || "Running" },
+    stopped: { variant: "destructive", icon: XCircle, label: children || "Stopped" },
+    pending: { variant: "outline", icon: Clock, label: children || "Pending" },
   };
 
   const sizeClasses = {
-    sm: "text-xs px-2 py-0.5",
-    md: "text-xs px-2.5 py-1",
-    lg: "text-sm px-3 py-1.5"
-  };
-
-  const iconSizes = {
-    sm: "h-3 w-3",
-    md: "h-3.5 w-3.5",
-    lg: "h-4 w-4"
+    sm: "h-5 px-2 text-xs",
+    md: "h-5.5 px-2.5 text-xs",
+    lg: "h-6 px-3 text-sm",
   };
 
   const config = statusConfig[status] || statusConfig.neutral;
   const Icon = config.icon;
 
   return (
-    <span className={cn("status-indicator", config.className, sizeClasses[size], className, "text-base-content")}>
-      {showIcon && <Icon className={`${iconSizes[size]} mr-1.5`} />}
+    <Badge
+      variant={config.variant}
+      className={cn(sizeClasses[size], className)}
+    >
+      {showIcon && <Icon data-icon="inline-start" />}
       {config.label}
-    </span>
+    </Badge>
   );
 };

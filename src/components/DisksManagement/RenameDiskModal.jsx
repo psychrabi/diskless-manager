@@ -1,3 +1,5 @@
+import { Field, FieldLabel } from "@/components/ui/field";
+import { Input as TextInput } from "@/components/ui/input";
 import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { renameDisk } from "@/api/modules/disks";
@@ -85,14 +87,14 @@ const RenameDiskModal = ({
           <p className="text-sm text-gray-600 dark:text-gray-400">
             Rename disk "{displayName}" to a new name.
           </p>
-          <fieldset className={`fieldset`}>
-            <legend className="fieldset-legend">New Name</legend>
-            <input
+          <Field>
+            <FieldLabel htmlFor="newName">New Name</FieldLabel>
+            <TextInput
               {...register("newName")}
               type="text"
               id="newName"
               placeholder="e.g., boot-disk, writeback-disk"
-              className="input w-full"
+              className="w-full"
               aria-invalid={!!errors.newName}
               aria-describedby={errors.newName ? "newName-error" : undefined}
             />
@@ -100,12 +102,12 @@ const RenameDiskModal = ({
               <div
                 id="newName-error"
                 role="alert"
-                className="text-red-500 text-xs"
+                className="text-destructive text-xs"
               >
                 {errors.newName.message}
               </div>
             )}
-          </fieldset>
+          </Field>
         </div>
         <div className="mt-6 flex justify-end space-x-3">
           <Button type="submit" variant="primary" icon={Save}>

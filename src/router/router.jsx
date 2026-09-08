@@ -1,6 +1,7 @@
 import UserManagement from "@/components/UserManagement";
 import PublicRoute from "@/components/Authentication/PublicRoute";
 import PublicLayout from "@/components/layouts/PublicLayout";
+import RouteErrorBoundary from "@/components/RouteErrorBoundary";
 import { lazy } from "react";
 import { createHashRouter } from "react-router-dom";
 
@@ -30,6 +31,7 @@ export const router = createHashRouter([
   {
     path: "/",
     element: <PublicLayout />,
+    errorElement: <RouteErrorBoundary />,
     children: [
       {
         path: "/login",
@@ -51,10 +53,11 @@ export const router = createHashRouter([
         path: "/setup",
         element: <Setup />,
       },
-    ],
+    ].map((route) => ({ ...route, errorElement: <RouteErrorBoundary fullPage={false} /> })),
   },
   {
     path: "/",
+    errorElement: <RouteErrorBoundary />,
     element: (
       <ProtectedRoute>
         <Adminlayout />
@@ -105,6 +108,11 @@ export const router = createHashRouter([
         path: "/ssh-tester",
         element: <SshTester />,
       },
-    ],
+    ].map((route) => ({ ...route, errorElement: <RouteErrorBoundary fullPage={false} /> })),
+  },
+  {
+    path: "*",
+    loader: () => { throw new Response(null, { status: 404 }); },
+    errorElement: <RouteErrorBoundary />,
   },
 ]);

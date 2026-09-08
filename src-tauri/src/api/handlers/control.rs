@@ -7,11 +7,12 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::audit_logger::{AuditLogFilter, AuditLogger, ControlOperation, OperationResult};
 use crate::state::AppState;
 use chrono::Utc;
+use sqlx::sqlite::SqlitePool;
 
 // Helper function to get master OS
 fn get_master_os(master_name: &str) -> Option<String> {
@@ -97,6 +98,173 @@ pub struct ControlOperationResponse {
     pub message: String,
     pub operation_id: Option<String>,
     pub timestamp: String,
+}
+
+/// A power operation (shutdown/reboot) delayed until a scheduled time.
+#[derive(Clone)]
+struct ScheduledPowerOp {
+    operation_id: String,
+    client_id: String,
+    client_name: String,
+    client_ip: String,
+    operation_type: String,
+    master_os: String,
+    force: bool,
+}
+
+/// Build the OS-specific command used to shutdown or reboot a client.
+fn build_power_command(operation_type: &str, ip: &str, master_os: &str, force: bool) -> Command {
+    let is_shutdown = operation_type == "shutdown";
+    if master_os.contains("linux") {
+        let action: &str = match (is_shutdown, force) {
+            (true, true) => "poweroff -f",
+            (true, false) => "shutdown -h now",
+            (false, true) => "reboot -f",
+            (false, false) => "shutdown -r now",
+        };
+        let mut cmd = Command::new("ssh");
+        cmd.args(["-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5"])
+            .arg(format!("root@{}", ip))
+            .arg(action);
+        cmd
+    } else if is_shutdown {
+        let mut cmd = Command::new("net");
+        cmd.args(["rpc", "shutdown", "-I", ip, "-U", "diskless%1", "-t", "0"]);
+        if force {
+            cmd.arg("-f");
+        }
+        cmd
+    } else {
+        let mut cmd = Command::new("net");
+        cmd.args([
+            "rpc",
+            "shutdown",
+            "-r",
+            "-I",
+            ip,
+            "-U",
+            "diskless%1",
+            "-t",
+            "0",
+        ]);
+        if force {
+            cmd.arg("-f");
+        }
+        cmd
+    }
+}
+
+/// Run a previously scheduled power operation once its delay has elapsed.
+async fn run_scheduled_power_op(pool: SqlitePool, op: ScheduledPowerOp, delay_secs: u64) {
+    tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+
+    // Bail out if the operation was cancelled while we were waiting.
+    let pending = match sqlx::query_scalar::<_, Option<String>>(
+        "SELECT result FROM scheduled_operations WHERE id = ?",
+    )
+    .bind(&op.operation_id)
+    .fetch_optional(&pool)
+    .await
+    {
+        Ok(Some(result)) => {
+            let result = result.unwrap_or_default();
+            result.is_empty() || result == "pending"
+        }
+        _ => true,
+    };
+    if !pending {
+        debug!(
+            "Scheduled operation {} skipped (no longer pending)",
+            op.operation_id
+        );
+        return;
+    }
+
+    let os_label = if op.master_os.contains("linux") {
+        "Linux"
+    } else {
+        "Windows"
+    };
+    let verb = if op.operation_type == "shutdown" {
+        "Shutdown"
+    } else {
+        "Reboot"
+    };
+
+    let (success, message) = match crate::api::util::run_command(&mut build_power_command(
+        &op.operation_type,
+        &op.client_ip,
+        &op.master_os,
+        op.force,
+    ))
+    .await
+    {
+        Ok(output) if output.status.success() => (
+            true,
+            format!(
+                "{} command sent to {} ({})",
+                verb, op.client_name, op.client_ip
+            ),
+        ),
+        Ok(output) => {
+            let msg = format!(
+                "Failed to {} {} client ({}): {}",
+                op.operation_type,
+                os_label,
+                op.client_ip,
+                String::from_utf8_lossy(&output.stderr)
+            );
+            error!("{}", msg);
+            (false, msg)
+        }
+        Err(e) => {
+            let msg = format!("Failed to execute SSH: {}", e);
+            error!("{}", msg);
+            (false, msg)
+        }
+    };
+
+    let result_column = if success {
+        "success".to_string()
+    } else {
+        format!("failed: {}", message)
+    };
+    if let Err(e) = sqlx::query("UPDATE scheduled_operations SET result = ? WHERE id = ?")
+        .bind(&result_column)
+        .bind(&op.operation_id)
+        .execute(&pool)
+        .await
+    {
+        error!(
+            "Failed to update scheduled operation {}: {}",
+            op.operation_id, e
+        );
+    }
+
+    let audit_logger = AuditLogger::new(Arc::new(pool.clone()));
+    let audit_operation = ControlOperation {
+        client_id: op.client_id.clone(),
+        client_name: op.client_name.clone(),
+        client_ip: op.client_ip.clone(),
+        os_type: op.master_os.clone(),
+        operation_type: op.operation_type.clone(),
+        operation_mode: if op.force { "force" } else { "graceful" }.to_string(),
+        delay_minutes: Some((delay_secs / 60) as u32),
+        timestamp: Utc::now(),
+        administrator: "system".to_string(),
+        result: if success {
+            OperationResult::Success
+        } else {
+            OperationResult::Failed(message)
+        },
+    };
+    if let Err(e) = audit_logger.log_operation(&audit_operation).await {
+        error!("Failed to log scheduled operation: {}", e);
+    }
+    info!(
+        "Scheduled {} operation {} finished: {}",
+        op.operation_type, op.operation_id, result_column
+    );
 }
 
 /// Response for remote desktop operations
@@ -195,76 +363,105 @@ pub async fn shutdown_client(
     let master_os = get_master_os(&client.master)
         .unwrap_or_default()
         .to_lowercase();
-    let (success, message) = if master_os.contains("linux") {
-        let mut cmd = Command::new("ssh");
-        cmd.args([
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "ConnectTimeout=5",
-            &format!("root@{}", ip),
-            "poweroff",
-        ]);
-        let output = crate::api::util::run_command(&mut cmd).await.map_err(|e| {
-            error!("Failed to execute SSH: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                    error: format!("Failed to execute SSH: {}", e),
-                    details: None,
-                }),
-            )
-        })?;
 
-        if !output.status.success() {
-            let msg = format!(
-                "Failed to shutdown Linux client (SSH): {}",
-                String::from_utf8_lossy(&output.stderr)
+    if let Some(delay_minutes) = delay_minutes {
+        if delay_minutes > 0 {
+            let operation_id = uuid::Uuid::new_v4().to_string();
+            let now = Utc::now();
+            let scheduled_time = now + chrono::Duration::minutes(i64::from(delay_minutes));
+            let op_mode = if force { "force" } else { "graceful" };
+
+            sqlx::query(
+                "INSERT INTO scheduled_operations (id, client_id, operation_type, operation_mode, scheduled_time, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(&operation_id)
+            .bind(&client.id)
+            .bind("shutdown")
+            .bind(op_mode)
+            .bind(scheduled_time.to_rfc3339())
+            .bind(now.to_rfc3339())
+            .execute(&state.db_pool)
+            .await
+            .map_err(|e| {
+                error!(
+                    "Failed to schedule shutdown operation for {}: {}",
+                    client.name, e
+                );
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                        error: "Failed to schedule shutdown operation".to_string(),
+                        details: Some(e.to_string()),
+                    }),
+                )
+            })?;
+
+            let pool = state.db_pool.clone();
+            let op = ScheduledPowerOp {
+                operation_id: operation_id.clone(),
+                client_id: client.id.clone(),
+                client_name: client.name.clone(),
+                client_ip: client.ip.clone(),
+                operation_type: "shutdown".to_string(),
+                master_os: master_os.clone(),
+                force,
+            };
+            let delay_secs = u64::from(delay_minutes) * 60;
+            tokio::spawn(async move {
+                run_scheduled_power_op(pool, op, delay_secs).await;
+            });
+
+            let message = format!(
+                "Shutdown for {} ({}) scheduled for {}",
+                client.name,
+                client.ip,
+                scheduled_time.format("%Y-%m-%d %H:%M:%S")
             );
-            error!("{}", msg);
-            (false, msg)
-        } else {
+            info!("{}", message);
+            return Ok(Json(ControlOperationResponse {
+                success: true,
+                message,
+                operation_id: Some(operation_id),
+                timestamp: now.to_rfc3339(),
+            }));
+        }
+    }
+
+    let (success, message) = match crate::api::util::run_command(&mut build_power_command(
+        "shutdown", ip, &master_os, force,
+    ))
+    .await
+    {
+        Ok(output) if output.status.success() => {
             let msg = format!("Shutdown command sent to {} ({})", client.name, ip);
             info!("{}", msg);
             (true, msg)
         }
-    } else {
-        let mut cmd = Command::new("net");
-        cmd.args([
-            "rpc",
-            "shutdown",
-            "-I",
-            ip,
-            "-U",
-            "diskless%1",
-            "-f",
-            "-t",
-            "0",
-        ]);
-        let output = crate::api::util::run_command(&mut cmd).await.map_err(|e| {
+        Ok(output) => {
+            let msg = format!(
+                "Failed to shutdown {} client ({}): {}",
+                if master_os.contains("linux") {
+                    "Linux"
+                } else {
+                    "Windows"
+                },
+                ip,
+                String::from_utf8_lossy(&output.stderr)
+            );
+            error!("{}", msg);
+            (false, msg)
+        }
+        Err(e) => {
             error!("Failed to execute SSH: {}", e);
-            (
+            return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
                     status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
                     error: format!("Failed to execute SSH: {}", e),
                     details: None,
                 }),
-            )
-        })?;
-
-        if !output.status.success() {
-            let msg = format!(
-                "Failed to shutdown Windows client: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            error!("{}", msg);
-            (false, msg)
-        } else {
-            let msg = format!("Shutdown command sent to {} ({})", client.name, ip);
-            info!("{}", msg);
-            (true, msg)
+            ));
         }
     };
 
@@ -344,77 +541,105 @@ pub async fn reboot_client(
     let master_os = get_master_os(&client.master)
         .unwrap_or_default()
         .to_lowercase();
-    let (success, message) = if master_os.contains("linux") {
-        let mut cmd = Command::new("ssh");
-        cmd.args([
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "ConnectTimeout=5",
-            &format!("root@{}", ip),
-            "reboot",
-        ]);
-        let output = crate::api::util::run_command(&mut cmd).await.map_err(|e| {
-            error!("Failed to execute SSH: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                    error: format!("Failed to execute SSH: {}", e),
-                    details: None,
-                }),
-            )
-        })?;
 
-        if !output.status.success() {
-            let msg = format!(
-                "Failed to reboot Linux client (SSH): {}",
-                String::from_utf8_lossy(&output.stderr)
+    if let Some(delay_minutes) = delay_minutes {
+        if delay_minutes > 0 {
+            let operation_id = uuid::Uuid::new_v4().to_string();
+            let now = Utc::now();
+            let scheduled_time = now + chrono::Duration::minutes(i64::from(delay_minutes));
+            let op_mode = if force { "force" } else { "graceful" };
+
+            sqlx::query(
+                "INSERT INTO scheduled_operations (id, client_id, operation_type, operation_mode, scheduled_time, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(&operation_id)
+            .bind(&client.id)
+            .bind("reboot")
+            .bind(op_mode)
+            .bind(scheduled_time.to_rfc3339())
+            .bind(now.to_rfc3339())
+            .execute(&state.db_pool)
+            .await
+            .map_err(|e| {
+                error!(
+                    "Failed to schedule reboot operation for {}: {}",
+                    client.name, e
+                );
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                        error: "Failed to schedule reboot operation".to_string(),
+                        details: Some(e.to_string()),
+                    }),
+                )
+            })?;
+
+            let pool = state.db_pool.clone();
+            let op = ScheduledPowerOp {
+                operation_id: operation_id.clone(),
+                client_id: client.id.clone(),
+                client_name: client.name.clone(),
+                client_ip: client.ip.clone(),
+                operation_type: "reboot".to_string(),
+                master_os: master_os.clone(),
+                force,
+            };
+            let delay_secs = u64::from(delay_minutes) * 60;
+            tokio::spawn(async move {
+                run_scheduled_power_op(pool, op, delay_secs).await;
+            });
+
+            let message = format!(
+                "Reboot for {} ({}) scheduled for {}",
+                client.name,
+                client.ip,
+                scheduled_time.format("%Y-%m-%d %H:%M:%S")
             );
-            error!("{}", msg);
-            (false, msg)
-        } else {
+            info!("{}", message);
+            return Ok(Json(ControlOperationResponse {
+                success: true,
+                message,
+                operation_id: Some(operation_id),
+                timestamp: now.to_rfc3339(),
+            }));
+        }
+    }
+
+    let (success, message) = match crate::api::util::run_command(&mut build_power_command(
+        "reboot", ip, &master_os, force,
+    ))
+    .await
+    {
+        Ok(output) if output.status.success() => {
             let msg = format!("Reboot command sent to {} ({})", client.name, ip);
             info!("{}", msg);
             (true, msg)
         }
-    } else {
-        let mut cmd = Command::new("net");
-        cmd.args([
-            "rpc",
-            "shutdown",
-            "-r",
-            "-I",
-            ip,
-            "-U",
-            "diskless%1",
-            "-f",
-            "-t",
-            "0",
-        ]);
-        let output = crate::api::util::run_command(&mut cmd).await.map_err(|e| {
+        Ok(output) => {
+            let msg = format!(
+                "Failed to reboot {} client ({}): {}",
+                if master_os.contains("linux") {
+                    "Linux"
+                } else {
+                    "Windows"
+                },
+                ip,
+                String::from_utf8_lossy(&output.stderr)
+            );
+            error!("{}", msg);
+            (false, msg)
+        }
+        Err(e) => {
             error!("Failed to execute SSH: {}", e);
-            (
+            return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
                     status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
                     error: format!("Failed to execute SSH: {}", e),
                     details: None,
                 }),
-            )
-        })?;
-
-        if !output.status.success() {
-            let msg = format!(
-                "Failed to reboot Windows client (SSH): {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            error!("{}", msg);
-            (false, msg)
-        } else {
-            let msg = format!("Reboot command sent to {} ({})", client.name, ip);
-            info!("{}", msg);
-            (true, msg)
+            ));
         }
     };
 
@@ -503,36 +728,53 @@ pub async fn remote_desktop_client(
         // Windows: Launch RDP client
         protocol_used = "RDP".to_string();
 
-        // Try to launch xfreerdp with proper display handling
-        let mut xfreerdp_cmd = Command::new("xfreerdp3");
-        xfreerdp_cmd
-            .args(&[
-                "/v:".to_string() + &ip,
-                "/u:".to_string() + &username,
-                "/p:".to_string() + &password,
-                "/cert:ignore".to_string(),
-                "/w:1920".to_string(),
-                "/h:1080".to_string(),
-                "/dynamic-resolution".to_string(),
-                "/gdi:hw".to_string(),
-                "/network:lan".to_string(),
-                "/bpp:32".to_string(),
-                "/sec:nla".to_string(),
-                "/timeout:20000".to_string(),
-            ])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        // Try to launch xfreerdp (v2/v3 binary naming) with proper display
+        // handling. Distros ship the FreeRDP 3 binary either as 'xfreerdp3'
+        // (Debian/Ubuntu) or 'xfreerdp' (Fedora/RHEL).
+        let freerdp_names = ["xfreerdp3", "xfreerdp"];
+        let mut freerdp_child = None;
+        let mut freerdp_error: Option<std::io::Error> = None;
 
-        // Set DISPLAY if available
-        if let Ok(display) = std::env::var("DISPLAY") {
-            xfreerdp_cmd.env("DISPLAY", display);
+        for freerdp_name in freerdp_names {
+            let mut freerdp_cmd = Command::new(freerdp_name);
+            freerdp_cmd
+                .args(&[
+                    "/v:".to_string() + &ip,
+                    "/u:".to_string() + &username,
+                    "/p:".to_string() + &password,
+                    "/cert:ignore".to_string(),
+                    "/w:1920".to_string(),
+                    "/h:1080".to_string(),
+                    "/dynamic-resolution".to_string(),
+                    "/gdi:hw".to_string(),
+                    "/network:lan".to_string(),
+                    "/bpp:32".to_string(),
+                    "/sec:nla".to_string(),
+                    "/timeout:20000".to_string(),
+                ])
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+
+            // Set DISPLAY if available
+            if let Ok(display) = std::env::var("DISPLAY") {
+                freerdp_cmd.env("DISPLAY", display);
+            }
+
+            match freerdp_cmd.spawn() {
+                Ok(child) => {
+                    freerdp_child = Some(child);
+                    break;
+                }
+                Err(e) => {
+                    debug!("Failed to launch {}: {}", freerdp_name, e);
+                    freerdp_error = Some(e);
+                }
+            }
         }
 
-        let result = xfreerdp_cmd.spawn();
-
-        match result {
-            Ok(child) => {
+        match freerdp_child {
+            Some(child) => {
                 // Spawn a thread to wait for the process and log any errors
                 std::thread::spawn(move || {
                     if let Ok(output) = child.wait_with_output() {
@@ -557,8 +799,13 @@ pub async fn remote_desktop_client(
                 );
                 info!("{}", message);
             }
-            Err(e) => {
-                error!("Failed to launch xfreerdp: {}", e);
+            None => {
+                let launch_error = freerdp_error
+                    .as_ref()
+                    .map(|e| e.to_string())
+                    .unwrap_or_else(|| "unknown error".to_string());
+
+                error!("Failed to launch xfreerdp: {}", launch_error);
 
                 // Fallback to rdesktop with NLA/CredSSP bypass
                 let mut rdesktop_cmd = Command::new("rdesktop");

@@ -1,14 +1,17 @@
-import { TableHead } from "@/components/ui";
+import { TableHead } from "@/components/ui/table";
+import { cn } from "@/lib/utils";
 
 const headerCellClass = (baseClassName = "", fixed) => {
-  const fixedClassName = fixed ? " bg-base-100" : "";
-  return `${baseClassName}${fixedClassName}`.trim();
+  return cn(baseClassName, fixed && "bg-card");
 };
 
 const ClientTableHeader = ({ fixed = false }) => {
   return (
     <tr
-      className={`border-b border-base-200 ${fixed ? "bg-base-100 shadow-sm z-10 w-full text-center" : ""}`}
+      className={cn(
+        "border-b border-border",
+        fixed && "z-10 w-full text-center bg-card shadow-sm"
+      )}
     >
       <TableHead className={headerCellClass("w-30", fixed)}>Name</TableHead>
       <TableHead className={headerCellClass("hidden md:table-cell w-40", fixed)}>

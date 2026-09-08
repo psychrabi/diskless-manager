@@ -1,4 +1,4 @@
-import { Button } from "@/components/ui/Button";
+import { Button } from "@/components/ui/button";
 import {
   Table,
   TableBody,
@@ -6,25 +6,27 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@/components/ui/Table";
+} from "@/components/ui/table";
+import { Badge } from "@/components/ui/badge";
+import { Spinner } from "@/components/ui/spinner";
 import { ChevronLeft, ChevronRight, Search } from "lucide-react";
 
-const OPERATION_BADGE_CLASS = {
-  shutdown: "badge-error",
-  reboot: "badge-warning",
-  remote: "badge-info",
+const OPERATION_BADGE_VARIANT = {
+  shutdown: "destructive",
+  reboot: "outline",
+  remote: "secondary",
 };
 
-const RESULT_BADGE_CLASS = {
-  success: "badge-success",
-  failed: "badge-error",
-  timeout: "badge-warning",
-  cancelled: "badge-neutral",
+const RESULT_BADGE_VARIANT = {
+  success: "default",
+  failed: "destructive",
+  timeout: "outline",
+  cancelled: "secondary",
 };
 
-const getBadgeClass = (value, classMap) => {
-  if (!value) return "badge-neutral";
-  return classMap[value.toLowerCase()] || "badge-neutral";
+const getBadgeVariant = (value, variantMap) => {
+  if (!value) return "secondary";
+  return variantMap[value.toLowerCase()] || "secondary";
 };
 
 const formatTimestamp = (timestamp) => {
@@ -45,27 +47,27 @@ const AuditLogTable = ({
   onNextPage,
 }) => {
   return (
-    <div className="space-y-3">
+    <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between">
-        <p className="text-sm text-base-content/70">
+        <p className="text-sm text-muted-foreground">
           {loading ? "Loading\u2026" : `${logs.length} log entries found`}
         </p>
       </div>
 
       {loading ? (
         <div className="flex justify-center py-8">
-          <span className="loading loading-spinner loading-lg"></span>
+          <Spinner />
         </div>
       ) : logs.length === 0 ? (
-        <div className="text-center py-8 text-base-content/60">
-          <Search className="h-8 w-8 mx-auto mb-2 opacity-50" />
+        <div className="flex flex-col items-center py-8 text-muted-foreground">
+          <Search className="mb-2 size-8 opacity-50" />
           <p>No audit logs found</p>
         </div>
       ) : (
         <>
-          <Table className="border border-base-200 rounded-lg overflow-hidden">
+          <Table className="overflow-hidden rounded-lg border border-border">
             <TableHeader>
-              <TableRow className="bg-base-200">
+              <TableRow className="bg-muted hover:bg-muted">
                 <TableHead>Timestamp</TableHead>
                 <TableHead>Client</TableHead>
                 <TableHead>IP Address</TableHead>
@@ -77,30 +79,26 @@ const AuditLogTable = ({
             </TableHeader>
             <TableBody>
               {paginatedLogs.map((log) => (
-                <TableRow key={log.id} className="hover:bg-base-200/50">
-                  <TableCell className="text-xs font-mono">
+                <TableRow key={log.id}>
+                  <TableCell className="font-mono text-xs">
                     {formatTimestamp(log.timestamp)}
                   </TableCell>
                   <TableCell className="font-semibold">{log.client_name}</TableCell>
-                  <TableCell className="text-xs font-mono">
+                  <TableCell className="font-mono text-xs">
                     {log.client_ip}
                   </TableCell>
                   <TableCell>
-                    <span
-                      className={`badge ${getBadgeClass(log.operation_type, OPERATION_BADGE_CLASS)}`}
-                    >
+                    <Badge variant={getBadgeVariant(log.operation_type, OPERATION_BADGE_VARIANT)}>
                       {log.operation_type}
-                    </span>
+                    </Badge>
                   </TableCell>
                   <TableCell className="text-xs">{log.operation_mode || "-"}</TableCell>
                   <TableCell>
-                    <span
-                      className={`badge ${getBadgeClass(log.result, RESULT_BADGE_CLASS)}`}
-                    >
+                    <Badge variant={getBadgeVariant(log.result, RESULT_BADGE_VARIANT)}>
                       {log.result}
-                    </span>
+                    </Badge>
                   </TableCell>
-                  <TableCell className="text-xs font-mono">
+                  <TableCell className="font-mono text-xs">
                     {log.duration_ms || "-"}
                   </TableCell>
                 </TableRow>
@@ -109,8 +107,8 @@ const AuditLogTable = ({
           </Table>
 
           {totalPages > 1 && (
-            <div className="flex items-center justify-between py-4 border-t border-base-200">
-              <p className="text-sm text-base-content/70">
+            <div className="flex items-center justify-between border-t border-border py-4">
+              <p className="text-sm text-muted-foreground">
                 Page {currentPage} of {totalPages}
               </p>
               <div className="flex gap-2">
@@ -119,8 +117,8 @@ const AuditLogTable = ({
                   size="sm"
                   onClick={onPreviousPage}
                   disabled={currentPage === 1}
-                  icon={ChevronLeft}
                 >
+                  <ChevronLeft data-icon="inline-start" />
                   Previous
                 </Button>
                 <Button
@@ -128,8 +126,8 @@ const AuditLogTable = ({
                   size="sm"
                   onClick={onNextPage}
                   disabled={currentPage === totalPages}
-                  icon={ChevronRight}
                 >
+                  <ChevronRight data-icon="inline-start" />
                   Next
                 </Button>
               </div>

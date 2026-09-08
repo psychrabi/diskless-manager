@@ -1,8 +1,13 @@
 import { getAuditLogs } from "@/api/modules/control";
-import { Modal } from "@/components/ui/Modal";
 import { useToastStore } from "@/store/useToastStore";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAppStore } from "../../store/useAppStore";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import AuditLogFilters from "./AuditLogFilters";
 import AuditLogTable from "./AuditLogTable";
 
@@ -76,32 +81,37 @@ const AuditLogViewer = ({ isOpen, onClose }) => {
   }, [totalPages]);
 
   return (
-    <Modal
-      isOpen={isOpen}
-      onClose={onClose}
-      title="Audit Logs"
-      size="5xl"
-      className="max-h-[90vh] overflow-y-auto"
+    <Dialog
+      open={isOpen}
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
     >
-      <div className="space-y-4">
-        <AuditLogFilters
-          filters={filters}
-          clients={clients}
-          onFilterChange={handleFilterChange}
-          onClearFilters={handleClearFilters}
-        />
+      <DialogContent className="max-h-[95vh] overflow-y-auto sm:max-w-5xl">
+        <DialogHeader>
+          <DialogTitle>Audit Logs</DialogTitle>
+        </DialogHeader>
 
-        <AuditLogTable
-          loading={loading}
-          logs={logs}
-          currentPage={currentPage}
-          totalPages={totalPages}
-          paginatedLogs={paginatedLogs}
-          onPreviousPage={handlePreviousPage}
-          onNextPage={handleNextPage}
-        />
-      </div>
-    </Modal>
+        <div className="flex flex-col gap-4">
+          <AuditLogFilters
+            filters={filters}
+            clients={clients}
+            onFilterChange={handleFilterChange}
+            onClearFilters={handleClearFilters}
+          />
+
+          <AuditLogTable
+            loading={loading}
+            logs={logs}
+            currentPage={currentPage}
+            totalPages={totalPages}
+            paginatedLogs={paginatedLogs}
+            onPreviousPage={handlePreviousPage}
+            onNextPage={handleNextPage}
+          />
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 };
 

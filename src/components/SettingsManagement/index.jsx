@@ -31,7 +31,7 @@ const SettingsManagement = () => {
   }, [fetchConfig]);
 
   return (
-    <Card title="System Settings" subtitle="Manage diskless boot server configurations" icon={Settings} className="bg-base-300">
+    <Card title="System Settings" subtitle="Manage diskless boot server configurations" icon={Settings} className="bg-muted">
 
       <div className="grid gap-4 xl:grid-cols-4 mb-4">
         <NetworkConfig />

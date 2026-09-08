@@ -1,57 +1,35 @@
+import { CheckCircle2, Info, TriangleAlert, XCircle, X } from "lucide-react";
 import { useToastStore } from "@/store/useToastStore";
 
-const typeStyles = {
-  success: "bg-success text-success-content",
-  error: "bg-error text-error-content",
-  warning: "bg-warning text-warning-content",
-  info: "bg-info text-info-content",
-};
-
-const typeIcons = {
-  success: "✓",
-  error: "✕",
-  warning: "⚠",
-  info: "ℹ",
+const typeMeta = {
+  success: { Icon: CheckCircle2, ring: "text-primary" },
+  error: { Icon: XCircle, ring: "text-destructive" },
+  warning: { Icon: TriangleAlert, ring: "text-muted-foreground" },
+  info: { Icon: Info, ring: "text-muted-foreground" },
 };
 
 export default function Toast({ toast }) {
   const { dismiss } = useToastStore();
+  const { Icon, ring } = typeMeta[toast.type] || typeMeta.info;
 
   return (
-    <div
-      className={`flex items-start gap-3 px-4 py-3 rounded-lg shadow-lg w-full max-w-full animate-in slide-in-from-right fade-in duration-200 ${
-        typeStyles[toast.type]
-      }`}
-    >
-      <span className="text-lg font-bold mt-0.5">{typeIcons[toast.type]}</span>
-      <div className="flex-1">
+    <div className="flex w-full max-w-full items-start gap-3 rounded-lg bg-popover px-4 py-3 text-popover-foreground shadow-lg ring-1 ring-foreground/10 backdrop-blur-md">
+      <Icon className={ring} />
+      <div className="flex-1 min-w-0">
         <h4 className="text-sm font-bold leading-tight">{toast.title}</h4>
         {toast.description && (
-          <p className="mt-1 text-xs opacity-90 leading-normal">
+          <p className="mt-1 text-xs text-muted-foreground leading-normal">
             {toast.description}
           </p>
         )}
       </div>
       <button
         type="button"
-        className="p-1 hover:bg-white/20 rounded transition-colors -mr-1"
+        className="p-1 -mr-1 rounded transition-colors hover:bg-muted"
         onClick={() => dismiss(toast.id)}
         aria-label="Dismiss notification"
       >
-        <svg
-          className="w-4 h-4"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-          aria-hidden="true"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth="2"
-            d="M6 18L18 6M6 6l12 12"
-          />
-        </svg>
+        <X className="size-4" />
       </button>
     </div>
   );

@@ -9,15 +9,15 @@ const Brand = ({
   className = "",
 }) => (
   <div className={cn("flex items-center", collapsed ? "justify-center" : "gap-3", className)}>
-    <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center shrink-0">
-      <Shield className="h-5 w-5 text-primary-content" />
+    <div className="size-8 bg-primary rounded-lg flex items-center justify-center shrink-0">
+      <Shield className="size-5 text-primary-foreground" />
     </div>
     {!collapsed && (
       <div>
-        <h1 className={cn("text-heading-sm font-bold text-base-content", titleClassName)}>
+        <p className={cn("text-heading-sm font-bold text-foreground", titleClassName)}>
           Diskless Manager
-        </h1>
-        <p className={cn("text-caption text-base-content/60", subtitleClassName)}>
+        </p>
+        <p className={cn("text-caption text-muted-foreground", subtitleClassName)}>
           {subtitle}
         </p>
       </div>

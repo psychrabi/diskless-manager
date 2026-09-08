@@ -1,18 +1,29 @@
+import { Controller } from "react-hook-form";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
 import { Input } from "../../ui";
 
-const DHCPForm = ({ register, errors, config }) => {
+const DHCPForm = ({ register, control, errors }) => {
   return (
     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-      <label htmlFor="enabled" className="label md:col-span-3">
-        <input
-          id="enabled"
-          className="checkbox checkbox-primary"
-          {...register("enabled")}
-          type="checkbox"
-          defaultChecked={config?.enabled}
+      <Label htmlFor="dhcp-enabled" className="flex items-center gap-2 text-sm font-medium md:col-span-3">
+        <Controller
+          name="enabled"
+          control={control}
+          defaultValue={false}
+          render={({ field }) => (
+            <Checkbox
+              id="dhcp-enabled"
+              name={field.name}
+              ref={field.ref}
+              checked={Boolean(field.value)}
+              onCheckedChange={field.onChange}
+              onBlur={field.onBlur}
+            />
+          )}
         />
         <span className="ml-2">DHCP Server (Start at boot)</span>
-      </label>
+      </Label>
       <Input
         label="Start IP"
         register={register("start_ip")}

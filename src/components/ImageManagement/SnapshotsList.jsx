@@ -10,11 +10,11 @@ const SnapshotItem = ({
 }) => (
   <li
     key={snap.name}
-    className="flex flex-wrap justify-between items-center gap-2 p-2 rounded hover:bg-base-100"
+    className="flex flex-wrap justify-between items-center gap-2 p-2 rounded hover:bg-background"
   >
     <div className="flex-1 min-w-0">
       <span className="font-mono text-xs break-all ">{snap.name}</span>
-      <span className="text-base-content/60 text-xs ml-2 whitespace-nowrap">
+      <span className="text-muted-foreground text-xs ml-2 whitespace-nowrap">
         ({snap.created}, {snap.used})
       </span>
     </div>
@@ -49,7 +49,7 @@ export const SnapshotsList = ({ master }) => {
 
   if (!snapshots || snapshots.length === 0) {
     return (
-      <p className="text-sm text-base-content/60">
+      <p className="text-sm text-muted-foreground">
         No snapshots found for this image.
       </p>
     );

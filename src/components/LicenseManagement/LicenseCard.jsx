@@ -17,11 +17,11 @@ export default function LicenseCard() {
         </div>
         <div className="flex justify-between text-sm">
           <span className="font-semibold">Expires:</span>
-          <span className="text-base-content/70">{license.license_expires || "\u2014"}</span>
+          <span className="text-muted-foreground">{license.license_expires || "\u2014"}</span>
         </div>
         <div className="flex justify-between text-sm">
           <span className="font-semibold">Key:</span>
-          <span className="font-mono text-xs text-base-content/70">
+          <span className="font-mono text-xs text-muted-foreground">
             {license.license_key || "\u2014"}
           </span>
         </div>

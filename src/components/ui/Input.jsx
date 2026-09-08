@@ -1,8 +1,11 @@
+import { useId } from "react";
 import { cn } from "@/lib/utils";
+import { Input as ShadcnInput } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 export const Input = ({
   label,
-  id,
+  id: providedId,
   register,
   placeholder,
   type = "text",
@@ -13,34 +16,32 @@ export const Input = ({
   error,
   helperText,
   size = "md",
-  variant = "default",
   autoComplete,
   inputMode,
+  ...props
 }) => {
+  const generatedId = useId();
+  const id = providedId || generatedId;
+  const errorMessage = typeof error === "string" ? error : error?.message || (error ? "This field is required" : undefined);
   const sizeClasses = {
-    sm: "input-sm",
-    md: "",
-    lg: "input-lg",
-  };
-
-  const variantClasses = {
-    default: "form-input",
-    bordered: "form-input border-2",
-    ghost: "input-ghost",
+    sm: "h-7 text-sm",
+    md: "h-8",
+    lg: "h-10",
   };
 
   return (
-    <div className={cn("form-group", className)}>
+    <div className={cn("flex flex-col gap-1.5", className)}>
       {label && (
-        <label htmlFor={id} className="form-label">
+        <Label htmlFor={id}>
           {label}
-          {required && <span className="text-error ml-1">*</span>}
-        </label>
+          {required && <span className="text-destructive ml-0.5">*</span>}
+        </Label>
       )}
-      <input
+      <ShadcnInput
         type={type}
         id={id}
         {...register}
+        {...props}
         placeholder={placeholder}
         title={title}
         required={required}
@@ -52,19 +53,17 @@ export const Input = ({
           error ? `${id}-error` : helperText ? `${id}-helper` : undefined
         }
         className={cn(
-          variantClasses[variant],
           sizeClasses[size],
-          error && "border-error! focus:border-error! focus:ring-error/20!",
-          disabled && "opacity-50 cursor-not-allowed"
+          disabled && "cursor-not-allowed",
         )}
       />
       {error && (
-        <span id={`${id}-error`} role="alert" className="form-error">
-          {error}
+        <span id={`${id}-error`} role="alert" className="text-sm text-destructive">
+          {errorMessage}
         </span>
       )}
       {helperText && !error && (
-        <span id={`${id}-helper`} className="form-helper">
+        <span id={`${id}-helper`} className="text-sm text-muted-foreground">
           {helperText}
         </span>
       )}

@@ -1,3 +1,4 @@
+import { NativeSelectOption } from "@/components/ui/native-select";
 import { useLogs } from "@/hooks/useLogs";
 import { RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -33,15 +34,15 @@ const Logs = () => {
         value={logUnit}
         onChange={(e) => setLogUnit(e.target.value)}
       >
-        <option value="app_log">Show App logs</option>
+        <NativeSelectOption value="app_log">Show App logs</NativeSelectOption>
         {Array.isArray(services) && services.length > 0 ? (
           services.map((svc) => (
-            <option key={svc.name} value={svc.name}>
+            <NativeSelectOption key={svc.name} value={svc.name}>
               {svc.display_name || svc.name}
-            </option>
+            </NativeSelectOption>
           ))
         ) : (
-          <option disabled>No services available</option>
+          <NativeSelectOption disabled>No services available</NativeSelectOption>
         )}
       </Select>
       <Button
@@ -59,12 +60,12 @@ const Logs = () => {
       title="Logs"
       headerClass="p-4"
       actions={logOptions}
-      className="max-h-[calc(100vh-7rem)]"
+      className="max-h-[calc(100vh-9rem)]"
     >
       <Activity mode={logUnit !== "app_log" ? "visible" : "hidden"}>
         <Card
           title={`${logUnit} Logs`}
-          className="bg-base-200"
+          className="bg-muted"
           headerClass="p-4"
           bodyClass="border-t-1"
         >

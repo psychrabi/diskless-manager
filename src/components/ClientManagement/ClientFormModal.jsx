@@ -1,3 +1,4 @@
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import {
   addClient,
   getClientNvmeOfStatus,
@@ -12,7 +13,25 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { RefreshCw, Save, Server, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
-import { Button, Input, Modal, Select } from "@/components/ui";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Field,
+  FieldContent,
+  FieldError,
+  FieldLabel,
+} from "@/components/ui/field";
+import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Spinner } from "@/components/ui/spinner";
 
 // Each opened client owns its form and asynchronous status state. Responses
 // belonging to an unmounted client cannot overwrite another client's dialog.
@@ -190,6 +209,16 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
     name: "snapshot",
   });
 
+  const keepWriteback = useWatch({
+    control,
+    name: "keep_writeback",
+  });
+
+  const useGameDisk = useWatch({
+    control,
+    name: "use_game_disk",
+  });
+
   useEffect(() => {
     if (!selectedSnapshot) {
       setValue("mode", "super", { shouldValidate: true });
@@ -202,217 +231,280 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
       nvmeStatus?.port_attached
   );
 
+  const masterReg = register("master");
+  const { onChange: masterRegOnChange, ...masterRegRest } = masterReg;
+
   return (
-    <Modal
-      isOpen={isOpen}
-      onClose={() => onClose()}
-      title={client?.id ? "Edit Client" : "Add Client"}
-      size="xl"
+    <Dialog
+      open={isOpen}
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
     >
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-        <Input
-          label="Client Name"
-          register={register("name")}
-          type="text"
-          placeholder="enter client name"
-          error={errors.name?.message}
-        />
-        <Input
-          label="MAC Address"
-          register={register("mac")}
-          type="text"
-          placeholder="XX:XX:XX:XX:XX:XX"
-          error={errors.mac?.message}
-        />
-        <Input
-          label="IP Address"
-          register={register("ip")}
-          type="text"
-          placeholder="X.X.X.X"
-          error={errors.ip?.message}
-        />
-        <Select
-          label="Select Image"
-          register={register("master")}
-          onChange={() => {
-            setValue("snapshot", "", {
-              shouldValidate: true,
-              shouldDirty: true,
-            });
-          }}
-          error={errors.master?.message}
-        >
-          <option value="">Select image ...</option>
-          {masters?.map((master) => (
-            <option key={master.name} value={master.name}>
-              {master.name}
-            </option>
-          ))}
-        </Select>
-        <Select
-          label="Select Snapshot"
-          register={register("snapshot")}
-          disabled={!selectedMaster}
-          error={errors.snapshot?.message}
-        >
-          <option value="">Use master directly</option>
-          {masters?.find((m) => m.name === selectedMaster)
-            ?.snapshots?.map((snap) => (
-              <option key={snap.name} value={`${selectedMaster}@${snap.name}`}>
-                {snap.name} ({snap.created}, {snap.size})
-              </option>
-            ))}
-        </Select>
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
+        <DialogHeader>
+          <DialogTitle>{client?.id ? "Edit Client" : "Add Client"}</DialogTitle>
+        </DialogHeader>
 
-        <div className="form-control">
-          <label className="label cursor-pointer justify-start gap-3">
-            <input
-              type="checkbox"
-              className="checkbox checkbox-primary"
-              {...register("keep_writeback")}
-            />
-            <div className="flex flex-col">
-              <span className="label-text font-medium">
-                Keep Writeback (Persistent Mode)
-              </span>
-              <span className="label-text-alt text-base-content/60 text-wrap text-xs">
-                If unchecked, the clone resets after the offline delay configured in Settings
-                (non-persistent mode)
-              </span>
-            </div>
-          </label>
-        </div>
+        <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
+          <Field>
+            <FieldLabel htmlFor="name">Client Name</FieldLabel>
+            <FieldContent>
+              <Input
+                id="name"
+                type="text"
+                placeholder="enter client name"
+                aria-invalid={!!errors.name}
+                {...register("name")}
+              />
+              <FieldError>{errors.name?.message}</FieldError>
+            </FieldContent>
+          </Field>
 
-        <div className="form-control">
-          <label className="label cursor-pointer justify-start gap-3">
-            <input
-              type="checkbox"
-              className="checkbox checkbox-primary"
-              {...register("use_game_disk")}
-            />
-            <div className="flex flex-col">
-              <span className="label-text font-medium">Use Game Disk</span>
-              <span className="label-text-alt text-base-content/60 text-wrap text-xs">
-                If checked, available game disks will be mounted via iSCSI
-              </span>
-            </div>
-          </label>
-        </div>
+          <Field>
+            <FieldLabel htmlFor="mac">MAC Address</FieldLabel>
+            <FieldContent>
+              <Input
+                id="mac"
+                type="text"
+                placeholder="XX:XX:XX:XX:XX:XX"
+                aria-invalid={!!errors.mac}
+                {...register("mac")}
+              />
+              <FieldError>{errors.mac?.message}</FieldError>
+            </FieldContent>
+          </Field>
 
-        {client?.id && (
-          <div className="rounded-lg border border-warning/30 bg-warning/5 p-4">
-            <div className="mb-3 flex items-start justify-between gap-3">
-              <div>
-                <div className="flex items-center gap-2 font-semibold">
-                  <Server className="h-4 w-4" />
-                  Experimental NVMe/TCP
-                </div>
-                <p className="mt-1 text-xs text-base-content/60">
-                  Exposes this client's existing ZVOL through Linux NVMe/TCP.
-                  iSCSI remains the normal/default boot path.
-                </p>
-              </div>
-              <span
-                className={`badge ${
-                  nvmeReady
-                    ? "badge-success"
-                    : nvmeLoading
-                      ? "badge-ghost"
-                      : "badge-warning"
-                }`}
+          <Field>
+            <FieldLabel htmlFor="ip">IP Address</FieldLabel>
+            <FieldContent>
+              <Input
+                id="ip"
+                type="text"
+                placeholder="X.X.X.X"
+                aria-invalid={!!errors.ip}
+                {...register("ip")}
+              />
+              <FieldError>{errors.ip?.message}</FieldError>
+            </FieldContent>
+          </Field>
+
+          <Field>
+            <FieldLabel htmlFor="master">Select Image</FieldLabel>
+            <FieldContent>
+              <NativeSelect
+                id="master"
+                aria-invalid={!!errors.master}
+                {...masterRegRest}
+                onChange={(e) => {
+                  masterRegOnChange(e);
+                  setValue("snapshot", "", {
+                    shouldValidate: true,
+                    shouldDirty: true,
+                  });
+                }}
               >
-                {nvmeLoading ? "Checking..." : nvmeReady ? "Ready" : "Not ready"}
-              </span>
-            </div>
+                <NativeSelectOption value="">Select image ...</NativeSelectOption>
+                {masters?.map((master) => (
+                  <NativeSelectOption key={master.name} value={master.name}>
+                    {master.name}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+              <FieldError>{errors.master?.message}</FieldError>
+            </FieldContent>
+          </Field>
 
-            <div className="grid gap-2 text-sm sm:grid-cols-2">
-              <div>
-                <span className="text-base-content/60">NQN:</span>
-                <div className="break-all font-mono text-xs">
-                  {nvmeStatus?.nqn || "—"}
-                </div>
-              </div>
-              <div>
-                <span className="text-base-content/60">Block device:</span>
-                <div className="break-all font-mono text-xs">
-                  {nvmeStatus?.block_device || client?.block_device || client?.block_store || "—"}
-                </div>
-              </div>
-              <div>
-                <span className="text-base-content/60">Namespace:</span>{" "}
-                <span>{nvmeStatus?.namespace_enabled ? "Enabled" : "Disabled"}</span>
-              </div>
-              <div>
-                <span className="text-base-content/60">TCP port:</span>{" "}
-                <span>{nvmeStatus?.tcp_port || 4420}</span>
-              </div>
-              <div>
-                <span className="text-base-content/60">Subsystem:</span>{" "}
-                <span>{nvmeStatus?.subsystem_present ? "Present" : "Missing"}</span>
-              </div>
-              <div>
-                <span className="text-base-content/60">Port attached:</span>{" "}
-                <span>{nvmeStatus?.port_attached ? "Yes" : "No"}</span>
-              </div>
-            </div>
+          <Field>
+            <FieldLabel htmlFor="snapshot">Select Snapshot</FieldLabel>
+            <FieldContent>
+              <NativeSelect
+                id="snapshot"
+                aria-invalid={!!errors.snapshot}
+                disabled={!selectedMaster}
+                {...register("snapshot")}
+              >
+                <NativeSelectOption value="">Use master directly</NativeSelectOption>
+                {masters?.find((m) => m.name === selectedMaster)
+                  ?.snapshots?.map((snap) => {
+                    const label = snap.name.includes("@")
+                      ? snap.name.split("@").pop()
+                      : snap.name;
+                    const snapshotSource = snap.name.includes("@")
+                      ? snap.name
+                      : `${selectedMaster}@${snap.name}`;
+                    return (
+                      <NativeSelectOption key={snap.name} value={snapshotSource}>
+                        {label} ({snap.created}, {snap.size})
+                      </NativeSelectOption>
+                    );
+                  })}
+              </NativeSelect>
+              <FieldError>{errors.snapshot?.message}</FieldError>
+            </FieldContent>
+          </Field>
 
-            {nvmeError && (
-              <div className="alert alert-error mt-3 py-2 text-xs">
-                <span>{nvmeError}</span>
-              </div>
-            )}
-
-            <div className="mt-4 flex flex-wrap gap-2">
-              <Button
-                type="button"
-                variant="primary"
-                icon={Server}
-                disabled={Boolean(nvmeAction)}
-                onClick={handlePrepareNvme}
-              >
-                {nvmeAction === "prepare"
-                  ? "Preparing..."
-                  : nvmeReady
-                    ? "Refresh NVMe/TCP Target"
-                    : "Prepare NVMe/TCP Target"}
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                icon={RefreshCw}
-                disabled={Boolean(nvmeAction) || nvmeLoading}
-                onClick={loadNvmeStatus}
-              >
-                Refresh Status
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                icon={Trash2}
-                disabled={Boolean(nvmeAction) || !nvmeStatus?.subsystem_present}
-                onClick={handleRemoveNvme}
-              >
-                {nvmeAction === "remove" ? "Removing..." : "Remove NVMe Target"}
-              </Button>
+          <div>
+            <div className="flex items-start gap-3">
+              <Checkbox
+                id="keep-writeback"
+                checked={Boolean(keepWriteback)}
+                onCheckedChange={(checked) =>
+                  setValue("keep_writeback", Boolean(checked), { shouldValidate: true })
+                }
+              />
+              <Label htmlFor="keep-writeback" className="flex cursor-pointer flex-col items-start gap-1">
+                <span className="font-medium">
+                  Keep Writeback (Persistent Mode)
+                </span>
+                <span className="text-xs text-muted-foreground text-wrap">
+                  If unchecked, the clone resets after the offline delay configured in Settings
+                  (non-persistent mode)
+                </span>
+              </Label>
             </div>
           </div>
-        )}
 
-        <div className="mt-6 flex justify-end space-x-3">
-          <Button type="button" variant="ghost" onClick={() => onClose()}>
-            Cancel
-          </Button>
-          <Button
-            type="submit"
-            variant="primary"
-            icon={Save}
-            disabled={isSubmitting || !isDirty || !isValid}
-          >
-            {isSubmitting ? "Saving..." : "Save"}
-          </Button>
-        </div>
-      </form>
-    </Modal>
+          <div>
+            <div className="flex items-start gap-3">
+              <Checkbox
+                id="use-game-disk"
+                checked={Boolean(useGameDisk)}
+                onCheckedChange={(checked) =>
+                  setValue("use_game_disk", Boolean(checked), { shouldValidate: true })
+                }
+              />
+              <Label htmlFor="use-game-disk" className="flex cursor-pointer flex-col items-start gap-1">
+                <span className="font-medium">Use Game Disk</span>
+                <span className="text-xs text-muted-foreground text-wrap">
+                  If checked, available game disks will be mounted via iSCSI
+                </span>
+              </Label>
+            </div>
+          </div>
+
+          {client?.id && (
+            <div className="rounded-lg border border-border bg-muted/30 p-4">
+              <div className="mb-3 flex items-start justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2 font-semibold">
+                    <Server className="size-4" />
+                    Experimental NVMe/TCP
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Exposes this client's existing ZVOL through Linux NVMe/TCP.
+                    iSCSI remains the normal/default boot path.
+                  </p>
+                </div>
+                <Badge
+                  variant={
+                    nvmeLoading
+                      ? "secondary"
+                      : nvmeReady
+                        ? "default"
+                        : "outline"
+                  }
+                >
+                  {nvmeLoading ? "Checking..." : nvmeReady ? "Ready" : "Not ready"}
+                </Badge>
+              </div>
+
+              <div className="grid gap-2 text-sm sm:grid-cols-2">
+                <div>
+                  <span className="text-muted-foreground">NQN:</span>
+                  <div className="break-all font-mono text-xs">
+                    {nvmeStatus?.nqn || "—"}
+                  </div>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Block device:</span>
+                  <div className="break-all font-mono text-xs">
+                    {nvmeStatus?.block_device || client?.block_device || client?.block_store || "—"}
+                  </div>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Namespace:</span>{" "}
+                  <span>{nvmeStatus?.namespace_enabled ? "Enabled" : "Disabled"}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">TCP port:</span>{" "}
+                  <span>{nvmeStatus?.tcp_port || 4420}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Subsystem:</span>{" "}
+                  <span>{nvmeStatus?.subsystem_present ? "Present" : "Missing"}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Port attached:</span>{" "}
+                  <span>{nvmeStatus?.port_attached ? "Yes" : "No"}</span>
+                </div>
+              </div>
+
+              {nvmeError && (
+                <div className="mt-3 rounded-lg border border-destructive/30 bg-destructive/10 p-2 text-xs text-destructive">
+                  <span>{nvmeError}</span>
+                </div>
+              )}
+
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant="default"
+                  disabled={Boolean(nvmeAction)}
+                  onClick={handlePrepareNvme}
+                >
+                  {nvmeAction === "prepare" ? (
+                    <Spinner data-icon="inline-start" />
+                  ) : (
+                    <Server data-icon="inline-start" />
+                  )}
+                  {nvmeAction === "prepare"
+                    ? "Preparing..."
+                    : nvmeReady
+                      ? "Refresh NVMe/TCP Target"
+                      : "Prepare NVMe/TCP Target"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  disabled={Boolean(nvmeAction) || nvmeLoading}
+                  onClick={loadNvmeStatus}
+                >
+                  <RefreshCw data-icon="inline-start" />
+                  Refresh Status
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  disabled={Boolean(nvmeAction) || !nvmeStatus?.subsystem_present}
+                  onClick={handleRemoveNvme}
+                >
+                  <Trash2 data-icon="inline-start" />
+                  {nvmeAction === "remove" ? "Removing..." : "Remove NVMe Target"}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="pt-2">
+            <Button type="button" variant="ghost" onClick={() => onClose()}>
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              disabled={isSubmitting || !isDirty || !isValid}
+            >
+              {isSubmitting ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <Save data-icon="inline-start" />
+              )}
+              {isSubmitting ? "Saving..." : "Save"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 };
 

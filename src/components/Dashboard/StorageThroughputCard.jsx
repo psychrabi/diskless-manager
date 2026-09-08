@@ -1,6 +1,6 @@
 import { HardDrive } from "lucide-react";
 import { useMetrics } from "@/contexts/useMetrics";
-import { Card } from "@/components/ui";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 const formatRate = (value) => (value == null ? "—" : `${value.toFixed(2)} MB/s`);
 
@@ -10,19 +10,37 @@ const StorageThroughputCard = () => {
   const zfs = storage?.zfs;
 
   return (
-    <Card title="ZFS Throughput" icon={HardDrive} subtitle="Measured from ZFS pool kstats">
-      {error ? (
-        <p className="text-error text-sm">Metrics stream is unavailable.</p>
-      ) : storage?.warming_up ? (
-        <p className="text-sm text-base-content/60">Collecting a second sample…</p>
-      ) : zfs ? (
-        <div className="space-y-2 font-mono text-sm">
-          <div className="flex justify-between"><span>Read</span><span>{formatRate(zfs.read_speed_mbps)}</span></div>
-          <div className="flex justify-between"><span>Write</span><span>{formatRate(zfs.write_speed_mbps)}</span></div>
-        </div>
-      ) : (
-        <p className="text-sm text-base-content/60">ZFS kstat counters are unavailable.</p>
-      )}
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <HardDrive className="size-4" />
+          ZFS Throughput
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {error ? (
+          <p className="text-sm text-destructive">Metrics stream is unavailable.</p>
+        ) : storage?.warming_up ? (
+          <p className="text-sm text-muted-foreground">
+            Collecting a second sample…
+          </p>
+        ) : zfs ? (
+          <div className="flex flex-col gap-2 font-mono text-sm">
+            <div className="flex justify-between">
+              <span>Read</span>
+              <span>{formatRate(zfs.read_speed_mbps)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>Write</span>
+              <span>{formatRate(zfs.write_speed_mbps)}</span>
+            </div>
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            ZFS kstat counters are unavailable.
+          </p>
+        )}
+      </CardContent>
     </Card>
   );
 };

@@ -9,6 +9,7 @@ import { Button } from "@/components/ui";
 const DHCPStep = ({ onSubmit, isSubmitting, initialConfig }) => {
   const {
     register,
+    control,
     handleSubmit,
     formState: { errors },
   } = useForm({
@@ -21,7 +22,7 @@ const DHCPStep = ({ onSubmit, isSubmitting, initialConfig }) => {
           your diskless clients." icon={Network} className="border-t-4 border-primary overflow-hidden"
     >
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-        <DHCPForm register={register} errors={errors} config={initialConfig} />
+        <DHCPForm control={control} register={register} errors={errors} config={initialConfig} />
 
         <Button
           type="submit"

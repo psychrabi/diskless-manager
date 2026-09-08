@@ -1,8 +1,19 @@
 import { useState } from "react";
 import { Clock } from "lucide-react";
 import { useToastStore } from "@/store/useToastStore";
-import { Button, Modal } from "@/components/ui";
 import { shutdownClient, rebootClient } from "@/api/modules/control";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Spinner } from "@/components/ui/spinner";
 
 const ScheduledOperationModal = ({ client, isOpen, onClose, onSuccess }) => {
   const { success, error: showError } = useToastStore();
@@ -56,130 +67,110 @@ const ScheduledOperationModal = ({ client, isOpen, onClose, onSuccess }) => {
   };
 
   return (
-    <Modal
-      isOpen={isOpen}
-      onClose={handleClose}
-      title="Schedule Operation"
-      size="lg"
+    <Dialog
+      open={isOpen}
+      onOpenChange={(open) => {
+        if (!open) handleClose();
+      }}
     >
-      <form onSubmit={handleSubmit} className="space-y-6">
-        <div className="bg-base-200/30 p-4 rounded-lg">
-          <p className="text-sm text-base-content/70">
-            Scheduling operation for:{" "}
-            <span className="font-semibold">{client?.name}</span>
-          </p>
-        </div>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Schedule Operation</DialogTitle>
+        </DialogHeader>
 
-        {/* Operation Type Selection */}
-        <div className="space-y-3">
-          <label className="label">
-            <span className="label-text font-medium">Operation Type</span>
-          </label>
-          <div className="space-y-2">
-            <label className="label cursor-pointer justify-start gap-3">
-              <input
-                type="radio"
-                name="operationType"
-                value="shutdown"
-                checked={operationType === "shutdown"}
-                onChange={(e) => setOperationType(e.target.value)}
-                className="radio radio-primary"
-              />
-              <span className="label-text">Shutdown</span>
-            </label>
-            <label className="label cursor-pointer justify-start gap-3">
-              <input
-                type="radio"
-                name="operationType"
-                value="reboot"
-                checked={operationType === "reboot"}
-                onChange={(e) => setOperationType(e.target.value)}
-                className="radio radio-primary"
-              />
-              <span className="label-text">Reboot</span>
-            </label>
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <div className="rounded-lg bg-muted p-4">
+            <p className="text-sm text-muted-foreground">
+              Scheduling operation for:{" "}
+              <span className="font-semibold text-foreground">{client?.name}</span>
+            </p>
           </div>
-        </div>
 
-        {/* Operation Mode Selection */}
-        <div className="space-y-3">
-          <label className="label">
-            <span className="label-text font-medium">Operation Mode</span>
-          </label>
-          <div className="space-y-2">
-            <label className="label cursor-pointer justify-start gap-3">
-              <input
-                type="radio"
-                name="mode"
-                value="graceful"
-                checked={mode === "graceful"}
-                onChange={(e) => setMode(e.target.value)}
-                className="radio radio-primary"
-              />
-              <span className="label-text">Graceful</span>
-            </label>
-            <label className="label cursor-pointer justify-start gap-3">
-              <input
-                type="radio"
-                name="mode"
-                value="force"
-                checked={mode === "force"}
-                onChange={(e) => setMode(e.target.value)}
-                className="radio radio-primary"
-              />
-              <span className="label-text">Force</span>
-            </label>
+          <div className="flex flex-col gap-2">
+            <Label className="font-medium">Operation Type</Label>
+            <RadioGroup
+              value={operationType}
+              onValueChange={(value) => setOperationType(value)}
+              className="gap-2"
+            >
+              <Label className="flex cursor-pointer items-center gap-3">
+                <RadioGroupItem value="shutdown" />
+                <span>Shutdown</span>
+              </Label>
+              <Label className="flex cursor-pointer items-center gap-3">
+                <RadioGroupItem value="reboot" />
+                <span>Reboot</span>
+              </Label>
+            </RadioGroup>
           </div>
-        </div>
 
-        {/* Delay Input */}
-        <div className="space-y-3">
-          <label className="label">
-            <span className="label-text font-medium">Delay (minutes)</span>
-          </label>
-          <input
-            type="number"
-            min="1"
-            max="1440"
-            value={delayMinutes}
-            onChange={(e) => setDelayMinutes(Math.max(1, parseInt(e.target.value) || 1))}
-            className="input input-bordered w-full"
-            placeholder="Enter delay in minutes"
-          />
-          <p className="text-xs text-base-content/60">
-            Operation will execute after {delayMinutes} minute{delayMinutes !== 1 ? "s" : ""}
-          </p>
-        </div>
+          <div className="flex flex-col gap-2">
+            <Label className="font-medium">Operation Mode</Label>
+            <RadioGroup
+              value={mode}
+              onValueChange={(value) => setMode(value)}
+              className="gap-2"
+            >
+              <Label className="flex cursor-pointer items-center gap-3">
+                <RadioGroupItem value="graceful" />
+                <span>Graceful</span>
+              </Label>
+              <Label className="flex cursor-pointer items-center gap-3">
+                <RadioGroupItem value="force" />
+                <span>Force</span>
+              </Label>
+            </RadioGroup>
+          </div>
 
-        {/* Summary */}
-        <div className="bg-info/10 border border-info/30 p-4 rounded-lg">
-          <p className="text-sm text-info-content">
-            <strong>Summary:</strong> {mode === "graceful" ? "Graceful" : "Force"}{" "}
-            {operationType} in {delayMinutes} minute{delayMinutes !== 1 ? "s" : ""}
-          </p>
-        </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="delay-minutes" className="font-medium">
+              Delay (minutes)
+            </Label>
+            <Input
+              id="delay-minutes"
+              type="number"
+              min="1"
+              max="1440"
+              value={delayMinutes}
+              onChange={(e) => setDelayMinutes(Math.max(1, parseInt(e.target.value) || 1))}
+              placeholder="Enter delay in minutes"
+            />
+            <p className="text-xs text-muted-foreground">
+              Operation will execute after {delayMinutes} minute{delayMinutes !== 1 ? "s" : ""}
+            </p>
+          </div>
 
-        {/* Action Buttons */}
-        <div className="flex justify-end gap-3 pt-4 border-t border-base-200/30">
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={handleClose}
-            disabled={isSubmitting}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="submit"
-            variant="primary"
-            icon={Clock}
-            disabled={isSubmitting || delayMinutes < 1}
-          >
-            {isSubmitting ? "Scheduling..." : "Schedule"}
-          </Button>
-        </div>
-      </form>
-    </Modal>
+          <div className="rounded-lg border border-border bg-muted/40 p-4">
+            <p className="text-sm text-muted-foreground">
+              <strong className="text-foreground">Summary:</strong> {mode === "graceful" ? "Graceful" : "Force"}{" "}
+              {operationType} in {delayMinutes} minute{delayMinutes !== 1 ? "s" : ""}
+            </p>
+          </div>
+
+          <DialogFooter className="pt-2">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={handleClose}
+              disabled={isSubmitting}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              disabled={isSubmitting || delayMinutes < 1}
+            >
+              {isSubmitting ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <Clock data-icon="inline-start" />
+              )}
+              {isSubmitting ? "Scheduling..." : "Schedule"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 };
 

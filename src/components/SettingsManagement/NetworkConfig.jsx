@@ -1,3 +1,5 @@
+import { Label } from "@/components/ui/label";
+import { Alert } from "@/components/ui/alert";
 import { useEffect, useState, useCallback } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -158,9 +160,9 @@ export default function NetworkConfig() {
 
           {/* Right Column: Addressing */}
           <div className="">
-            <label className="text-sm font-semibold text-base-content/70 uppercase tracking-tight flex items-center gap-2 ">
+            <Label className="text-sm font-semibold text-muted-foreground uppercase tracking-tight flex items-center gap-2">
               <Globe size={14} /> Identification
-            </label>
+            </Label>
 
             <Input
               label="Hostname"
@@ -168,7 +170,6 @@ export default function NetworkConfig() {
               register={register("hostname")}
               error={errors.hostname?.message}
               placeholder="pxeserver"
-              className="fieldset-compact"
             />
             <Input
               label="Domain"
@@ -176,15 +177,14 @@ export default function NetworkConfig() {
               register={register("domain")}
               error={errors.domain?.message}
               placeholder="local"
-              className="fieldset-compact"
             />
           </div>
 
           <div className="col-span-2">
             <div className="flex items-center justify-between">
-              <label className="text-sm font-semibold text-base-content/70 uppercase tracking-tight flex items-center gap-2">
+              <Label className="text-sm font-semibold text-muted-foreground uppercase tracking-tight flex items-center gap-2">
                 <Shield size={14} /> Addressing (Static IP)
-              </label>
+              </Label>
               <Button
                 type="button"
                 variant="ghost"
@@ -205,7 +205,6 @@ export default function NetworkConfig() {
                 register={register("ip_address")}
                 error={errors.ip_address?.message}
                 placeholder="192.168.1.1"
-                className="fieldset-compact"
               />
               <Input
                 label="Subnet Mask"
@@ -213,7 +212,6 @@ export default function NetworkConfig() {
                 register={register("netmask")}
                 error={errors.netmask?.message}
                 placeholder="255.255.255.0"
-                className="fieldset-compact"
               />
             </div>
 
@@ -223,7 +221,6 @@ export default function NetworkConfig() {
               register={register("gateway")}
               error={errors.gateway?.message}
               placeholder="192.168.1.1"
-              className="fieldset-compact"
             />
 
             <div className="space-y-2">
@@ -233,12 +230,11 @@ export default function NetworkConfig() {
                 register={register("dns")}
                 error={errors.dns?.message}
                 placeholder="8.8.8.8, 8.8.4.4"
-                className="fieldset-compact"
                 title="Separate multiple IPs with commas"
               />
             </div>
 
-            <div className="alert alert-warning py-3 px-4 mt-3 rounded-xl border-none bg-warning/10 text-warning text-xs leading-relaxed shadow-sm">
+            <Alert className="py-3 px-4 mt-3 rounded-xl border-none bg-amber-600/10 text-amber-600 text-xs leading-relaxed shadow-sm">
               <div className="flex items-start gap-3">
                 <span className="text-lg">⚠️</span>
                 <span>
@@ -250,7 +246,7 @@ export default function NetworkConfig() {
                   settings are correct to avoid losing server connectivity.
                 </span>
               </div>
-            </div>
+            </Alert>
           </div>
         </div>
 
@@ -269,7 +265,7 @@ export default function NetworkConfig() {
               type="button"
               onClick={handleApplyStatic}
               disabled={isSubmitting}
-              className="border-warning/30 hover:bg-warning/10 hover:border-warning/50 text-warning"
+              className="border-amber-600/30 hover:bg-amber-600/10 hover:border-amber-600/50 text-amber-600"
             >
               Apply as Static IP
             </Button>

@@ -10,8 +10,10 @@ use serde::{Deserialize, Serialize};
 use std::process::Command;
 
 use crate::{
+    application::image_service::ImageService,
     core::client::{BootLogEntry, Client, ClientManager, CreateClientRequest, UpdateClientRequest},
     domain::storage::{ClientStorage, ClientStorageSpec, StorageSource, StorageVolume},
+    persistence::repositories::image::ImageRepository,
     state::AppState,
     validation::{validate_ip_address, validate_mac_address},
 };
@@ -28,6 +30,10 @@ fn get_master_os(master_name: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+fn image_service(state: &AppState) -> ImageService {
+    ImageService::new(ImageRepository::new(state.db_pool.clone()))
 }
 
 #[derive(Deserialize)]
@@ -255,6 +261,37 @@ async fn refresh_dhcp(state: &AppState, settings: &crate::core::config::Settings
     } else {
         info!("DHCP service reloaded successfully after {}", operation);
     }
+}
+
+/// Persist the runtime storage/mode fields of a client.
+///
+/// Used by the Super mode toggle, which switches storage between a shared
+/// master volume and a snapshot clone without going through the generic
+/// client update path.
+async fn persist_client_runtime_state(
+    client: &Client,
+    pool: &sqlx::SqlitePool,
+) -> Result<sqlx::sqlite::SqliteQueryResult, sqlx::Error> {
+    sqlx::query(
+        r#"
+        UPDATE clients
+        SET master = ?, snapshot = ?, block_device = ?, block_store = ?,
+            target_iqn = ?, mode = ?, status = ?, last_modified = ?, updated_at = ?
+        WHERE id = ?
+        "#,
+    )
+    .bind(&client.master)
+    .bind(&client.snapshot)
+    .bind(&client.block_device)
+    .bind(&client.block_store)
+    .bind(&client.target_iqn)
+    .bind(&client.mode)
+    .bind(&client.status)
+    .bind(&client.last_modified)
+    .bind(client.updated_at.to_rfc3339())
+    .bind(&client.id)
+    .execute(pool)
+    .await
 }
 
 // ============================================================================
@@ -742,47 +779,291 @@ pub async fn update_client(
             // Super mode
             // ----------------------------------------------------------------
             "super" => {
-                if let Some(make_super) = request.make_super {
-                    let mut client = existing_client.clone();
+                let Some(make_super) = request.make_super else {
+                    return Ok(Json(existing_client));
+                };
 
-                    client.mode = if make_super {
-                        Some("super".to_string())
-                    } else {
-                        None
+                let settings = state.settings.read().await;
+
+                let master = existing_client.master.trim().to_string();
+
+                if master.is_empty() || master == "pending" {
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        Json(ErrorResponse {
+                            status: StatusCode::BAD_REQUEST.as_u16(),
+                            error: format!(
+                                "Cannot toggle Super mode for '{}': no master image configured",
+                                existing_client.name
+                            ),
+                        }),
+                    ));
+                }
+
+                let client_status =
+                    crate::utils::network::get_client_status_realtime(existing_client.ip.clone());
+
+                if client_status != "Offline" {
+                    return Err((
+                        StatusCode::CONFLICT,
+                        Json(ErrorResponse {
+                            status: StatusCode::CONFLICT.as_u16(),
+                            error: format!(
+                                "Cannot toggle Super mode for '{}': client must be offline (current status: {})",
+                                existing_client.name, client_status
+                            ),
+                        }),
+                    ));
+                }
+
+                let mut client = existing_client.clone();
+
+                if make_super {
+                    // -------------------------------------------------------
+                    // Enable Super mode: point the client's iSCSI target
+                    // directly at the (shared) master ZVOL.
+                    // -------------------------------------------------------
+                    info!(
+                        "Enabling Super mode for client '{}' using master '{}'",
+                        existing_client.name, master
+                    );
+
+                    let current_storage = storage_from_client(&settings, &existing_client)
+                        .map_err(|error| {
+                            (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(ErrorResponse {
+                                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                                    error,
+                                }),
+                            )
+                        })?;
+
+                    if let Err(error) = state
+                        .application
+                        .storage
+                        .destroy_client_storage(&current_storage)
+                    {
+                        tracing::warn!(
+                            "Failed to remove existing storage before enabling Super mode for '{}': {}",
+                            existing_client.name,
+                            error
+                        );
+                    }
+
+                    let mut spec = ClientStorageSpec {
+                        client_id: existing_client.id.clone(),
+                        source: StorageSource::ExistingVolume(master.clone()),
+                        dataset: master.clone(),
+                        backstore: format!("block_{}", existing_client.name.to_lowercase()),
+                        target_iqn: format!(
+                            "{}:client.{}",
+                            settings.iscsi.target_prefix,
+                            existing_client.name.to_lowercase()
+                        ),
+                        lun: 0,
+                        use_game_disk: existing_client.use_game_disk.unwrap_or(false),
                     };
 
-                    client.updated_at = Utc::now();
+                    preserve_persisted_target_iqn(&mut spec, &existing_client);
 
-                    client.last_modified =
-                        Some(client.updated_at.format("%Y-%m-%d %H:%M:%S").to_string());
+                    let storage = state
+                        .application
+                        .storage
+                        .create_client_storage(&spec)
+                        .map_err(|error| {
+                            (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(ErrorResponse {
+                                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                                    error: format!(
+                                        "Failed to activate Super client storage: {}",
+                                        error
+                                    ),
+                                }),
+                            )
+                        })?;
 
-                    sqlx::query(
-                        r#"
-                        UPDATE clients
-                        SET mode = ?, last_modified = ?, updated_at = ?
-                        WHERE id = ?
-                        "#,
+                    client.mode = Some("super".to_string());
+                    client.master = master;
+                    client.snapshot = None;
+                    client.block_device = Some(format!("/dev/zvol/{}", storage.dataset()));
+                    client.block_store = Some(format!("/dev/zvol/{}", storage.dataset()));
+                    client.target_iqn = Some(storage.target_iqn().to_string());
+                } else {
+                    // -------------------------------------------------------
+                    // Disable Super mode: revert the client to a snapshot
+                    // clone of the master.
+                    // -------------------------------------------------------
+                    info!(
+                        "Disabling Super mode for client '{}' using master '{}'",
+                        existing_client.name, master
+                    );
+
+                    let image = image_service(&state).get(&master).await.map_err(|e| {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(ErrorResponse {
+                                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                                error: format!(
+                                    "Failed to look up master image '{}': {}",
+                                    master, e
+                                ),
+                            }),
+                        )
+                    })?;
+
+                    let snapshots =
+                        image_service(&state)
+                            .snapshots(&image.id)
+                            .await
+                            .map_err(|e| {
+                                (
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    Json(ErrorResponse {
+                                        status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                                        error: format!(
+                                            "Failed to list snapshots for master '{}': {}",
+                                            master, e
+                                        ),
+                                    }),
+                                )
+                            })?;
+
+                    let snapshot_image = snapshots
+                        .iter()
+                        .find(|snapshot| snapshot.is_default)
+                        .cloned()
+                        .or_else(|| {
+                            snapshots
+                                .iter()
+                                .max_by_key(|snapshot| snapshot.created_at)
+                                .cloned()
+                        });
+
+                    let Some(snapshot_image) = snapshot_image else {
+                        return Err((
+                            StatusCode::BAD_REQUEST,
+                            Json(ErrorResponse {
+                                status: StatusCode::BAD_REQUEST.as_u16(),
+                                error: format!(
+                                    "Cannot disable Super mode for '{}': no snapshots found for master '{}'. Client remains in Super mode.",
+                                    existing_client.name, master
+                                ),
+                            }),
+                        ));
+                    };
+
+                    let snapshot_source = format!("{}@{}", master, snapshot_image.name);
+
+                    let current_storage = storage_from_client(&settings, &existing_client)
+                        .map_err(|error| {
+                            (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(ErrorResponse {
+                                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                                    error,
+                                }),
+                            )
+                        })?;
+
+                    if let Err(error) = state
+                        .application
+                        .storage
+                        .destroy_client_storage(&current_storage)
+                    {
+                        tracing::warn!(
+                            "Failed to remove existing storage before disabling Super mode for '{}': {}",
+                            existing_client.name,
+                            error
+                        );
+                    }
+
+                    let mut spec = build_storage_spec(
+                        &settings,
+                        &existing_client.id,
+                        &existing_client.name,
+                        &master,
+                        Some(&snapshot_source),
+                        existing_client.use_game_disk.unwrap_or(false),
                     )
-                    .bind(&client.mode)
-                    .bind(&client.last_modified)
-                    .bind(client.updated_at.to_rfc3339())
-                    .bind(&client.id)
-                    .execute(&state.db_pool)
+                    .map_err(|error| {
+                        (
+                            StatusCode::BAD_REQUEST,
+                            Json(ErrorResponse {
+                                status: StatusCode::BAD_REQUEST.as_u16(),
+                                error,
+                            }),
+                        )
+                    })?;
+
+                    preserve_persisted_target_iqn(&mut spec, &existing_client);
+
+                    let storage = state
+                        .application
+                        .storage
+                        .create_client_storage(&spec)
+                        .map_err(|error| {
+                            (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(ErrorResponse {
+                                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                                    error: format!(
+                                        "Failed to rebuild client storage from snapshot: {}",
+                                        error
+                                    ),
+                                }),
+                            )
+                        })?;
+
+                    client.mode = None;
+                    client.master = master;
+                    client.snapshot = Some(snapshot_source.clone());
+                    client.block_device = Some(format!("/dev/zvol/{}", storage.dataset()));
+                    client.block_store = Some(format!("/dev/zvol/{}", storage.dataset()));
+                    client.target_iqn = Some(storage.target_iqn().to_string());
+
+                    info!(
+                        "Super mode disabled for client '{}': storage rebuilt from snapshot '{}'",
+                        client.name, snapshot_source
+                    );
+                }
+
+                client.updated_at = Utc::now();
+
+                client.last_modified =
+                    Some(client.updated_at.format("%Y-%m-%d %H:%M:%S").to_string());
+
+                persist_client_runtime_state(&client, &state.db_pool)
                     .await
                     .map_err(|e| {
                         (
                             StatusCode::INTERNAL_SERVER_ERROR,
                             Json(ErrorResponse {
                                 status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                                error: format!("Failed to update client mode: {}", e),
+                                error: format!("Failed to persist Super mode state: {}", e),
                             }),
                         )
                     })?;
 
-                    info!("Client '{}' super mode set to: {}", client.name, make_super);
+                info!(
+                    "Super mode state saved for client '{}': mode={:?}, device={}",
+                    client.name,
+                    client.mode,
+                    client.block_device.as_deref().unwrap_or_default()
+                );
 
-                    return Ok(Json(client));
+                drop(settings);
+
+                if let Err(e) = state.refresh_client_ips().await {
+                    tracing::warn!("Failed to refresh client IPs cache: {}", e);
                 }
+
+                let settings = state.settings.read().await;
+
+                refresh_dhcp(&state, &settings, "toggling super mode").await;
+
+                return Ok(Json(client));
             }
 
             // ----------------------------------------------------------------

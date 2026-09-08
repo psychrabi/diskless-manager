@@ -1,3 +1,6 @@
+import { Label } from "@/components/ui/label";
+import { Spinner } from "@/components/ui/spinner";
+import { Badge } from "@/components/ui/badge";
 import { RefreshCcw, Network } from "lucide-react";
 import { Button } from "@/components/ui";
 
@@ -12,9 +15,9 @@ const NetworkInterfaceSelector = ({
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <label className="text-sm font-semibold text-base-content/70 uppercase tracking-tight flex items-center gap-2">
+        <Label className="text-sm font-semibold text-muted-foreground uppercase tracking-tight flex items-center gap-2">
           <Network size={14} /> Network Interfaces
-        </label>
+        </Label>
         <Button
           type="button"
           onClick={onRefresh}
@@ -27,51 +30,49 @@ const NetworkInterfaceSelector = ({
           Refresh
         </Button>
       </div>
-      <div className="border border-base-300 rounded-xl bg-base-200/30 overflow-hidden">
+      <div className="border border-border rounded-xl bg-muted/30 overflow-hidden">
         <div className="max-h-[200px] overflow-y-auto p-2 space-y-1">
           {loading ? (
             <div className="flex flex-col items-center justify-center py-8 gap-2 opacity-50">
-              <span className="loading loading-spinner loading-sm"></span>
+              <Spinner className=""></Spinner>
               <span className="text-xs">Detecting interfaces...</span>
             </div>
           ) : interfaces.length === 0 ? (
-            <div className="py-8 text-center text-sm text-error/70 italic">
+            <div className="py-8 text-center text-sm text-destructive/70 italic">
               No active network interfaces detected.
             </div>
           ) : (
             interfaces.map((iface) => {
               const isSelected = selectedInterfaces?.includes(iface);
               return (
-                <label
+                <Label
                   key={iface}
                   className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition-all border ${
                     isSelected
                       ? "bg-primary/10 border-primary/30 text-primary shadow-sm"
-                      : "bg-base-100 border-transparent hover:border-base-300 hover:bg-base-200"
+                      : "bg-background border-transparent hover:border-border hover:bg-muted"
                   }`}
                 >
                   <div className="flex items-center gap-3">
-                    <input
-                      type="checkbox"
-                      className="checkbox checkbox-primary checkbox-sm rounded"
-                      checked={isSelected}
-                      onChange={() => onToggle(iface)}
+                    <Checkbox
+                      checked={Boolean(isSelected)}
+                      onCheckedChange={() => onToggle(iface)}
                     />
                     <span className="font-mono text-sm font-bold">{iface}</span>
                   </div>
                   {isSelected && (
-                    <span className="badge badge-primary badge-xs py-2 px-2 font-bold uppercase tracking-widest text-[10px]">
+                    <Badge variant="default" className="py-2 px-2 font-bold uppercase tracking-widest text-[10px]">
                       Active
-                    </span>
+                    </Badge>
                   )}
-                </label>
+                </Label>
               );
             })
           )}
         </div>
       </div>
       {errorMessage && (
-        <p className="text-xs text-error font-medium flex items-center gap-1 mt-1">
+        <p className="text-xs text-destructive font-medium flex items-center gap-1 mt-1">
           <span>⚠️</span> {errorMessage}
         </p>
       )}
@@ -80,3 +81,4 @@ const NetworkInterfaceSelector = ({
 };
 
 export default NetworkInterfaceSelector;
+import { Checkbox } from "@/components/ui/checkbox";

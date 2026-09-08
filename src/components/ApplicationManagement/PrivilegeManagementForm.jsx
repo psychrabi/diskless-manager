@@ -27,13 +27,13 @@ export default function PrivilegeManagementForm() {
       icon={ShieldCheck}
     >
       <div className="space-y-4">
-        <p className="text-sm text-base-content/60">
+        <p className="text-sm text-muted-foreground">
           Authorize the application to perform administrative tasks (service
           management, ZFS operations, package installation) without manual
           password prompts.
         </p>
 
-        <div className="flex items-center gap-3 p-3 bg-warning/10 border border-warning/20 rounded-lg text-warning text-xs">
+        <div className="flex items-center gap-3 p-3 bg-amber-600/10 border border-amber-600/20 rounded-lg text-amber-600 text-xs">
           <ShieldAlert size={24} className="shrink-0" />
           <p>
             This will create a specific sudoers rule for the current user. A

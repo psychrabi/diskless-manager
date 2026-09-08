@@ -24,6 +24,7 @@ const ConfigForm = ({ schema, section, title, FormComponent }) => {
 
   const {
     register,
+    control,
     handleSubmit,
     formState: { errors, isSubmitting },
     reset,
@@ -51,6 +52,7 @@ const ConfigForm = ({ schema, section, title, FormComponent }) => {
     <Card title={`${title} Configuration`} icon={Network} className="xl:col-span-2">
       <form onSubmit={handleSubmit(onSubmit)}>
         <FormComponent
+          control={control}
           register={register}
           errors={errors}
           config={config?.settings?.[section]}

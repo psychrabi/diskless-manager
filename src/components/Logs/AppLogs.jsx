@@ -49,7 +49,7 @@ export default function AppLogs() {
   return (
     <Card
       title="Application Logs"
-      className="bg-base-200"
+      className="bg-muted"
       headerClass="p-4"
       bodyClass="border-t-1 p-0"
       actions={

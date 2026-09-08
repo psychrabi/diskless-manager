@@ -8,6 +8,7 @@ import HTTPForm from "../SettingsManagement/Forms/HTTPForm";
 const HTTPStep = ({ onSubmit, isSubmitting, initialConfig }) => {
   const {
     register,
+    control,
     handleSubmit,
     formState: { errors },
   } = useForm({
@@ -20,7 +21,7 @@ const HTTPStep = ({ onSubmit, isSubmitting, initialConfig }) => {
           faster than TFTP." icon={Globe} className="border-t-4 border-primary overflow-hidden"
     >
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-        <HTTPForm register={register} errors={errors} config={initialConfig} />
+        <HTTPForm control={control} register={register} errors={errors} config={initialConfig} />
         <Button
           type="submit"
           variant="primary"

@@ -4,17 +4,17 @@ import ClientTableHeader from "./ClientTableHeader";
 const ClientTableEmptyState = () => {
   return (
     <div className="p-4">
-      <table className="table w-full">
-        <thead>
+      <table className="w-full">
+        <thead className="[&_tr]:border-b">
           <ClientTableHeader />
         </thead>
-        <tbody>
+        <tbody className="[&_tr:last-child]:border-0">
           <tr>
-            <td colSpan="11">
-              <div className="flex flex-col items-center justify-center py-12 text-base-content/50">
-                <Laptop className="h-12 w-12 mb-3 opacity-40" />
+            <td colSpan="11" className="p-2 align-middle">
+              <div className="flex flex-col items-center justify-center py-12 text-muted-foreground/60">
+                <Laptop className="mb-3 size-12 opacity-40" />
                 <p className="text-sm font-medium">No clients configured</p>
-                <p className="text-xs mt-1">Add your first client using the button above</p>
+                <p className="mt-1 text-xs">Add your first client using the button above</p>
               </div>
             </td>
           </tr>

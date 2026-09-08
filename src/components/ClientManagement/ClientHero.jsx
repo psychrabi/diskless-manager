@@ -1,26 +1,35 @@
 import { PlusCircle, Laptop } from "lucide-react";
-import { Button, Card } from "@/components/ui";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardTitle,
+} from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 
 function ClientHero({ handleClientFormModalOpen }) {
   return (
-    <Card variant="outlined" className="text-center py-12">
-      <div className="w-20 h-20 bg-base-200 rounded-full flex items-center justify-center text-4xl mb-6 mx-auto">
-        <Laptop className="h-10 w-10 text-base-content/40" />
-      </div>
-      <h2 className="text-heading-lg font-semibold mb-3">No Clients Found</h2>
-      <p className="text-body-md text-base-content/60 max-w-md mx-auto mb-6">
-        Get started by adding your first diskless boot client. You'll need the
-        client's MAC address and desired IP configuration.
-      </p>
-      <div className="flex flex-col sm:flex-row gap-3 justify-center">
-        <Button
-          variant="primary"
-          onClick={handleClientFormModalOpen}
-          icon={PlusCircle}
-        >
-          Add Your First Client
-        </Button>
-      </div>
+    <Card className="py-12 text-center">
+      <CardContent className="flex flex-col items-center gap-4">
+        <span className="flex size-20 items-center justify-center rounded-full bg-muted">
+          <Laptop className="size-10 text-muted-foreground/60" />
+        </span>
+        <div className="flex flex-col gap-2">
+          <CardTitle className="text-lg font-semibold">
+            No Clients Found
+          </CardTitle>
+          <CardDescription className="mx-auto max-w-md">
+            Get started by adding your first diskless boot client. You'll need
+            the client's MAC address and desired IP configuration.
+          </CardDescription>
+        </div>
+        <div className="flex flex-col justify-center gap-3 sm:flex-row">
+          <Button variant="default" onClick={handleClientFormModalOpen}>
+            <PlusCircle data-icon="inline-start" />
+            Add Your First Client
+          </Button>
+        </div>
+      </CardContent>
     </Card>
   );
 }

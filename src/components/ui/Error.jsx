@@ -22,7 +22,7 @@ export const Error = ({ error }) => {
 
   return (
     <div
-      className="bg-error/10 border border-error/30 text-error px-4 py-3 rounded-xl relative mb-6"
+      className="mb-6 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-destructive"
       role="alert"
     >
       <strong className="font-bold mr-2">Error:</strong>

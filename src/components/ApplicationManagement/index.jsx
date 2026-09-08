@@ -11,7 +11,7 @@ const ApplicationSettings = () => {
         title="Application Settings"
         subtitle="Set your application settings"
         icon={Wrench}
-        className="bg-base-300"
+        className="bg-muted"
       >
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <AdminPasswordForm />

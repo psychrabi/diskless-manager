@@ -64,7 +64,7 @@ const ServiceManagement = () => {
     <Card
       title="Service Management"
       icon={Server}
-      className="bg-base-300"
+      className="bg-muted"
       actions={
         <>
           <Button

@@ -1,5 +1,12 @@
 import { createElement } from "react";
 import { cn } from "@/lib/utils";
+import {
+  Card as ShadcnCard,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 
 export const Card = ({
   title,
@@ -14,56 +21,42 @@ export const Card = ({
   variant = "default",
   size = "default",
 }) => {
-  const variants = {
-    default: "card-professional",
-    elevated: "card-professional shadow-xl",
-    outlined: "card bg-base-100 border-2 border-base-300 shadow-sm",
-    ghost: "card bg-transparent border border-base-200/30",
+  const variantClasses = {
+    default: "",
+    elevated: "shadow-xl",
+    outlined: "ring-2",
+    ghost: "bg-transparent shadow-none ring-0",
   };
 
-  const sizes = {
+  const sizeClasses = {
     sm: "text-sm",
     default: "",
     lg: "text-lg",
   };
 
   return (
-    <div className={cn(variants[variant], sizes[size], className)}>
+    <ShadcnCard className={cn(variantClasses[variant], sizeClasses[size], className)}>
       {title && (
-        <div className={`card-header-professional ${headerClass} pb-0`}>
-          <div className="flex justify-between items-center flex-col md:flex-row">
-            <div className="flex items-center min-w-0 flex-1 mb-5">
-              {icon && (
-                <div className="shrink-0 mr-4">
-                  <div className="p-2 w-12 h-12 bg-primary/10 rounded-lg flex items-center justify-center">
-                    {createElement(icon, {
-                      className: "h-10 w-10 text-primary",
-                    })}
-                  </div>
-                </div>
-              )}
-              <div className="flex flex-col min-w-0 flex-1">
-                <h3
-                  className={`text-heading-lg font-semibold text-base-content mb-1 ${titleClassName}`}
-                >
-                  {title}
-                </h3>
-                {subtitle && (
-                  <p className="text-body-sm text-base-content/60 leading-relaxed">
-                    {subtitle}
-                  </p>
-                )}
-              </div>
-            </div>
-            {actions && (
-              <div className="flex items-center gap-2 ml-4 shrink-0">
-                {actions}
-              </div>
+        <CardHeader
+          className={cn("flex flex-row flex-wrap items-center justify-between gap-3", headerClass)}
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            {icon && (
+              <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted">
+                {createElement(icon, { className: "size-4 text-primary" })}
+              </span>
             )}
+            <div className="flex flex-col gap-0.5 min-w-0">
+              <CardTitle className={cn(titleClassName)}>{title}</CardTitle>
+              {subtitle && <CardDescription>{subtitle}</CardDescription>}
+            </div>
           </div>
-        </div>
+          {actions && (
+            <div className="flex flex-wrap items-center gap-2">{actions}</div>
+          )}
+        </CardHeader>
       )}
-      <div className={`card-body-professional ${bodyClass}`}>{children}</div>
-    </div>
+      <CardContent className={cn(bodyClass)}>{children}</CardContent>
+    </ShadcnCard>
   );
 };

@@ -1,3 +1,4 @@
+import { NativeSelectOption } from "@/components/ui/native-select";
 import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -60,11 +61,11 @@ const DiskFormModal = ({ zpools, isOpen, setIsOpen, refresh }) => {
           onChange={(e) => setValue("zpool", e.target.value)}
           error={errors.zpool?.message}
         >
-          <option value="">Select zpool</option>
+          <NativeSelectOption value="">Select zpool</NativeSelectOption>
           {zpools.map((p) => (
-            <option key={p} value={p}>
+            <NativeSelectOption key={p} value={p}>
               {p}
-            </option>
+            </NativeSelectOption>
           ))}
         </Select>
 
@@ -74,10 +75,10 @@ const DiskFormModal = ({ zpools, isOpen, setIsOpen, refresh }) => {
           onChange={(e) => setValue("usage_type", e.target.value)}
           error={errors.usage_type?.message}
         >
-          <option value="">Select disk type</option>
-          <option value="image">Image (store images)</option>
-          <option value="writeback">Writeback (store clones)</option>
-          <option value="game">Game (Game Disks - creates zvol)</option>
+          <NativeSelectOption value="">Select disk type</NativeSelectOption>
+          <NativeSelectOption value="image">Image (store images)</NativeSelectOption>
+          <NativeSelectOption value="writeback">Writeback (store clones)</NativeSelectOption>
+          <NativeSelectOption value="game">Game (Game Disks - creates zvol)</NativeSelectOption>
         </Select>
 
         <Input

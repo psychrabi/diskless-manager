@@ -1,5 +1,4 @@
-import { Shield } from "lucide-react";
-import { Button, Card, Input } from "@/components/ui";
+import { LoginForm } from "@/components/login-form";
 import { useAuth } from "@/contexts/auth";
 import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -25,15 +24,13 @@ const Login = () => {
     checkAdminExists()
       .then((response) => {
         if (!cancelled) {
-          setAdminExists(response.exists || response.admin_exists);
+          setAdminExists(response.exists ?? response.admin_exists ?? false);
         }
       })
       .catch(() => {
         if (!cancelled) setAdminExists(true);
       });
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, []);
 
   const {
@@ -43,16 +40,12 @@ const Login = () => {
     reset,
   } = useForm({
     resolver: zodResolver(loginSchema),
-    defaultValues: {
-      username: "",
-      password: "",
-    },
+    defaultValues: { username: "", password: "" },
   });
 
   const onSubmit = async (data) => {
     try {
       const response = await login(data.username, data.password);
-
       setAuth(response.user, response.token);
       success("Authentication", "You have successfully logged in");
       localStorage.removeItem("last_path");
@@ -65,59 +58,14 @@ const Login = () => {
   };
 
   return (
-    <Card className="w-full max-w-md animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <div className="text-center mb-8">
-        <div className="w-16 h-16 bg-primary rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-primary/20">
-          <Shield className="h-8 w-8 text-primary-content" />
-        </div>
-        <h1 className="text-2xl font-bold text-base-content">Diskless Manager</h1>
-        <p className="text-base-content/60 mt-1">Sign in to manage your boot server</p>
-      </div>
-
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
-        <Input
-          id="username"
-          type="text"
-          label="Username"
-          register={register("username")}
-          placeholder="Enter your username"
-          error={errors.username?.message}
-        />
-        <Input
-          id="password"
-          type="password"
-          label="Password"
-          register={register("password")}
-          placeholder="Enter your password"
-          error={errors.password?.message}
-        />
-        <Button
-          type="submit"
-          disabled={isSubmitting}
-          className="w-full"
-          variant="primary"
-          size="lg"
-        >
-          {isSubmitting ? "Signing in\u2026" : "Sign in"}
-        </Button>
-      </form>
-
-      {adminExists === false && (
-        <div className="mt-6 pt-4 border-t border-base-300 text-center">
-          <p className="text-sm text-base-content/60 mb-2">
-            No administrator account exists yet.
-          </p>
-          <Button
-            type="button"
-            variant="outline"
-            className="w-full"
-            onClick={() => navigate("/initial-setup")}
-          >
-            Create your first admin account
-          </Button>
-        </div>
-      )}
-    </Card>
+    <LoginForm
+      onSubmit={handleSubmit(onSubmit)}
+      register={register}
+      errors={errors}
+      isSubmitting={isSubmitting}
+      canBootstrap={adminExists === false}
+      onCreateAdmin={() => navigate("/initial-setup")}
+    />
   );
 };
 

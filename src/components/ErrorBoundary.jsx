@@ -1,76 +1,54 @@
-import { AlertTriangle, Home, RefreshCw } from "lucide-react";
-import React from "react";
-import { Button } from "./ui";
+import { Component } from "react";
+import ErrorFallback from "./ErrorFallback";
+import { clearSavedRoute, returnToHome } from "@/lib/error-recovery";
 
-class ErrorBoundary extends React.Component {
-  constructor(props) {
-    super(props);
-    this.state = { hasError: false, error: null, errorInfo: null };
-  }
+const initialState = { hasError: false, error: null, componentStack: "" };
+
+export default class ErrorBoundary extends Component {
+  state = initialState;
 
   static getDerivedStateFromError(error) {
-    console.error("Uncaught error:", error);
-    return { hasError: true };
+    return { hasError: true, error };
   }
 
-  componentDidCatch(error, errorInfo) {
-    this.setState({ error, errorInfo });
-    console.error("Uncaught error:", error, errorInfo);
+  componentDidCatch(error, info) {
+    this.setState({ componentStack: info.componentStack || "" });
+    console.error("[ErrorBoundary]", error, info.componentStack);
   }
+
+  componentDidUpdate(prevProps, prevState) {
+    const previous = prevProps.resetKeys || [];
+    const current = this.props.resetKeys || [];
+    if (this.state.hasError && prevState.hasError && (
+      previous.length !== current.length || current.some((value, index) => !Object.is(value, previous[index]))
+    )) {
+      this.reset();
+    }
+  }
+
+  reset = () => this.setState(initialState);
+
+  goHome = () => {
+    clearSavedRoute();
+    if (this.props.onHome) {
+      this.props.onHome();
+      this.reset();
+    } else {
+      returnToHome();
+    }
+  };
 
   render() {
-    if (this.state.hasError) {
-      return (
-        <div className="min-h-screen flex items-center justify-center bg-base-200 p-4">
-          <div className="card w-full max-w-lg bg-base-100 shadow-xl">
-            <div className="card-body items-center text-center">
-              <AlertTriangle className="h-12 w-12 text-error mb-4" />
-              <h2 className="card-title text-2xl mb-2">Something went wrong</h2>
-              <p className="text-base-content/70 mb-6">
-                An unexpected error occurred. Please try reloading the page.
-              </p>
-              <div className="flex gap-4">
-                <Button
-                  variant="primary"
-                  onClick={() => window.location.reload()}
-                  className="gap-2"
-                >
-                  <RefreshCw className="h-4 w-4" />
-                  Reload Page
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => (window.location.href = "/")}
-                  className="gap-2"
-                >
-                  <Home className="h-4 w-4" />
-                  Go Home
-                </Button>
-              </div>
-              {import.meta.env.VITE_APP_ENV === "development" && (
-                <div className="mt-6 text-left w-full collapse collapse-arrow border border-base-300 bg-base-200 rounded-box">
-                  <input type="checkbox" />
-                  <div className="collapse-title font-medium">
-                    Error Details
-                  </div>
-                  <div className="collapse-content">
-                    <pre className="text-xs overflow-auto max-h-40 p-2">
-                      {this.state.error && this.state.error.toString()}
-                      <br />
-                      {this.state.errorInfo &&
-                        this.state.errorInfo.componentStack}
-                    </pre>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      );
-    }
-
-    return this.props.children;
+    if (!this.state.hasError) return this.props.children;
+    return (
+      <ErrorFallback
+        error={this.state.error}
+        componentStack={this.state.componentStack}
+        fullPage={this.props.fullPage}
+        showDetails={this.props.showDetails}
+        onRetry={this.reset}
+        onHome={this.goHome}
+      />
+    );
   }
 }
-
-export default ErrorBoundary;

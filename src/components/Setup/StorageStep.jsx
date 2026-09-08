@@ -1,3 +1,4 @@
+import { NativeSelectOption } from "@/components/ui/native-select";
 import { AlertCircle, CheckCircle, Database } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { Button, Card, Input, Select } from "@/components/ui";
@@ -23,12 +24,12 @@ const StorageStep = ({
     >
       {poolExists ? (
         <div className="flex flex-col items-center py-8 space-y-6 text-center">
-          <div className="w-20 h-20 bg-success/20 text-success rounded-full flex items-center justify-center">
+          <div className="w-20 h-20 bg-emerald-600/20 text-emerald-600 rounded-full flex items-center justify-center">
             <CheckCircle size={48} />
           </div>
           <div className="space-y-2">
             <h3 className="text-xl font-bold">Storage is Ready</h3>
-            <p className="text-base-content/60">
+            <p className="text-muted-foreground">
               ZFS pool &apos;{poolName || "zroot"}&apos; is initialized and
               ready for use.
             </p>
@@ -43,11 +44,11 @@ const StorageStep = ({
               subtitle="Caution: All data on this disk will be erased"
               error={errors.disk}
             >
-              <option value="">-- Select Disk --</option>
+              <NativeSelectOption value="">-- Select Disk --</NativeSelectOption>
               {disks.map((disk) => (
-                <option key={disk} value={disk}>
+                <NativeSelectOption key={disk} value={disk}>
                   {disk}
-                </option>
+                </NativeSelectOption>
               ))}
             </Select>
             <Input
@@ -58,7 +59,7 @@ const StorageStep = ({
               error={errors.name}
             />
           </div>
-          <div className="p-4 bg-warning/10 border border-warning/20 rounded-lg text-warning text-sm flex gap-3">
+          <div className="p-4 bg-amber-600/10 border border-amber-600/20 rounded-lg text-amber-600 text-sm flex gap-3">
             <AlertCircle size={20} className="shrink-0" />
             <p>
               Creating a ZFS pool will format the selected disk. Ensure you have

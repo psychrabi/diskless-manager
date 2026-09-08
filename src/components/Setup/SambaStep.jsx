@@ -17,6 +17,7 @@ const sambaInitial = {
 const SambaStep = ({ onSubmit, isSubmitting, initialConfig }) => {
   const {
     register,
+    control,
     handleSubmit,
     formState: { errors },
   } = useForm({
@@ -35,6 +36,7 @@ const SambaStep = ({ onSubmit, isSubmitting, initialConfig }) => {
     >
       <form onSubmit={handleSubmit(handleFormSubmit)} className="space-y-4">
         <SambaForm
+          control={control}
           register={register}
           errors={errors}
           config={initialConfig || sambaInitial}

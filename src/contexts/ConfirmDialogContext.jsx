@@ -1,3 +1,5 @@
+import { Label } from "@/components/ui/label";
+import { Input as TextInput } from "@/components/ui/input";
 import { Button, Modal } from "@/components/ui";
 import { useCallback, useRef, useState } from "react";
 import { ConfirmDialogContext } from "./confirmDialog";
@@ -82,17 +84,19 @@ export const ConfirmDialogProvider = ({ children }) => {
           {options.showInput && (
             <div className="space-y-2">
               {options.inputLabel && (
-                <label className="text-xs font-bold uppercase tracking-wider opacity-50">
+                <Label htmlFor="confirmation-input" className="text-xs font-bold uppercase tracking-wider opacity-50">
                   {options.inputLabel}
-                </label>
+                </Label>
               )}
-              <input
+              <TextInput
+                id="confirmation-input"
+                aria-label={options.inputLabel || options.inputPlaceholder || "Confirmation value"}
                 autoFocus
                 type={options.inputType || "text"}
                 placeholder={options.inputPlaceholder}
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
-                className="input input-bordered w-full"
+                className="w-full"
                 onKeyDown={(e) => {
                   if (e.key === "Enter") handleConfirm();
                   if (e.key === "Escape") handleCancel();

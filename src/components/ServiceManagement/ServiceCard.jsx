@@ -45,13 +45,13 @@ export default function ServiceCard({
 
   return (
     <Card icon={Icon} title={service.display_name} subtitle={service.name}>
-      <p className="text-sm text-base-content/70 mb-4 leading-relaxed">
+      <p className="text-sm text-muted-foreground mb-4 leading-relaxed">
         {serviceDescriptions[service.name] || "System service"}
       </p>
 
-      <div className="flex items-center justify-between px-3 py-2 bg-base-200/50 rounded-lg mb-4 text-sm">
-        <span className="text-base-content/50">
-          PID: <span className="font-mono text-base-content/70">{service.pid ?? "\u2014"}</span>
+      <div className="flex items-center justify-between px-3 py-2 bg-muted/50 rounded-lg mb-4 text-sm">
+        <span className="text-muted-foreground">
+          PID: <span className="font-mono text-muted-foreground">{service.pid ?? "\u2014"}</span>
         </span>
         <StatusBadge
           status={service.enabled ? "success" : "error"}

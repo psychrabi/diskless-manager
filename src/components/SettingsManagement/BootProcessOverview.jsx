@@ -1,4 +1,4 @@
-import { GitPullRequestArrow } from "lucide-react";
+import { Check, GitPullRequestArrow } from "lucide-react";
 import { useShallow } from "zustand/shallow";
 import { useAppStore } from "@/store/useAppStore";
 import { Card, StatusBadge } from "@/components/ui";
@@ -23,9 +23,9 @@ export default function BootProcessOverview() {
     <Card
       title="Boot Process Overview"
       icon={GitPullRequestArrow}
-      className="bg-base-100"
+      className="bg-background"
     >
-      <ul className="steps steps-vertical lg:steps-horizontal w-full">
+      <ol aria-label="Network boot sequence" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {bootSteps.map((step, i) => {
           const isRunning = step.key ? runningServices.has(step.key) : true;
           const isComplete = i < bootSteps.length - 1;
@@ -34,10 +34,12 @@ export default function BootProcessOverview() {
           return (
             <li
               key={step.label}
-              className={`step ${completed ? "step-primary" : ""}`}
-              data-content={completed ? "\u2713" : undefined}
+              className="flex items-start gap-3 rounded-lg border bg-muted/30 p-4"
             >
-              <div className="flex flex-col items-center mt-2">
+              <span className={`flex size-8 shrink-0 items-center justify-center rounded-full text-sm font-medium ${completed ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>
+                {completed ? <Check aria-label="Complete" className="size-4" /> : i + 1}
+              </span>
+              <div className="flex flex-col gap-2">
                 <div className="flex items-center gap-2">
                   <span className="font-bold">{step.label}</span>
                   <StatusBadge
@@ -46,14 +48,14 @@ export default function BootProcessOverview() {
                     showIcon={false}
                   />
                 </div>
-                <span className="text-xs text-base-content/60 text-center max-w-[150px]">
+                <span className="text-xs text-muted-foreground">
                   {step.description}
                 </span>
               </div>
             </li>
           );
         })}
-      </ul>
+      </ol>
     </Card>
   );
 }

@@ -27,7 +27,7 @@ const VirtuosoTableComponents = {
   Table: ({ style, ...props }, ref) => (
     <table
       {...props}
-      className="table w-full bg-base-100"
+      className="w-full bg-card"
       style={{ ...style }}
       ref={ref}
     />
@@ -45,7 +45,7 @@ const VirtuosoTableComponents = {
             context.handleClientContextMenu(e, item);
           }
         }}
-        className={`border-b border-base-200 transition-colors hover:bg-base-200/50 cursor-context-menu ${props.className || ""
+        className={`border-b border-border transition-colors hover:bg-muted/50 cursor-context-menu ${props.className || ""
           }`}
         ref={ref}
       />
@@ -76,7 +76,7 @@ const ClientTable = ({ handleClientContextMenu }) => {
   }, [clients, metrics?.clients, metricsMap, setClients]);
 
   return (
-    <div className="bg-base-100 rounded-lg h-[70vh] w-full border border-base-200">
+    <div className="h-[70vh] w-full rounded-lg border border-border bg-card">
       {clients.length === 0 ? (
         <ClientTableEmptyState />
       ) : (

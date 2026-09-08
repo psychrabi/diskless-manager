@@ -1,3 +1,5 @@
+import { Label } from "@/components/ui/label";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -62,25 +64,25 @@ export default function EditUserModal({ isOpen, onClose, user }) {
           autoFocus
         />
 
-        <div className="form-control">
-          <label className="label">
-            <span className="label-text">Role</span>
-          </label>
-          <select
-            className={`select select-bordered w-full ${
-              errors.role ? 'select-error' : ''
-            }`}
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="role">
+            <span className="text-sm font-medium">Role</span>
+          </Label>
+          <NativeSelect
+            id="role"
+            aria-invalid={!!errors.role}
+            aria-describedby={errors.role ? "role-error" : undefined}
             {...register('role')}
           >
-            <option value="user">User</option>
-            <option value="admin">Admin</option>
-          </select>
+            <NativeSelectOption value="user">User</NativeSelectOption>
+            <NativeSelectOption value="admin">Admin</NativeSelectOption>
+          </NativeSelect>
           {errors.role && (
-            <label className="label">
-              <span className="label-text-alt text-error">
+            <Label className="flex items-center gap-2 text-sm font-medium">
+              <span id="role-error" role="alert" className="text-xs text-destructive">
                 {errors.role.message}
               </span>
-            </label>
+            </Label>
           )}
         </div>
 

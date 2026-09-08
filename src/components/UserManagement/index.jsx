@@ -1,3 +1,13 @@
+import { Badge } from "@/components/ui/badge";
+import {
+  Table,
+  TableHeader,
+  TableRow,
+  TableHead,
+  TableBody,
+  TableCell,
+} from "@/components/ui/table";
+import { Spinner } from "@/components/ui/spinner";
 import { Button, Card } from '@/components/ui';
 import { useUserManagement } from '@/hooks/useUserManagement';
 import { useToastStore } from '@/store/useToastStore';
@@ -84,7 +94,7 @@ export default function UserManagement() {
         title="User Management"
         subtitle="Manage system users and their roles"
         icon={Users}
-        className="bg-base-300"
+        className="bg-muted"
         actions={ <Button
             variant="primary"
             onClick={handleCreateUser}
@@ -95,46 +105,40 @@ export default function UserManagement() {
           </Button>}
       >   
 
-    <div className="bg-base-100 rounded-lg max-h-[70vh] w-full border border-base-200 overflow-auto">
-          <table className="table table-zebra w-full">
-            <thead>
-              <tr>
-                <th>Username</th>
-                <th>Role</th>
-                <th className="text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
+    <div className="bg-background rounded-lg max-h-[70vh] w-full border border-border overflow-auto">
+          <Table className="w-full">
+            <TableHeader>
+              <TableRow>
+                <TableHead>Username</TableHead>
+                <TableHead>Role</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {loading && users.length === 0 ? (
-                <tr>
-                  <td colSpan="3" className="text-center py-8">
-                    <span className="loading loading-spinner loading-md"></span>
-                  </td>
-                </tr>
+                <TableRow>
+                  <TableCell colSpan="3" className="text-center py-8">
+                    <Spinner className=""></Spinner>
+                  </TableCell>
+                </TableRow>
               ) : users.length === 0 ? (
-                <tr>
-                  <td colSpan="3" className="text-center py-8 text-base-content/60">
+                <TableRow>
+                  <TableCell colSpan="3" className="text-center py-8 text-muted-foreground">
                     No users found
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               ) : (
                 users.map((user) => (
-                  <tr key={user.id}>
-                    <td>
+                  <TableRow key={user.id}>
+                    <TableCell>
                       <div className="font-medium">{user.username}</div>
-                    </td>
-                    <td>
-                      <span
-                        className={`badge ${
-                          user.role === 'admin'
-                            ? 'badge-primary'
-                            : 'badge-secondary'
-                        }`}
-                      >
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={user.role === "admin" ? "default" : "secondary"}>
                         {user.role}
-                      </span>
-                    </td>
-                    <td>
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
                       <div className="flex justify-end gap-2">
                         <Button
                           variant="ghost"
@@ -156,15 +160,15 @@ export default function UserManagement() {
                           onClick={() => handleDeleteUser(user)}
                           icon={Trash2}
                           title="Delete user"
-                          className="text-error hover:bg-error/10"
+                          className="text-destructive hover:bg-destructive/10"
                         />
                       </div>
-                    </td>
-                  </tr>
+                    </TableCell>
+                  </TableRow>
                 ))
               )}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         </div>
       </Card>
 

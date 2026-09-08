@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Power, RefreshCw, ScreenShare } from "lucide-react";
-import { Button } from "@/components/ui";
+import { Button } from "@/components/ui/button";
 import PowerActionModal from "./PowerActionModal";
 import RemoteDesktopModal from "./RemoteDesktopModal";
 
@@ -26,7 +26,7 @@ const ControlActionButtons = ({ client, onActionComplete }) => {
           disabled={!isOnline}
           onClick={() => setPowerAction("reboot")}
         >
-          <RefreshCw className="w-4 h-4" />
+          <RefreshCw />
         </Button>
 
         <Button
@@ -36,7 +36,7 @@ const ControlActionButtons = ({ client, onActionComplete }) => {
           disabled={!isOnline}
           onClick={() => setPowerAction("shutdown")}
         >
-          <Power className="w-4 h-4" />
+          <Power />
         </Button>
 
         <Button
@@ -46,7 +46,7 @@ const ControlActionButtons = ({ client, onActionComplete }) => {
           disabled={!isOnline}
           onClick={() => setRemoteModalOpen(true)}
         >
-          <ScreenShare className="w-4 h-4" />
+          <ScreenShare />
         </Button>
       </div>
 

@@ -16,9 +16,9 @@ const ImageCard = ({
 }) => {
 
   const actions = (
-    <div className="join join-horizontal">
+    <div className="flex items-center gap-1 ">
       <Button
-        className="join-item"
+        className=""
         variant={master.is_default ? "success" : "default"}
         size="icon"
         icon={master.is_default ? Star : StarIcon}
@@ -30,7 +30,7 @@ const ImageCard = ({
 
       <Button
         variant="primary"
-        className="join-item"
+        className=""
         onClick={() => handleCreateSnapshot(master)}
         size="icon"
         icon={PlusCircle}
@@ -38,7 +38,7 @@ const ImageCard = ({
       />
       <Button
         variant="info"
-        className="join-item"
+        className=""
         onClick={() => handleRenameImage(master)}
         size="icon"
         icon={Edit}
@@ -46,7 +46,7 @@ const ImageCard = ({
       />
       <Button
         variant="destructive"
-        className="join-item"
+        className=""
         onClick={() => handleDeleteImage(master)}
         size="icon"
         icon={Trash2}
@@ -56,13 +56,13 @@ const ImageCard = ({
   )
 
   return <Card title={`${master.name} (${master.size_gb}GB)`} subtitle={master.path} actions={actions}>
-    <h5 className="text-sm font-semibold mb-2 text-base-content/70">
+    <h5 className="text-sm font-semibold mb-2 text-muted-foreground">
       Available Snapshots:
     </h5>
     {master.snapshots && master.snapshots.length > 0 ? (
       <SnapshotsList master={master} />
     ) : (
-      <p className="text-sm text-base-content/60">
+      <p className="text-sm text-muted-foreground">
         No snapshots found for this master.
       </p>
     )}

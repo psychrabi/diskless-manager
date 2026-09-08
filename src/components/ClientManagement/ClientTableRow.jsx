@@ -1,5 +1,6 @@
 import { memo } from "react";
-import { TableCell } from "@/components/ui";
+import { TableCell } from "@/components/ui/table";
+import { Badge } from "@/components/ui/badge";
 import { formatUptime } from "@/utils/formatUptime";
 import { Clock, Monitor, MoveDown, MoveUp } from "lucide-react";
 import ControlActionButtons from "./ControlActionButtons";
@@ -9,13 +10,14 @@ const ClientStatusBadge = memo(({ status }) => {
   const currentStatus = status || "Offline";
   const isOnline = currentStatus === "Online";
   const isLeased = currentStatus === "Leased";
-  const badgeClass = isOnline
-    ? "text-success"
-    : isLeased
-      ? "text-warning"
-      : "text-neutral";
+  const variant = isOnline ? "default" : isLeased ? "secondary" : "destructive";
 
-  return <Monitor className={`inline mr-2 h-4 w-4 ${badgeClass}`} />;
+  return (
+    <Badge variant={variant} className="mr-2" title={currentStatus}>
+      <Monitor data-icon="inline-start" />
+      {currentStatus}
+    </Badge>
+  );
 });
 
 const ClientModeBadge = memo(({ client }) => {
@@ -23,38 +25,35 @@ const ClientModeBadge = memo(({ client }) => {
 
   if (isUsingMasterDirectly) {
     return (
-      <span
-        className="status status-warning status-lg"
-        title={`Super Client : ${client.master}`}
-      />
+      <Badge variant="outline" title={`Super Client : ${client.master}`}>
+        Super
+      </Badge>
     );
   }
 
   if (client.keep_writeback === false) {
     return (
-      <span
-        className="status status-secondary status-lg"
-        title="Non-Persistent"
-      />
+      <Badge variant="secondary" title="Non-Persistent">
+        Non-Persistent
+      </Badge>
     );
   }
 
   return (
-    <span
-      className="status status-info status-lg"
-      title={`Persistent: ${client.block_store}`}
-    />
+    <Badge variant="default" title={`Persistent: ${client.block_store}`}>
+      Persistent
+    </Badge>
   );
 });
 
 const SpeedCell = ({ metricValue, icon: Icon, iconClassName }) => {
   if (metricValue == null) {
-    return <span className="text-base-content/40">-</span>;
+    return <span className="text-muted-foreground/60">-</span>;
   }
 
   return (
     <span className="flex items-center justify-center gap-1">
-      <Icon className={`w-3 h-3 ${iconClassName}`} />
+      <Icon className={`size-3 ${iconClassName}`} />
       {metricValue.toFixed(2)}
     </span>
   );
@@ -62,12 +61,12 @@ const SpeedCell = ({ metricValue, icon: Icon, iconClassName }) => {
 
 const UptimeCell = ({ uptimeSeconds }) => {
   if (uptimeSeconds == null) {
-    return <span className="text-base-content/40">-</span>;
+    return <span className="text-muted-foreground/60">-</span>;
   }
 
   return (
     <span className="flex items-center gap-1">
-      <Clock className="w-3 h-3 text-secondary" />
+      <Clock className="size-3 text-secondary" />
       {formatUptime(uptimeSeconds)}
     </span>
   );
@@ -80,40 +79,46 @@ const ClientTableRow = ({ client, clientMetrics }) => {
         <ClientStatusBadge status={client.status} />
         {client.name}
       </TableCell>
-      <TableCell className="hidden md:table-cell text-xs font-mono">
+      <TableCell className="hidden text-xs font-mono md:table-cell">
         {client.mac}
       </TableCell>
-      <TableCell className="font-mono text-xs text-center">{client.ip}</TableCell>
-      <TableCell className="hidden lg:table-cell font-mono">
+      <TableCell className="text-center font-mono text-xs">{client.ip}</TableCell>
+      <TableCell className="hidden font-mono lg:table-cell">
         <SpeedCell
           metricValue={clientMetrics?.iscsi?.read_speed_mbps}
           icon={MoveUp}
           iconClassName="text-primary"
         />
       </TableCell>
-      <TableCell className="hidden lg:table-cell font-mono text-center" title="Total since the disk counters last restarted">
+      <TableCell
+        className="hidden text-center font-mono lg:table-cell"
+        title="Total since the disk counters last restarted"
+      >
         {formatDiskBytes(clientMetrics?.iscsi?.total_read_bytes)}
       </TableCell>
-      <TableCell className="hidden lg:table-cell font-mono">
+      <TableCell className="hidden font-mono lg:table-cell">
         <SpeedCell
           metricValue={clientMetrics?.iscsi?.write_speed_mbps}
           icon={MoveDown}
           iconClassName="text-secondary"
         />
       </TableCell>
-      <TableCell className="hidden lg:table-cell font-mono text-center" title="Total since the disk counters last restarted">
+      <TableCell
+        className="hidden text-center font-mono lg:table-cell"
+        title="Total since the disk counters last restarted"
+      >
         {formatDiskBytes(clientMetrics?.iscsi?.total_write_bytes)}
       </TableCell>
-      <TableCell className="hidden xl:table-cell text-xs font-mono break-all text-center">
+      <TableCell className="hidden break-all text-center font-mono text-xs xl:table-cell">
         {client.master}
       </TableCell>
       <TableCell className="text-center">
         <ClientModeBadge client={client} />
       </TableCell>
-      <TableCell className="hidden lg:table-cell text-xs font-mono text-center">
+      <TableCell className="hidden text-center font-mono text-xs lg:table-cell">
         <UptimeCell uptimeSeconds={clientMetrics?.uptime_seconds} />
       </TableCell>
-      <TableCell >
+      <TableCell>
         <ControlActionButtons client={client} onActionComplete={() => {}} />
       </TableCell>
     </>

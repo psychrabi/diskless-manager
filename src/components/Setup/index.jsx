@@ -1,4 +1,5 @@
 import { ChevronRight } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { useNavigate } from "react-router-dom";
 import { useSetupWizard } from "@/hooks/useSetupWizard";
 import AuthorizeStep from "./AuthorizeStep";
@@ -41,29 +42,30 @@ const Setup = () => {
   return (
     <div className="w-full max-w-3xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 px-2 sm:px-0">
       <div className="text-center space-y-2">
-        <h1 className="text-3xl sm:text-4xl font-black tracking-tight bg-linear-to-r from-primary to-secondary bg-clip-text text-transparent">
+        <h1 className="text-3xl sm:text-4xl font-semibold tracking-tight text-foreground">
           System Setup
         </h1>
-        <p className="text-base-content/60 text-lg">
+        <p className="text-muted-foreground text-lg">
           Configure your server for diskless booting
         </p>
       </div>
 
-      {/* Modern Stepper */}
-      <div className="flex justify-between items-center px-4 relative overflow-x-auto">
+      <nav aria-label="Setup steps" className="flex justify-between items-center gap-2 p-4 relative overflow-x-auto">
         {steps.map((step) => (
-          <div
+          <Button
             key={step.id}
-            className="relative z-10 flex flex-col items-center cursor-pointer group shrink-0 px-3"
+            variant="ghost"
+            aria-current={activeStep === step.id ? "step" : undefined}
+            className="relative z-10 h-auto flex-col gap-2 group shrink-0 px-3 py-2"
             onClick={() => setActiveStep(step.id)}
           >
             <div
               className={`w-12 h-12 rounded-full flex items-center justify-center border-4 transition-all duration-300 ${
                 step.status === "complete"
-                  ? "bg-success border-success text-success-content scale-110 group-hover:bg-success/80"
+                  ? "bg-emerald-600 border-emerald-600 text-white scale-110 group-hover:bg-emerald-600/80"
                   : step.status === "current" || activeStep === step.id
-                    ? "bg-primary border-primary text-primary-content scale-110 shadow-lg shadow-primary/20"
-                    : "bg-base-100 border-base-300 text-base-content/40 group-hover:border-primary/50"
+                    ? "bg-primary border-primary text-primary-foreground scale-110 shadow-lg shadow-primary/20"
+                    : "bg-background border-border text-muted-foreground group-hover:border-primary/50"
               }`}
             >
               <step.icon size={20} />
@@ -73,15 +75,15 @@ const Setup = () => {
                 activeStep === step.id
                   ? "text-primary"
                   : step.status === "upcoming"
-                    ? "text-base-content/40"
-                    : "text-base-content"
+                    ? "text-muted-foreground"
+                    : "text-foreground"
               }`}
             >
               {step.title}
             </span>
-          </div>
+          </Button>
         ))}
-      </div>
+      </nav>
 
       <div className="min-h-[50vh]">
         {activeStep === 1 && (
@@ -154,27 +156,29 @@ const Setup = () => {
       </div>
 
       {activeStep < 9 ? (
-        <div className="flex justify-between items-center text-xs text-base-content/40">
+        <div className="flex justify-between items-center text-xs text-muted-foreground">
           <span>
             Status:{" "}
             {checking ? "Refreshing\u2026" : "Configuration in progress"}
           </span>
-          <span
-            className="flex items-center gap-1 cursor-pointer hover:text-primary transition-colors"
+          <Button
+            variant="link"
+            size="sm"
             onClick={() => navigate("/")}
           >
             Skip for now <ChevronRight size={14} />
-          </span>
+          </Button>
         </div>
       ) : (
-        <div className="flex justify-between items-center text-xs text-base-content/40">
+        <div className="flex justify-between items-center text-xs text-muted-foreground">
           <span>Status: Setup completed</span>
-          <span
-            className="flex items-center gap-1 cursor-pointer hover:text-primary transition-colors"
+          <Button
+            variant="link"
+            size="sm"
             onClick={() => navigate("/")}
           >
             Go to Dashboard <ChevronRight size={14} />
-          </span>
+          </Button>
         </div>
       )}
     </div>

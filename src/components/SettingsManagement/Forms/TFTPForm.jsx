@@ -1,18 +1,29 @@
+import { Controller } from "react-hook-form";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
 import { Input } from "../../ui";
 
-const TFTPForm = ({ register, errors, config }) => {
+const TFTPForm = ({ register, control, errors }) => {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-      <label htmlFor="enabled" className="label md:col-span-2">
-        <input
-          id="enabled"
-          className="checkbox checkbox-primary"
-          {...register("enabled")}
-          type="checkbox"
-          defaultChecked={config?.enabled}
+      <Label htmlFor="tftp-enabled" className="flex items-center gap-2 text-sm font-medium md:col-span-2">
+        <Controller
+          name="enabled"
+          control={control}
+          defaultValue={false}
+          render={({ field }) => (
+            <Checkbox
+              id="tftp-enabled"
+              name={field.name}
+              ref={field.ref}
+              checked={Boolean(field.value)}
+              onCheckedChange={field.onChange}
+              onBlur={field.onBlur}
+            />
+          )}
         />
         <span className="ml-2">TFTP Server (Start at boot)</span>
-      </label>
+      </Label>
 
       <Input
         label="TFTP Server IP"

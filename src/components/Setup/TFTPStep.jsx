@@ -16,6 +16,7 @@ const tftpInitial = {
 const TFTPStep = ({ onSubmit, isSubmitting, initialConfig }) => {
   const {
     register,
+    control,
     handleSubmit,
     formState: { errors },
   } = useForm({
@@ -29,6 +30,7 @@ const TFTPStep = ({ onSubmit, isSubmitting, initialConfig }) => {
     >
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         <TFTPForm
+          control={control}
           register={register}
           errors={errors}
           config={initialConfig || tftpInitial}

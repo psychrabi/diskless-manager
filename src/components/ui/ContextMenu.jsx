@@ -21,14 +21,14 @@ const MenuItem = ({
   className = "",
 }) => {
   const variants = {
-    default: "",
-    success: "hover:bg-success/20 transition-colors text-success",
-    warning: "hover:bg-warning/20 transition-colors text-warning",
-    error: "hover:bg-error/20 transition-colors text-error",
-    info: "hover:bg-info/20 transition-colors text-info",
-    secondary: "hover:bg-secondary/20 transition-colors text-secondary",
+    default: "hover:bg-accent hover:text-accent-foreground",
+    success: "hover:bg-accent hover:text-accent-foreground",
+    warning: "hover:bg-accent hover:text-accent-foreground",
+    error: "hover:bg-accent hover:text-accent-foreground",
+    info: "hover:bg-accent hover:text-accent-foreground",
+    secondary: "hover:bg-accent hover:text-accent-foreground",
     destructive:
-      "hover:bg-error text-error hover:text-white transition-all group",
+      "text-destructive hover:bg-destructive hover:text-destructive-foreground",
   };
 
   const handleKeyDown = (e) => {
@@ -45,18 +45,12 @@ const MenuItem = ({
         onClick={onClick}
         onKeyDown={handleKeyDown}
         className={cn(
-          "w-full text-left flex items-center gap-3 px-3 py-2 text-sm transition-all duration-200",
+          "flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors duration-150",
           variants[variant],
           className
         )}
       >
-        <Icon
-          className={`w-4 h-4 shrink-0 ${
-            variant === "destructive"
-              ? "group-hover:scale-110 transition-transform"
-              : ""
-          }`}
-        />
+        <Icon className="size-4 shrink-0" />
         <span>{label}</span>
       </button>
     </li>
@@ -64,7 +58,7 @@ const MenuItem = ({
 };
 
 const SectionHeader = ({ label }) => (
-  <div className="px-3 py-1 font-bold bg-base-300 uppercase tracking-widest">
+  <div className="px-3 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-widest">
     {label}
   </div>
 );
@@ -109,19 +103,19 @@ export const ContextMenu = ({
     <div
       ref={menuRef}
       style={{ top: coords.y, left: coords.x }}
-      className="fixed z-60 bg-base-100/80 backdrop-blur-md rounded-xl shadow-2xl min-w-55 border border-white/10 overflow-hidden animate-in fade-in zoom-in duration-150"
+      className="fixed z-50 min-w-55 overflow-hidden rounded-xl bg-popover p-1.5 text-popover-foreground shadow-2xl ring-1 ring-foreground/10 backdrop-blur-md"
     >
-      <div className="p-4 bg-base-300 border-b border-white/5">
-        <p className="text-xs font-bold uppercase tracking-widest text-primary mb-2">
+      <div className="border-b border-border px-3 py-2.5">
+        <p className="text-xs font-bold uppercase tracking-widest text-primary mb-0.5">
           {targetClient.name}
         </p>
 
-        <p className="text-[10px] opacity-40 font-mono truncate text-base-content">
+        <p className="text-[10px] text-muted-foreground font-mono truncate">
           {targetClient.ip} • {targetClient.mac}
         </p>
       </div>
 
-      <ul className="menu w-full p-0" role="menu">
+      <ul className="flex w-full flex-col p-0" role="menu">
         <SectionHeader label="Control" />
         {!isOnline && (
           <MenuItem
@@ -154,7 +148,6 @@ export const ContextMenu = ({
           </>
         )}
 
-        {/* Maintenance Group */}
         {!isOnline && (
           <>
             <SectionHeader label="Maintenance" />

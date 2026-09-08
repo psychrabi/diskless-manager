@@ -1,8 +1,15 @@
 import { useToastStore } from "@/store/useToastStore";
 import { getDefaultImageOverview } from "@/api/modules/dashboard";
-import { HardDrive, RefreshCw } from "lucide-react"; // Add Refresh icon
+import { CircleAlert, HardDrive, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { Button, Card, LoadingSkeleton } from "@/components/ui"; // Assume Button component
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+} from "@/components/ui/alert";
 
 const MasterImageOverviewCard = () => {
   const [overview, setOverview] = useState(null);
@@ -55,43 +62,60 @@ const MasterImageOverviewCard = () => {
   const handleRetry = () => fetchMasterImageOverview(false); // No duplicate toast
 
   return (
-    <Card title="Default Image Overview" icon={HardDrive}>
-      {loading ? (
-        <div className="space-y-3" aria-hidden="true">
-          <LoadingSkeleton variant="text" width="3/4" />
-          <LoadingSkeleton variant="text" width="1/2" />
-          <LoadingSkeleton variant="text" width="2/3" />
-        </div>
-      ) : error ? (
-        <div className="text-center py-4 space-y-2">
-          <div className="text-error">{error}</div>
-          <Button onClick={handleRetry} variant="outline" size="sm">
-            <RefreshCw className="w-4 h-4 mr-2" />
-            Retry
-          </Button>
-        </div>
-      ) : overview ? (
-        <div className="space-y-2">
-          <div className="flex justify-between">
-            <span className="font-semibold">Name:</span>
-            <span className="text-right">{overview.name}</span>
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <HardDrive className="size-4" />
+          Default Image Overview
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {loading ? (
+          <div className="flex flex-col gap-3" aria-hidden="true">
+            <Skeleton className="h-4 w-3/4" />
+            <Skeleton className="h-4 w-1/2" />
+            <Skeleton className="h-4 w-2/3" />
           </div>
-          <div className="flex justify-between">
-            <span className="font-semibold">Created:</span>
-            <span className="text-right">{overview.creation_date}</span>
+        ) : error ? (
+          <div className="flex flex-col gap-2">
+            <Alert variant="destructive">
+              <CircleAlert />
+              <AlertTitle>Master image unavailable</AlertTitle>
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+            <Button
+              onClick={handleRetry}
+              variant="outline"
+              size="sm"
+              className="self-start"
+            >
+              <RefreshCw data-icon="inline-start" />
+              Retry
+            </Button>
           </div>
-          {overview.clones && overview.clones !== "-" && (
+        ) : overview ? (
+          <div className="flex flex-col gap-2">
             <div className="flex justify-between">
-              <span className="font-semibold">Clones:</span>
-              <span className="text-right">{overview.clones}</span>
+              <span className="font-semibold">Name:</span>
+              <span className="text-right">{overview.name}</span>
             </div>
-          )}
-        </div>
-      ) : (
-        <div className="text-error text-center py-4">
-          Set a default image first.
-        </div>
-      )}
+            <div className="flex justify-between">
+              <span className="font-semibold">Created:</span>
+              <span className="text-right">{overview.creation_date}</span>
+            </div>
+            {overview.clones && overview.clones !== "-" && (
+              <div className="flex justify-between">
+                <span className="font-semibold">Clones:</span>
+                <span className="text-right">{overview.clones}</span>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="text-center py-4 text-destructive">
+            Set a default image first.
+          </div>
+        )}
+      </CardContent>
     </Card>
   );
 };

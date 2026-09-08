@@ -8,7 +8,9 @@ export const useClientActions = (
   fetchData,
   closeContextMenu,
   setClient,
-  setIsModalOpen
+  setIsModalOpen,
+  openRemoteDesktop,
+  openPowerAction
 ) => {
   const { success, error: showError, info } = useToastStore();
   const confirm = useConfirm();
@@ -101,33 +103,37 @@ export const useClientActions = (
   const handleEdit = useCallback((client) => handleAction(client, "edit"), [handleAction]);
 
   const handleReboot = useCallback(
-    (client) =>
-      handleAction(
-        client,
-        "reboot",
-        "Reboot Client",
-        `Are you sure you want to reboot client "${client.name}" ? `,
-        "Reboot Client",
-        () => updateClient(client.id, { action: "reboot" }),
-        "Client Rebooted",
-        "Client reboot cancelled."
-      ),
-    [handleAction]
+    (client) => {
+      if (!client || client.status !== "Online") {
+        showError("Client Management", "Client must be online to reboot.");
+        return;
+      }
+      if (!openPowerAction) {
+        showError("Client Management", "Power action modal is not available.");
+        return;
+      }
+      closeContextMenu();
+      setClient(client);
+      openPowerAction("reboot");
+    },
+    [closeContextMenu, setClient, showError, openPowerAction]
   );
 
   const handleShutdown = useCallback(
-    (client) =>
-      handleAction(
-        client,
-        "shutdown",
-        "Shutdown Client",
-        `Are you sure you want to shutdown client "${client.name}" ? `,
-        "Shutdown Client",
-        () => updateClient(client.id, { action: "shutdown" }),
-        "Client Shutdown",
-        "Client shutdown cancelled."
-      ),
-    [handleAction]
+    (client) => {
+      if (!client || client.status !== "Online") {
+        showError("Client Management", "Client must be online to shutdown.");
+        return;
+      }
+      if (!openPowerAction) {
+        showError("Client Management", "Power action modal is not available.");
+        return;
+      }
+      closeContextMenu();
+      setClient(client);
+      openPowerAction("shutdown");
+    },
+    [closeContextMenu, setClient, showError, openPowerAction]
   );
 
   const handleWake = useCallback(
@@ -146,18 +152,22 @@ export const useClientActions = (
   );
 
   const handleRemote = useCallback(
-    (client) =>
-      handleAction(
-        client,
-        "remote",
-        "Remote Client",
-        `Are you sure you want to remote client "${client.name}" ? `,
-        "Remote Client",
-        () => updateClient(client.id, { action: "remote" }),
-        "Client Remotely Connected",
-        "Client remote connection cancelled."
-      ),
-    [handleAction]
+    (client) => {
+      if (!client) return;
+
+      if (client.status !== "Online") {
+        showError("Client Management", "Client must be online to remote.");
+        return;
+      }
+
+      closeContextMenu();
+      setClient(client);
+
+      if (openRemoteDesktop) {
+        openRemoteDesktop(client);
+      }
+    },
+    [closeContextMenu, setClient, showError, openRemoteDesktop]
   );
 
   const handleReset = useCallback(

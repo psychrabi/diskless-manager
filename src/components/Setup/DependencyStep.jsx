@@ -1,3 +1,4 @@
+import { Badge } from "@/components/ui/badge";
 import { Check, Package, RefreshCw } from "lucide-react";
 import {
   Button,
@@ -28,6 +29,7 @@ const DependencyStep = ({
         <Button
           variant="ghost"
           size="icon"
+          title="Refresh dependencies"
           onClick={onRefresh}
           disabled={checking}
         >
@@ -36,10 +38,10 @@ const DependencyStep = ({
       }
     >
 
-      <div className="border rounded-xl overflow-hidden bg-base-200/50 backdrop-blur-sm">
+      <div className="border rounded-xl overflow-hidden bg-muted/50 backdrop-blur-sm">
         <Table>
           <TableHeader>
-            <TableRow className="bg-base-300/50">
+            <TableRow className="bg-muted/50">
               <TableHead>Package</TableHead>
               <TableHead>Version</TableHead>
               <TableHead className="text-center">Status</TableHead>
@@ -50,7 +52,7 @@ const DependencyStep = ({
             {dependencies.map((svc) => (
               <TableRow
                 key={svc.name}
-                className="hover:bg-base-300/20 transition-colors"
+                className="hover:bg-muted/20 transition-colors"
               >
                 <TableCell className="font-medium">{svc.name}</TableCell>
                 <TableCell className="font-mono text-xs">
@@ -58,13 +60,13 @@ const DependencyStep = ({
                 </TableCell>
                 <TableCell className="text-center">
                   {svc.installed ? (
-                    <span className="badge badge-success badge-sm gap-1">
+                    <Badge variant="outline" className="gap-1 border-emerald-600/30 text-emerald-600">
                       <Check size={12} /> Installed
-                    </span>
+                    </Badge>
                   ) : (
-                    <span className="badge badge-warning badge-sm gap-1">
+                    <Badge variant="outline" className="gap-1 border-amber-600/30 text-amber-600">
                       Missing
-                    </span>
+                    </Badge>
                   )}
                 </TableCell>
                 <TableCell className="text-right">

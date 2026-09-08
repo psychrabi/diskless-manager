@@ -1,15 +1,24 @@
 import { useClientActions } from "@/hooks/useClientActions";
-import { StatusBadge, LoadingSkeleton } from "@/components/ui";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { LoadingSkeleton } from "@/components/ui/LoadingSkeleton";
+import { ContextMenu } from "../ui/ContextMenu";
 import { Laptop, PlusCircle, Users, Wifi, WifiOff, History, Clock } from "lucide-react";
 import { memo, useCallback, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
 import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "../../store/useAppStore";
-import { Button, Card } from "@/components/ui";
-import { ContextMenu } from "../ui/ContextMenu";
 import ClientFormModal from "./ClientFormModal";
 import ClientTable from "./ClientTable";
 import ClientHero from "./ClientHero";
+import RemoteDesktopModal from "./RemoteDesktopModal";
+import PowerActionModal from "./PowerActionModal";
 import AuditLogViewer from "./AuditLogViewer";
 import ScheduledOperationsList from "./ScheduledOperationsList";
 
@@ -34,6 +43,8 @@ const ClientManagement = () => {
   );
 
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isRemoteModalOpen, setIsRemoteModalOpen] = useState(false);
+  const [powerAction, setPowerAction] = useState(null);
   const [isAuditLogViewerOpen, setIsAuditLogViewerOpen] = useState(false);
   const [isScheduledOperationsOpen, setIsScheduledOperationsOpen] = useState(false);
   const [client, setClient] = useState({
@@ -75,6 +86,8 @@ const ClientManagement = () => {
     closeContextMenu,
     setClient,
     setIsModalOpen,
+    () => setIsRemoteModalOpen(true),
+    setPowerAction,
   );
 
   const handleClientFormModalOpen = useCallback(() => {
@@ -123,109 +136,117 @@ const ClientManagement = () => {
 
   if (loading && clients.length === 0) {
     return (
-      <div className="space-y-6">
-        <Card
-          title="Client Management"
-          subtitle="Loading client information..."
-          icon={Laptop}
-          variant="elevated"
-        >
-          <LoadingSkeleton variant="table" count={5} />
+      <div className="flex flex-col gap-6">
+        <Card className="shadow-xl">
+          <CardHeader className="flex flex-row items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted">
+                <Laptop className="size-4 text-primary" />
+              </span>
+              <div className="flex min-w-0 flex-col gap-0.5">
+                <CardTitle>Client Management</CardTitle>
+                <CardDescription>Loading client information...</CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <LoadingSkeleton variant="table" count={5} />
+          </CardContent>
         </Card>
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-6">
       {/* Page Header with Stats */}
-      <Card
-        title="Client Management"
-        subtitle="Manage diskless boot clients and monitor their connection status"
-        icon={Laptop}
-        variant="elevated"
-        actions={
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              onClick={() => setIsScheduledOperationsOpen(true)}
-              icon={Clock}
-              size="sm"
-            >
-              Scheduled Ops
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => setIsAuditLogViewerOpen(true)}
-              icon={History}
-              size="sm"
-            >
-              Audit Logs
-            </Button>
-            <Button
-              variant="primary"
-              onClick={handleClientFormModalOpen}
-              icon={PlusCircle}
-              size="sm"
-            >
-              Add Client
-            </Button>
+      <Card className="shadow-xl">
+        <CardHeader className="flex flex-row items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted">
+              <Laptop className="size-4 text-primary" />
+            </span>
+            <div className="flex min-w-0 flex-col gap-0.5">
+              <CardTitle>Client Management</CardTitle>
+              <CardDescription>
+                Manage diskless boot clients and monitor their connection status
+              </CardDescription>
+            </div>
           </div>
-        }
-      >
+          <CardAction>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setIsScheduledOperationsOpen(true)}
+              >
+                <Clock data-icon="inline-start" />
+                Scheduled Ops
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setIsAuditLogViewerOpen(true)}
+              >
+                <History data-icon="inline-start" />
+                Audit Logs
+              </Button>
+              <Button
+                variant="default"
+                size="sm"
+                onClick={handleClientFormModalOpen}
+              >
+                <PlusCircle data-icon="inline-start" />
+                Add Client
+              </Button>
+            </div>
+          </CardAction>
+        </CardHeader>
         {clients.length > 0 && (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {/* Total Clients */}
-            <div className="card-professional bg-gradient-to-br from-primary/10 to-primary/5 border-primary/20">
-              <div className="card-body-professional py-4">
-                <div className="flex items-center justify-between">
+          <CardContent>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+              {/* Total Clients */}
+              <Card>
+                <CardContent className="flex items-center justify-between">
                   <div>
-                    <div className="text-heading-sm font-semibold text-base-content">
+                    <div className="text-2xl font-semibold text-card-foreground">
                       {clients.length}
                     </div>
-                    <div className="text-body-sm text-base-content/60">
+                    <div className="text-sm text-muted-foreground">
                       Total Clients
                     </div>
                   </div>
-                  <Users className="h-8 w-8 text-primary/60" />
-                </div>
-              </div>
-            </div>
+                  <Users className="size-8 text-primary/60" />
+                </CardContent>
+              </Card>
 
-            {/* Online Clients */}
-            <div className="card-professional bg-gradient-to-br from-success/10 to-success/5 border-success/20">
-              <div className="card-body-professional py-4">
-                <div className="flex items-center justify-between">
+              {/* Online Clients */}
+              <Card>
+                <CardContent className="flex items-center justify-between">
                   <div>
-                    <div className="text-heading-sm font-semibold text-base-content">
+                    <div className="text-2xl font-semibold text-card-foreground">
                       {onlineClients}
                     </div>
-                    <div className="text-body-sm text-base-content/60">
-                      Online
-                    </div>
+                    <div className="text-sm text-muted-foreground">Online</div>
                   </div>
-                  <Wifi className="h-8 w-8 text-success/60" />
-                </div>
-              </div>
-            </div>
+                  <Wifi className="size-8 text-primary" />
+                </CardContent>
+              </Card>
 
-            {/* Offline Clients */}
-            <div className="card-professional bg-gradient-to-br from-base-300/50 to-base-200/30 border-base-300">
-              <div className="card-body-professional py-4">
-                <div className="flex items-center justify-between">
+              {/* Offline Clients */}
+              <Card>
+                <CardContent className="flex items-center justify-between">
                   <div>
-                    <div className="text-heading-sm font-semibold text-base-content">
+                    <div className="text-2xl font-semibold text-card-foreground">
                       {offlineClients}
                     </div>
-                    <div className="text-body-sm text-base-content/60">
-                      Offline
-                    </div>
+                    <div className="text-sm text-muted-foreground">Offline</div>
                   </div>
-                  <WifiOff className="h-8 w-8 text-base-content/40" />
-                </div>
-              </div>
+                  <WifiOff className="size-8 text-muted-foreground/60" />
+                </CardContent>
+              </Card>
             </div>
-          </div>
+          </CardContent>
         )}
       </Card>
 
@@ -252,6 +273,19 @@ const ClientManagement = () => {
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         refresh={refreshData}
+      />
+      <RemoteDesktopModal
+        client={client}
+        isOpen={isRemoteModalOpen}
+        onClose={() => setIsRemoteModalOpen(false)}
+        onSuccess={refreshData}
+      />
+      <PowerActionModal
+        client={client}
+        type={powerAction}
+        isOpen={!!powerAction}
+        onClose={() => setPowerAction(null)}
+        onSuccess={refreshData}
       />
       <AuditLogViewer
         isOpen={isAuditLogViewerOpen}

@@ -4,9 +4,20 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
+use std::sync::{Mutex, OnceLock};
 
 use crate::core::service::ServiceManager;
 use crate::state::AppState;
+
+/// Snapshot of cumulative ARC counters used to derive per-interval hit rates.
+struct ArcCounterSample {
+    hits: u64,
+    misses: u64,
+    demand_data_hits: u64,
+    demand_data_misses: u64,
+}
+
+static LAST_ARC_SAMPLE: OnceLock<Mutex<Option<ArcCounterSample>>> = OnceLock::new();
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ClearCacheRequest {}
@@ -408,13 +419,41 @@ pub async fn get_ram_usage(
 pub struct ArcStatResponse {
     pub size: u64,
     pub max_size: u64,
+    pub used_percent: f64,
+    pub hits: u64,
+    pub misses: u64,
     pub hit_ratio: f64,
+    pub demand_data_hit_ratio: f64,
+    pub l2_size: u64,
+    pub l2_hits: u64,
+    pub l2_misses: u64,
+    pub l2_hit_ratio: f64,
+    pub interval_hit_ratio: f64,
+    pub interval_demand_hit_ratio: f64,
+    pub interval_warming_up: bool,
 }
 
 pub async fn get_zfs_arcstat(
     State(_state): State<AppState>,
 ) -> Result<Json<ArcStatResponse>, StatusCode> {
     use std::fs;
+
+    let empty = || ArcStatResponse {
+        size: 0,
+        max_size: 0,
+        used_percent: 0.0,
+        hits: 0,
+        misses: 0,
+        hit_ratio: 0.0,
+        demand_data_hit_ratio: 0.0,
+        l2_size: 0,
+        l2_hits: 0,
+        l2_misses: 0,
+        l2_hit_ratio: 0.0,
+        interval_hit_ratio: 0.0,
+        interval_demand_hit_ratio: 0.0,
+        interval_warming_up: true,
+    };
 
     // Try to get ARC stats from /proc/spl/kstat/zfs/arcstats
     match fs::read_to_string("/proc/spl/kstat/zfs/arcstats") {
@@ -423,6 +462,11 @@ pub async fn get_zfs_arcstat(
             let mut max_size = 0u64;
             let mut hits = 0u64;
             let mut misses = 0u64;
+            let mut demand_data_hits = 0u64;
+            let mut demand_data_misses = 0u64;
+            let mut l2_size = 0u64;
+            let mut l2_hits = 0u64;
+            let mut l2_misses = 0u64;
 
             for line in content.lines() {
                 let parts: Vec<&str> = line.split_whitespace().collect();
@@ -432,30 +476,77 @@ pub async fn get_zfs_arcstat(
                         "c_max" => max_size = parts[2].parse().unwrap_or(0),
                         "hits" => hits = parts[2].parse().unwrap_or(0),
                         "misses" => misses = parts[2].parse().unwrap_or(0),
+                        "demand_data_hits" => demand_data_hits = parts[2].parse().unwrap_or(0),
+                        "demand_data_misses" => demand_data_misses = parts[2].parse().unwrap_or(0),
+                        "l2_size" => l2_size = parts[2].parse().unwrap_or(0),
+                        "l2_hits" => l2_hits = parts[2].parse().unwrap_or(0),
+                        "l2_misses" => l2_misses = parts[2].parse().unwrap_or(0),
                         _ => {}
                     }
                 }
             }
 
-            let hit_ratio = if hits + misses > 0 {
-                (hits as f64 / (hits + misses) as f64) * 100.0
+            let ratio = |hits: u64, misses: u64| -> f64 {
+                if hits + misses > 0 {
+                    (hits as f64 / (hits + misses) as f64) * 100.0
+                } else {
+                    0.0
+                }
+            };
+
+            let used_percent = if max_size > 0 {
+                (size as f64 / max_size as f64) * 100.0
             } else {
                 0.0
             };
 
+            let interval = {
+                let lock = LAST_ARC_SAMPLE.get_or_init(|| Mutex::new(None));
+                let mut sample = lock.lock().unwrap_or_else(|e| e.into_inner());
+                let current = ArcCounterSample {
+                    hits,
+                    misses,
+                    demand_data_hits,
+                    demand_data_misses,
+                };
+                let interval = sample.as_ref().map(|prev| {
+                    (
+                        ratio(
+                            hits.saturating_sub(prev.hits),
+                            misses.saturating_sub(prev.misses),
+                        ),
+                        ratio(
+                            demand_data_hits.saturating_sub(prev.demand_data_hits),
+                            demand_data_misses.saturating_sub(prev.demand_data_misses),
+                        ),
+                    )
+                });
+                *sample = Some(current);
+                interval
+            };
+            let (interval_hit_ratio, interval_demand_hit_ratio) = interval.unwrap_or((0.0, 0.0));
+            let interval_warming_up = interval.is_none();
+
             Ok(Json(ArcStatResponse {
                 size,
                 max_size,
-                hit_ratio,
+                used_percent,
+                hits,
+                misses,
+                hit_ratio: ratio(hits, misses),
+                demand_data_hit_ratio: ratio(demand_data_hits, demand_data_misses),
+                l2_size,
+                l2_hits,
+                l2_misses,
+                l2_hit_ratio: ratio(l2_hits, l2_misses),
+                interval_hit_ratio,
+                interval_demand_hit_ratio,
+                interval_warming_up,
             }))
         }
         Err(_) => {
             // Return default values if ARC stats not available
-            Ok(Json(ArcStatResponse {
-                size: 0,
-                max_size: 0,
-                hit_ratio: 0.0,
-            }))
+            Ok(Json(empty()))
         }
     }
 }

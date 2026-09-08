@@ -1,3 +1,5 @@
+import { Label } from "@/components/ui/label";
+import { Input as TextInput } from "@/components/ui/input";
 import { useSettings } from "@/hooks/useSettings";
 import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
@@ -35,16 +37,16 @@ export default function LicenseActivation() {
   return (
     <Card title="License Activation" icon={File}>
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-3">
-        <label className="block">
-          <span className="label-text">License</span>
-          <input
+        <Label className="block">
+          <span className="text-sm font-medium">License</span>
+          <TextInput
             type="text"
             {...register("license_key")}
             placeholder="Enter license key"
-            className="input input-bordered w-full mt-1"
+            className="w-full mt-1"
             readOnly={!!licenseInfo?.license_key} // make read-only if already activated
           />
-        </label>
+        </Label>
 
         <div className="flex items-center gap-2">
           <Button

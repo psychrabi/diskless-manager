@@ -4,7 +4,23 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useToastStore } from "@/store/useToastStore";
 import { remoteDesktopClient } from "@/api/modules/control";
-import { Button } from "@/components/ui";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Field,
+  FieldContent,
+  FieldError,
+  FieldLabel,
+} from "@/components/ui/field";
+import { Spinner } from "@/components/ui/spinner";
 
 const remoteDesktopSchema = z.object({
   username: z.string().min(1, "Username is required"),
@@ -62,51 +78,49 @@ const RemoteDesktopModal = ({ client, isOpen, onClose, onSuccess }) => {
     onClose();
   };
 
-  if (!isOpen) return null;
-
   return (
-    <div className="modal modal-open">
-      <div className="modal-box w-full max-w-md">
-        <h3 className="font-bold text-lg mb-4">Remote Desktop Credentials</h3>
+    <Dialog
+      open={isOpen}
+      onOpenChange={(open) => {
+        if (!open) handleClose();
+      }}
+    >
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Remote Desktop Credentials</DialogTitle>
+          <DialogDescription>Client: {client?.name}</DialogDescription>
+        </DialogHeader>
 
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-          <div>
-            <label className="label">
-              <span className="label-text">Client: {client?.name}</span>
-            </label>
-          </div>
+        <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
+          <Field>
+            <FieldLabel htmlFor="rd-username">Username</FieldLabel>
+            <FieldContent>
+              <Input
+                id="rd-username"
+                type="text"
+                placeholder="Administrator"
+                aria-invalid={!!errors.username}
+                {...register("username")}
+              />
+              <FieldError>{errors.username?.message}</FieldError>
+            </FieldContent>
+          </Field>
 
-          <div>
-            <label className="label">
-              <span className="label-text">Username</span>
-            </label>
-            <input
-              type="text"
-              placeholder="Administrator"
-              className="input input-bordered w-full"
-              {...register("username")}
-            />
-            {errors.username && (
-              <span className="text-error text-sm">{errors.username.message}</span>
-            )}
-          </div>
+          <Field>
+            <FieldLabel htmlFor="rd-password">Password</FieldLabel>
+            <FieldContent>
+              <Input
+                id="rd-password"
+                type="password"
+                placeholder="Enter password"
+                aria-invalid={!!errors.password}
+                {...register("password")}
+              />
+              <FieldError>{errors.password?.message}</FieldError>
+            </FieldContent>
+          </Field>
 
-          <div>
-            <label className="label">
-              <span className="label-text">Password</span>
-            </label>
-            <input
-              type="password"
-              placeholder="Enter password"
-              className="input input-bordered w-full"
-              {...register("password")}
-            />
-            {errors.password && (
-              <span className="text-error text-sm">{errors.password.message}</span>
-            )}
-          </div>
-
-          <div className="modal-action">
+          <DialogFooter className="pt-2">
             <Button
               type="button"
               variant="ghost"
@@ -115,19 +129,14 @@ const RemoteDesktopModal = ({ client, isOpen, onClose, onSuccess }) => {
             >
               Cancel
             </Button>
-            <Button
-              type="submit"
-              variant="primary"
-              loading={isLoading}
-            >
+            <Button type="submit" disabled={isLoading}>
+              {isLoading && <Spinner data-icon="inline-start" />}
               {isLoading ? "Connecting…" : "Connect"}
             </Button>
-          </div>
+          </DialogFooter>
         </form>
-      </div>
-
-      <div className="modal-backdrop" onClick={handleClose} />
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 };
 

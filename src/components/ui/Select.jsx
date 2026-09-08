@@ -1,8 +1,11 @@
+import { useId } from "react";
 import { cn } from "@/lib/utils";
+import { NativeSelect } from "@/components/ui/native-select";
+import { Label } from "@/components/ui/label";
 
 export const Select = ({
   label,
-  id,
+  id: providedId,
   register,
   value,
   onChange,
@@ -12,40 +15,46 @@ export const Select = ({
   disabled = false,
   error,
   helperText,
+  subtitle,
+  ...props
 }) => {
+  const generatedId = useId();
+  const id = providedId || generatedId;
+  const description = helperText || subtitle;
+  const errorMessage = typeof error === "string" ? error : error?.message || (error ? "This field is required" : undefined);
   const { onChange: regOnChange, ...regRest } = register || {};
 
   return (
-    <fieldset className={cn("fieldset", className)}>
-      {label && <legend className="fieldset-legend">{label}</legend>}
-      <select
+    <div className={cn("flex flex-col gap-1.5", className)}>
+      {label && <Label htmlFor={id}>{label}{required && <span className="text-destructive">*</span>}</Label>}
+      <NativeSelect
         id={id}
         {...regRest}
-        defaultValue={value}
+        {...props}
+        value={value}
         onChange={(e) => {
           if (regOnChange) regOnChange(e);
           if (onChange) onChange(e);
         }}
-        className={`select w-full ${error ? "select-error" : ""}`}
         required={required}
         disabled={disabled}
         aria-invalid={!!error}
         aria-describedby={
-          error ? `${id}-error` : helperText ? `${id}-helper` : undefined
+          error ? `${id}-error` : description ? `${id}-helper` : undefined
         }
       >
         {children}
-      </select>
+      </NativeSelect>
       {error && (
-        <span id={`${id}-error`} role="alert" className="form-error">
-          {error}
+        <span id={`${id}-error`} role="alert" className="text-sm text-destructive">
+          {errorMessage}
         </span>
       )}
-      {helperText && !error && (
-        <span id={`${id}-helper`} className="form-helper">
-          {helperText}
+      {description && !error && (
+        <span id={`${id}-helper`} className="text-sm text-muted-foreground">
+          {description}
         </span>
       )}
-    </fieldset>
+    </div>
   );
 };

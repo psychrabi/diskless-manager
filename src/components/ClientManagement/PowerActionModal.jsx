@@ -1,8 +1,20 @@
 import { useState } from "react";
 import { Power, RefreshCw } from "lucide-react";
 import { useToastStore } from "@/store/useToastStore";
-import { Button, Modal } from "@/components/ui";
 import { shutdownClient, rebootClient } from "@/api/modules/control";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Spinner } from "@/components/ui/spinner";
 
 const CONFIG = {
   shutdown: {
@@ -70,112 +82,105 @@ const PowerActionModal = ({ client, isOpen, onClose, onSuccess, type = "shutdown
     onClose();
   };
 
+  const ModeIcon = cfg.icon;
+
   return (
-    <Modal
-      isOpen={isOpen}
-      onClose={handleClose}
-      title={cfg.title}
-      size="lg"
+    <Dialog
+      open={isOpen}
+      onOpenChange={(open) => {
+        if (!open) handleClose();
+      }}
     >
-      <form onSubmit={handleSubmit} className="space-y-6">
-        <div className="bg-base-200/30 p-4 rounded-lg">
-          <p className="text-sm text-base-content/70">
-            {cfg.verbing}: <span className="font-semibold">{client?.name}</span>
-          </p>
-        </div>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>{cfg.title}</DialogTitle>
+        </DialogHeader>
 
-        <div className="space-y-3">
-          <label className="label">
-            <span className="label-text font-medium">{cfg.noun} Mode</span>
-          </label>
-          <div className="space-y-2">
-            <label className="label cursor-pointer justify-start gap-3">
-              <input
-                type="radio"
-                name="mode"
-                value="graceful"
-                checked={mode === "graceful"}
-                onChange={(e) => setMode(e.target.value)}
-                className="radio radio-primary"
-              />
-              <div className="flex flex-col">
-                <span className="label-text font-medium">Graceful {cfg.noun}</span>
-                <span className="label-text-alt text-xs text-base-content/60">
-                  Allows running processes to terminate cleanly
-                </span>
-              </div>
-            </label>
-            <label className="label cursor-pointer justify-start gap-3">
-              <input
-                type="radio"
-                name="mode"
-                value="force"
-                checked={mode === "force"}
-                onChange={(e) => setMode(e.target.value)}
-                className="radio radio-primary"
-              />
-              <div className="flex flex-col">
-                <span className="label-text font-medium">Force {cfg.noun}</span>
-                <span className="label-text-alt text-xs text-base-content/60">
-                  Immediate {cfg.verb} without waiting for processes
-                </span>
-              </div>
-            </label>
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <div className="rounded-lg bg-muted p-4">
+            <p className="text-sm text-muted-foreground">
+              {cfg.verbing}: <span className="font-semibold text-foreground">{client?.name}</span>
+            </p>
           </div>
-        </div>
 
-        <div className="space-y-3">
-          <label className="label cursor-pointer justify-start gap-3">
-            <input
-              type="checkbox"
-              checked={useScheduled}
-              onChange={(e) => setUseScheduled(e.target.checked)}
-              className="checkbox checkbox-primary"
-            />
-            <span className="label-text font-medium">Schedule {cfg.noun}</span>
-          </label>
+          <div className="flex flex-col gap-2">
+            <Label className="font-medium">{cfg.noun} Mode</Label>
+            <RadioGroup value={mode} onValueChange={(value) => setMode(value)} className="gap-3">
+              <Label className="flex cursor-pointer items-start gap-3">
+                <RadioGroupItem value="graceful" />
+                <div className="flex flex-col">
+                  <span className="font-medium">Graceful {cfg.noun}</span>
+                  <span className="text-xs text-muted-foreground">
+                    Allows running processes to terminate cleanly
+                  </span>
+                </div>
+              </Label>
+              <Label className="flex cursor-pointer items-start gap-3">
+                <RadioGroupItem value="force" />
+                <div className="flex flex-col">
+                  <span className="font-medium">Force {cfg.noun}</span>
+                  <span className="text-xs text-muted-foreground">
+                    Immediate {cfg.verb} without waiting for processes
+                  </span>
+                </div>
+              </Label>
+            </RadioGroup>
+          </div>
 
-          {useScheduled && (
-            <div className="ml-6 space-y-2">
-              <label className="label">
-                <span className="label-text text-sm">Delay (minutes)</span>
-              </label>
-              <input
-                type="number"
-                min="1"
-                max="1440"
-                value={delayMinutes}
-                onChange={(e) => setDelayMinutes(Math.max(0, parseInt(e.target.value) || 0))}
-                className="input input-bordered input-sm w-full"
-                placeholder="Enter delay in minutes"
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-3">
+              <Checkbox
+                id="schedule-action"
+                checked={useScheduled}
+                onCheckedChange={(checked) => setUseScheduled(Boolean(checked))}
               />
-              <p className="text-xs text-base-content/60">
-                Client will {cfg.verb} after {delayMinutes} minute{delayMinutes !== 1 ? "s" : ""}
-              </p>
+              <Label htmlFor="schedule-action" className="cursor-pointer font-medium">
+                Schedule {cfg.noun}
+              </Label>
             </div>
-          )}
-        </div>
 
-        <div className="flex justify-end gap-3 pt-4 border-t border-base-200/30">
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={handleClose}
-            disabled={isSubmitting}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="submit"
-            variant="primary"
-            icon={cfg.icon}
-            disabled={isSubmitting}
-          >
-            {isSubmitting ? "Sending..." : cfg.label}
-          </Button>
-        </div>
-      </form>
-    </Modal>
+            {useScheduled && (
+              <div className="ml-6 flex flex-col gap-2">
+                <Label htmlFor="delay-minutes" className="text-sm">
+                  Delay (minutes)
+                </Label>
+                <Input
+                  id="delay-minutes"
+                  type="number"
+                  min="1"
+                  max="1440"
+                  value={delayMinutes}
+                  onChange={(e) => setDelayMinutes(Math.max(0, parseInt(e.target.value) || 0))}
+                  placeholder="Enter delay in minutes"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Client will {cfg.verb} after {delayMinutes} minute{delayMinutes !== 1 ? "s" : ""}
+                </p>
+              </div>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={handleClose}
+              disabled={isSubmitting}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" disabled={isSubmitting}>
+              {isSubmitting ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <ModeIcon data-icon="inline-start" />
+              )}
+              {isSubmitting ? "Sending..." : cfg.label}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 };
 

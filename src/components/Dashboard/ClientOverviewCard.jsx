@@ -2,7 +2,9 @@ import { useToastStore } from "@/store/useToastStore";
 import { getClientOverview } from "@/api/modules/dashboard";
 import { Users } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Card, LoadingSkeleton } from "@/components/ui";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useMetrics } from "@/contexts/useMetrics";
 
 const ClientOverviewCard = () => {
@@ -42,31 +44,43 @@ const ClientOverviewCard = () => {
   }
 
   return (
-    <Card title="Client Overview" icon={Users}>
-      {loading || !liveOverview ? (
-        <div className="space-y-3" aria-hidden="true">
-          <LoadingSkeleton variant="text" width="2/3" />
-          <LoadingSkeleton variant="text" width="1/2" />
-          <LoadingSkeleton variant="text" width="3/5" />
-        </div>
-      ) : liveOverview ? (
-        <div className="space-y-2">
-          <div className="flex justify-between items-center">
-            <span className="font-semibold">Total Clients:</span>
-            <span className="badge badge-ghost rounded-full font-mono tabular-nums">{liveOverview.total}</span>
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Users className="size-4" />
+          Client Overview
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {loading || !liveOverview ? (
+          <div className="flex flex-col gap-3" aria-hidden="true">
+            <Skeleton className="h-4 w-2/3" />
+            <Skeleton className="h-4 w-1/2" />
+            <Skeleton className="h-4 w-3/5" />
           </div>
-          <div className="flex justify-between items-center">
-            <span className="font-semibold">Online Clients:</span>
-            <span className="badge badge-success rounded-full font-mono tabular-nums">{liveOverview.online}</span>
+        ) : (
+          <div className="flex flex-col gap-2">
+            <div className="flex justify-between items-center">
+              <span className="font-semibold">Total Clients:</span>
+              <Badge variant="secondary" className="font-mono tabular-nums">
+                {liveOverview.total}
+              </Badge>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="font-semibold">Online Clients:</span>
+              <Badge variant="outline" className="font-mono tabular-nums">
+                {liveOverview.online}
+              </Badge>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="font-semibold">Offline Clients:</span>
+              <Badge variant="destructive" className="font-mono tabular-nums">
+                {liveOverview.offline}
+              </Badge>
+            </div>
           </div>
-          <div className="flex justify-between items-center">
-            <span className="font-semibold">Offline Clients:</span>
-            <span className="badge badge-error rounded-full font-mono tabular-nums">{liveOverview.offline}</span>
-          </div>
-        </div>
-      ) : (
-        <div className="text-error text-center py-4">Failed to load client overview.</div>
-      )}
+        )}
+      </CardContent>
     </Card>
   );
 };

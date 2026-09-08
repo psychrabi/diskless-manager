@@ -1,4 +1,4 @@
-import { Button, Card, Input } from "@/components/ui";
+import { SignupForm } from "@/components/signup-form";
 import { useAuth } from "@/contexts/auth";
 import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -77,53 +77,13 @@ const InitialSetup = () => {
   };
 
   return (
-    <Card className="w-[24rem]">
-      <div className="text-center mb-6">
-        <h1 className="text-2xl font-bold text-primary">Diskless Manager</h1>
-        <p className="text-base-content/70 mt-2">Initial Admin Setup</p>
-        <p className="text-sm text-base-content/60 mt-1">
-          Create your first admin account
-        </p>
-      </div>
-
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-        <Input
-          id="username"
-          type="text"
-          label="Username"
-          register={register("username")}
-          placeholder="Enter admin username"
-          className="w-full"
-          error={errors.username?.message}
-        />
-        <Input
-          id="password"
-          type="password"
-          label="Password"
-          register={register("password")}
-          placeholder="Enter password"
-          className="w-full"
-          error={errors.password?.message}
-        />
-        <Input
-          id="confirmPassword"
-          type="password"
-          label="Confirm Password"
-          register={register("confirmPassword")}
-          placeholder="Confirm password"
-          className="w-full"
-          error={errors.confirmPassword?.message}
-        />
-        <Button
-          type="submit"
-          disabled={isSubmitting}
-          className="w-full"
-          variant="primary"
-        >
-          {isSubmitting ? "Setting up..." : "Create Admin Account"}
-        </Button>
-      </form>
-    </Card>
+    <SignupForm
+      onSubmit={handleSubmit(onSubmit)}
+      register={register}
+      errors={errors}
+      isSubmitting={isSubmitting}
+      onLogin={() => navigate("/login")}
+    />
   );
 };
 

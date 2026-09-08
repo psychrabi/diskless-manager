@@ -1,3 +1,4 @@
+import { Textarea } from "@/components/ui/textarea";
 import { useServiceManager } from "@/hooks/useServiceManager";
 import { Code } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -49,8 +50,9 @@ const BootScriptStep = ({ onSubmit, isSubmitting }) => {
           menu and how clients load their OS." icon={Code} className="border-t-4 border-primary overflow-hidden"
     >
       <div className="space-y-4">
-        <textarea
-          className="w-full h-130 p-4 font-mono text-sm bg-base-300 rounded-lg outline-none focus:ring-2 focus:ring-primary/50 transition-all resize-none"
+        <Textarea
+          aria-label="iPXE boot script"
+          className="w-full h-130 p-4 font-mono text-sm bg-muted rounded-lg outline-none focus:ring-2 focus:ring-primary/50 transition-all resize-none"
           value={script}
           onChange={(e) => setScript(e.target.value)}
           spellCheck={false}

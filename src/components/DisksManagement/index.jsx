@@ -1,3 +1,4 @@
+import { Card as ShadcnCard, CardContent, CardTitle } from "@/components/ui/card";
 import { useAppStore } from "@/store/useAppStore";
 import { HardDrive, PlusCircle } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -41,7 +42,7 @@ export default function DisksManagement() {
       title="Disk Management"
       subtitle="Manage diskless boot server disks"
       icon={HardDrive}
-      className="bg-base-300"
+      className="bg-muted"
       actions={
         datasets.length > 0 && (
           <Button
@@ -56,13 +57,13 @@ export default function DisksManagement() {
     >
       <div className="min-h-[50vh]">
         {datasets.length === 0 ? (
-          <div className="card bg-base-100 shadow-xl border border-base-200/50">
-            <div className="card-body items-center text-center p-12">
-              <div className="w-20 h-20 bg-base-200 rounded-full flex items-center justify-center text-4xl mb-4">
+          <ShadcnCard className="shadow-sm border border-border/50">
+            <CardContent className="flex flex-col gap-4 items-center text-center p-12">
+              <div className="w-20 h-20 bg-muted rounded-full flex items-center justify-center text-4xl mb-4">
                 <HardDrive />
               </div>
-              <h2 className="card-title text-2xl mb-2">No Disks Available</h2>
-              <p className="text-base-content/60 max-w-md mb-6">
+              <CardTitle className="text-2xl mb-2">No Disks Available</CardTitle>
+              <p className="text-muted-foreground max-w-md mb-6">
                 Create your first Boot image for clients to boot from.
               </p>
               <Button
@@ -71,8 +72,8 @@ export default function DisksManagement() {
               >
                 Add Disk
               </Button>
-            </div>
-          </div>
+            </CardContent>
+          </ShadcnCard>
         ) : (
           <DiskTable datasets={datasets} onRefresh={refresh} />
         )}

@@ -1,11 +1,43 @@
 import { useCallback, useEffect, useState } from "react";
 import { AlertCircle, Clock, Trash2 } from "lucide-react";
 import { useAppStore } from "../../store/useAppStore";
-import { Button } from "@/components/ui/Button";
-import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/Table";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from "@/components/ui/table";
+import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
+import { Spinner } from "@/components/ui/spinner";
 import { Modal } from "@/components/ui/Modal";
 import { cancelScheduledOperation, getScheduledOperations } from "@/api/modules/control";
 import { useToastStore } from "@/store/useToastStore";
+
+const getOperationBadgeVariant = (operationType) => {
+  switch (operationType?.toLowerCase()) {
+    case "shutdown":
+      return "destructive";
+    case "reboot":
+      return "outline";
+    default:
+      return "secondary";
+  }
+};
+
+const getModeBadgeVariant = (mode) => {
+  switch (mode?.toLowerCase()) {
+    case "graceful":
+      return "outline";
+    case "force":
+      return "destructive";
+    default:
+      return "secondary";
+  }
+};
 
 const ScheduledOperationsList = ({ isOpen, onClose }) => {
   const clients = useAppStore((state) => state.clients);
@@ -69,30 +101,6 @@ const ScheduledOperationsList = ({ isOpen, onClose }) => {
     }
   };
 
-  // Get operation type badge color
-  const getOperationBadgeClass = (operationType) => {
-    switch (operationType?.toLowerCase()) {
-      case "shutdown":
-        return "badge-error";
-      case "reboot":
-        return "badge-warning";
-      default:
-        return "badge-neutral";
-    }
-  };
-
-  // Get operation mode badge color
-  const getModeBadgeClass = (mode) => {
-    switch (mode?.toLowerCase()) {
-      case "graceful":
-        return "badge-info";
-      case "force":
-        return "badge-error";
-      default:
-        return "badge-neutral";
-    }
-  };
-
   // Get client name by ID
   const getClientName = (clientId) => {
     const client = clients.find((c) => c.id === clientId);
@@ -107,22 +115,21 @@ const ScheduledOperationsList = ({ isOpen, onClose }) => {
       size="4xl"
       className="max-h-[90vh] overflow-y-auto"
     >
-      <div className="space-y-4">
+      <div className="flex flex-col gap-4">
         {/* Info Banner */}
-        <div className="bg-info/10 border border-info/30 p-4 rounded-lg flex gap-3">
-          <AlertCircle className="h-5 w-5 text-info shrink-0 mt-0.5" />
-          <div className="text-sm text-info-content">
-            <p className="font-semibold">Scheduled Operations</p>
-            <p className="text-xs mt-1">
-              View and manage operations scheduled to run on clients. Operations will execute at their scheduled time.
-            </p>
-          </div>
-        </div>
+        <Alert>
+          <AlertCircle />
+          <AlertTitle>Scheduled Operations</AlertTitle>
+          <AlertDescription>
+            View and manage operations scheduled to run on clients. Operations
+            will execute at their scheduled time.
+          </AlertDescription>
+        </Alert>
 
         {/* Results Section */}
-        <div className="space-y-3">
+        <div className="flex flex-col gap-3">
           <div className="flex items-center justify-between">
-            <p className="text-sm text-base-content/70">
+            <p className="text-sm text-muted-foreground">
               {loading ? "Loading\u2026" : `${operations.length} scheduled operation${operations.length !== 1 ? "s" : ""}`}
             </p>
           </div>
@@ -130,20 +137,20 @@ const ScheduledOperationsList = ({ isOpen, onClose }) => {
           {/* Table */}
           {loading ? (
             <div className="flex justify-center py-8">
-              <span className="loading loading-spinner loading-lg"></span>
+              <Spinner className="size-8" />
             </div>
           ) : operations.length === 0 ? (
-            <div className="text-center py-12 text-base-content/60">
-              <Clock className="h-12 w-12 mx-auto mb-3 opacity-30" />
+            <div className="py-12 text-center text-muted-foreground/60">
+              <Clock className="mx-auto mb-3 size-12 opacity-30" />
               <p className="font-medium">No Scheduled Operations</p>
-              <p className="text-xs mt-1">
+              <p className="mt-1 text-xs">
                 Scheduled operations will appear here when you schedule shutdown or reboot operations with a delay.
               </p>
             </div>
           ) : (
-            <Table className="border border-base-200 rounded-lg overflow-hidden">
+            <Table className="overflow-hidden rounded-lg border border-border">
               <TableHeader>
-                <TableRow className="bg-base-200">
+                <TableRow className="bg-muted/50">
                   <TableHead>Client</TableHead>
                   <TableHead>Operation</TableHead>
                   <TableHead>Mode</TableHead>
@@ -154,37 +161,36 @@ const ScheduledOperationsList = ({ isOpen, onClose }) => {
               </TableHeader>
               <TableBody>
                 {operations.map((operation) => (
-                  <TableRow key={operation.id} className="hover:bg-base-200/50">
+                  <TableRow key={operation.id} className="hover:bg-muted/50">
                     <TableCell className="font-semibold">
                       {getClientName(operation.client_id)}
                     </TableCell>
                     <TableCell>
-                      <span className={`badge ${getOperationBadgeClass(operation.operation_type)}`}>
+                      <Badge variant={getOperationBadgeVariant(operation.operation_type)}>
                         {operation.operation_type}
-                      </span>
+                      </Badge>
                     </TableCell>
                     <TableCell>
-                      <span className={`badge ${getModeBadgeClass(operation.operation_mode)}`}>
+                      <Badge variant={getModeBadgeVariant(operation.operation_mode)}>
                         {operation.operation_mode}
-                      </span>
+                      </Badge>
                     </TableCell>
                     <TableCell className="text-xs font-mono">
                       {formatTimestamp(operation.scheduled_time)}
                     </TableCell>
                     <TableCell>
-                      <span className="badge badge-outline">
+                      <Badge variant="outline">
                         {operation.result ? operation.result : "Pending"}
-                      </span>
+                      </Badge>
                     </TableCell>
                     <TableCell className="text-right">
                       <Button
-                        variant="ghost"
+                        variant="outline"
                         size="sm"
-                        icon={Trash2}
                         onClick={() => handleCancelOperation(operation.id)}
                         disabled={cancellingId === operation.id}
-                        className="text-error hover:text-error"
                       >
+                        <Trash2 data-icon="inline-start" />
                         {cancellingId === operation.id ? "Cancelling..." : "Cancel"}
                       </Button>
                     </TableCell>
