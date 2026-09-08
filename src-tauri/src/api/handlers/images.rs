@@ -225,6 +225,24 @@ pub async fn import_image(
     })
 }
 
+/// Scan the ZFS pool for existing image ZVOLs and snapshots and register any
+/// that are not already tracked in the database.
+pub async fn import_existing_images(
+    State(state): State<AppState>,
+) -> Result<Json<crate::application::image_service::ImportScanResult>, StatusCode> {
+    let service = image_service(&state);
+
+    service
+        .import_existing_images()
+        .await
+        .map(Json)
+        .map_err(|error| {
+            log::error!("Failed to scan for existing images: {}", error);
+
+            StatusCode::INTERNAL_SERVER_ERROR
+        })
+}
+
 #[derive(Debug, Deserialize)]
 pub struct CloneImageRequest {
     pub snapshot_name: String,

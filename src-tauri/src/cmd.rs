@@ -171,6 +171,40 @@ where
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+/// Read a configuration file that may be root-only readable (Fedora/RHEL keep
+/// `/etc/dhcp` mode-0700). Direct reads succeed for the world-readable files
+/// used on Debian; on a permission error the file is read with `sudo -n cat`,
+/// which the setup grants in the diskless-manager sudoers rule. A missing file
+/// yields `Ok(None)` so callers can treat it like an absent optional config.
+pub fn read_file_with_sudo(path: &std::path::Path) -> Result<Option<String>, AppError> {
+    use std::ffi::OsStr;
+    match std::fs::read_to_string(path) {
+        Ok(content) => Ok(Some(content)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            let args = [
+                OsStr::new("/usr/bin/cat"),
+                OsStr::new("--"),
+                path.as_os_str(),
+            ];
+            match exec_sudo_cmd(args.iter()) {
+                Ok(output) => Ok(Some(String::from_utf8_lossy(&output.stdout).to_string())),
+                Err(CommandError::Failure { stderr, .. })
+                    if stderr.to_lowercase().contains("no such file") =>
+                {
+                    Ok(None)
+                }
+                Err(error) => Err(AppError::Command(format!(
+                    "Failed to read {} via sudo: {}",
+                    path.display(),
+                    error
+                ))),
+            }
+        }
+        Err(error) => Err(AppError::Io(error)),
+    }
+}
+
 pub fn run_command_output_no_sudo<II>(args: II) -> Result<String, AppError>
 where
     II: IntoIterator,
@@ -311,13 +345,14 @@ pub fn read_logs() -> String {
 
 /// Read logs for a specific systemd unit
 pub fn read_service_logs(unit: &str, lines: u32) -> Result<String, AppError> {
+    let distro = crate::platform::detect();
     let service = match unit {
-        "http" => "apache2",
-        "samba" => "smbd",
-        "tftp" => "tftpd-hpa",
-        "dhcp" => "isc-dhcp-server",
-        "nfs" => "nfs-kernel-server",
-        "iscsi" => "rtslib-fb-targetctl",
+        "http" => distro.http_service(),
+        "samba" => distro.samba_services()[0],
+        "tftp" => distro.tftp_service(),
+        "dhcp" => distro.dhcp_service(),
+        "nfs" => distro.nfs_service(),
+        "iscsi" => distro.iscsi_service(),
         _ => "/etc/default/config",
     };
     let output = std::process::Command::new("journalctl")

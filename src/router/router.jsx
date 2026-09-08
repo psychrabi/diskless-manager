@@ -19,6 +19,9 @@ const ApplicationSettings = lazy(() =>
 const Logs = lazy(() => import("@/components/Logs"));
 const SshTester = lazy(() => import("@/components/SshTester/SshTester"));
 const Login = lazy(() => import("@/components/Authentication/Login"));
+const InitialSetup = lazy(() =>
+  import("@/components/Authentication/InitialSetup")
+);
 const ProtectedRoute = lazy(() =>
   import("@/components/Authentication/ProtectedRoute")
 );
@@ -33,6 +36,14 @@ export const router = createHashRouter([
         element: (
           <PublicRoute>
             <Login />
+          </PublicRoute>
+        ),
+      },
+      {
+        path: "/initial-setup",
+        element: (
+          <PublicRoute>
+            <InitialSetup />
           </PublicRoute>
         ),
       },

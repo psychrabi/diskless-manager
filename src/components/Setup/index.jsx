@@ -34,6 +34,8 @@ const Setup = () => {
     handleSambaSubmit,
     handleAuthorized,
     handleBootScriptSubmit,
+    privilegedAccessGranted,
+    authChecking,
   } = wizard;
 
   return (
@@ -82,7 +84,13 @@ const Setup = () => {
       </div>
 
       <div className="min-h-[50vh]">
-        {activeStep === 1 && <AuthorizeStep onAuthorized={handleAuthorized} />}
+        {activeStep === 1 && (
+          <AuthorizeStep
+            onAuthorized={handleAuthorized}
+            authorized={privilegedAccessGranted}
+            checking={authChecking}
+          />
+        )}
 
         {activeStep === 2 && (
           <DependencyStep

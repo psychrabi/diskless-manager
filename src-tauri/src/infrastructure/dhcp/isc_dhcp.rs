@@ -145,7 +145,7 @@ impl BootReservationPublisher for IscDhcpPublisher {
             if let Err(error) = crate::infrastructure::command::run_command_async([
                 "systemctl",
                 "restart",
-                "isc-dhcp-server.service",
+                crate::platform::detect().dhcp_service(),
             ])
             .await
             {
@@ -186,7 +186,7 @@ impl BootReservationPublisher for IscDhcpPublisher {
                 crate::infrastructure::command::run_command_async([
                     "systemctl",
                     "restart",
-                    "isc-dhcp-server.service",
+                    crate::platform::detect().dhcp_service(),
                 ])
                 .await
                 .map_err(anyhow::Error::from)

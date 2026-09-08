@@ -8,14 +8,17 @@ use serde_json::Value;
 use crate::services::{write_with_sudo_tee, ServiceManager};
 use crate::state::AppState;
 
-const SERVICE_CONFIG_FILES: &[(&str, &str)] = &[
-    ("dhcp", "/etc/dhcp/dhcpd.conf"),
-    ("dhcp-clients", "/etc/dhcp/clients.conf"),
-    ("tftp-autoexec", "/srv/tftp/autoexec.ipxe"),
-    ("tftp", "/etc/default/tftpd-hpa"),
-    ("http", "/etc/apache2/sites-available/diskless-server.conf"),
-    ("samba", "/etc/samba/smb.conf"),
-];
+fn service_config_files() -> Vec<(&'static str, String)> {
+    let distro = crate::platform::detect();
+    vec![
+        ("dhcp", "/etc/dhcp/dhcpd.conf".to_string()),
+        ("dhcp-clients", "/etc/dhcp/clients.conf".to_string()),
+        ("tftp-autoexec", "/srv/tftp/autoexec.ipxe".to_string()),
+        ("tftp", distro.tftp_defaults_path().to_string()),
+        ("http", distro.http_config_path().to_string()),
+        ("samba", "/etc/samba/smb.conf".to_string()),
+    ]
+}
 
 fn requires_dhcp_validation(service_name: &str) -> bool {
     matches!(service_name, "dhcp" | "dhcp-clients")
@@ -128,10 +131,10 @@ pub async fn start_service(
 ) -> Result<Json<String>, StatusCode> {
     let settings = state.settings.read().await;
     let service_manager = ServiceManager::new(settings.clone(), state.db_pool.clone());
-    service_manager
-        .start(&name)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    service_manager.start(&name).await.map_err(|error| {
+        log::error!("Failed to start '{}': {:#}", name, error);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     let response = format!("Service {} started", name);
     Ok(Json(response))
 }
@@ -142,10 +145,10 @@ pub async fn stop_service(
 ) -> Result<Json<String>, StatusCode> {
     let settings = state.settings.read().await;
     let service_manager = ServiceManager::new(settings.clone(), state.db_pool.clone());
-    service_manager
-        .stop(&name)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    service_manager.stop(&name).await.map_err(|error| {
+        log::error!("Failed to stop '{}': {:#}", name, error);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     let response = format!("Service {} stopped", name);
     Ok(Json(response))
 }
@@ -156,10 +159,10 @@ pub async fn restart_service(
 ) -> Result<Json<String>, StatusCode> {
     let settings = state.settings.read().await;
     let service_manager = ServiceManager::new(settings.clone(), state.db_pool.clone());
-    service_manager
-        .reload(&name)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    service_manager.reload(&name).await.map_err(|error| {
+        log::error!("Failed to restart '{}': {:#}", name, error);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     let response = format!("Service {} restarted", name);
     Ok(Json(response))
 }
@@ -245,9 +248,16 @@ pub async fn configure_service(
         .and_then(|v| v.get("content").and_then(|c| c.as_str()).map(String::from));
 
     if let Some(content) = raw_content {
-        let config_path = SERVICE_CONFIG_FILES
+        let config_files = service_config_files();
+        let config_path = config_files
             .iter()
-            .find_map(|&(k, p)| if k == name.as_str() { Some(p) } else { None })
+            .find_map(|(k, p)| {
+                if *k == name.as_str() {
+                    Some(p.as_str())
+                } else {
+                    None
+                }
+            })
             .ok_or_else(|| {
                 log::error!("Unknown service for config save: {}", name);
                 StatusCode::NOT_FOUND
@@ -325,8 +335,18 @@ pub async fn install_service(
         .and_then(|v| v.as_str())
         .ok_or(StatusCode::BAD_REQUEST)?;
 
+    log::info!(
+        "Dependency install: install request received for '{}'",
+        service
+    );
     match crate::commands::system::install_package(service.to_string()).await {
-        Ok(msg) => Ok(Json(msg)),
+        Ok(msg) => {
+            log::info!(
+                "Dependency install: request for '{}' completed successfully",
+                service
+            );
+            Ok(Json(msg))
+        }
         Err(e) => {
             log::error!("Failed to install service '{}': {}", service, e);
             Err(StatusCode::INTERNAL_SERVER_ERROR)

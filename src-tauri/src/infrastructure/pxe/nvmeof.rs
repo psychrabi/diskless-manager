@@ -37,7 +37,7 @@ chain http://${{next-server}}/snponly-nvmeof.efi || goto failed
 /// active NIC MAC address to the same 12-hex-character form used by
 /// `client_mac_script_path()` and then chains the generated per-client menu.
 #[must_use]
-pub fn render_client_dispatcher_autoexec(http_port: u16) -> String {
+pub fn render_client_dispatcher_autoexec(http_port: u16, enroll_port: u16) -> String {
     let port_suffix = if http_port == 80 {
         String::new()
     } else {
@@ -59,13 +59,23 @@ chain ${{boot-url}}/clients/${{client-mac}}.ipxe || goto unknown_client
 
 :unknown_client
 echo No generated client iPXE menu exists for ${{net0/mac}}.
-echo Expected: clients/${{client-mac}}.ipxe
+echo Contacting the enrollment service to register this machine...
+chain http://${{next-server}}:{enroll_port}/enroll/${{client-mac}} || goto enroll_failed
+echo Enrollment response completed; restarting to pick up any assignment.
+sleep 5
+reboot
+
+:enroll_failed
+echo Could not reach the Diskless Manager enrollment service.
+echo Expected enrollment at http://${{next-server}}:{enroll_port}/enroll/${{client-mac}}
 shell
 
 :failed
 echo DHCP failed; cannot locate the diskless-manager boot server.
 shell
 "##,
+        port_suffix = port_suffix,
+        enroll_port = enroll_port,
     )
 }
 
@@ -93,7 +103,7 @@ mod tests {
 
     #[test]
     fn dispatcher_chains_mac_specific_script() {
-        let script = render_client_dispatcher_autoexec(80);
+        let script = render_client_dispatcher_autoexec(80, 4237);
         assert!(script.contains("set client-mac ${net0/mac:hexraw}"));
         assert!(script.contains("chain ${boot-url}/clients/${client-mac}.ipxe"));
         assert!(script.contains("set boot-url http://${next-server}"));
@@ -101,7 +111,16 @@ mod tests {
 
     #[test]
     fn dispatcher_supports_non_default_http_port() {
-        let script = render_client_dispatcher_autoexec(4433);
+        let script = render_client_dispatcher_autoexec(4433, 4237);
         assert!(script.contains("set boot-url http://${next-server}:4433"));
+    }
+
+    #[test]
+    fn dispatcher_unknown_client_chains_to_the_enrollment_service() {
+        let script = render_client_dispatcher_autoexec(80, 4237);
+        assert!(script.contains(
+            "chain http://${next-server}:4237/enroll/${client-mac} || goto enroll_failed"
+        ));
+        assert!(script.contains(":enroll_failed"));
     }
 }

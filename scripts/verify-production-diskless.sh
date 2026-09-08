@@ -37,13 +37,37 @@ printf '%s\n' "Host: $(hostname 2>/dev/null || printf unknown)"
 printf '%s\n' "Date: $(date -Is 2>/dev/null || printf unknown)"
 printf '\n'
 
+# Distribution detection: keep the script usable on Debian/Ubuntu, Fedora/RHEL
+# and Arch which all use different package names for the same services.
+DISTRO="debian"
+if [[ -f /etc/redhat-release ]]; then
+    DISTRO="redhat"
+elif [[ -f /etc/arch-release ]]; then
+    DISTRO="arch"
+fi
+
 DHCP_CONF=/etc/dhcp/dhcpd.conf
 DHCP_CLIENTS=/etc/dhcp/clients.conf
-DHCP_DEFAULT=/etc/default/isc-dhcp-server
 HTTP_ROOT=/srv/tftp
 SERVER_IP=192.168.1.250
 HTTP_PORT=80
 WINPE_URL="http://${SERVER_IP}:${HTTP_PORT}/boot/winpe"
+
+# The DHCP daemon unit and the interfaces toggling differ per family.
+# Arch's dhcpd4.service reads the interface list from a systemd drop-in.
+if [[ "$DISTRO" == "redhat" ]]; then
+    DHCP_DEFAULT=/etc/sysconfig/dhcpd
+    DHCP_SERVICE=dhcpd
+    DHCP_INTERFACES_PATTERN='DHCPDARGS="eno2"'
+elif [[ "$DISTRO" == "arch" ]]; then
+    DHCP_DEFAULT=/etc/systemd/system/dhcpd4.service.d/diskless-manager.conf
+    DHCP_SERVICE=dhcpd4
+    DHCP_INTERFACES_PATTERN='ExecStart=/usr/bin/dhcpd -4 -q -cf /etc/dhcp/dhcpd.conf -pf /run/dhcpd4/dhcpd.pid eno2'
+else
+    DHCP_DEFAULT=/etc/default/isc-dhcp-server
+    DHCP_SERVICE=isc-dhcp-server
+    DHCP_INTERFACES_PATTERN='INTERFACESv4="eno2"'
+fi
 
 printf '%s\n' '--- DHCP syntax ---'
 if command -v dhcpd >/dev/null 2>&1; then
@@ -69,7 +93,7 @@ expect_line 'include "/etc/dhcp/clients.conf";' "$DHCP_CONF"
 expect_line 'range 192.168.1.100 192.168.1.200;' "$DHCP_CONF"
 expect_line 'option routers 192.168.1.254;' "$DHCP_CONF"
 expect_line 'option broadcast-address 192.168.1.255;' "$DHCP_CONF"
-expect_line 'INTERFACESv4="eno2"' "$DHCP_DEFAULT"
+expect_line "$DHCP_INTERFACES_PATTERN" "$DHCP_DEFAULT"
 
 printf '\n%s\n' '--- PXE/HTTP files ---'
 expect_file "$HTTP_ROOT/autoexec.ipxe"
@@ -114,7 +138,7 @@ fi
 
 printf '\n%s\n' '--- Service state ---'
 if command -v systemctl >/dev/null 2>&1; then
-    if systemctl is-active --quiet isc-dhcp-server; then pass 'isc-dhcp-server is active'; else fail 'isc-dhcp-server is not active'; fi
+    if systemctl is-active --quiet "$DHCP_SERVICE"; then pass "$DHCP_SERVICE is active"; else fail "$DHCP_SERVICE is not active"; fi
 else
     warn 'systemctl is unavailable; service-state verification skipped'
 fi

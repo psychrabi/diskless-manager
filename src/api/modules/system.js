@@ -45,6 +45,10 @@ export async function saveSettings(settings) {
   });
 }
 
+export async function checkPrivilegedAccess() {
+  return apiRequest("/api/system/privileged-access");
+}
+
 export async function setupPrivilegedAccess(config) {
   return apiRequest("/api/system/privileged-access", {
     method: "POST",

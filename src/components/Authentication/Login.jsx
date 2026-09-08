@@ -3,10 +3,11 @@ import { Button, Card, Input } from "@/components/ui";
 import { useAuth } from "@/contexts/auth";
 import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { checkAdminExists, login } from "@/api/modules/auth";
+import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { useNavigate } from "react-router-dom";
 import { z } from "zod";
-import { login } from "@/api/modules/auth";
 
 const loginSchema = z.object({
   username: z.string().min(1, "Username is required"),
@@ -17,6 +18,23 @@ const Login = () => {
   const navigate = useNavigate();
   const { login: setAuth } = useAuth();
   const { error, success } = useToastStore();
+  const [adminExists, setAdminExists] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    checkAdminExists()
+      .then((response) => {
+        if (!cancelled) {
+          setAdminExists(response.exists || response.admin_exists);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setAdminExists(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const {
     register,
@@ -83,6 +101,22 @@ const Login = () => {
           {isSubmitting ? "Signing in\u2026" : "Sign in"}
         </Button>
       </form>
+
+      {adminExists === false && (
+        <div className="mt-6 pt-4 border-t border-base-300 text-center">
+          <p className="text-sm text-base-content/60 mb-2">
+            No administrator account exists yet.
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full"
+            onClick={() => navigate("/initial-setup")}
+          >
+            Create your first admin account
+          </Button>
+        </div>
+      )}
     </Card>
   );
 };

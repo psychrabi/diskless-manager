@@ -3,6 +3,13 @@ use std::path::Path;
 pub const NVMEOF_FIRMWARE: &str = "snponly-nvmeof.efi";
 pub const NVMEOF_CAPABILITY_FLAG: &str = "diskless-nvmeof";
 
+/// Port the dedicated client-enrollment HTTP listener binds to.
+///
+/// The enrollment listener is deliberately separate from the management API
+/// so iPXE clients only ever reach a single, unauthenticated endpoint instead
+/// of the full management surface.
+pub const ENROLL_PORT: u16 = 4237;
+
 /// Returns a filesystem-safe identifier suitable for a per-client iPXE filename.
 #[must_use]
 pub fn client_script_slug(client_name: &str) -> String {
@@ -50,6 +57,52 @@ pub fn client_mac_script_path(mac: &str) -> String {
 #[must_use]
 pub fn render_client_script(client_name: &str, target_iqn: &str, http_port: u16) -> String {
     render_client_script_with_mode(client_name, target_iqn, http_port, true)
+}
+
+/// iPXE response served to a client that is not yet registered.
+///
+/// Reuses the session variables set by `autoexec.ipxe` (`boot-url`,
+/// `client-mac`), which are preserved across a `chain` into this script.
+#[must_use]
+pub fn render_enrollment_pending() -> String {
+    r##"#!ipxe
+echo ##########################################################
+echo # Diskless Manager - client enrollment                 #
+echo #                                                        #
+echo # Client ${client-mac} has been registered.             #
+echo # No master image has been assigned yet.                #
+echo # Ask an administrator to provision this machine.       #
+echo ##########################################################
+sleep 30
+reboot
+"##
+    .to_string()
+}
+
+/// iPXE response served to an already-provisioned client whose per-client
+/// menu lives on the boot server. Re-enters the normal dispatch path.
+#[must_use]
+pub fn render_enrollment_redirect() -> String {
+    r##"#!ipxe
+echo Diskless Manager: client ${client-mac} is provisioned.
+echo Re-entering the normal boot menu...
+chain ${boot-url}/clients/${client-mac}.ipxe || shell
+"##
+    .to_string()
+}
+
+/// iPXE response served when the enrollment request itself could not be
+/// understood. Retries are deferred so clients poll rather than hammer the
+/// server on a broken configuration.
+#[must_use]
+pub fn render_enrollment_invalid_mac() -> String {
+    r##"#!ipxe
+echo Diskless Manager: enrollment failed (unrecognized client MAC).
+echo Check the boot server network configuration.
+sleep 30
+reboot
+"##
+    .to_string()
 }
 
 #[must_use]

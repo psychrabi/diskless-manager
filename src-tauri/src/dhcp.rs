@@ -56,23 +56,29 @@ fn lock_dhcp_config() -> Result<std::fs::File, String> {
 }
 
 fn read_optional_config(path: &str) -> Result<String, String> {
-    match std::fs::read_to_string(path) {
-        Ok(content) => Ok(content),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
-        Err(error) => Err(format!("Cannot read {path}: {error}")),
-    }
+    crate::infrastructure::command::read_file_with_sudo(Path::new(path))
+        .map(|content| content.unwrap_or_default())
+        .map_err(|e| format!("Cannot read {path}: {e}"))
 }
 
 async fn install_reservations(clients: &str) -> Result<(), String> {
-    let primary = std::fs::read_to_string(DHCP_CONFIG_PATH)
-        .map_err(|e| format!("Cannot read DHCP configuration: {e}"))?;
+    let primary = crate::infrastructure::command::read_file_with_sudo(Path::new(DHCP_CONFIG_PATH))
+        .map_err(|e| format!("Cannot read DHCP configuration: {e}"))?
+        .ok_or_else(|| {
+            format!(
+                "Cannot read DHCP configuration: {} missing",
+                DHCP_CONFIG_PATH
+            )
+        })?;
     install_configuration(&primary, clients).await
 }
 
 // Caller holds the shared DHCP lock through staging, validation, and rollback.
 async fn install_configuration(primary: &str, clients: &str) -> Result<(), String> {
     let primary = super::reconcile_dynamic_pool(primary, clients).map_err(|e| format!("{e:#}"))?;
-    let staging = Path::new("/srv/tftp/backups").join(format!("dhcp-{}", uuid::Uuid::new_v4()));
+    // Staging lives in the user-writable temp directory; /srv/tftp is root-only
+    // on Fedora/RHEL and would otherwise turn every install into an EACCES.
+    let staging = std::env::temp_dir().join(format!("diskless-dhcp-{}", uuid::Uuid::new_v4()));
     super::config_install::install_files(
         &[
             (Path::new(DHCP_CONFIG_PATH), &primary),
@@ -170,6 +176,32 @@ option root-path "iscsi:{server_ip}::::{target_iqn}";
     entry
 }
 
+/// Build a static host entry for a registered client that has not yet been
+/// assigned an image (no iSCSI target exists).
+///
+/// The entry pins the client's MAC/IP and sets a host name but omits
+/// `option root-path`, so an unprovisioned machine keeps the same address and
+/// still receives the subnet's boot script (`autoexec.ipxe`). The full entry
+/// with the iSCSI root path replaces this block when the client is provisioned.
+pub fn create_pending_dhcp_entry(name: &str, mac: &str, ip: &str) -> String {
+    let formatted_name = format_client_name(name);
+
+    let entry = format!(
+        r#"host {formatted_name} {{
+hardware ethernet {mac};
+fixed-address {ip};
+option host-name "{formatted_name}";
+}}"#,
+        formatted_name = formatted_name,
+        mac = mac,
+        ip = ip,
+    );
+
+    info!("DHCP pending entry for {}: {} bytes", name, entry.len());
+
+    entry
+}
+
 /// Check whether a client's DHCP host block exactly matches the desired entry.
 pub fn dhcp_entry_matches(content: &str, client_name: &str, desired_entry: &str) -> bool {
     let formatted_name = format_client_name(client_name);
@@ -225,6 +257,18 @@ mod tests {
         );
 
         assert!(entry.contains("option root-path \"iscsi:192.168.1.250::::iqn.test\";"));
+    }
+
+    #[test]
+    fn pending_entries_pin_the_address_without_an_iscsi_root_path() {
+        let entry =
+            create_pending_dhcp_entry("client_aabbccddeeff", "aa:bb:cc:dd:ee:ff", "192.168.1.150");
+
+        assert!(entry.starts_with("host CLIENT_AABBCCDDEEFF {"));
+        assert!(entry.contains("hardware ethernet aa:bb:cc:dd:ee:ff;"));
+        assert!(entry.contains("fixed-address 192.168.1.150;"));
+        assert!(entry.contains("option host-name \"CLIENT_AABBCCDDEEFF\";"));
+        assert!(!entry.contains("option root-path"));
     }
 
     #[test]

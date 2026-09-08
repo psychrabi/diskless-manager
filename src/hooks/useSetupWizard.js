@@ -16,6 +16,7 @@ import { useToastStore } from "@/store/useToastStore";
 import { useAppStore } from "@/store/useAppStore";
 import { listDisks, checkZfsPoolExists, createZfsPool } from "@/api/modules/disks";
 import { installService, configureSambaServer } from "@/api/modules/services";
+import { checkPrivilegedAccess } from "@/api/modules/system";
 
 const getInitialStep = ({
   privilegedAccessGranted,
@@ -75,6 +76,7 @@ export const useSetupWizard = () => {
   const [checking, setChecking] = useState(false);
   const [bootScriptContent, setBootScriptContent] = useState(null);
   const [privilegedAccessGranted, setPrivilegedAccessGranted] = useState(false);
+  const [authChecking, setAuthChecking] = useState(false);
 
   const { appConfig, fetchConfig } = useAppStore();
   const { error, success, info } = useToastStore();
@@ -130,6 +132,31 @@ export const useSetupWizard = () => {
     const timer = setTimeout(checkAll, 0);
     return () => clearTimeout(timer);
   }, [checkAll]);
+
+  // Probe the backend once on mount to see whether privileged access has
+  // already been granted so the Authorize step can be skipped.
+  useEffect(() => {
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      (async () => {
+        setAuthChecking(true);
+        try {
+          const result = await checkPrivilegedAccess();
+          if (!cancelled && result?.authorized) {
+            setPrivilegedAccessGranted(true);
+          }
+        } catch {
+          // Non-fatal: the user can still click Authorize manually.
+        } finally {
+          if (!cancelled) setAuthChecking(false);
+        }
+      })();
+    }, 0);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, []);
 
   const allServicesInstalled =
     dependencies.length > 0 && !dependencies.some((svc) => !svc.installed);
@@ -365,5 +392,7 @@ export const useSetupWizard = () => {
     handleSambaSubmit,
     handleAuthorized,
     handleBootScriptSubmit,
+    privilegedAccessGranted,
+    authChecking,
   };
 };

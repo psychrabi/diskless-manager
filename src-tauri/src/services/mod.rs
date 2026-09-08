@@ -88,14 +88,16 @@ impl ServiceManager {
 
     /// Start the Linux LIO target service.
     async fn start_iscsi(&self) -> anyhow::Result<()> {
-        run_sudo_command(["systemctl", "start", "rtslib-fb-targetctl"])
+        let service = crate::platform::detect().iscsi_service();
+        run_sudo_command(["systemctl", "start", service])
             .await
             .map_err(|error| anyhow::anyhow!("failed to start iSCSI service: {}", error))
     }
 
     /// Stop the Linux LIO target service.
     async fn stop_iscsi(&self) -> anyhow::Result<()> {
-        run_sudo_command(["systemctl", "stop", "rtslib-fb-targetctl"])
+        let service = crate::platform::detect().iscsi_service();
+        run_sudo_command(["systemctl", "stop", service])
             .await
             .map_err(|error| anyhow::anyhow!("failed to stop iSCSI service: {}", error))
     }
@@ -133,8 +135,9 @@ impl ServiceManager {
 
     /// Return the status of the Linux LIO target service.
     async fn iscsi_status(&self) -> anyhow::Result<ServiceStatus> {
-        let running = is_systemd_service_running("rtslib-fb-targetctl").await?;
-        let pid = get_service_pid("rtslib-fb-targetctl").await?;
+        let service = crate::platform::detect().iscsi_service();
+        let running = is_systemd_service_running(service).await?;
+        let pid = get_service_pid(service).await?;
 
         Ok(ServiceStatus {
             running,
@@ -330,12 +333,12 @@ impl ServiceManager {
     pub async fn get_config(&self, service: &str) -> anyhow::Result<String> {
         // Map service names that may come from the frontend to internal names.
         let internal_service = match service {
-            "apache2" => "http",
-            "smbd" => "samba",
-            "tftpd-hpa" => "tftp",
-            "isc-dhcp-server" => "dhcp",
-            "nfs-kernel-server" => "nfs",
-            "rtslib-fb-targetctl" => "iscsi",
+            "apache2" | "httpd" => "http",
+            "smbd" | "smb" => "samba",
+            "tftpd-hpa" | "tftpd" => "tftp",
+            "isc-dhcp-server" | "dhcpd" | "dhcpd4" => "dhcp",
+            "nfs-kernel-server" | "nfs-server" => "nfs",
+            "rtslib-fb-targetctl" | "target" => "iscsi",
 
             "http" | "samba" | "tftp" | "dhcp" | "nfs" | "iscsi" => service,
 

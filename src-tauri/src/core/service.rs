@@ -29,13 +29,14 @@ impl ServiceManager {
     }
 
     pub fn list_services(&self) -> Vec<ServiceInfo> {
+        let distro = crate::platform::detect();
         let services = vec![
-            ("isc-dhcp-server", "DHCP Server"),
-            ("tftpd-hpa", "TFTP Server"),
-            ("rtslib-fb-targetctl", "iSCSI Target (LIO)"),
-            ("nfs-kernel-server", "NFS Server"),
-            ("smbd", "Samba Server"),
-            ("apache2", "Apache2 HTTP Server"),
+            (distro.dhcp_service(), "DHCP Server"),
+            (distro.tftp_service(), "TFTP Server"),
+            (distro.iscsi_service(), "iSCSI Target (LIO)"),
+            (distro.nfs_service(), "NFS Server"),
+            (distro.samba_services()[0], "Samba Server"),
+            (distro.http_service(), "Apache HTTP Server"),
         ];
 
         services
@@ -133,13 +134,14 @@ impl ServiceManager {
     }
 
     pub fn start_all(&self) -> anyhow::Result<Vec<String>> {
+        let distro = crate::platform::detect();
         let services = [
-            "isc-dhcp-server",
-            "tftpd-hpa",
-            "rtslib-fb-targetctl",
-            "nfs-kernel-server",
-            "smbd",
-            "apache2",
+            distro.dhcp_service(),
+            distro.tftp_service(),
+            distro.iscsi_service(),
+            distro.nfs_service(),
+            distro.samba_services()[0],
+            distro.http_service(),
         ];
         let mut started = Vec::new();
 
@@ -153,13 +155,14 @@ impl ServiceManager {
     }
 
     pub fn stop_all(&self) -> anyhow::Result<Vec<String>> {
+        let distro = crate::platform::detect();
         let services = [
-            "apache2",
-            "smbd",
-            "nfs-kernel-server",
-            "rtslib-fb-targetctl",
-            "tftpd-hpa",
-            "isc-dhcp-server",
+            distro.http_service(),
+            distro.samba_services()[0],
+            distro.nfs_service(),
+            distro.iscsi_service(),
+            distro.tftp_service(),
+            distro.dhcp_service(),
         ];
         let mut stopped = Vec::new();
 

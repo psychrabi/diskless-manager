@@ -243,10 +243,11 @@ export default function NetworkConfig() {
                 <span className="text-lg">⚠️</span>
                 <span>
                   <strong>Caution:</strong> Applying static IP settings will
-                  rewrite
-                  <code>/etc/netplan/99-diskless-manager.yaml</code> and apply
-                  changes immediately. Ensure the settings are correct to avoid
-                  losing server connectivity.
+                  rewrite the server network configuration
+                  (<code>/etc/netplan/99-diskless-manager.yaml</code> on
+                  Debian/Ubuntu, a NetworkManager profile on Fedora/RHEL and
+                  Arch Linux) and apply changes immediately. Ensure the
+                  settings are correct to avoid losing server connectivity.
                 </span>
               </div>
             </div>

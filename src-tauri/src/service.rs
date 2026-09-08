@@ -57,10 +57,8 @@ async fn write_with_sudo_tee(path: &str, content: &str) -> Result<(), AppError> 
 pub async fn install_service(service: String, token: String) -> Result<(), AppError> {
     validate_auth(&token)?;
 
-    match Command::new("sudo")
-        .args(["apt-get", "install", "-y", &service])
-        .output()
-    {
+    let args = crate::platform::detect().pkg_install(&service);
+    match Command::new("sudo").args(&args).output() {
         Ok(_) => Ok(()),
         Err(e) => Err(AppError::Command(format!(
             "Failed to install {}: {}",
@@ -80,12 +78,13 @@ pub async fn save_service_config(
 ) -> Result<(), AppError> {
     validate_auth(&token)?;
 
+    let distro = crate::platform::detect();
     let config_file_map = [
         ("dhcp", DHCP_CONFIG_PATH),
         ("dhcp-clients", DHCP_CLIENTS_PATH),
         ("tftp-autoexec", TFTP_AUTOEXEC_PATH),
-        ("tftp", "/etc/default/tftpd-hpa"),
-        ("http", "/etc/apache2/sites-available/diskless-server.conf"),
+        ("tftp", distro.tftp_defaults_path()),
+        ("http", distro.http_config_path()),
         ("samba", "/etc/samba/smb.conf"),
     ];
 

@@ -1,5 +1,6 @@
 import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
+import { useAuth } from "@/contexts/auth";
 import { runPreflightCheck } from "@/api/modules/system";
 import { getLicenseInfo } from "@/api/modules/license";
 import { useEffect, useState } from "react";
@@ -8,7 +9,10 @@ import { Loading, ToastContainer } from "@/components/ui";
 
 const PublicLayout = () => {
   const { setDependencies } = useAppStore();
-  const [preflightLoading, setPreflightLoading] = useState(true);
+  const { token } = useAuth();
+  const [preflightLoading, setPreflightLoading] = useState(() =>
+    Boolean(token),
+  );
   const navigate = useNavigate();
   const location = useLocation();
   const { error } = useToastStore();
@@ -16,6 +20,12 @@ const PublicLayout = () => {
   // Preflight check before showing login
   useEffect(() => {
     let cancelled = false;
+
+    // Preflight and license checks require authentication. Skip them
+    // when not logged in so the login/setup screens do not fire 401
+    // error toasts on first load.
+    if (!token) return;
+
     (async () => {
       try {
         const { list, allServicesInstalled, poolExists } =
@@ -23,10 +33,11 @@ const PublicLayout = () => {
         if (!cancelled) {
           setDependencies(list);
           // Only redirect to setup if services are not installed OR pool missing
-          // AND we are not already on setup page
+          // AND we are not already on setup or the initial admin page
           if (
             (!allServicesInstalled || !poolExists) &&
-            location.pathname !== "/setup"
+            location.pathname !== "/setup" &&
+            location.pathname !== "/initial-setup"
           ) {
             navigate("/setup");
           }
@@ -54,7 +65,7 @@ const PublicLayout = () => {
     return () => {
       cancelled = true;
     };
-  }, [navigate, setDependencies, error, location.pathname]);
+  }, [navigate, setDependencies, error, location.pathname, token]);
 
   if (preflightLoading) {
     return <Loading message="Performing preflight checks..." />;

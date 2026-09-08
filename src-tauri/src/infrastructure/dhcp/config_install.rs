@@ -21,6 +21,25 @@ pub(super) async fn install_files(
                 backups.push(Some(backup));
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => backups.push(None),
+            // Fedora/RHEL keep /etc/dhcp mode-0700, so back the file up with
+            // `sudo cat` (granted by the diskless-manager sudoers rule) instead.
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                match super::super::command::read_file_with_sudo(destination) {
+                    Ok(Some(content)) => {
+                        tokio::fs::write(&backup, content)
+                            .await
+                            .map_err(|e| e.to_string())?;
+                        backups.push(Some(backup));
+                    }
+                    Ok(None) => backups.push(None),
+                    Err(read_error) => {
+                        return Err(format!(
+                            "Cannot back up {}: {read_error}",
+                            destination.display()
+                        ))
+                    }
+                }
+            }
             Err(error) => return Err(format!("Cannot back up {}: {error}", destination.display())),
         }
         let temporary = staging.join(format!("new-{index}"));

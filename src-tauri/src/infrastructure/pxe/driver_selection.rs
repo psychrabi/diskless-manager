@@ -88,7 +88,11 @@ pub fn select_drivers(
         })
         .collect::<Vec<_>>();
 
-    selected.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.driver_id.cmp(&b.driver_id)));
+    selected.sort_by(|a, b| {
+        b.score
+            .cmp(&a.score)
+            .then_with(|| a.driver_id.cmp(&b.driver_id))
+    });
     selected
 }
 
@@ -97,7 +101,13 @@ fn normalize_mac(value: Option<&str>) -> String {
         .unwrap_or_default()
         .chars()
         .filter(|character| character.is_ascii_hexdigit())
-        .flat_map(|character| character.to_ascii_lowercase().to_string().chars().collect::<Vec<_>>())
+        .flat_map(|character| {
+            character
+                .to_ascii_lowercase()
+                .to_string()
+                .chars()
+                .collect::<Vec<_>>()
+        })
         .collect()
 }
 
@@ -110,7 +120,12 @@ mod tests {
     use super::*;
     use chrono::Utc;
 
-    fn package(id: &str, pnp: Option<&str>, mac: Option<&str>, service: Option<&str>) -> NetworkDriverPackage {
+    fn package(
+        id: &str,
+        pnp: Option<&str>,
+        mac: Option<&str>,
+        service: Option<&str>,
+    ) -> NetworkDriverPackage {
         NetworkDriverPackage {
             id: id.to_string(),
             name: id.to_string(),
@@ -142,7 +157,10 @@ mod tests {
 
     #[test]
     fn explicit_selection_is_supported() {
-        let packages = vec![package("one", None, None, None), package("two", None, None, None)];
+        let packages = vec![
+            package("one", None, None, None),
+            package("two", None, None, None),
+        ];
         let input = NetworkDriverSelectorInput {
             driver_ids: vec!["two".to_string()],
             ..Default::default()

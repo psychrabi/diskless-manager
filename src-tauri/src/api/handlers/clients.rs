@@ -439,7 +439,7 @@ pub async fn update_client(
                     existing_client.name, mac
                 );
 
-                let mut wake_cmd = Command::new("wakeonlan");
+                let mut wake_cmd = Command::new(crate::platform::wol_binary());
                 wake_cmd.arg(mac);
                 let result = crate::api::util::run_command(&mut wake_cmd).await;
 

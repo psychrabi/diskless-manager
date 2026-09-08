@@ -80,7 +80,14 @@ pub async fn execute_ssh_command(
     State(_state): State<AppState>,
     Json(request): Json<ExecuteCommandRequest>,
 ) -> Result<Json<SshTestResult>, (StatusCode, Json<ErrorResponse>)> {
-    match execute_ssh_cmd(request.host, request.username, request.password, request.command).await {
+    match execute_ssh_cmd(
+        request.host,
+        request.username,
+        request.password,
+        request.command,
+    )
+    .await
+    {
         Ok(result) => Ok(Json(result)),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,

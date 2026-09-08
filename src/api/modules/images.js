@@ -33,6 +33,10 @@ export async function importImage(request) {
   });
 }
 
+export async function scanAndImportImages() {
+  return apiRequest("/api/images/import-scan", { method: "POST" });
+}
+
 export async function deleteImage(id) {
   return apiRequest(`/api/images/${id}`, { method: "DELETE" });
 }

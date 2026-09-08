@@ -42,7 +42,8 @@ impl DriverManifest {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let json = serde_json::to_string_pretty(self).context("failed to serialize driver manifest")?;
+        let json =
+            serde_json::to_string_pretty(self).context("failed to serialize driver manifest")?;
         fs::write(path, format!("{json}\n"))
             .with_context(|| format!("failed to write driver manifest {}", path.display()))?;
         Ok(())

@@ -112,6 +112,41 @@ impl ClientRepository {
         row.map(Self::row_to_domain).transpose()
     }
 
+    pub async fn find_by_mac(&self, mac: &MacAddress) -> Result<Option<Client>> {
+        let row = sqlx::query_as::<_, ClientRow>(
+            r#"
+            SELECT
+                id,
+                name,
+                mac,
+                ip,
+                master,
+                enabled,
+                created_at,
+                updated_at,
+                snapshot,
+                block_store,
+                target_iqn,
+                writeback,
+                last_modified,
+                block_device,
+                status,
+                mode,
+                pxe_mode,
+                keep_writeback,
+                use_game_disk
+            FROM clients
+            WHERE mac = ?
+            "#,
+        )
+        .bind(mac.as_str())
+        .fetch_optional(&self.pool)
+        .await
+        .context("failed to query client by MAC")?;
+
+        row.map(Self::row_to_domain).transpose()
+    }
+
     pub async fn find_all(&self) -> Result<Vec<Client>> {
         let rows = sqlx::query_as::<_, ClientRow>(
             r#"
@@ -457,5 +492,68 @@ mod tests {
         assert_eq!(client.name, "PC001");
         assert_eq!(client.mac.as_str(), "aa:bb:cc:dd:ee:ff");
         assert!(client.enabled);
+    }
+
+    #[tokio::test]
+    async fn round_trips_a_client_through_the_mac_lookup() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            r#"
+            CREATE TABLE clients (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                mac TEXT NOT NULL,
+                ip TEXT NOT NULL,
+                master TEXT NOT NULL,
+                enabled INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                snapshot TEXT,
+                block_store TEXT,
+                target_iqn TEXT,
+                writeback TEXT,
+                last_modified TEXT,
+                block_device TEXT,
+                status TEXT,
+                mode TEXT,
+                pxe_mode TEXT,
+                keep_writeback INTEGER,
+                use_game_disk INTEGER
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let repository = ClientRepository::new(pool.clone());
+        let client = Client::create(CreateClient {
+            name: "client-001122334455".to_string(),
+            mac: "00:11:22:33:44:55".to_string(),
+            ip: "192.168.1.150".to_string(),
+            master: "pending".to_string(),
+            snapshot: None,
+            block_store: None,
+            block_device: None,
+            target_iqn: None,
+            pxe_mode: PxeMode::Uefi,
+            keep_writeback: true,
+            use_game_disk: false,
+        })
+        .expect("pending client should be valid");
+
+        repository.insert(&client).await.unwrap();
+        let found = repository
+            .find_by_mac(&client.mac)
+            .await
+            .unwrap()
+            .expect("registered client should be found by MAC");
+        assert_eq!(found.id, client.id);
+        assert_eq!(found.ip.to_string(), "192.168.1.150");
+        assert!(found.target_iqn.is_none());
     }
 }

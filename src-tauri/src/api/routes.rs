@@ -26,8 +26,9 @@ use crate::api::handlers::{
     disks::{create_pool, list_disks, pool_exists, rename_disk},
     images::{
         clone_image, create_image, create_snapshot, delete_image, delete_snapshot, get_image,
-        get_image_info, get_snapshots, import_image, list_images, list_masters, rename_image,
-        resize_image, rollback_snapshot, set_default_image, update_image, verify_image,
+        get_image_info, get_snapshots, import_existing_images, import_image, list_images,
+        list_masters, rename_image, resize_image, rollback_snapshot, set_default_image,
+        update_image, verify_image,
     },
     license::{activate_license_handler, get_license_info_handler},
     logs::{clear_logs, get_logs},
@@ -46,10 +47,10 @@ use crate::api::handlers::{
     },
     ssh::{execute_ssh_command, get_windows_system_info, test_ssh_connection},
     system::{
-        apply_network_settings, check_dependencies, clear_cache, detect_server_network,
-        get_interface_ip, get_network_interfaces, get_ram_usage, get_server_status, get_settings,
-        get_system_info, get_zfs_arcstat, initialize_server, save_settings,
-        setup_privileged_access,
+        apply_network_settings, check_dependencies, check_privileged_access, clear_cache,
+        detect_server_network, get_interface_ip, get_network_interfaces, get_ram_usage,
+        get_server_status, get_settings, get_system_info, get_zfs_arcstat, initialize_server,
+        save_settings, setup_privileged_access,
     },
     system_reconciliation::inspect_system_reconciliation_handler,
     users::{create_user, delete_user, get_user, list_users, update_user, update_user_password},
@@ -158,6 +159,7 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         )
         .route("/api/images/{id}/rename", put(rename_image))
         .route("/api/images/import", post(import_image))
+        .route("/api/images/import-scan", post(import_existing_images))
         .route("/api/images/{id}/clone", post(clone_image))
         .route(
             "/api/images/{id}/snapshots",
@@ -203,7 +205,7 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route("/api/system/settings", get(get_settings).put(save_settings))
         .route(
             "/api/system/privileged-access",
-            post(setup_privileged_access),
+            get(check_privileged_access).post(setup_privileged_access),
         )
         .route("/api/system/ram-usage", get(get_ram_usage))
         .route("/api/system/zfs-arcstat", get(get_zfs_arcstat))

@@ -1,8 +1,10 @@
-import { File, HardDrive, PlusCircle } from "lucide-react";
+import { Download, File, HardDrive, PlusCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAppStore } from "../../store/useAppStore";
 import { Button, Card } from "@/components/ui";
+import { scanAndImportImages } from "@/api/modules/images";
+import { useToastStore } from "@/store/useToastStore";
 import CreateImageModal from "./CreateImageModal";
 import { ImagesList } from "./ImagesList";
 
@@ -11,7 +13,12 @@ const ImageManagement = () => {
   const masters = useAppStore((state) => state.masters);
   const datasets = useAppStore((state) => state.datasets);
   const zpools = useAppStore((state) => state.zpools);
+  const fetchMasters = useAppStore((state) => state.fetchMasters);
+  const fetchDatasets = useAppStore((state) => state.fetchDatasets);
+  const fetchImages = useAppStore((state) => state.fetchImages);
+  const { error, success } = useToastStore();
   const [openImageCreateModal, setOpenImageCreateModal] = useState(false);
+  const [importing, setImporting] = useState(false);
 
   // Check if there are any image disks (datasets with org.diskless:type=image)
   const hasImageDisk = datasets.some(
@@ -22,6 +29,28 @@ const ImageManagement = () => {
   const handleCreateImage = () => {
     if (hasImageDisk) {
       setOpenImageCreateModal(true);
+    }
+  };
+
+  const handleImportExisting = async () => {
+    setImporting(true);
+    try {
+      const result = await scanAndImportImages();
+      await Promise.all([fetchMasters(), fetchImages()]);
+      const activePool = zpools[0]?.name;
+      if (activePool) {
+        await fetchDatasets(activePool);
+      }
+      success(
+        "Import Images",
+        `Scanned ZFS pool: ${result?.imported_masters ?? 0} image(s) and ${
+          result?.imported_snapshots ?? 0
+        } snapshot(s) imported.`
+      );
+    } catch (e) {
+      error("Import Images", `Failed to scan for existing images: ${e}`);
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -40,21 +69,32 @@ const ImageManagement = () => {
       className="bg-base-300"
       icon={HardDrive}
       actions={
-        masters.length > 0 && (
+        <div className="flex items-center gap-2">
           <Button
-            variant="primary"
-            onClick={handleCreateImage}
-            icon={PlusCircle}
-            disabled={!hasImageDisk}
-            title={
-              !hasImageDisk
-                ? "No image disk found. Create an image disk first."
-                : "Create Image"
-            }
+            variant="ghost"
+            onClick={handleImportExisting}
+            icon={Download}
+            disabled={importing}
+            title="Scan the ZFS pool and register existing boot images and snapshots"
           >
-            Create Image
+            {importing ? "Scanning..." : "Import Existing"}
           </Button>
-        )
+          {masters.length > 0 && (
+            <Button
+              variant="primary"
+              onClick={handleCreateImage}
+              icon={PlusCircle}
+              disabled={!hasImageDisk}
+              title={
+                !hasImageDisk
+                  ? "No image disk found. Create an image disk first."
+                  : "Create Image"
+              }
+            >
+              Create Image
+            </Button>
+          )}
+        </div>
       }
     >
       <div className="space-y-6 min-h-[50vh]">

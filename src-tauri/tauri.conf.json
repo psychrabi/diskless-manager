@@ -40,6 +40,17 @@
           "targetcli-fb",
           "zfsutils-linux"
         ]
+      },
+      "rpm": {
+        "depends": [
+          "dhcp-server",
+          "tftp-server",
+          "samba",
+          "httpd",
+          "wakeonlan",
+          "targetcli",
+          "zfs"
+        ]
       }
     },
     "icon": [

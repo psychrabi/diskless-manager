@@ -63,10 +63,13 @@ pub async fn delete_network_driver(
     Path(id): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
     let plugin = plugin_from_state(&state).await;
-    plugin.remove(&id).map(|_| StatusCode::NO_CONTENT).map_err(|error| {
-        log::error!("Failed to delete network driver '{}': {error}", id);
-        StatusCode::NOT_FOUND
-    })
+    plugin
+        .remove(&id)
+        .map(|_| StatusCode::NO_CONTENT)
+        .map_err(|error| {
+            log::error!("Failed to delete network driver '{}': {error}", id);
+            StatusCode::NOT_FOUND
+        })
 }
 
 pub async fn rebuild_network_driver_media(

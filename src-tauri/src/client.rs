@@ -525,7 +525,7 @@ pub async fn control_client(
                 )));
             }
 
-            let output = Command::new("wakeonlan")
+            let output = Command::new(crate::platform::wol_binary())
                 .arg(&mac)
                 .output()
                 .map_err(AppError::Io)?;
@@ -1010,8 +1010,12 @@ pub async fn reset_client(
 
     if let Err(error) = update_dhcp_config(&client_id, &dhcp_entry, false).await {
         warn!("Failed to update DHCP config after reset: {}", error);
-    } else if let Err(error) =
-        run_command_async(&["systemctl", "restart", "isc-dhcp-server.service"]).await
+    } else if let Err(error) = run_command_async(&[
+        "systemctl",
+        "restart",
+        crate::platform::detect().dhcp_service(),
+    ])
+    .await
     {
         warn!("Failed to restart DHCP service: {}", error);
     }

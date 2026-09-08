@@ -30,3 +30,4 @@ src-tauri/config.json
 .qwen/
 gha-creds-*.json
 .kiro
+.cache/

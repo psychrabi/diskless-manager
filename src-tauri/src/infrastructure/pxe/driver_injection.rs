@@ -93,7 +93,11 @@ impl NetworkDriverInjectionPlugin {
 
     pub fn status(&self) -> Result<DriverInjectionStatus> {
         let catalog = self.load_catalog()?;
-        let inf_count = catalog.drivers.iter().map(|driver| driver.inf_files.len()).sum();
+        let inf_count = catalog
+            .drivers
+            .iter()
+            .map(|driver| driver.inf_files.len())
+            .sum();
 
         Ok(DriverInjectionStatus {
             driver_count: catalog.drivers.len(),
@@ -146,7 +150,12 @@ impl NetworkDriverInjectionPlugin {
                 .map(|path| {
                     path.strip_prefix(&package_source)
                         .map(|p| p.to_string_lossy().replace('\\', "/"))
-                        .unwrap_or_else(|_| path.file_name().unwrap_or_default().to_string_lossy().into_owned())
+                        .unwrap_or_else(|_| {
+                            path.file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .into_owned()
+                        })
                 })
                 .collect::<Vec<_>>();
 
@@ -168,7 +177,9 @@ impl NetworkDriverInjectionPlugin {
             let mut catalog = self.load_catalog()?;
             catalog.drivers.retain(|existing| existing.id != package.id);
             catalog.drivers.push(package.clone());
-            catalog.drivers.sort_by_key(|driver| driver.name.to_lowercase());
+            catalog
+                .drivers
+                .sort_by_key(|driver| driver.name.to_lowercase());
             self.save_catalog(&catalog)?;
             self.rebuild_media(&catalog)?;
 
@@ -294,7 +305,11 @@ endlocal
         let xorriso = find_executable("xorriso")
             .or_else(|| find_executable("genisoimage"))
             .or_else(|| find_executable("mkisofs"))
-            .ok_or_else(|| anyhow::anyhow!("creating network driver media requires xorriso, genisoimage, or mkisofs"))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "creating network driver media requires xorriso, genisoimage, or mkisofs"
+                )
+            })?;
 
         let output = if xorriso.file_name() == Some(OsStr::new("xorriso")) {
             Command::new(&xorriso)
@@ -385,8 +400,8 @@ fn find_metadata(root: &Path) -> Result<ImportedDriverMetadata> {
         });
     };
 
-    let content = fs::read_to_string(&path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
+    let content =
+        fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
     serde_json::from_str(&content).context("invalid driver-info.json")
 }
 
@@ -409,7 +424,11 @@ fn find_driver_package(root: &Path) -> Result<PathBuf> {
 fn find_inf_files(root: &Path) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     collect_files(root, &mut |path| {
-        if path.extension().and_then(OsStr::to_str).is_some_and(|ext| ext.eq_ignore_ascii_case("inf")) {
+        if path
+            .extension()
+            .and_then(OsStr::to_str)
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("inf"))
+        {
             files.push(path.to_path_buf());
         }
     })?;
@@ -425,7 +444,10 @@ fn validate_network_inf(path: &Path) -> Result<()> {
     if !lower.contains("class=net")
         && !lower.contains("classguid={4d36e972-e325-11ce-bfc1-08002be10318}")
     {
-        bail!("INF does not identify as a network adapter driver: {}", path.display());
+        bail!(
+            "INF does not identify as a network adapter driver: {}",
+            path.display()
+        );
     }
 
     Ok(())

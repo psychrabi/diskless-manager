@@ -470,7 +470,12 @@ pub async fn add_client_provisioning(
     // Step 5: Restart DHCP.
     // -----------------------------------------------------------------
 
-    if let Err(error) = run_command_async(["systemctl", "restart", "isc-dhcp-server.service"]).await
+    if let Err(error) = run_command_async([
+        "systemctl",
+        "restart",
+        crate::platform::detect().dhcp_service(),
+    ])
+    .await
     {
         warn!(
             "Failed to restart DHCP service after adding client {}: {}",

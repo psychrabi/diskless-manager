@@ -25,6 +25,7 @@ pub mod control_handler;
 pub mod core;
 pub mod error_logger;
 pub mod os_detector;
+pub mod platform;
 pub mod remote_desktop_launcher;
 mod services;
 pub mod ssh_executor;
@@ -71,6 +72,17 @@ pub async fn run() -> anyhow::Result<()> {
     let (api_shutdown_tx, api_shutdown_rx) = tokio::sync::oneshot::channel();
     let api_task = tokio::spawn(api_server.serve_with_shutdown(api_shutdown_rx));
     let lifecycle_task = tokio::spawn(crate::application::client_lifecycle::run(state.clone()));
+
+    // Dedicated PXE client enrollment listener. Bound to the LAN on its own
+    // port (default 4237) so iPXE clients can register an unprovisioned
+    // machine without exposing the management API on the network.
+    let enroll_state = state.clone();
+    let configured_enroll_addr = std::env::var("DISKLESS_ENROLL_ADDR").ok();
+    let enroll_addr = crate::api::enroll::enroll_address(configured_enroll_addr.as_deref())?;
+    let enroll_server = crate::api::enroll::EnrollServer::new(enroll_state, enroll_addr)
+        .bind()
+        .await?;
+    let enroll_task = tokio::spawn(enroll_server.serve());
 
     // Start Tauri application
     let app = tauri::Builder::default()
@@ -182,6 +194,7 @@ pub async fn run() -> anyhow::Result<()> {
     });
 
     lifecycle_task.abort();
+    enroll_task.abort();
     api_task
         .await
         .map_err(|error| anyhow::anyhow!("API server task failed: {error}"))??;

@@ -30,7 +30,10 @@ pub struct DriverPackageValidation {
 
 pub fn validate_package(root: &Path) -> Result<DriverPackageValidation> {
     if !root.is_dir() {
-        bail!("driver package directory does not exist: {}", root.display());
+        bail!(
+            "driver package directory does not exist: {}",
+            root.display()
+        );
     }
 
     let mut inf_files = Vec::new();
@@ -47,7 +50,10 @@ pub fn validate_package(root: &Path) -> Result<DriverPackageValidation> {
     for path in inf_files {
         let inspection = inspect_inf(&path)?;
         if !inspection.is_network_class {
-            warnings.push(format!("{} is not identified as a network driver", path.display()));
+            warnings.push(format!(
+                "{} is not identified as a network driver",
+                path.display()
+            ));
         }
         inspections.push(inspection);
     }
@@ -125,7 +131,11 @@ fn collect_inf_files(root: &Path, output: &mut Vec<PathBuf>) -> Result<()> {
         let path = entry?.path();
         if path.is_dir() {
             collect_inf_files(&path, output)?;
-        } else if path.extension().and_then(|v| v.to_str()).is_some_and(|v| v.eq_ignore_ascii_case("inf")) {
+        } else if path
+            .extension()
+            .and_then(|v| v.to_str())
+            .is_some_and(|v| v.eq_ignore_ascii_case("inf"))
+        {
             output.push(path);
         }
     }

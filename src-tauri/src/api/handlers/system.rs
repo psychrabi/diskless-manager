@@ -173,38 +173,7 @@ pub async fn apply_network_settings(
     // Convert dotted mask to prefix
     let prefix = mask_to_prefix(mask).unwrap_or(24);
 
-    let dns_str = if dns.is_empty() {
-        "8.8.8.8, 8.8.4.4".to_string()
-    } else {
-        dns.join(", ")
-    };
-
-    let netplan_content = format!(
-        r#"network:
-  version: 2
-  renderer: networkd
-  ethernets:
-    {}:
-      dhcp4: no
-      addresses:
-        - {}/{}
-      gateway4: {}
-      nameservers:
-        addresses: [{}]
-"#,
-        interface, ip, prefix, gateway, dns_str
-    );
-
-    let path = "/etc/netplan/99-diskless-manager.yaml";
-    if crate::services::write_with_sudo_tee(path, &netplan_content)
-        .await
-        .is_err()
-    {
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
-    }
-
-    // Apply netplan
-    if crate::services::run_sudo_command(["netplan", "apply"])
+    if crate::platform::apply_static_network_config(interface, ip, prefix, gateway, dns)
         .await
         .is_err()
     {
@@ -351,6 +320,18 @@ pub async fn setup_privileged_access() -> Result<Json<serde_json::Value>, Status
         Ok(msg) => Ok(Json(serde_json::json!({ "message": msg }))),
         Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
+}
+
+pub async fn check_privileged_access() -> Result<Json<serde_json::Value>, StatusCode> {
+    let authorized = crate::commands::system::is_privileged_access_configured();
+    let message = if authorized {
+        "Privileged access is already configured"
+    } else {
+        "Privileged access has not been granted yet"
+    };
+    Ok(Json(
+        serde_json::json!({ "authorized": authorized, "message": message }),
+    ))
 }
 
 fn mask_to_prefix(mask: &str) -> Option<u32> {

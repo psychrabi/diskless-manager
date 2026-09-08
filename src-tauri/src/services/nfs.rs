@@ -54,13 +54,15 @@ impl NfsService {
     }
 
     pub async fn start(&self) -> anyhow::Result<()> {
-        run_sudo_command(["systemctl", "start", "nfs-kernel-server"]).await?;
+        let service = crate::platform::detect().nfs_service();
+        run_sudo_command(["systemctl", "start", service]).await?;
         info!("NFS service started");
         Ok(())
     }
 
     pub async fn stop(&self) -> anyhow::Result<()> {
-        run_sudo_command(["systemctl", "stop", "nfs-kernel-server"]).await?;
+        let service = crate::platform::detect().nfs_service();
+        run_sudo_command(["systemctl", "stop", service]).await?;
         info!("NFS service stopped");
         Ok(())
     }
@@ -88,8 +90,9 @@ impl NfsService {
     }
 
     pub async fn status(&self) -> anyhow::Result<ServiceStatus> {
-        let running = is_systemd_service_running("nfs-kernel-server").await?;
-        let pid = get_service_pid("nfs-kernel-server").await?;
+        let service = crate::platform::detect().nfs_service();
+        let running = is_systemd_service_running(service).await?;
+        let pid = get_service_pid(service).await?;
         Ok(ServiceStatus {
             running,
             pid,

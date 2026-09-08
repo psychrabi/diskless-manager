@@ -1,14 +1,28 @@
 import { ShieldCheck, ShieldAlert } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { setupPrivilegedAccess } from "@/api/modules/system";
 import { useToastStore } from "@/store/useToastStore";
 import { Button, Card } from "@/components/ui";
 
-const AuthorizeStep = ({ onAuthorized }) => {
+const AuthorizeStep = ({ onAuthorized, authorized = false, checking = false }) => {
   const { success, error } = useToastStore();
   const [loading, setLoading] = useState(false);
 
+  // When the backend probe confirms the user is already authorized the wizard
+  // will auto-advance to the next step; show the disabled state while we wait.
+  const isDisabled = authorized || loading || checking;
+
+  useEffect(() => {
+    if (!authorized || checking) return;
+    // Give the UI a moment to reflect the disabled state before moving on.
+    const timer = setTimeout(() => {
+      onAuthorized();
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [authorized, checking, onAuthorized]);
+
   const handleAuthorize = async () => {
+    if (authorized) return;
     setLoading(true);
     try {
       const response = await setupPrivilegedAccess({});
@@ -60,9 +74,14 @@ const AuthorizeStep = ({ onAuthorized }) => {
           variant="primary"
           onClick={handleAuthorize}
           loading={loading}
+          disabled={isDisabled}
           className="w-full"
         >
-          {loading ? "Authorizing..." : "Authorize Application"}
+          {authorized
+            ? "Already Authorized"
+            : loading || checking
+              ? "Checking..."
+              : "Authorize Application"}
         </Button>
       </div>
     </Card>

@@ -663,6 +663,207 @@ impl ImageService {
             })
             .collect())
     }
+
+    /// Scan the ZFS pool for image ZVOLs (and their snapshots) that live
+    /// under the configured `image-disk` parent but are not yet registered in
+    /// the database, and register them so they show up in the UI.
+    ///
+    /// Existing database rows are left untouched; this never deletes or
+    /// overwrites anything. A row that cannot be inserted (for example a
+    /// duplicate snapshot name) is skipped with a warning rather than aborting
+    /// the whole scan.
+    pub async fn import_existing_images(&self) -> Result<ImportScanResult> {
+        use crate::infrastructure::zfs::{
+            ZfsCommand, ZfsDatasetOperations, ZfsProvider, ZfsSnapshotOperations,
+        };
+
+        let parent = self.backend.image_parent()?;
+
+        let zpool = parent
+            .split_once('/')
+            .map(|(pool, _)| pool.to_string())
+            .unwrap_or_else(|| parent.clone());
+
+        let datasets = ZfsDatasetOperations::new(ZfsCommand::new());
+        let snapshots = ZfsSnapshotOperations::new(ZfsCommand::new());
+
+        let volumes = datasets.list_datasets(&zpool)?;
+        let listed = snapshots.list(&zpool)?;
+
+        let tracked = self.repository.list().await?;
+
+        let mut imported_masters = 0;
+        let mut imported_snapshots = 0;
+
+        for volume in &volumes {
+            let is_volume = volume.dataset_type == "volume";
+
+            // Only consider ZVOLs under the image parent (e.g. "pool/image-disk/..").
+            // Client disks and other datasets live elsewhere and are not images.
+            if !is_volume || !volume.name.starts_with(&format!("{}/", parent)) {
+                continue;
+            }
+
+            let parent_children = listed
+                .iter()
+                .filter(|snap| snap.dataset == volume.name)
+                .collect::<Vec<_>>();
+
+            let size_gb = volume.used.as_deref().and_then(parse_size_gb).unwrap_or(0);
+
+            let os_type = datasets
+                .get_property("org.diskless:os", &volume.name)?
+                .and_then(|value| value.parse::<OsType>().ok())
+                .unwrap_or(OsType::Linux);
+
+            if let Some(master) = tracked
+                .iter()
+                .find(|img| img.kind == ImageKind::Master && img.name == volume.name)
+            {
+                // Master already tracked: still register any snapshots that are
+                // missing, then move on.
+                for snap in &parent_children {
+                    let already = tracked.iter().any(|img| {
+                        img.kind == ImageKind::Snapshot
+                            && img.parent_id.as_deref() == Some(master.id.as_str())
+                            && img.name == snap.snapshot
+                    });
+                    if already {
+                        continue;
+                    }
+                    match self
+                        .repository
+                        .insert(&snapshot_record(master, snap, &volume.name))
+                        .await
+                    {
+                        Ok(_) => imported_snapshots += 1,
+                        Err(error) => {
+                            log::warn!(
+                                "import_existing: skipping snapshot '{}' of '{}': {}",
+                                snap.snapshot,
+                                volume.name,
+                                error
+                            );
+                        }
+                    }
+                }
+                continue;
+            }
+
+            let image = Image {
+                id: Uuid::new_v4().to_string(),
+                name: volume.name.clone(),
+                kind: ImageKind::Master,
+                os_type,
+                size_gb,
+                path: PathBuf::from(format!("/dev/zvol/{}", volume.name)),
+                format: ImageFormat::Raw,
+                status: "ready".to_string(),
+                description: None,
+                parent_id: None,
+                source_snapshot: None,
+                checksum: None,
+                is_default: false,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            };
+
+            if let Err(error) = self.repository.insert(&image).await {
+                log::warn!("import_existing: skipping '{}': {}", volume.name, error);
+                continue;
+            }
+            imported_masters += 1;
+
+            for snap in &parent_children {
+                match self
+                    .repository
+                    .insert(&snapshot_record(&image, snap, &volume.name))
+                    .await
+                {
+                    Ok(_) => imported_snapshots += 1,
+                    Err(error) => {
+                        log::warn!(
+                            "import_existing: skipping snapshot '{}' of '{}': {}",
+                            snap.snapshot,
+                            volume.name,
+                            error
+                        );
+                    }
+                }
+            }
+        }
+
+        Ok(ImportScanResult {
+            imported_masters,
+            imported_snapshots,
+        })
+    }
+}
+
+/// Build the database record for a snapshot child of `master`.
+///
+/// Matches the semantics used by `create_snapshot`: the stored `name` is the
+/// raw snapshot name (the part after `@`), while the actual ZFS object is
+/// `master.name@image.name`.
+fn snapshot_record(
+    master: &Image,
+    snap: &crate::infrastructure::zfs::provider::ZfsSnapshotInfo,
+    volume_name: &str,
+) -> Image {
+    Image {
+        id: Uuid::new_v4().to_string(),
+        name: snap.snapshot.clone(),
+        kind: ImageKind::Snapshot,
+        os_type: master.os_type,
+        size_gb: master.size_gb,
+        path: PathBuf::from(format!("/dev/zvol/{}", volume_name)),
+        format: master.format,
+        status: "ready".to_string(),
+        description: Some(format!("Snapshot of {}", master.name)),
+        parent_id: Some(master.id.clone()),
+        source_snapshot: None,
+        checksum: None,
+        is_default: false,
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    }
+}
+
+/// Result of a ZFS scan-and-import operation.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ImportScanResult {
+    pub imported_masters: usize,
+    pub imported_snapshots: usize,
+}
+
+fn parse_size_gb(value: &str) -> Option<u64> {
+    let value = value.trim();
+    if value.is_empty() || value == "-" {
+        return Some(0);
+    }
+    let number: f64 = value
+        .trim_end_matches(['K', 'M', 'G', 'T', 'P'])
+        .trim()
+        .parse()
+        .ok()?;
+    let multiplier: u64 = if value.ends_with('K') {
+        1024
+    } else if value.ends_with('M') {
+        1024 * 1024
+    } else if value.ends_with('G') {
+        1024 * 1024 * 1024
+    } else if value.ends_with('T') {
+        1024 * 1024 * 1024 * 1024
+    } else if value.ends_with('P') {
+        1024 * 1024 * 1024 * 1024 * 1024
+    } else {
+        1
+    };
+    Some(
+        (number as u64)
+            .saturating_mul(multiplier)
+            .div_ceil(1024 * 1024 * 1024),
+    )
 }
 
 fn validate_create_request(request: &CreateImageRequest) -> Result<()> {

@@ -35,6 +35,36 @@ A web-based toolkit for managing diskless PXE/iSCSI boot environments using ZFS,
 
 ### System Packages
 
+The toolkit runs on Debian/Ubuntu (apt), Fedora/RHEL-based (dnf) and Arch Linux
+(pacman) systems.
+
+#### Arch Linux
+
+```bash
+sudo pacman -S \
+    zfs \
+    targetcli-fb \
+    dhcp \
+    tftp-hpa \
+    apache \
+    wakeonlan \
+    samba \
+    openssh \
+    net-tools \
+    NetworkManager
+
+# QEMU tooling for image conversion
+sudo pacman -S qemu
+
+# FreeRDP client (provides xfreerdp)
+sudo pacman -S freerdp
+```
+
+> `zfs` and `targetcli-fb` are only available from the AUR and must be built
+> with an AUR helper (e.g. `paru` or `yay`).
+
+#### Debian / Ubuntu
+
 ```bash
 sudo apt update
 sudo apt install \
@@ -50,10 +80,48 @@ sudo apt install \
     net-tools
 ```
 
+#### Fedora / RHEL / CentOS
+
+```bash
+sudo dnf install \
+    targetcli \
+    dhcp-server \
+    tftp-server \
+    httpd \
+    wol \
+    samba \
+    openssh-server \
+    net-tools \
+    NetworkManager
+
+# Fedora uses a different package for the FreeRDP client
+sudo dnf install freerdp
+
+# QEMU tooling for image conversion
+sudo dnf install qemu-img
+```
+
+> `wakeonlan` was renamed to `wol` on Fedora/RHEL systems; the app detects
+> this automatically. OpenZFS is not packaged by the default Fedora/RHEL
+> repositories — the setup wizard enables the official zfsonlinux repository
+> and installs `zfs` (plus a matching `kernel-devel`) automatically.
+
+> Service names also differ: `dhcpd` (not `isc-dhcp-server`), `tftpd` (not
+> `tftpd-hpa`), `httpd` (not `apache2`), `nfs-server` (not
+> `nfs-kernel-server`) and `smb`/`nmb` (not `smbd`/`nmbd`). The app detects
+> the distribution automatically and uses the correct names and
+> configuration paths (`/etc/sysconfig/dhcpd`, `/etc/sysconfig/tftpd`,
+> `/etc/httpd/conf.d/`).
+>
+> On Arch Linux the service is called `dhcpd4`, the DHCP/TFTP settings live in
+> `/etc/systemd/system/dhcpd4.service.d/diskless-manager.conf` and
+> `/etc/conf.d/tftpd`, and the Apache configuration goes into
+> `/etc/httpd/conf/conf.d/`.
+
 ### Required Services
 
 ```bash
-# Check service status
+# Debian / Ubuntu
 sudo systemctl status \
     target \
     tftpd-hpa \
@@ -62,7 +130,25 @@ sudo systemctl status \
     apache2 \
     ssh
 
-# Enable services to start on boot
+# Fedora / RHEL
+sudo systemctl status \
+    target \
+    tftpd \
+    dhcpd \
+    smb \
+    httpd \
+    ssh
+
+# Arch Linux
+sudo systemctl status \
+    target \
+    tftpd \
+    dhcpd4 \
+    smb \
+    httpd \
+    sshd
+
+# Enable services to start on boot (substitute names as above)
 sudo systemctl enable \
     target \
     tftpd-hpa \
@@ -99,23 +185,6 @@ sudo smbpasswd -a diskless
    read only = no
    guest ok = no
    valid users = diskless
-```
-
-### System Packages
-
-```bash
-sudo apt install \
-    zfsutils-linux \
-    targetcli-fb \
-    isc-dhcp-server \
-    tftpd-hpa \
-    apache2 \
-    wakeonlan \
-    samba \
-    samba-common-bin \
-    openssh-server \
-    net-tools
-
 ```
 
 ## 🛠️ Installation
@@ -158,8 +227,14 @@ sudo apt install \
 2. **Configure Sudo Access**
    ```bash
    # Add to /etc/sudoers.d/diskless-manager
+   # Debian/Ubuntu: include apt-get, a2ensite, a2enmod, netplan
+   # Fedora/RHEL: include dnf, nmcli
+   # Arch Linux: include pacman, nmcli
    %USER% ALL=(ALL) NOPASSWD: /usr/sbin/zfs,/usr/bin/targetcli,/bin/systemctl,/usr/sbin/dhcpd,/usr/bin/wakeonlan
    ```
+   The **Privileged access** button in the app's setup wizard generates this
+   file automatically with the correct commands for the detected
+   distribution.
 
 ### 4. Configure Environment Variables
 
@@ -196,6 +271,18 @@ source ~/.bashrc
 
 2. **Access Web Interface**
    - Open browser to `http://localhost:5173`
+
+### Packaging
+
+The default bundle target is a Debian package (`.deb`). On Fedora/RHEL build
+an RPM instead:
+
+```bash
+bun tauri build --bundles rpm
+```
+
+The RPM metadata (dependency names/paths) is defined in
+`src-tauri/tauri.conf.json` under `bundle.linux.rpm`.
 
 ## 📁 Project Structure
 

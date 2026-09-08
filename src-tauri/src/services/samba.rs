@@ -32,17 +32,19 @@ impl SambaService {
         // Generate and write Samba configuration
         self.generate_config().await?;
 
-        // Start Samba services
-        run_sudo_command(["systemctl", "start", "smbd"]).await?;
-        run_sudo_command(["systemctl", "start", "nmbd"]).await?;
+        // Start Samba services (smbd/nmbd on Debian, smb/nmb on Fedora)
+        for service in crate::platform::detect().samba_services() {
+            run_sudo_command(["systemctl", "start", service]).await?;
+        }
 
         info!("Samba service started");
         Ok(())
     }
 
     pub async fn stop(&self) -> anyhow::Result<()> {
-        run_sudo_command(["systemctl", "stop", "smbd"]).await?;
-        run_sudo_command(["systemctl", "stop", "nmbd"]).await?;
+        for service in crate::platform::detect().samba_services() {
+            run_sudo_command(["systemctl", "stop", service]).await?;
+        }
 
         info!("Samba service stopped");
         Ok(())
@@ -51,19 +53,21 @@ impl SambaService {
     pub async fn reload(&self) -> anyhow::Result<()> {
         self.generate_config().await?;
 
-        run_sudo_command(["systemctl", "restart", "smbd"]).await?;
+        let samba_services = crate::platform::detect().samba_services();
+        run_sudo_command(["systemctl", "restart", samba_services[0]]).await?;
 
         info!("Samba service reloaded");
         Ok(())
     }
 
     pub async fn status(&self) -> anyhow::Result<ServiceStatus> {
-        let smbd_running = is_systemd_service_running("smbd").await?;
-        let nmbd_running = is_systemd_service_running("nmbd").await?;
-        let running = smbd_running && nmbd_running;
+        let samba_services = crate::platform::detect().samba_services();
+        let first_running = is_systemd_service_running(samba_services[0]).await?;
+        let second_running = is_systemd_service_running(samba_services[1]).await?;
+        let running = first_running && second_running;
 
         let pid = if running {
-            get_service_pid("smbd").await?
+            get_service_pid(samba_services[0]).await?
         } else {
             None
         };
@@ -72,11 +76,14 @@ impl SambaService {
             running,
             pid,
             message: if running {
-                "Samba server is running (smbd + nmbd)".to_string()
-            } else if smbd_running {
-                "Only smbd is running".to_string()
-            } else if nmbd_running {
-                "Only nmbd is running".to_string()
+                format!(
+                    "Samba server is running ({} + {})",
+                    samba_services[0], samba_services[1]
+                )
+            } else if first_running {
+                format!("Only {} is running", samba_services[0])
+            } else if second_running {
+                format!("Only {} is running", samba_services[1])
             } else {
                 "Samba server is not running".to_string()
             },

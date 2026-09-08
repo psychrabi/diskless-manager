@@ -171,19 +171,50 @@ pub async fn initialize_server(state: State<'_, AppState>) -> Result<String, Str
 }
 
 pub async fn check_dependencies() -> Result<Vec<DependencyStatus>, String> {
-    let dependencies = vec![
-        ("qemu-img", "qemu-utils"),
-        ("targetcli", "targetcli-fb"),
-        ("dhcpd", "isc-dhcp-server"),
-        ("in.tftpd", "tftpd-hpa"),
-        ("exportfs", "nfs-kernel-server"),
-        ("apache2", "apache2"),
-        ("smbd", "samba"),
-        ("wakeonlan", "wakeonlan"),
-        ("zfs", "zfsutils-linux"),
-        ("xfreerdp3", "freerdp3-x11"),
-        ("iftop", "iftop"),
-    ];
+    let distro = crate::platform::detect();
+
+    // Binary name -> package name, varying per distribution family.
+    let dependencies: Vec<(&str, &str)> = match distro {
+        crate::platform::Distro::Debian => vec![
+            ("qemu-img", "qemu-utils"),
+            ("targetcli", "targetcli-fb"),
+            ("dhcpd", "isc-dhcp-server"),
+            ("in.tftpd", "tftpd-hpa"),
+            ("exportfs", "nfs-kernel-server"),
+            ("apache2", "apache2"),
+            ("smbd", "samba"),
+            ("wakeonlan", "wakeonlan"),
+            ("zfs", "zfsutils-linux"),
+            ("xfreerdp3", "freerdp3-x11"),
+            ("iftop", "iftop"),
+        ],
+        crate::platform::Distro::RedHat => vec![
+            ("qemu-img", "qemu-img"),
+            ("targetcli", "targetcli"),
+            ("dhcpd", "dhcp-server"),
+            ("in.tftpd", "tftp-server"),
+            ("exportfs", "nfs-utils"),
+            ("httpd", "httpd"),
+            ("smbd", "samba"),
+            ("wol", "wol"),
+            ("zfs", "zfs"),
+            ("xfreerdp", "freerdp"),
+            ("iftop", "iftop"),
+        ],
+        crate::platform::Distro::Arch => vec![
+            ("qemu-img", "qemu"),
+            ("targetcli", "targetcli-fb"),
+            ("dhcpd", "dhcp"),
+            ("in.tftpd", "tftp-hpa"),
+            ("exportfs", "nfs-utils"),
+            ("httpd", "apache"),
+            ("smbd", "samba"),
+            ("wakeonlan", "wakeonlan"),
+            ("zfs", "zfs"),
+            ("xfreerdp", "freerdp"),
+            ("iftop", "iftop"),
+        ],
+    };
 
     let mut handles = Vec::new();
 
@@ -192,18 +223,10 @@ pub async fn check_dependencies() -> Result<Vec<DependencyStatus>, String> {
         let name = name.to_string();
         handles.push(tokio::spawn(async move {
             let output = Command::new("which").arg(&cmd).output();
-            let installed = output.map(|o| o.status.success()).unwrap_or(false);
+            let binary_found = output.map(|o| o.status.success()).unwrap_or(false);
+            let installed = crate::platform::is_package_installed(distro, &name) || binary_found;
 
-            let version = Command::new("dpkg-query")
-                .args(["--showformat=${Version}\n", "--show", &name])
-                .output()
-                .ok()
-                .and_then(|o| {
-                    let stdout = String::from_utf8_lossy(&o.stdout);
-                    let stderr = String::from_utf8_lossy(&o.stderr);
-                    let output = if stdout.is_empty() { stderr } else { stdout };
-                    output.lines().next().map(|s| s.to_string())
-                });
+            let version = crate::platform::package_version(distro, &name);
 
             DependencyStatus {
                 name,
@@ -281,25 +304,7 @@ pub async fn setup_privileged_access() -> Result<String, String> {
     });
 
     // We list the exactly required commands with their paths found in the system
-    let commands = [
-        "/usr/bin/apt-get",
-        "/usr/bin/systemctl",
-        "/usr/sbin/zfs",
-        "/usr/sbin/zpool",
-        "/usr/bin/targetcli",
-        "/usr/bin/tee",
-        "/usr/bin/mkdir",
-        "/usr/bin/sync",
-        "/usr/sbin/exportfs",
-        "/usr/sbin/a2ensite",
-        "/usr/sbin/a2enmod",
-        "/usr/bin/journalctl",
-        "/usr/bin/rm",
-        "/usr/bin/mv",
-        "/usr/bin/cp",
-        "/usr/sbin/netplan",
-        "/usr/sbin/dhcpd",
-    ];
+    let commands = crate::platform::detect().privileged_commands();
 
     let commands_str = commands.join(", ");
     let sudoers_content = format!("{} ALL=(ALL) NOPASSWD: {}\n", user, commands_str);
@@ -324,6 +329,37 @@ pub async fn setup_privileged_access() -> Result<String, String> {
             stderr
         ))
     }
+}
+
+/// Whether privileged access has already been granted. The sudoers rule lives
+/// in a root-only mode-0440 file that the app process (a regular user) cannot
+/// read, so probe the grant indirectly: `sudo -n` with one of the exact
+/// passwordless-command paths only succeeds when the diskless-manager rule
+/// exists. `-n` guarantees the probe never prompts.
+pub fn is_privileged_access_configured() -> bool {
+    // Best-effort direct read, which only works when the process can read the
+    // file (e.g. it is running as root).
+    if let Ok(content) = std::fs::read_to_string("/etc/sudoers.d/diskless-manager") {
+        if let Ok(user) = std::env::var("USER") {
+            if content
+                .lines()
+                .any(|line| line.starts_with(&format!("{} ALL=", user)))
+            {
+                return true;
+            }
+        } else if !content.trim().is_empty() {
+            return true;
+        }
+    }
+
+    let Ok(output) = std::process::Command::new("sudo")
+        .args(["-n", "/usr/bin/systemctl", "--version"])
+        .output()
+    else {
+        return false;
+    };
+    let stderr = String::from_utf8_lossy(&output.stderr).to_lowercase();
+    output.status.success() && !stderr.contains("password is required")
 }
 
 pub async fn get_network_interfaces() -> Result<Vec<String>, String> {
@@ -395,37 +431,7 @@ pub async fn apply_network_settings(state: State<'_, AppState>) -> Result<String
     // Convert dotted mask to prefix
     let prefix = mask_to_prefix(mask).unwrap_or(24);
 
-    let dns_str = if dns.is_empty() {
-        "8.8.8.8, 8.8.4.4".to_string()
-    } else {
-        dns.join(", ")
-    };
-
-    let netplan_content = format!(
-        r#"network:
-  version: 2
-  renderer: networkd
-  ethernets:
-    {}:
-      dhcp4: no
-      addresses:
-        - {}/{}
-      gateway4: {}
-      nameservers:
-        addresses: [{}]
-"#,
-        interface, ip, prefix, gateway, dns_str
-    );
-
-    let path = "/etc/netplan/99-diskless-manager.yaml";
-    crate::services::write_with_sudo_tee(path, &netplan_content)
-        .await
-        .map_err(|e| format!("Failed to write netplan config: {}", e))?;
-
-    // Apply netplan
-    crate::services::run_sudo_command(["netplan", "apply"])
-        .await
-        .map_err(|e| format!("Failed to apply netplan: {}", e))?;
+    crate::platform::apply_static_network_config(interface, ip, prefix, gateway, dns).await?;
 
     // Update related service configurations with the new static IP
     settings.tftp.server_ip = ip.clone();
@@ -713,15 +719,5 @@ fn mask_to_prefix(mask: &str) -> Option<u32> {
 }
 
 pub async fn install_package(service: String) -> Result<String, String> {
-    let output = Command::new("sudo")
-        .args(["apt-get", "install", "-y", &service])
-        .output()
-        .map_err(|e| format!("Failed to spawn apt-get: {}", e))?;
-
-    if output.status.success() {
-        Ok(format!("Package {} installed successfully", service))
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!("Failed to install {}: {}", service, stderr))
-    }
+    crate::platform::install_package(&service).await
 }

@@ -11,6 +11,14 @@ BACKUP_DIR="${ROOT_DIR}/backups"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 BACKUP="${BACKUP_DIR}/autoexec.ipxe.${TIMESTAMP}.bak"
 
+# Apache ships as "apache2" on Debian-like systems and "httpd" on RedHat-like
+# and Arch systems. Reload whichever web server serves the boot files once the
+# new autoexec has been installed.
+WEB_SERVICE="apache2"
+if [[ -f /etc/redhat-release ]] || [[ -f /etc/arch-release ]]; then
+    WEB_SERVICE="httpd"
+fi
+
 if [[ ! -d "$ROOT_DIR" ]]; then
     echo "ERROR: HTTP/TFTP root does not exist: $ROOT_DIR" >&2
     exit 1
@@ -57,8 +65,8 @@ if grep -Fq 'windows-boot' "$AUTOEXEC" || grep -Fq '4433' "$AUTOEXEC"; then
     exit 1
 fi
 
-sudo systemctl reload apache2
+sudo systemctl reload "$WEB_SERVICE"
 
 echo "Installed generic DHCP-root-path autoexec: $AUTOEXEC"
-echo "Apache2 reloaded."
+echo "${WEB_SERVICE} reloaded."
 echo "This migration does not create or repair iSCSI targets."
