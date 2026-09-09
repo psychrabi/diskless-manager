@@ -14,7 +14,7 @@ use crate::api::handlers::{
         bootstrap_first_admin, check_admin_exists, login, update_admin_password,
         validate_auth_token,
     },
-    clients::{create_client, delete_client, get_client_boot_history, update_client},
+    clients::{create_client, delete_client, get_client_boot_history, rotate_client_chap, update_client},
     clients_v2::{get_client, list_clients},
     config::get_config,
     control::{
@@ -41,16 +41,16 @@ use crate::api::handlers::{
     pxe::select_network_drivers,
     reconciliation::{inspect_storage_reconciliation, repair_storage_reconciliation},
     services::{
-        configure_service, get_service_config, get_service_status, install_service, list_services,
-        restart_all_services, restart_service, start_all_services, start_service,
-        stop_all_services, stop_service,
+        configure_service, disable_service_boot, enable_service_boot, get_service_config,
+        get_service_status, install_service, list_services, restart_all_services, restart_service,
+        start_all_services, start_service, stop_all_services, stop_service,
     },
     ssh::{execute_ssh_command, get_windows_system_info, test_ssh_connection},
     system::{
         apply_network_settings, check_dependencies, check_privileged_access, clear_cache,
-        close_enrollment, detect_server_network, get_interface_ip, get_network_interfaces,
-        get_ram_usage, get_server_status, get_settings, get_system_info, get_zfs_arcstat,
-        initialize_server, open_enrollment, save_settings, setup_privileged_access,
+        close_enrollment, detect_server_network, get_firewall_status, get_interface_ip,
+        get_network_interfaces, get_ram_usage, get_server_status, get_settings, get_system_info,
+        get_zfs_arcstat, initialize_server, open_enrollment, save_settings, setup_privileged_access,
     },
     system_reconciliation::inspect_system_reconciliation_handler,
     users::{create_user, delete_user, get_user, list_users, update_user, update_user_password},
@@ -140,6 +140,7 @@ pub fn create_app(state: crate::state::AppState) -> Router {
             post(prepare_nvmeof_boot),
         )
         .route("/api/clients/{id}/shutdown", post(shutdown_client))
+        .route("/api/clients/{id}/chap/rotate", post(rotate_client_chap))
         .route("/api/clients/{id}/reboot", post(reboot_client))
         .route(
             "/api/clients/{id}/remote-desktop",
@@ -182,6 +183,8 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route("/api/services/{name}/start", post(start_service))
         .route("/api/services/{name}/stop", post(stop_service))
         .route("/api/services/{name}/restart", post(restart_service))
+        .route("/api/services/{name}/boot/enable", post(enable_service_boot))
+        .route("/api/services/{name}/boot/disable", post(disable_service_boot))
         .route("/api/services/all/start", post(start_all_services))
         .route("/api/services/all/stop", post(stop_all_services))
         .route("/api/services/all/restart", post(restart_all_services))
@@ -203,6 +206,7 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route("/api/system/network/detect", post(detect_server_network))
         .route("/api/system/network/apply", post(apply_network_settings))
         .route("/api/system/settings", get(get_settings).put(save_settings))
+        .route("/api/system/firewall", get(get_firewall_status))
         .route("/api/system/enrollment/open", post(open_enrollment))
         .route("/api/system/enrollment/close", post(close_enrollment))
         .route(

@@ -6,6 +6,7 @@ import { Save } from "lucide-react";
 import { useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
 import { Button, Input, Modal, Select } from "@/components/ui";
+import { DialogFooter } from "@/components/ui/dialog";
 
 const diskSchema = z
   .object({
@@ -134,7 +135,7 @@ const DiskFormModal = ({ zpools, isOpen, setIsOpen, refresh }) => {
             error={errors.size?.message}
           />
         )}
-        <div className="mt-6 flex justify-end space-x-3">
+        <DialogFooter className="mt-6">
           <Button type="submit" variant="primary" icon={Save}>
             {usageType === "game" ? "Create Game Disk" : "Create Master"}
           </Button>
@@ -145,7 +146,7 @@ const DiskFormModal = ({ zpools, isOpen, setIsOpen, refresh }) => {
           >
             Cancel
           </Button>
-        </div>
+        </DialogFooter>
       </form>
     </Modal>
   );

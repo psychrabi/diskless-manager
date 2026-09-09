@@ -1,23 +1,18 @@
-import { Wrench } from "lucide-react";
-import { Card } from "@/components/ui";
+import { PageHeader } from "@/components/ui";
 import AdminPasswordForm from "./AdminPasswordForm";
 import PrivilegeManagementForm from "./PrivilegeManagementForm";
-import UserManagement from "../UserManagement";
 
 const ApplicationSettings = () => {
   return (
-    <div className="space-y-6">
-      <Card
+    <div className="flex flex-col gap-4">
+      <PageHeader
         title="Application Settings"
-        subtitle="Set your application settings"
-        icon={Wrench}
-        className="bg-muted"
-      >
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <AdminPasswordForm />
-          <PrivilegeManagementForm />
-        </div>
-      </Card>
+        description="Set your application settings, admin access, and user accounts."
+      />
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 items-stretch">
+        <AdminPasswordForm />
+        <PrivilegeManagementForm />
+      </div>
     </div>
   );
 };

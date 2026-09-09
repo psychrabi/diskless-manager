@@ -5,7 +5,8 @@ use std::time::{Duration, Instant};
 use crate::infrastructure::command::{run_command, run_command_output};
 
 use super::model::{
-    IscsiLunSpec, IscsiLunState, IscsiProvisionResult, IscsiTargetSpec, IscsiTargetState,
+    ChapCredentials, IscsiLunSpec, IscsiLunState, IscsiProvisionResult, IscsiTargetSpec,
+    IscsiTargetState,
 };
 
 /// Abstraction over the iSCSI/LIO provisioning layer.
@@ -44,6 +45,16 @@ pub trait IscsiProvisioner: Send + Sync {
 
     /// Check whether an iSCSI target exists.
     fn target_exists(&self, target_iqn: &str) -> Result<bool>;
+
+    /// Enforce (or clear with `None`) one-way CHAP on a live target.
+    ///
+    /// Applies immediately to new logins; existing sessions are
+    /// unaffected. Used by secret rotation to avoid a full rebuild.
+    fn set_chap_auth(
+        &self,
+        target_iqn: &str,
+        chap: Option<&ChapCredentials>,
+    ) -> Result<()>;
 
     /// List every LUN currently attached to a target.
     ///
@@ -215,6 +226,28 @@ impl TargetCliProvisioner {
 
         self.execute(["targetcli", &tpg, "set", "attribute", "authentication=0"])
             .context("failed to disable iSCSI authentication")?;
+
+        // One-way CHAP: the target authenticates the initiator. Secrets
+        // are server-generated alphanumeric strings, safe to interpolate.
+        if let Some(chap) = spec.chap.as_ref() {
+            self.execute([
+                "targetcli",
+                &tpg,
+                "set",
+                "auth",
+                &format!("userid={}", chap.username),
+                &format!("password={}", chap.password),
+            ])
+            .with_context(|| {
+                format!(
+                    "failed to set iSCSI CHAP credentials for user '{}'",
+                    chap.username
+                )
+            })?;
+
+            self.execute(["targetcli", &tpg, "set", "attribute", "authentication=1"])
+                .context("failed to enable iSCSI authentication")?;
+        }
 
         Ok(())
     }
@@ -643,8 +676,40 @@ impl IscsiProvisioner for TargetCliProvisioner {
         Ok(())
     }
 
-    fn list_target_luns(&self, target_iqn: &str) -> Result<Vec<IscsiLunState>> {
-        if !self.target_exists(target_iqn)? {
+    fn set_chap_auth(
+        &self,
+        target_iqn: &str,
+        chap: Option<&ChapCredentials>,
+    ) -> Result<()> {
+        let tpg = Self::tpg_path(target_iqn);
+        match chap {
+            Some(chap) => {
+                self.execute([
+                    "targetcli",
+                    &tpg,
+                    "set",
+                    "auth",
+                    &format!("userid={}", chap.username),
+                    &format!("password={}", chap.password),
+                ])
+                .with_context(|| {
+                    format!(
+                        "failed to set iSCSI CHAP credentials for user '{}'",
+                        chap.username
+                    )
+                })?;
+                self.execute(["targetcli", &tpg, "set", "attribute", "authentication=1"])
+                    .context("failed to enable iSCSI authentication")?;
+            }
+            None => {
+                self.execute(["targetcli", &tpg, "set", "attribute", "authentication=0"])
+                    .context("failed to disable iSCSI authentication")?;
+            }
+        }
+        self.save()
+    }
+
+    fn list_target_luns(&self, target_iqn: &str) -> Result<Vec<IscsiLunState>> {        if !self.target_exists(target_iqn)? {
             return Ok(Vec::new());
         }
         let lun_output = self.output(["targetcli", &Self::lun_path(target_iqn), "ls"])?;

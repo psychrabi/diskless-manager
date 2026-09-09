@@ -128,6 +128,9 @@ impl HttpService {
                 ip: client.ip.clone(),
                 target_iqn: target_iqn.to_string(),
                 server_ip: server_ip.to_string(),
+                // Repair-menu path preserves the legacy open attach; CHAP
+                // menus are (re)published by the enrollment/update flows.
+                chap: None,
             };
 
             publish_client_ipxe(&reservation).await.map_err(|error| {

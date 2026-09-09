@@ -2,6 +2,8 @@ import { ShieldCheck, ShieldAlert } from "lucide-react";
 import { useEffect, useState } from "react";
 import { setupPrivilegedAccess } from "@/api/modules/system";
 import { useToastStore } from "@/store/useToastStore";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { FieldDescription } from "@/components/ui/field";
 import { Button, Card } from "@/components/ui";
 
 const AuthorizeStep = ({ onAuthorized, authorized = false, checking = false }) => {
@@ -36,24 +38,17 @@ const AuthorizeStep = ({ onAuthorized, authorized = false, checking = false }) =
   };
 
   return (
-    <Card className="w-full max-w-md mx-auto">
-      <div className="text-center mb-6">
-        <div className="flex justify-center mb-4">
-          <div className="p-3 bg-primary/10 rounded-full">
-            <ShieldCheck size={32} className="text-primary" />
-          </div>
-        </div>
-        <h2 className="text-2xl font-bold text-primary">Authorize Application</h2>
-        <p className="text-muted-foreground mt-2">
-          Grant privileged access for system management
-        </p>
-      </div>
-
+    <Card
+      title="Authorize Application"
+      subtitle="Grant privileged access for system management"
+      icon={ShieldCheck}
+      className="w-full max-w-md mx-auto"
+    >
       <div className="space-y-4">
-        <p className="text-sm text-muted-foreground leading-relaxed">
+        <FieldDescription>
           The application requires privileged access to manage system services,
           storage, and configuration files. This includes:
-        </p>
+        </FieldDescription>
 
         <ul className="text-sm text-muted-foreground space-y-1.5 list-disc list-inside">
           <li>Service management (DHCP, TFTP, HTTP, Samba)</li>
@@ -62,13 +57,13 @@ const AuthorizeStep = ({ onAuthorized, authorized = false, checking = false }) =
           <li>Network configuration</li>
         </ul>
 
-        <div className="flex items-center gap-3 p-3 bg-amber-600/10 border border-amber-600/20 rounded-lg text-amber-600 text-xs">
-          <ShieldAlert size={24} className="shrink-0" />
-          <p>
+        <Alert variant="default" className="border-amber-600/20 bg-amber-600/10 text-amber-600">
+          <ShieldAlert />
+          <AlertDescription className="text-amber-600">
             A one-time password prompt (Polkit) will appear to authorize this
             operation. This creates a specific sudoers rule for the current user.
-          </p>
-        </div>
+          </AlertDescription>
+        </Alert>
 
         <Button
           variant="primary"

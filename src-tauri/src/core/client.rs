@@ -26,6 +26,9 @@ pub struct Client {
     pub pxe_mode: Option<String>,
     pub keep_writeback: Option<bool>,
     pub use_game_disk: Option<bool>,
+    pub chap_user: Option<String>,
+    pub chap_secret: Option<String>,
+    pub chap_enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,6 +41,9 @@ pub struct CreateClientRequest {
     pub keep_writeback: Option<bool>,
     pub use_game_disk: Option<bool>,
     pub game_disks: Option<Vec<String>>,
+    /// Enforce one-way iSCSI CHAP (server-generated credentials).
+    /// `None` preserves the legacy open portal.
+    pub chap_enabled: Option<bool>,
     pub block_store: Option<String>,
     pub block_device: Option<String>,
     pub target_iqn: Option<String>,
@@ -55,6 +61,9 @@ pub struct UpdateClientRequest {
     /// Explicit per-client game master selection. `None` keeps the stored
     /// selection; `Some` replaces it wholesale.
     pub game_disks: Option<Vec<String>>,
+    /// Toggle one-way iSCSI CHAP enforcement. Secrets are server-managed;
+    /// this only flips enforcement (credentials are ensured separately).
+    pub chap_enabled: Option<bool>,
     pub enabled: Option<bool>,
     pub block_store: Option<String>,
     pub block_device: Option<String>,
@@ -100,6 +109,9 @@ impl Client {
             pxe_mode: Some("uefi".to_string()),
             keep_writeback: req.keep_writeback,
             use_game_disk: req.use_game_disk,
+            chap_user: None,
+            chap_secret: None,
+            chap_enabled: None,
         })
     }
 
@@ -181,6 +193,9 @@ struct ClientRow {
     mode: Option<String>,
     keep_writeback: Option<bool>,
     use_game_disk: Option<bool>,
+    chap_user: Option<String>,
+    chap_secret: Option<String>,
+    chap_enabled: Option<bool>,
 }
 
 impl ClientManager {
@@ -196,8 +211,9 @@ impl ClientManager {
             INSERT INTO clients (
                 id, name, mac, ip, master, snapshot, block_store, target_iqn,
                 writeback, block_device, status, mode, pxe_mode, keep_writeback,
-                use_game_disk, created_at, last_modified, enabled, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                use_game_disk, chap_user, chap_secret, chap_enabled,
+                created_at, last_modified, enabled, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name, mac = excluded.mac, ip = excluded.ip,
                 master = excluded.master, snapshot = excluded.snapshot,
@@ -205,6 +221,8 @@ impl ClientManager {
                 writeback = excluded.writeback, block_device = excluded.block_device,
                 status = excluded.status, mode = excluded.mode, pxe_mode = excluded.pxe_mode,
                 keep_writeback = excluded.keep_writeback, use_game_disk = excluded.use_game_disk,
+                chap_user = excluded.chap_user, chap_secret = excluded.chap_secret,
+                chap_enabled = excluded.chap_enabled,
                 created_at = excluded.created_at, last_modified = excluded.last_modified,
                 enabled = excluded.enabled, updated_at = excluded.updated_at
             "#,
@@ -224,6 +242,9 @@ impl ClientManager {
         .bind(client.pxe_mode.as_ref().unwrap_or(&"uefi".to_string()))
         .bind(client.keep_writeback.unwrap_or(true))
         .bind(client.use_game_disk.unwrap_or(false))
+        .bind(&client.chap_user)
+        .bind(&client.chap_secret)
+        .bind(client.chap_enabled.unwrap_or(false))
         .bind(client.created_at.to_rfc3339())
         .bind(&client.last_modified)
         .bind(client.enabled)
@@ -239,7 +260,8 @@ impl ClientManager {
             r#"
             SELECT id, name, mac, ip, master, enabled, created_at, updated_at,
                    snapshot, block_store, target_iqn, writeback, last_modified,
-                   block_device, status, mode, keep_writeback, use_game_disk
+                   block_device, status, mode, keep_writeback, use_game_disk,
+                   chap_user, chap_secret, chap_enabled
             FROM clients
             ORDER BY name
             "#,
@@ -279,6 +301,9 @@ impl ClientManager {
                 pxe_mode: Some("uefi".to_string()), // Default to UEFI
                 keep_writeback: row.keep_writeback,
                 use_game_disk: row.use_game_disk,
+                chap_user: row.chap_user,
+                chap_secret: row.chap_secret,
+                chap_enabled: row.chap_enabled,
             })
             .collect();
 
@@ -290,7 +315,8 @@ impl ClientManager {
             r#"
             SELECT id, name, mac, ip, master, enabled, created_at, updated_at,
                    snapshot, block_store, target_iqn, writeback, last_modified,
-                   block_device, status, mode, keep_writeback, use_game_disk
+                   block_device, status, mode, keep_writeback, use_game_disk,
+                   chap_user, chap_secret, chap_enabled
             FROM clients
             WHERE id = ? OR name = ? OR mac = ?
             "#,
@@ -333,6 +359,9 @@ impl ClientManager {
             pxe_mode: Some("uefi".to_string()), // Default to UEFI
             keep_writeback: row.keep_writeback,
             use_game_disk: row.use_game_disk,
+            chap_user: row.chap_user,
+            chap_secret: row.chap_secret,
+            chap_enabled: row.chap_enabled,
         })
     }
 
@@ -383,6 +412,9 @@ impl ClientManager {
         }
         if let Some(use_game_disk) = req.use_game_disk {
             client.use_game_disk = Some(use_game_disk);
+        }
+        if let Some(chap_enabled) = req.chap_enabled {
+            client.chap_enabled = Some(chap_enabled);
         }
         if let Some(enabled) = req.enabled {
             client.enabled = enabled;

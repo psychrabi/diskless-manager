@@ -107,6 +107,11 @@ async fn install_configuration(primary: &str, clients: &str) -> Result<(), Strin
     )
     .await?;
     info!("DHCP reservations and dynamic ranges validated and installed");
+    // Staged files inherit temp-dir labels; confined dhcpd is denied them
+    // under an enforcing policy (shows up as "Can't open ... Permission
+    // denied" only when systemd starts the service).
+    crate::infrastructure::command::restorecon_paths(&[DHCP_CONFIG_PATH, DHCP_CLIENTS_PATH])
+        .map_err(|e| format!("SELinux relabel failed: {e}"))?;
     Ok(())
 }
 

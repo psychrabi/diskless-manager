@@ -5,7 +5,10 @@ use crate::{
     },
     infrastructure::{
         image::ImageBackend,
-        iscsi::{IscsiLunSpec, IscsiProvisionResult, IscsiProvisioner, IscsiTargetSpec},
+        iscsi::{
+            ChapCredentials, IscsiLunSpec, IscsiProvisionResult, IscsiProvisioner,
+            IscsiTargetSpec,
+        },
     },
 };
 use anyhow::{bail, Context, Result};
@@ -413,6 +416,25 @@ impl StorageService {
         Ok(clone)
     }
 
+    /// Enforce (or clear with `None`) one-way CHAP on a live target.
+    ///
+    /// Applies immediately to new logins; existing sessions are
+    /// unaffected. Skips targets that were never provisioned (their first
+    /// provision enforces). Used by auth flips and secret rotation to
+    /// avoid a full storage rebuild.
+    pub fn set_target_chap(
+        &self,
+        target_iqn: &str,
+        chap: Option<&ChapCredentials>,
+    ) -> Result<()> {
+        if !self.iscsi.target_exists(target_iqn)? {
+            return Ok(());
+        }
+        self.iscsi.set_chap_auth(target_iqn, chap).with_context(|| {
+            format!("failed to apply CHAP change on target '{target_iqn}'")
+        })
+    }
+
     /// Remove every `game_*` LUN/backstore on a target that is not desired.
     ///
     /// Only backstores starting with `game_` are touched; the boot
@@ -477,11 +499,14 @@ impl StorageService {
     /// attached LUN survive the reset. The caller must establish that the
     /// client is offline. Super (persistent) clients never reach this:
     /// their clones are intentionally kept across reboots.
+    ///
+    /// `chap` mirrors portal enforcement (see `sync_game_storage`).
     pub fn reset_game_clones(
         &self,
         client_id: &str,
         target_iqn: &str,
         masters: &[String],
+        chap: Option<&ChapCredentials>,
     ) -> Result<()> {
         for master in masters {
             let clone = game_clone_dataset(client_id, master);
@@ -508,7 +533,8 @@ impl StorageService {
         self.prune_game_luns(target_iqn, &desired)?;
         let luns = Self::build_game_luns(client_id, masters);
         if !luns.is_empty() {
-            let spec = IscsiTargetSpec::with_luns(target_iqn, luns)?;
+            let mut spec = IscsiTargetSpec::with_luns(target_iqn, luns)?;
+            spec.chap = chap.cloned();
             self.iscsi.create_target(&spec).with_context(|| {
                 format!("failed to re-expose game LUNs for client '{client_id}'")
             })?;
@@ -554,11 +580,16 @@ impl StorageService {
     /// created, desired LUNs are (re-)exposed, stale LUNs are pruned, and
     /// clone datasets that are no longer selected are destroyed. The boot
     /// LUN is never modified.
+    ///
+    /// `chap` must mirror the target's enforcement: `create_target`
+    /// reconfigures the portal, and a `None` here would silently drop
+    /// authentication.
     pub fn sync_game_storage(
         &self,
         client_id: &str,
         target_iqn: &str,
         masters: &[String],
+        chap: Option<&ChapCredentials>,
     ) -> Result<()> {
         for master in masters {
             self.ensure_game_clone(client_id, master)?;
@@ -570,7 +601,8 @@ impl StorageService {
         // removed first so `create_target` attaches the fresh clones.
         self.prune_game_luns(target_iqn, &desired)?;
         if !luns.is_empty() {
-            let spec = IscsiTargetSpec::with_luns(target_iqn, luns)?;
+            let mut spec = IscsiTargetSpec::with_luns(target_iqn, luns)?;
+            spec.chap = chap.cloned();
             // Additive and idempotent: existing LUNs are left alone.
             self.iscsi.create_target(&spec).with_context(|| {
                 format!("failed to expose game LUNs for client '{client_id}'")
@@ -766,7 +798,10 @@ impl StorageService {
             luns.extend(game_luns);
         }
 
-        let iscsi_spec = IscsiTargetSpec::with_luns(&spec.target_iqn, luns)?;
+        let mut iscsi_spec = IscsiTargetSpec::with_luns(&spec.target_iqn, luns)?;
+        // Enforcement travels with every provision: configure_tpg applies
+        // (or explicitly clears) target authentication from this field.
+        iscsi_spec.chap = spec.chap.clone();
 
         // ---------------------------------------------------------------
         // Step 2b: Prune stale game attachments BEFORE creating LUNs.

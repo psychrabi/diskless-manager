@@ -77,6 +77,9 @@ impl ProvisioningService {
             ip: client.ip.to_string(),
             target_iqn: storage.target_iqn().to_string(),
             server_ip: server_ip.to_string(),
+            // The provisioned menu must carry the same credentials the
+            // target enforces, or the first boot cannot log in.
+            chap: storage_spec.chap.clone(),
         };
         if let Err(error) = self.boot.publish(&reservation).await {
             let rollback = self.storage.destroy_client_storage(&storage);
@@ -103,6 +106,21 @@ impl ProvisioningService {
             bail!(message);
         }
 
+        // Persist CHAP credentials resolved at the API layer. The target
+        // and menu already enforce/carry them; the database must agree.
+        if let Some(chap) = &storage_spec.chap {
+            if let Err(error) = self
+                .clients
+                .set_chap_credentials(&client.id, &chap.username, &chap.password)
+                .await
+            {
+                tracing::error!(client_id = %client.id, %error, "failed to persist CHAP credentials; continuing without them");
+            }
+            client.chap_user = Some(chap.username.clone());
+            client.chap_secret = Some(chap.password.clone());
+            client.chap_enabled = true;
+        }
+
         if let Err(error) = self
             .clients
             .set_game_selection(&client.id, &client.game_disks)
@@ -123,7 +141,7 @@ mod tests {
         infrastructure::{
             dhcp::{BootReservation, BootReservationPublisher},
             image::{ImageBackend, ImageBackendInfo},
-            iscsi::{IscsiLunState, IscsiProvisioner, IscsiTargetSpec, IscsiTargetState},
+            iscsi::{ChapCredentials, IscsiLunState, IscsiProvisioner, IscsiTargetSpec, IscsiTargetState},
         },
     };
     use std::path::Path;
@@ -187,6 +205,9 @@ mod tests {
             unreachable!()
         }
         fn target_exists(&self, _: &str) -> Result<bool> {
+            unreachable!()
+        }
+        fn set_chap_auth(&self, _: &str, _: Option<&ChapCredentials>) -> Result<()> {
             unreachable!()
         }
         fn list_target_luns(&self, _: &str) -> Result<Vec<IscsiLunState>> {
@@ -279,6 +300,9 @@ mod tests {
             // Prune short-circuits on a missing target.
             Ok(false)
         }
+        fn set_chap_auth(&self, _: &str, _: Option<&ChapCredentials>) -> Result<()> {
+            Ok(())
+        }
         fn list_target_luns(&self, _: &str) -> Result<Vec<IscsiLunState>> {
             Ok(Vec::new())
         }
@@ -332,6 +356,7 @@ mod tests {
                 keep_writeback: true,
                 use_game_disk: false,
                 game_disks: Vec::new(),
+                chap_enabled: false,
             },
             ClientStorageSpec {
                 client_id: "ignored".into(),
@@ -342,6 +367,7 @@ mod tests {
                 lun: 0,
                 use_game_disk: false,
                 game_disks: Vec::new(),
+                chap: None,
             },
         )
     }
@@ -383,6 +409,7 @@ mod tests {
             keep_writeback: true,
             use_game_disk: false,
             game_disks: Vec::new(),
+            chap_enabled: false,
         };
         let spec = ClientStorageSpec {
             client_id: "ignored".into(),
@@ -393,6 +420,7 @@ mod tests {
             lun: 0,
             use_game_disk: false,
             game_disks: Vec::new(),
+            chap: None,
         };
 
         let error = service

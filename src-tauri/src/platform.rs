@@ -105,6 +105,47 @@ impl Distro {
         }
     }
 
+    /// systemd units to enable for start-on-boot, by internal service name
+    /// (`dhcp`, `tftp`, `iscsi`, `nfs`, `http`, `samba`).
+    ///
+    /// Usually the service unit itself. Exceptions are documented inline:
+    /// socket-activated services need their socket, multi-unit services
+    /// need every unit.
+    pub fn boot_units(&self, service: &str) -> &'static [&'static str] {
+        match service {
+            "dhcp" => match self {
+                Distro::Debian => &["isc-dhcp-server"],
+                Distro::RedHat => &["dhcpd"],
+                Distro::Arch => &["dhcpd4"],
+            },
+            // Fedora/RHEL's tftp-server package ships `tftp.service`
+            // activated over `tftp.socket` — the socket is what must be
+            // enabled for the service to come up at boot.
+            "tftp" => match self {
+                Distro::Debian => &["tftpd-hpa"],
+                Distro::RedHat => &["tftp.socket"],
+                Distro::Arch => &["tftpd"],
+            },
+            "iscsi" => match self {
+                Distro::Debian => &["rtslib-fb-targetctl"],
+                Distro::RedHat | Distro::Arch => &["target"],
+            },
+            "nfs" => match self {
+                Distro::Debian => &["nfs-kernel-server"],
+                Distro::RedHat | Distro::Arch => &["nfs-server"],
+            },
+            "http" => match self {
+                Distro::Debian => &["apache2"],
+                Distro::RedHat | Distro::Arch => &["httpd"],
+            },
+            "samba" => match self {
+                Distro::Debian => &["smbd", "nmbd"],
+                Distro::RedHat | Distro::Arch => &["smb", "nmb"],
+            },
+            _ => &[],
+        }
+    }
+
     // -------------------------------------------------------------------
     // configuration paths
     // -------------------------------------------------------------------
@@ -590,6 +631,11 @@ mod tests {
             d.http_config_path(),
             "/etc/apache2/sites-available/diskless-server.conf"
         );
+        // Boot units track the service units one-to-one on Debian.
+        assert_eq!(d.boot_units("dhcp"), ["isc-dhcp-server"]);
+        assert_eq!(d.boot_units("tftp"), ["tftpd-hpa"]);
+        assert_eq!(d.boot_units("samba"), ["smbd", "nmbd"]);
+        assert_eq!(d.boot_units("unknown"), &[] as &[&str]);
     }
 
     #[test]
@@ -608,6 +654,10 @@ mod tests {
             d.http_config_path(),
             "/etc/httpd/conf.d/diskless-server.conf"
         );
+        // Socket-activated tftp needs its socket enabled, not the service.
+        assert_eq!(d.boot_units("tftp"), ["tftp.socket"]);
+        assert_eq!(d.boot_units("iscsi"), ["target"]);
+        assert_eq!(d.boot_units("samba"), ["smb", "nmb"]);
     }
 
     #[test]

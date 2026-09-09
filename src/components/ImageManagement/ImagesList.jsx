@@ -56,16 +56,7 @@ const ImageCard = ({
   )
 
   return <Card title={`${master.name} (${master.size_gb}GB)`} subtitle={master.path} actions={actions}>
-    <h5 className="text-sm font-semibold mb-2 text-muted-foreground">
-      Available Snapshots:
-    </h5>
-    {master.snapshots && master.snapshots.length > 0 ? (
-      <SnapshotsList master={master} />
-    ) : (
-      <p className="text-sm text-muted-foreground">
-        No snapshots found for this master.
-      </p>
-    )}
+    <SnapshotsList master={master} />
   </Card>
 };
 

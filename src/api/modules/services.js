@@ -7,7 +7,6 @@ export async function listServices() {
 export async function startService(name) {
   return apiRequest(`/api/services/${name}/start`, { method: "POST" });
 }
-
 export async function stopService(name) {
   return apiRequest(`/api/services/${name}/stop`, { method: "POST" });
 }
@@ -16,6 +15,22 @@ export async function restartService(name) {
   return apiRequest(`/api/services/${encodeURIComponent(name)}/restart`, {
     method: "POST",
   });
+}
+
+export async function enableServiceBoot(name) {
+  return apiRequest(`/api/services/${encodeURIComponent(name)}/boot/enable`, {
+    method: "POST",
+  });
+}
+
+export async function disableServiceBoot(name) {
+  return apiRequest(`/api/services/${encodeURIComponent(name)}/boot/disable`, {
+    method: "POST",
+  });
+}
+
+export async function getFirewallStatus() {
+  return apiRequest("/api/system/firewall");
 }
 
 export async function startAllServices() {

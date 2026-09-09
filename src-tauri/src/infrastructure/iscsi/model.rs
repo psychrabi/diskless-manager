@@ -61,6 +61,11 @@ pub struct IscsiTargetSpec {
     /// LUNs exposed by this target.
     pub luns: Vec<IscsiLunSpec>,
 
+    /// One-way CHAP credentials enforced on the target portal.
+    /// `None` preserves the legacy open portal (no authentication).
+    #[serde(default)]
+    pub chap: Option<ChapCredentials>,
+
     /// iSCSI portal address.
     pub portal_address: String,
 
@@ -79,6 +84,7 @@ impl IscsiTargetSpec {
         Self {
             target_iqn: target_iqn.into(),
             luns: vec![IscsiLunSpec::new(lun, backstore, block_device)],
+            chap: None,
             portal_address: "0.0.0.0".to_string(),
             portal_port: 3260,
         }
@@ -96,6 +102,7 @@ impl IscsiTargetSpec {
         Ok(Self {
             target_iqn: target_iqn.into(),
             luns,
+            chap: None,
             portal_address: "0.0.0.0".to_string(),
             portal_port: 3260,
         })
@@ -105,6 +112,78 @@ impl IscsiTargetSpec {
     pub fn lun(&self, lun_number: u32) -> Option<&IscsiLunSpec> {
         self.luns.iter().find(|lun| lun.lun == lun_number)
     }
+}
+
+/// One-way CHAP credentials: the target authenticates the initiator.
+///
+/// Stored per client in the database (server-generated, never accepted
+/// from API input) and embedded in the client's boot menu so unattended
+/// boot keeps working. Rotation issues a new secret for the same username.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChapCredentials {
+    /// CHAP username, e.g. `chap-pc001`. Stable for the client lifetime.
+    pub username: String,
+    /// CHAP secret, 12 alphanumeric characters.
+    pub password: String,
+}
+
+impl ChapCredentials {
+    /// Deterministic username for a client name. Sanitized to CHAP-safe
+    /// characters; stored permanently so renames never rotate identity.
+    pub fn username_for_client(client_name: &str) -> String {
+        let slug: String = client_name
+            .trim()
+            .to_lowercase()
+            .chars()
+            .map(|c| {
+                if matches!(c, 'a'..='z' | '0'..='9' | '-' | '_' | '.' | ':') {
+                    c
+                } else {
+                    '-'
+                }
+            })
+            .collect();
+        let slug = slug.trim_matches('-');
+        if slug.is_empty() {
+            "chap-client".to_string()
+        } else {
+            format!("chap-{slug}")
+        }
+    }
+
+    /// Generate a fresh credential pair. No new dependencies: reads the
+    /// OS CSPRNG directly.
+    pub fn generate(client_name: &str) -> anyhow::Result<Self> {
+        Ok(Self {
+            username: Self::username_for_client(client_name),
+            password: generate_chap_secret()?,
+        })
+    }
+
+    /// Issue a new secret for the same username (rotation).
+    pub fn rotate(&mut self) -> anyhow::Result<()> {
+        self.password = generate_chap_secret()?;
+        Ok(())
+    }
+}
+
+/// Generate a 12-character alphanumeric CHAP secret from /dev/urandom.
+///
+/// Twelve characters satisfy the common 12-16 character initiator
+/// requirement (e.g. Windows, open-iscsi) with ~71 bits of entropy.
+fn generate_chap_secret() -> anyhow::Result<String> {
+    use std::io::Read;
+
+    const ALPHABET: &[u8] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    let mut bytes = [0u8; 12];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut file| file.read_exact(&mut bytes))
+        .map_err(|error| anyhow::anyhow!("failed to read OS randomness: {error}"))?;
+    Ok(bytes
+        .iter()
+        .map(|byte| ALPHABET[(byte % 62) as usize] as char)
+        .collect())
 }
 
 /// Current state of one LUN.
@@ -417,5 +496,41 @@ mod tests {
         );
 
         assert!(!state.is_ready());
+    }
+}
+
+#[cfg(test)]
+mod chap_tests {
+    use super::*;
+
+    #[test]
+    fn chap_username_is_deterministic_and_safe() {
+        assert_eq!(ChapCredentials::username_for_client("PC001"), "chap-pc001");
+        assert_eq!(
+            ChapCredentials::username_for_client("PC 001/West"),
+            "chap-pc-001-west"
+        );
+        assert_eq!(ChapCredentials::username_for_client("!!!"), "chap-client");
+    }
+
+    #[test]
+    fn generated_secret_has_required_shape() {
+        let creds = ChapCredentials::generate("PC001").expect("generation must succeed");
+        assert_eq!(creds.username, "chap-pc001");
+        assert_eq!(creds.password.len(), 12);
+        assert!(creds
+            .password
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric()));
+    }
+
+    #[test]
+    fn rotation_keeps_username_and_changes_secret() {
+        let mut creds = ChapCredentials::generate("PC001").expect("generation must succeed");
+        let first = creds.password.clone();
+        creds.rotate().expect("rotation must succeed");
+        assert_eq!(creds.username, "chap-pc001");
+        // Astronomically likely to differ; equality would mean a broken RNG.
+        assert_ne!(creds.password, first);
     }
 }

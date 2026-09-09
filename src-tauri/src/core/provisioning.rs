@@ -243,6 +243,9 @@ pub async fn add_client_provisioning(
             pxe_mode: Some("uefi".to_string()),
             keep_writeback: keep_writeback.or(Some(true)),
             use_game_disk,
+            chap_user: None,
+            chap_secret: None,
+            chap_enabled: None,
         };
 
         if !save_client_config(&state.db_pool, &client_data).await {
@@ -362,6 +365,9 @@ pub async fn add_client_provisioning(
 
         // Legacy provisioning path: no per-client game selection.
         game_disks: Vec::new(),
+
+        // Legacy provisioning path: preserves the open portal.
+        chap: None,
     };
 
     let (_storage, iscsi_result) = match state
@@ -460,6 +466,9 @@ pub async fn add_client_provisioning(
         keep_writeback: keep_writeback.or(Some(true)),
 
         use_game_disk,
+        chap_user: None,
+        chap_secret: None,
+        chap_enabled: None,
     };
 
     if !save_client_config(&state.db_pool, &client_data).await {

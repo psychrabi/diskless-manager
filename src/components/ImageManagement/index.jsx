@@ -1,10 +1,10 @@
 import { buttonVariants } from "@/components/ui/button";
-import { Card as ShadcnCard, CardContent, CardTitle } from "@/components/ui/card";
-import { Download, File, HardDrive, PlusCircle } from "lucide-react";
+import { Card as ShadcnCard, CardContent, CardDescription, CardTitle } from "@/components/ui/card";
+import { Download, File, PlusCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAppStore } from "../../store/useAppStore";
-import { Button, Card } from "@/components/ui";
+import { Button, PageHeader } from "@/components/ui";
 import { scanAndImportImages } from "@/api/modules/images";
 import { useToastStore } from "@/store/useToastStore";
 import CreateImageModal from "./CreateImageModal";
@@ -65,40 +65,39 @@ const ImageManagement = () => {
   }, [zpools]);
 
   return (
-    <Card
-      title="Image Management"
-      subtitle="Manage diskless boot images and their snapshots"
-      className="bg-muted"
-      icon={HardDrive}
-      actions={
-        <div className="flex items-center gap-2">
-          <Button
-            variant="ghost"
-            onClick={handleImportExisting}
-            icon={Download}
-            disabled={importing}
-            title="Scan the ZFS pool and register existing boot images and snapshots"
-          >
-            {importing ? "Scanning..." : "Import Existing"}
-          </Button>
-          {masters.length > 0 && (
+    <div className="flex flex-col gap-4">
+      <PageHeader
+        title="Image Management"
+        description="Manage diskless boot images and their snapshots"
+        actions={
+          <div className="flex items-center gap-2">
             <Button
-              variant="primary"
-              onClick={handleCreateImage}
-              icon={PlusCircle}
-              disabled={!hasImageDisk}
-              title={
-                !hasImageDisk
-                  ? "No image disk found. Create an image disk first."
-                  : "Create Image"
-              }
+              variant="ghost"
+              onClick={handleImportExisting}
+              icon={Download}
+              disabled={importing}
+              title="Scan the ZFS pool and register existing boot images and snapshots"
             >
-              Create Image
+              {importing ? "Scanning..." : "Import Existing"}
             </Button>
-          )}
-        </div>
-      }
-    >
+            {masters.length > 0 && (
+              <Button
+                variant="primary"
+                onClick={handleCreateImage}
+                icon={PlusCircle}
+                disabled={!hasImageDisk}
+                title={
+                  !hasImageDisk
+                    ? "No image disk found. Create an image disk first."
+                    : "Create Image"
+                }
+              >
+                Create Image
+              </Button>
+            )}
+          </div>
+        }
+      />
       <div className="space-y-6 min-h-[50vh]">
         {masters.length === 0 ? (
           <ShadcnCard className="shadow-sm border border-border/50">
@@ -107,11 +106,11 @@ const ImageManagement = () => {
                 <File />
               </div>
               <CardTitle className="text-2xl mb-2">No Images Available</CardTitle>
-              <p className="text-muted-foreground max-w-md mb-6">
+              <CardDescription className="max-w-md mb-6">
                 {!hasImageDisk
                   ? "No image disk found. Create an image disk first in the Disks Management section."
                   : "Create your first Boot image for clients to boot from."}
-              </p>
+              </CardDescription>
               <Button
                 variant="primary"
                 onClick={handleCreateImage}
@@ -137,7 +136,7 @@ const ImageManagement = () => {
           setOpenImageCreateModal={setOpenImageCreateModal}
         />
       )}
-    </Card>
+    </div>
   );
 };
 

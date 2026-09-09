@@ -1,7 +1,6 @@
 import { useAppStore } from "@/store/useAppStore";
-import { Settings } from "lucide-react";
 import { useEffect } from "react";
-import { Card } from "@/components/ui";
+import { PageHeader } from "@/components/ui";
 import ConfigForm from "./ConfigForm";
 import { dhcpSchema, tftpSchema, httpSchema, sambaSchema, iscsiSchema } from "@/schema";
 import DHCPForm from "./Forms/DHCPForm";
@@ -32,11 +31,14 @@ const SettingsManagement = () => {
   }, [fetchConfig]);
 
   return (
-    <Card title="System Settings" subtitle="Manage diskless boot server configurations" icon={Settings} className="bg-muted">
-
-      <div className="grid gap-4 xl:grid-cols-4 mb-4">
+    <div className="flex flex-col gap-4">
+      <PageHeader
+        title="System Settings"
+        description="Manage diskless boot server configurations."
+      />
+      <div className="grid grid-cols-1 items-stretch gap-4 md:grid-cols-2 xl:grid-cols-6">
         <NetworkConfig />
-        <EnrollmentControl />
+
         {SECTIONS.map(({ section, title, schema, Form }) => (
           <ConfigForm
             key={section}
@@ -47,8 +49,9 @@ const SettingsManagement = () => {
           />
         ))}
       </div>
+      <EnrollmentControl />
       <BootProcessOverview />
-    </Card>
+    </div>
   );
 };
 

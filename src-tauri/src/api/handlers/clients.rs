@@ -141,6 +141,8 @@ fn build_storage_spec(
                 // Resolved selection is filled in by callers that manage
                 // game disks (create/update); otherwise empty.
                 game_disks: Vec::new(),
+                // Same for CHAP: callers that enforce resolve credentials.
+                chap: None,
             })
         }
 
@@ -153,6 +155,7 @@ fn build_storage_spec(
             lun: 0,
             use_game_disk,
             game_disks: Vec::new(),
+            chap: None,
         }),
     }
 }
@@ -244,9 +247,46 @@ fn resolve_effective_game_selection(
     )
 }
 
+/// (Re)publish a provisioned client's static boot menu, embedding CHAP
+/// credentials when enforced. Best-effort: menus self-heal on the next
+/// boot through the enrollment redirect path.
+async fn publish_boot_menu(
+    settings: &crate::core::config::Settings,
+    client_name: &str,
+    mac: &str,
+    ip: &str,
+    target_iqn: &str,
+    chap: Option<&crate::infrastructure::iscsi::ChapCredentials>,
+) {
+    let server_ip = {
+        let next = settings.dhcp.next_server_ip.trim();
+        if next.is_empty() {
+            settings.server.ip_address.trim().to_string()
+        } else {
+            next.to_string()
+        }
+    };
+    let reservation = crate::infrastructure::dhcp::BootReservation {
+        client_name: client_name.to_string(),
+        mac: mac.to_string(),
+        ip: ip.to_string(),
+        target_iqn: target_iqn.to_string(),
+        server_ip,
+        chap: chap.cloned(),
+    };
+    if let Err(error) =
+        crate::infrastructure::dhcp::publish_client_ipxe(&reservation).await
+    {
+        tracing::warn!(
+            "Failed to regenerate boot menu for client '{}': {}",
+            client_name,
+            error
+        );
+    }
+}
+
 /// Replace a client's stored game master selection wholesale.
-async fn persist_game_selection(
-    pool: &sqlx::SqlitePool,
+async fn persist_game_selection(    pool: &sqlx::SqlitePool,
     client_id: &str,
     selection: &[String],
 ) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
@@ -477,6 +517,27 @@ pub async fn create_client(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
+    // New clients enforce CHAP unless explicitly opted out. Credentials
+    // are generated up front (no client id exists yet), travel into the
+    // provisioned target and boot menu together, and are persisted after
+    // the insert succeeds.
+    let chap_enabled = request.chap_enabled.unwrap_or(true);
+    storage_spec.chap = if chap_enabled {
+        Some(
+            crate::infrastructure::iscsi::ChapCredentials::generate(&request.name)
+                .map_err(|error| {
+                    error!(
+                        "Failed to generate CHAP credentials for client '{}': {}",
+                        request.name, error
+                    );
+
+                    StatusCode::INTERNAL_SERVER_ERROR
+                })?,
+        )
+    } else {
+        None
+    };
+
     // ------------------------------------------------------------------------
     // Provision storage and persist the client through one application
     // transaction shared by every transport adapter.
@@ -495,6 +556,7 @@ pub async fn create_client(
         keep_writeback: request.keep_writeback.unwrap_or(true),
         use_game_disk: request.use_game_disk.unwrap_or(false),
         game_disks: request.game_disks.clone().unwrap_or_default(),
+        chap_enabled: request.chap_enabled.unwrap_or(true),
     };
 
     let client = state
@@ -988,6 +1050,27 @@ pub async fn update_client(
                         lun: 0,
                         use_game_disk: existing_client.use_game_disk.unwrap_or(false),
                         game_disks: Vec::new(),
+                        // A super-mode rebuild must not silently drop target
+                        // authentication.
+                        chap: crate::core::reconciliation::ensure_chap_credentials(
+                            &state.db_pool,
+                            &existing_client.id,
+                            &existing_client.name,
+                            existing_client.chap_enabled.unwrap_or(false),
+                        )
+                        .await
+                        .map_err(|error| {
+                            (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(ErrorResponse {
+                                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                                    error: format!(
+                                        "Failed to resolve CHAP credentials: {}",
+                                        error
+                                    ),
+                                }),
+                            )
+                        })?,
                     };
 
                     preserve_persisted_target_iqn(&mut spec, &existing_client);
@@ -1124,6 +1207,28 @@ pub async fn update_client(
 
                     preserve_persisted_target_iqn(&mut spec, &existing_client);
 
+                    // A super-mode rebuild must not silently drop target
+                    // authentication.
+                    spec.chap = crate::core::reconciliation::ensure_chap_credentials(
+                        &state.db_pool,
+                        &existing_client.id,
+                        &existing_client.name,
+                        existing_client.chap_enabled.unwrap_or(false),
+                    )
+                    .await
+                    .map_err(|error| {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(ErrorResponse {
+                                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                                error: format!(
+                                    "Failed to resolve CHAP credentials: {}",
+                                    error
+                                ),
+                            }),
+                        )
+                    })?;
+
                     let storage = state
                         .application
                         .storage
@@ -1145,7 +1250,7 @@ pub async fn update_client(
                     client.master = master;
                     client.snapshot = Some(snapshot_source.clone());
                     client.block_device = Some(format!("/dev/zvol/{}", storage.dataset()));
-                    client.block_store = Some(format!("/dev/zvol/{}", storage.dataset()));
+                    client.block_store = Some(storage.backstore().to_string());
                     client.target_iqn = Some(storage.target_iqn().to_string());
 
                     info!(
@@ -1367,6 +1472,34 @@ pub async fn update_client(
     let game_changed =
         game_configuration_changed(existing_game_flag, &stored_game_disks, &request);
 
+    // CHAP: resolve once for every path below. Generation is idempotent
+    // (read-first), so resolving on every update is cheap and keeps all
+    // provisioning paths converged without per-branch duplication.
+    let existing_chap = existing_client.chap_enabled.unwrap_or(false);
+    let chap_enabled = request.chap_enabled.unwrap_or(existing_chap);
+    let chap_changed = request.chap_enabled.is_some_and(|value| value != existing_chap);
+    let chap_name = request.name.as_deref().unwrap_or(&existing_client.name);
+    let chap_creds = if chap_enabled {
+        crate::core::reconciliation::ensure_chap_credentials(
+            &state.db_pool,
+            &id,
+            chap_name,
+            true,
+        )
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    status: 500,
+                    error: format!("Failed to ensure CHAP credentials: {}", error),
+                }),
+            )
+        })?
+    } else {
+        None
+    };
+
     // Boot-menu lifecycle for the enabled switch.
     //
     // Provisioned clients boot through their static per-client iPXE menu
@@ -1393,41 +1526,52 @@ pub async fn update_client(
                     }),
                 )
             })?;
-    } else if !existing_client.enabled && will_be_enabled {
+    } else if will_be_enabled {
         // Best-effort: a missing menu self-heals on the next boot via the
         // enrollment redirect path, so regeneration must not fail saves.
+        // Runs on enable transitions AND auth changes so the embedded
+        // CHAP credentials never go stale.
         if let Some(target_iqn) = existing_client
             .target_iqn
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
         {
-            let server_ip = {
-                let next = settings.dhcp.next_server_ip.trim();
-                if next.is_empty() {
-                    settings.server.ip_address.trim().to_string()
-                } else {
-                    next.to_string()
-                }
-            };
-            let reservation = crate::infrastructure::dhcp::BootReservation {
-                client_name: existing_client.name.clone(),
-                mac: existing_client.mac.clone(),
-                ip: existing_client.ip.clone(),
-                target_iqn: target_iqn.to_string(),
-                server_ip,
-            };
-            if let Err(error) = crate::infrastructure::dhcp::publish_client_ipxe(
-                &reservation,
+            publish_boot_menu(
+                &settings,
+                &existing_client.name,
+                &existing_client.mac,
+                &existing_client.ip,
+                target_iqn,
+                chap_creds.as_ref(),
             )
-            .await
-            {
-                tracing::warn!(
-                    "Failed to regenerate boot menu for client '{}': {}",
-                    existing_client.name,
-                    error
-                );
-            }
+            .await;
+        }
+    }
+
+    // Live-apply an auth flip without a storage rebuild: existing sessions
+    // persist (authentication happens at login), new logins follow the new
+    // state. Skipped when no target exists yet (provisioning enforces).
+    if chap_changed {
+        if let Some(target_iqn) = existing_client
+            .target_iqn
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            state
+                .application
+                .storage
+                .set_target_chap(target_iqn, chap_creds.as_ref())
+                .map_err(|error| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ErrorResponse {
+                            status: 500,
+                            error: format!("Failed to apply CHAP change: {}", error),
+                        }),
+                    )
+                })?;
         }
     }
 
@@ -1494,7 +1638,7 @@ pub async fn update_client(
         state
             .application
             .storage
-            .sync_game_storage(&id, &target_iqn, &resolved)
+            .sync_game_storage(&id, &target_iqn, &resolved, chap_creds.as_ref())
             .map_err(|error| {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -1644,6 +1788,10 @@ pub async fn update_client(
                 )
             })?;
 
+    // Enforcement travels into the rebuilt target; absence preserves the
+    // legacy open portal.
+    storage_spec.chap = chap_creds.clone();
+
     preserve_persisted_target_iqn(&mut storage_spec, &existing_client);
 
     let storage = state
@@ -1718,11 +1866,104 @@ pub async fn update_client(
 // Delete client
 // ============================================================================
 
+/// Rotate a client's iSCSI CHAP secret without a storage rebuild.
+///
+/// The username is stable; only the secret changes. Enforcement turns on
+/// as a side effect (rotating for an open target would be pointless), the
+/// new credentials apply live to the target, and the boot menu is
+/// republished so the next boot carries them. Existing sessions persist;
+/// only new logins need the new secret.
+pub async fn rotate_client_chap(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    let _client_guard = state.client_mutations.lock().await;
+    let err = |error: String| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                status: 500,
+                error,
+            }),
+        )
+    };
+
+    let manager = ClientManager::new(state.db_pool.clone());
+    let existing = manager.get(&id).await.map_err(|_| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                status: 404,
+                error: format!("Client not found: {}", id),
+            }),
+        )
+    })?;
+
+    let username = existing
+        .chap_user
+        .clone()
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| {
+            crate::infrastructure::iscsi::ChapCredentials::username_for_client(
+                &existing.name,
+            )
+        });
+    let mut creds =
+        crate::infrastructure::iscsi::ChapCredentials::generate(&existing.name)
+            .map_err(|error| err(format!("Failed to generate CHAP secret: {}", error)))?;
+    creds.username = username.clone();
+
+    sqlx::query(
+        "UPDATE clients SET chap_user = ?, chap_secret = ?, chap_enabled = 1 WHERE id = ?",
+    )
+    .bind(&creds.username)
+    .bind(&creds.password)
+    .bind(&id)
+    .execute(&state.db_pool)
+    .await
+    .map_err(|error| err(format!("Failed to persist CHAP secret: {}", error)))?;
+
+    if let Some(target_iqn) = existing
+        .target_iqn
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        state
+            .application
+            .storage
+            .set_target_chap(target_iqn, Some(&creds))
+            .map_err(|error| err(format!("Failed to apply CHAP secret: {}", error)))?;
+
+        let settings = state.settings.read().await;
+        publish_boot_menu(
+            &settings,
+            &existing.name,
+            &existing.mac,
+            &existing.ip,
+            target_iqn,
+            Some(&creds),
+        )
+        .await;
+    }
+
+    tracing::info!(
+        client_id = %id,
+        user = %creds.username,
+        "rotated iSCSI CHAP secret"
+    );
+    Ok(Json(serde_json::json!({
+        "message": format!("CHAP secret rotated for '{}'", existing.name),
+        "username": creds.username,
+        "password": creds.password,
+        "chap_enabled": true,
+    })))
+}
+
 pub async fn delete_client(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<(), StatusCode> {
-    let _client_guard = state.client_mutations.lock().await;
+) -> Result<(), StatusCode> {    let _client_guard = state.client_mutations.lock().await;
     let recovering: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM client_offline_resets WHERE client_id = ? AND operation IS NOT NULL",
     )

@@ -1,3 +1,4 @@
+use crate::infrastructure::iscsi::ChapCredentials;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -107,6 +108,11 @@ pub struct ClientStorageSpec {
     /// `use_game_disk` set means "all discovered masters".
     #[serde(default)]
     pub game_disks: Vec<String>,
+
+    /// One-way iSCSI CHAP credentials enforced on the target portal.
+    /// `None` preserves the legacy open portal (no authentication).
+    #[serde(default)]
+    pub chap: Option<ChapCredentials>,
 }
 
 impl ClientStorageSpec {

@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { useAppStore } from "../store/useAppStore";
 import AppLogs from "./Logs/AppLogs";
 import LogViewer from "./Logs/LogViewer";
-import { Activity, Button, Card, Select } from "./ui";
+import { Activity, Button, Card, PageHeader, Select } from "./ui";
 
 const Logs = () => {
   const [logUnit, setLogUnit] = useState("app_log");
@@ -14,7 +14,6 @@ const Logs = () => {
   const { logs, fetchLogs } = useLogs();
 
   useEffect(() => {
-    console.log("Services in Logs component:", services);
     // Fetch services if not already loaded
     if (!services || services.length === 0) {
       fetchServices();
@@ -56,26 +55,21 @@ const Logs = () => {
   );
 
   return (
-    <Card
-      title="Logs"
-      headerClass="p-4"
-      actions={logOptions}
-      className="max-h-[calc(100vh-9rem)]"
-    >
+    <div className="flex flex-col gap-4">
+      <PageHeader
+        title="Logs"
+        description="View application and service logs."
+        actions={logOptions}
+      />
       <Activity mode={logUnit !== "app_log" ? "visible" : "hidden"}>
-        <Card
-          title={`${logUnit} Logs`}
-          className="bg-muted"
-          headerClass="p-4"
-          bodyClass="border-t-1"
-        >
+        <Card title={`${logUnit} Logs`}>
           <LogViewer content={logs} emptyText="" />
         </Card>
       </Activity>
       <Activity mode={logUnit === "app_log" ? "visible" : "hidden"}>
         <AppLogs />
       </Activity>
-    </Card>
+    </div>
   );
 };
 

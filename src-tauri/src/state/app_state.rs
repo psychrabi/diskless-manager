@@ -108,6 +108,9 @@ impl AppState {
             ("pxe_mode", "TEXT DEFAULT 'uefi'"),
             ("keep_writeback", "INTEGER NOT NULL DEFAULT 1"),
             ("use_game_disk", "INTEGER NOT NULL DEFAULT 0"),
+            ("chap_user", "TEXT"),
+            ("chap_secret", "TEXT"),
+            ("chap_enabled", "INTEGER NOT NULL DEFAULT 0"),
         ] {
             Self::ensure_column(pool, "clients", column, definition).await?;
         }
@@ -551,6 +554,9 @@ mod migration_tests {
             "pxe_mode",
             "keep_writeback",
             "use_game_disk",
+            "chap_user",
+            "chap_secret",
+            "chap_enabled",
         ] {
             let exists: i64 = sqlx::query_scalar(
                 "SELECT COUNT(*) FROM pragma_table_info('clients') WHERE name = ?",

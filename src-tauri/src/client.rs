@@ -101,6 +101,7 @@ pub async fn add_client_impl(
         lun: 0,
         use_game_disk: req.use_game_disk.unwrap_or(false),
         game_disks: Vec::new(),
+        chap: None,
     };
     let client = state
         .application
@@ -119,6 +120,7 @@ pub async fn add_client_impl(
                 keep_writeback: req.keep_writeback.unwrap_or(true),
                 use_game_disk: req.use_game_disk.unwrap_or(false),
                 game_disks: Vec::new(),
+                chap_enabled: false,
             },
             storage_spec,
             &settings.dhcp.next_server_ip,

@@ -49,9 +49,6 @@ export default function AppLogs() {
   return (
     <Card
       title="Application Logs"
-      className="bg-muted"
-      headerClass="p-4"
-      bodyClass="border-t-1 p-0"
       actions={
         <>
           <Button

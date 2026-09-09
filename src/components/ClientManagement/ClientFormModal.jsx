@@ -4,6 +4,7 @@ import {
   getClientNvmeOfStatus,
   prepareClientNvmeOf,
   removeClientNvmeOf,
+  rotateChapSecret,
   updateClient,
 } from "@/api/modules/clients";
 import { listGameDisks } from "@/api/modules/zfs";
@@ -12,7 +13,7 @@ import ClientGameDiskPicker from "./ClientGameDiskPicker";
 import { clientSchema } from "@/schema";
 import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { RefreshCw, Save, Server, Trash2 } from "lucide-react";
+import { Copy, Eye, EyeOff, KeyRound, RefreshCw, Save, Server, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import {
@@ -24,13 +25,14 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   Field,
   FieldContent,
+  FieldDescription,
   FieldError,
   FieldLabel,
 } from "@/components/ui/field";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Spinner } from "@/components/ui/spinner";
@@ -41,9 +43,9 @@ const ClientFormModal = (props) => (
   <ClientFormModalContent key={`${props.client?.id ?? "new"}:${props.isOpen}`} {...props} />
 );
 
-// Explicit form defaults: a new client starts enabled, with the game
-// switch off and an empty selection, instead of `undefined` values.
-const formDefaults = { enabled: true, use_game_disk: false, game_disks: [] };
+// Explicit form defaults: a new client starts enabled with CHAP on, the
+// game switch off and an empty selection, instead of `undefined` values.
+const formDefaults = { enabled: true, chap_enabled: true, use_game_disk: false, game_disks: [] };
 
 const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) => {
   const { success, error } = useToastStore();
@@ -200,6 +202,7 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
           keep_writeback: data.keep_writeback,
           use_game_disk: data.use_game_disk,
           game_disks: data.game_disks || [],
+          chap_enabled: data.chap_enabled ?? true,
           enabled: data.enabled ?? true,
         });
         success("Client Management", `Client ${data.name} added successfully.`);
@@ -213,6 +216,7 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
           keep_writeback: data.keep_writeback,
           use_game_disk: data.use_game_disk,
           game_disks: data.game_disks || [],
+          chap_enabled: data.chap_enabled ?? true,
           enabled: data.enabled ?? true,
         });
         success(
@@ -242,6 +246,40 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
     control,
     name: "enabled",
   });
+
+  const chapEnabled = useWatch({
+    control,
+    name: "chap_enabled",
+  });
+
+  const [chapSecret, setChapSecret] = useState(client?.chap_secret ?? null);
+  const [chapRevealed, setChapRevealed] = useState(false);
+  const [chapRotating, setChapRotating] = useState(false);
+
+  const handleRotateChap = async () => {
+    if (!client?.id || chapRotating) return;
+    setChapRotating(true);
+    try {
+      const result = await rotateChapSecret(client.id);
+      setChapSecret(result?.password ?? null);
+      setChapRevealed(true);
+      success("Client Management", result?.message || "CHAP secret rotated.");
+    } catch (e) {
+      error("Client Management", e);
+    } finally {
+      setChapRotating(false);
+    }
+  };
+
+  const handleCopyChapSecret = async () => {
+    if (!chapSecret) return;
+    try {
+      await navigator.clipboard.writeText(chapSecret);
+      success("Client Management", "CHAP secret copied to clipboard.");
+    } catch {
+      error("Client Management", "Could not access the clipboard.");
+    }
+  };
 
   const useGameDisk = useWatch({
     control,
@@ -408,69 +446,67 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
             </FieldContent>
           </Field>
 
-          <div>
-            <div className="flex items-start gap-3">
-              <Checkbox
-                id="client-enabled"
-                checked={clientEnabled ?? true}
-                onCheckedChange={(checked) =>
-                  setValue("enabled", Boolean(checked), {
-                    shouldValidate: true,
-                    shouldDirty: true,
-                  })
-                }
-              />
-              <Label htmlFor="client-enabled" className="flex cursor-pointer flex-col items-start gap-1">
-                <span className="font-medium">
-                  Enabled
-                </span>
-                <span className="text-xs text-muted-foreground text-wrap">
-                  If unchecked, this machine is denied at boot even when it is
-                  fully provisioned
-                </span>
-              </Label>
-            </div>
-          </div>
+          <Field orientation="horizontal">
+            <Checkbox
+              id="client-enabled"
+              checked={clientEnabled ?? true}
+              onCheckedChange={(checked) =>
+                setValue("enabled", Boolean(checked), {
+                  shouldValidate: true,
+                  shouldDirty: true,
+                })
+              }
+            />
+            <FieldContent>
+              <FieldLabel htmlFor="client-enabled" className="cursor-pointer">
+                Enabled
+              </FieldLabel>
+              <FieldDescription>
+                If unchecked, this machine is denied at boot even when it is
+                fully provisioned
+              </FieldDescription>
+            </FieldContent>
+          </Field>
+
+          <Field orientation="horizontal">
+            <Checkbox
+              id="keep-writeback"
+              checked={Boolean(keepWriteback)}
+              onCheckedChange={(checked) =>
+                setValue("keep_writeback", Boolean(checked), {
+                  shouldValidate: true,
+                  shouldDirty: true,
+                })
+              }
+            />
+            <FieldContent>
+              <FieldLabel htmlFor="keep-writeback" className="cursor-pointer">
+                Keep Writeback (Persistent Mode)
+              </FieldLabel>
+              <FieldDescription>
+                If unchecked, the clone resets after the offline delay configured in Settings
+                (non-persistent mode)
+              </FieldDescription>
+            </FieldContent>
+          </Field>
 
           <div>
-            <div className="flex items-start gap-3">
-              <Checkbox
-                id="keep-writeback"
-                checked={Boolean(keepWriteback)}
-                onCheckedChange={(checked) =>
-                  setValue("keep_writeback", Boolean(checked), {
-                    shouldValidate: true,
-                    shouldDirty: true,
-                  })
-                }
-              />
-              <Label htmlFor="keep-writeback" className="flex cursor-pointer flex-col items-start gap-1">
-                <span className="font-medium">
-                  Keep Writeback (Persistent Mode)
-                </span>
-                <span className="text-xs text-muted-foreground text-wrap">
-                  If unchecked, the clone resets after the offline delay configured in Settings
-                  (non-persistent mode)
-                </span>
-              </Label>
-            </div>
-          </div>
-
-          <div>
-            <div className="flex items-start gap-3">
+            <Field orientation="horizontal">
               <Checkbox
                 id="use-game-disk"
                 checked={Boolean(useGameDisk)}
                 onCheckedChange={handleGameDiskSwitch}
               />
-              <Label htmlFor="use-game-disk" className="flex cursor-pointer flex-col items-start gap-1">
-                <span className="font-medium">Use Game Disk</span>
-                <span className="text-xs text-muted-foreground text-wrap">
+              <FieldContent>
+                <FieldLabel htmlFor="use-game-disk" className="cursor-pointer">
+                  Use Game Disk
+                </FieldLabel>
+                <FieldDescription>
                   If checked, each selected game disk gets a private writable
                   clone attached to this client via iSCSI
-                </span>
-              </Label>
-            </div>
+                </FieldDescription>
+              </FieldContent>
+            </Field>
             {Boolean(useGameDisk) && (
               <div className="mt-3">
                 <ClientGameDiskPicker
@@ -480,6 +516,90 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
                   onToggle={toggleGameDisk}
                   onNavigateAway={onClose}
                 />
+              </div>
+            )}
+          </div>
+
+          <div>
+            <Field orientation="horizontal">
+              <Checkbox
+                id="chap-enabled"
+                checked={chapEnabled ?? true}
+                onCheckedChange={(checked) =>
+                  setValue("chap_enabled", Boolean(checked), {
+                    shouldValidate: true,
+                    shouldDirty: true,
+                  })
+                }
+              />
+              <FieldContent>
+                <FieldLabel htmlFor="chap-enabled" className="cursor-pointer">
+                  CHAP Authentication
+                </FieldLabel>
+                <FieldDescription>
+                  If checked, the iSCSI target requires the login secret
+                  below. The boot menu carries it automatically.
+                </FieldDescription>
+              </FieldContent>
+            </Field>
+            {client?.id && (
+              <div className="mt-3 flex flex-col gap-2 rounded-lg border border-border bg-muted/30 p-3">
+                <div className="flex items-center gap-2 text-sm font-medium">
+                  <KeyRound className="size-4 text-muted-foreground" />
+                  iSCSI login secret
+                </div>
+                <div className="grid gap-1 text-sm">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-muted-foreground">Username</span>
+                    <span className="">{client.chap_user || "—"}</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-muted-foreground">Secret</span>
+                    <span className="flex items-center gap-1">
+                      <span className="">
+                        {chapSecret ? (chapRevealed ? chapSecret : "••••••••••••") : "—"}
+                      </span>
+                      {chapSecret && (
+                        <>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            title={chapRevealed ? "Hide secret" : "Show secret"}
+                            onClick={() => setChapRevealed((value) => !value)}
+                          >
+                            {chapRevealed ? <EyeOff /> : <Eye />}
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            title="Copy secret"
+                            onClick={handleCopyChapSecret}
+                          >
+                            <Copy />
+                          </Button>
+                        </>
+                      )}
+                    </span>
+                  </div>
+                </div>
+                <div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    icon={RefreshCw}
+                    disabled={chapRotating}
+                    onClick={handleRotateChap}
+                  >
+                    {chapRotating ? "Rotating..." : "Rotate secret"}
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Rotation applies to the live target at once; existing
+                  sessions stay up, new logins need the new secret, and the
+                  boot menu is republished automatically.
+                </p>
               </div>
             )}
           </div>
@@ -513,13 +633,13 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
               <div className="grid gap-2 text-sm sm:grid-cols-2">
                 <div>
                   <span className="text-muted-foreground">NQN:</span>
-                  <div className="break-all font-mono text-xs">
+                  <div className="break-all  text-xs">
                     {nvmeStatus?.nqn || "—"}
                   </div>
                 </div>
                 <div>
                   <span className="text-muted-foreground">Block device:</span>
-                  <div className="break-all font-mono text-xs">
+                  <div className="break-all  text-xs">
                     {nvmeStatus?.block_device || client?.block_device || client?.block_store || "—"}
                   </div>
                 </div>
@@ -542,9 +662,9 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
               </div>
 
               {nvmeError && (
-                <div className="mt-3 rounded-lg border border-destructive/30 bg-destructive/10 p-2 text-xs text-destructive">
-                  <span>{nvmeError}</span>
-                </div>
+                <Alert variant="destructive" className="mt-3">
+                  <AlertDescription>{nvmeError}</AlertDescription>
+                </Alert>
               )}
 
               <div className="mt-4 flex flex-wrap gap-2">

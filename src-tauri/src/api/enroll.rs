@@ -141,12 +141,30 @@ async fn ensure_client_menu(
         return;
     };
 
+    let chap = match (
+        client.chap_enabled,
+        client.chap_user.as_deref(),
+        client.chap_secret.as_deref(),
+    ) {
+        (true, Some(username), Some(password))
+            if !username.trim().is_empty() && !password.is_empty() =>
+        {
+            Some(
+                crate::infrastructure::iscsi::ChapCredentials {
+                    username: username.to_string(),
+                    password: password.to_string(),
+                },
+            )
+        }
+        _ => None,
+    };
     let reservation = BootReservation {
         client_name: client.name.clone(),
         mac: client.mac.to_string(),
         ip: client.ip.to_string(),
         target_iqn: target_iqn.to_string(),
         server_ip: boot_server_ip(settings),
+        chap,
     };
     if let Err(error) = crate::infrastructure::dhcp::publish_client_ipxe(&reservation).await {
         warn!(
@@ -200,6 +218,8 @@ async fn register_pending_client(
         keep_writeback: true,
         use_game_disk: false,
         game_disks: Vec::new(),
+        // Pool clients get credentials on first provisioning, not here.
+        chap_enabled: false,
     };
     let mut client = crate::domain::Client::create(request)
         .map_err(|error| anyhow::anyhow!("invalid enrolled client: {error}"))?;

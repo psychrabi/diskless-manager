@@ -179,6 +179,10 @@ impl ServiceManager {
     // ========================================================================
 
     pub async fn start_all(&self) -> anyhow::Result<()> {
+        // Persist across reboots first (Ubuntu parity); individual starts
+        // below are idempotent re-enables.
+        self.enable_boot_all().await?;
+
         if self.settings.dhcp.enabled {
             self.dhcp.start().await?;
         }
@@ -236,6 +240,10 @@ impl ServiceManager {
     // ========================================================================
 
     pub async fn start(&self, service: &str) -> anyhow::Result<()> {
+        // Ubuntu parity: starting a service persists it across reboots.
+        // Fedora ships every unit disabled, so a bare `start` would only
+        // last until the next boot.
+        self.enable_boot(service).await?;
         match service {
             "dhcp" => self.dhcp.start().await,
             "tftp" => self.tftp.start().await,
@@ -284,6 +292,63 @@ impl ServiceManager {
     }
 
     // ========================================================================
+    // START ON BOOT
+    // ========================================================================
+
+    /// Whether every boot unit for a service is enabled.
+    pub async fn boot_enabled(&self, service: &str) -> anyhow::Result<bool> {
+        let units = crate::platform::detect().boot_units(service);
+        if units.is_empty() {
+            anyhow::bail!("Unknown service: {}", service);
+        }
+        for unit in units {
+            if !is_boot_unit_enabled(unit).await? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Persist a service across reboots without changing its running state.
+    pub async fn enable_boot(&self, service: &str) -> anyhow::Result<()> {
+        let units = crate::platform::detect().boot_units(service);
+        if units.is_empty() {
+            anyhow::bail!("Unknown service: {}", service);
+        }
+        set_boot_units_enabled(&units, true).await
+    }
+
+    /// Stop persisting a service across reboots without changing its
+    /// running state. Use `stop` to halt a running service now.
+    pub async fn disable_boot(&self, service: &str) -> anyhow::Result<()> {
+        let units = crate::platform::detect().boot_units(service);
+        if units.is_empty() {
+            anyhow::bail!("Unknown service: {}", service);
+        }
+        set_boot_units_enabled(&units, false).await
+    }
+
+    /// Enable every settings-enabled service for start on boot.
+    pub async fn enable_boot_all(&self) -> anyhow::Result<()> {
+        for service in ["dhcp", "tftp", "iscsi", "nfs", "samba"] {
+            let managed = match service {
+                "dhcp" => self.settings.dhcp.enabled,
+                "tftp" => self.settings.tftp.enabled,
+                "iscsi" => self.settings.iscsi.enabled,
+                "nfs" => self.settings.nfs.enabled,
+                "samba" => self.settings.samba.enabled,
+                _ => false,
+            };
+            if managed {
+                self.enable_boot(service).await?;
+            }
+        }
+        // HTTP is always required for iPXE boot.
+        self.enable_boot("http").await?;
+        Ok(())
+    }
+
+    // ========================================================================
     // DHCP HELPERS
     // ========================================================================
 
@@ -321,6 +386,33 @@ impl ServiceManager {
 // ============================================================================
 // SYSTEMD HELPERS
 // ============================================================================
+
+/// Check whether a systemd unit is enabled for start on boot.
+///
+/// `is-enabled` exits non-zero for disabled/missing units, which is a
+/// normal negative answer — not an error.
+pub async fn is_boot_unit_enabled(unit: &str) -> anyhow::Result<bool> {
+    let output = Command::new("systemctl")
+        .args(["is-enabled", unit])
+        .output()
+        .await?;
+
+    Ok(output.status.success())
+}
+
+/// Enable or disable systemd units for start on boot (no sudo needed to
+/// query; elevation required to change).
+pub async fn set_boot_units_enabled(units: &[&str], enabled: bool) -> anyhow::Result<()> {
+    let action = if enabled { "enable" } else { "disable" };
+    let mut args = vec![String::from("systemctl"), String::from(action)];
+    args.extend(units.iter().map(|unit| unit.to_string()));
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_sudo_command(arg_refs)
+        .await
+        .map_err(|error| {
+            anyhow::anyhow!("failed to {} boot units {:?}: {}", action, units, error)
+        })
+}
 
 /// Check whether a systemd service is running.
 pub async fn is_systemd_service_running(service: &str) -> anyhow::Result<bool> {

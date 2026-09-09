@@ -1,12 +1,10 @@
-import { Label } from "@/components/ui/label";
-import { Input as TextInput } from "@/components/ui/input";
 import { useSettings } from "@/hooks/useSettings";
 import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
 import { File } from "lucide-react";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
-import { Button, Card } from "@/components/ui";
+import { Button, Card, Input } from "@/components/ui";
 
 export default function LicenseActivation() {
   const { activateLicense } = useSettings();
@@ -35,20 +33,17 @@ export default function LicenseActivation() {
   };
 
   return (
-    <Card title="License Activation" icon={File}>
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-3">
-        <Label className="block">
-          <span className="text-sm font-medium">License</span>
-          <TextInput
-            type="text"
-            {...register("license_key")}
-            placeholder="Enter license key"
-            className="w-full mt-1"
-            readOnly={!!licenseInfo?.license_key} // make read-only if already activated
-          />
-        </Label>
+    <Card title="License Activation" icon={File} className="h-full">
+      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+        <Input
+          label="License"
+          type="text"
+          register={register("license_key")}
+          placeholder="Enter license key"
+          readOnly={!!licenseInfo?.license_key}
+        />
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center justify-end gap-2">
           <Button
             type="submit"
             variant="primary"

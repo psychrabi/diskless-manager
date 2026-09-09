@@ -8,7 +8,7 @@ import {
   TableCell,
 } from "@/components/ui/table";
 import { Spinner } from "@/components/ui/spinner";
-import { Button, Card } from '@/components/ui';
+import { Button, Card, PageHeader } from '@/components/ui';
 import { useUserManagement } from '@/hooks/useUserManagement';
 import { useToastStore } from '@/store/useToastStore';
 import { Key, Pencil, Plus, Trash2, Users } from 'lucide-react';
@@ -89,12 +89,15 @@ export default function UserManagement() {
   };
 
   return (
-    <>
-      <Card
+    <div className="flex flex-col gap-4">
+      <PageHeader
         title="User Management"
-        subtitle="Manage system users and their roles"
+        description="Manage system users and their roles."
+      />
+      <Card
+        title="Users"
+        subtitle={`${users.length} user${users.length === 1 ? "" : "s"}`}
         icon={Users}
-        className="bg-muted"
         actions={ <Button
             variant="primary"
             onClick={handleCreateUser}
@@ -103,9 +106,8 @@ export default function UserManagement() {
           >
             Create User
           </Button>}
-      >   
-
-    <div className="bg-background rounded-lg max-h-[70vh] w-full border border-border overflow-auto">
+      >
+        <div className="bg-background rounded-lg max-h-[70vh] w-full border border-border overflow-auto">
           <Table className="w-full">
             <TableHeader>
               <TableRow>
@@ -118,7 +120,7 @@ export default function UserManagement() {
               {loading && users.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan="3" className="text-center py-8">
-                    <Spinner className=""></Spinner>
+                    <Spinner />
                   </TableCell>
                 </TableRow>
               ) : users.length === 0 ? (
@@ -194,6 +196,6 @@ export default function UserManagement() {
           user={selectedUser}
         />
       )}
-    </>
+    </div>
   );
 }

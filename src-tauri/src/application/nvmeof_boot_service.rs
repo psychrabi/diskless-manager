@@ -76,6 +76,8 @@ impl NvmeOfBootService {
             ip: client.ip.to_string(),
             target_iqn: target_iqn.to_string(),
             server_ip: server_ip.to_string(),
+            // NVMe path keeps the legacy open menu; CHAP is an iSCSI-plane concern.
+            chap: None,
         };
         publish_client_ipxe(&reservation)
             .await

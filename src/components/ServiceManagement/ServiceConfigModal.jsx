@@ -1,4 +1,6 @@
 import { Textarea } from "@/components/ui/textarea";
+import { DialogDescription, DialogFooter } from "@/components/ui/dialog";
+import { Spinner } from "@/components/ui/spinner";
 import { useState } from "react";
 import { useServiceManager } from "../../hooks/useServiceManager";
 import { Button, Modal } from "@/components/ui";
@@ -64,15 +66,15 @@ function ServiceConfigModal({
 
   return (
     <Modal isOpen={isOpen} onClose={handleCancel} title={title} size="5xl">
-      <h3>Configuration path: {path}</h3>
+      <DialogDescription>Configuration path: {path}</DialogDescription>
       {initialLoading ? (
         <div className="flex justify-center items-center h-40">
-          <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-500"></div>
+          <Spinner className="size-8" />
         </div>
       ) : editable ? (
         <Textarea
           aria-label="Service configuration"
-          className="bg-background p-4 rounded-md text-xs overflow-auto h-[80vh] w-full font-mono max-h-[80vh]"
+          className="bg-background p-4 rounded-md text-xs overflow-auto h-[80vh] w-full  max-h-[80vh]"
           value={config}
           onChange={handleChange}
           disabled={saving}
@@ -83,7 +85,7 @@ function ServiceConfigModal({
           <code>{config}</code>
         </pre>
       )}
-      <div className="mt-4 flex justify-end space-x-2">
+      <DialogFooter className="mt-4">
         {editable ? (
           <Button
             onClick={() => handleSave()}
@@ -105,10 +107,10 @@ function ServiceConfigModal({
           onClick={() => handleCancel()}
           disabled={saving}
         >
-          Cancel
-        </Button>
-      </div>
-    </Modal>
+            Cancel
+          </Button>
+        </DialogFooter>
+      </Modal>
   );
 }
 

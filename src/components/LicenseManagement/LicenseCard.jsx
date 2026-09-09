@@ -7,21 +7,21 @@ export default function LicenseCard() {
   const isActive = Boolean(license.license_status);
 
   return (
-    <Card title="License Information" icon={Key}>
+    <Card title="License Information" icon={Key} className="h-full">
       <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <span className="font-semibold text-sm">Status:</span>
+        <div className="flex items-center justify-between gap-4">
+          <span className="text-sm text-muted-foreground">Status</span>
           <StatusBadge status={isActive ? "success" : "error"} size="sm">
             {isActive ? license.license_status : "Not activated"}
           </StatusBadge>
         </div>
-        <div className="flex justify-between text-sm">
-          <span className="font-semibold">Expires:</span>
-          <span className="text-muted-foreground">{license.license_expires || "\u2014"}</span>
+        <div className="flex items-center justify-between gap-4">
+          <span className="text-sm text-muted-foreground">Expires</span>
+          <span className="text-sm font-medium text-right">{license.license_expires || "\u2014"}</span>
         </div>
-        <div className="flex justify-between text-sm">
-          <span className="font-semibold">Key:</span>
-          <span className="font-mono text-xs text-muted-foreground">
+        <div className="flex items-center justify-between gap-4">
+          <span className="text-sm text-muted-foreground">Key</span>
+          <span className=" text-xs text-muted-foreground text-right break-all">
             {license.license_key || "\u2014"}
           </span>
         </div>

@@ -1,16 +1,14 @@
 import { useClientActions } from "@/hooks/useClientActions";
 import {
   Card,
-  CardAction,
   CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { PageHeader } from "@/components/ui";
 import { LoadingSkeleton } from "@/components/ui/LoadingSkeleton";
 import { ContextMenu } from "../ui/ContextMenu";
-import { Laptop, PlusCircle, Users, Wifi, WifiOff, History, Clock } from "lucide-react";
+import { PlusCircle, Users, Wifi, WifiOff, History, Clock } from "lucide-react";
 import { memo, useCallback, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "../../store/useAppStore";
@@ -136,19 +134,17 @@ const ClientManagement = () => {
 
   if (loading && clients.length === 0) {
     return (
-      <div className="flex flex-col gap-6">
-        <Card className="shadow-xl">
-          <CardHeader className="flex flex-row items-center justify-between gap-2">
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted">
-                <Laptop className="size-4 text-primary" />
-              </span>
-              <div className="flex min-w-0 flex-col gap-0.5">
-                <CardTitle>Client Management</CardTitle>
-                <CardDescription>Loading client information...</CardDescription>
-              </div>
-            </div>
-          </CardHeader>
+      <div className="flex flex-col gap-4">
+        <div className="space-y-1">
+          <Skeleton className="h-7 w-48" />
+          <Skeleton className="h-4 w-96 max-w-full" />
+        </div>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          {Array.from({ length: 3 }, (_, i) => (
+            <Skeleton key={i} className="h-24 rounded-xl" />
+          ))}
+        </div>
+        <Card>
           <CardContent>
             <LoadingSkeleton variant="table" count={5} />
           </CardContent>
@@ -158,97 +154,83 @@ const ClientManagement = () => {
   }
 
   return (
-    <div className="flex flex-col gap-6">
-      {/* Page Header with Stats */}
-      <Card className="shadow-xl">
-        <CardHeader className="flex flex-row items-center justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted">
-              <Laptop className="size-4 text-primary" />
-            </span>
-            <div className="flex min-w-0 flex-col gap-0.5">
-              <CardTitle>Client Management</CardTitle>
-              <CardDescription>
-                Manage diskless boot clients and monitor their connection status
-              </CardDescription>
-            </div>
+    <div className="flex flex-col gap-4">
+      <PageHeader
+        title="Client Management"
+        description="Manage diskless boot clients and monitor their connection status"
+        actions={
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setIsScheduledOperationsOpen(true)}
+            >
+              <Clock data-icon="inline-start" />
+              Scheduled Ops
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setIsAuditLogViewerOpen(true)}
+            >
+              <History data-icon="inline-start" />
+              Audit Logs
+            </Button>
+            <Button
+              variant="default"
+              size="sm"
+              onClick={handleClientFormModalOpen}
+            >
+              <PlusCircle data-icon="inline-start" />
+              Add Client
+            </Button>
           </div>
-          <CardAction>
-            <div className="flex gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setIsScheduledOperationsOpen(true)}
-              >
-                <Clock data-icon="inline-start" />
-                Scheduled Ops
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setIsAuditLogViewerOpen(true)}
-              >
-                <History data-icon="inline-start" />
-                Audit Logs
-              </Button>
-              <Button
-                variant="default"
-                size="sm"
-                onClick={handleClientFormModalOpen}
-              >
-                <PlusCircle data-icon="inline-start" />
-                Add Client
-              </Button>
-            </div>
-          </CardAction>
-        </CardHeader>
-        {clients.length > 0 && (
-          <CardContent>
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-              {/* Total Clients */}
-              <Card>
-                <CardContent className="flex items-center justify-between">
-                  <div>
-                    <div className="text-2xl font-semibold text-card-foreground">
-                      {clients.length}
-                    </div>
-                    <div className="text-sm text-muted-foreground">
-                      Total Clients
-                    </div>
-                  </div>
-                  <Users className="size-8 text-primary/60" />
-                </CardContent>
-              </Card>
+        }
+      />
+      {clients.length > 0 && (
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          {/* Total Clients */}
+          <Card>
+            <CardContent className="flex items-center justify-between">
+              <div>
+                <div className="text-2xl font-semibold text-card-foreground">
+                  {clients.length}
+                </div>
+                <div className="text-sm text-muted-foreground">
+                  Total Clients
+                </div>
+              </div>
+              <Users className="size-8 text-primary/60" />
+            </CardContent>
+          </Card>
 
-              {/* Online Clients */}
-              <Card>
-                <CardContent className="flex items-center justify-between">
-                  <div>
-                    <div className="text-2xl font-semibold text-card-foreground">
-                      {onlineClients}
-                    </div>
-                    <div className="text-sm text-muted-foreground">Online</div>
-                  </div>
-                  <Wifi className="size-8 text-primary" />
-                </CardContent>
-              </Card>
+          {/* Online Clients */}
+          <Card>
+            <CardContent className="flex items-center justify-between">
+              <div>
+                <div className="text-2xl font-semibold text-card-foreground">
+                  {onlineClients}
+                </div>
+                <div className="text-sm text-muted-foreground">Online</div>
+              </div>
+              <Wifi className="size-8 text-primary" />
+            </CardContent>
+          </Card>
 
-              {/* Offline Clients */}
-              <Card>
-                <CardContent className="flex items-center justify-between">
-                  <div>
-                    <div className="text-2xl font-semibold text-card-foreground">
-                      {offlineClients}
-                    </div>
-                    <div className="text-sm text-muted-foreground">Offline</div>
-                  </div>
-                  <WifiOff className="size-8 text-muted-foreground/60" />
-                </CardContent>
-              </Card>
-            </div>
-          </CardContent>
-        )}
-      </Card>
+          {/* Offline Clients */}
+          <Card>
+            <CardContent className="flex items-center justify-between">
+              <div>
+                <div className="text-2xl font-semibold text-card-foreground">
+                  {offlineClients}
+                </div>
+                <div className="text-sm text-muted-foreground">Offline</div>
+              </div>
+              <WifiOff className="size-8 text-muted-foreground/60" />
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       {/* Client Table or Empty State */}
       {clients.length === 0 ? (

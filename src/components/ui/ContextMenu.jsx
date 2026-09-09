@@ -1,10 +1,7 @@
 import {
   HardDrive,
   History,
-  Play,
-  Power,
   RefreshCw,
-  ScreenShare,
   Settings,
   ShieldAlert,
   Trash2,
@@ -110,44 +107,12 @@ export const ContextMenu = ({
           {targetClient.name}
         </p>
 
-        <p className="text-[10px] text-muted-foreground font-mono truncate">
+        <p className="text-[10px] text-muted-foreground  truncate">
           {targetClient.ip} • {targetClient.mac}
         </p>
       </div>
 
       <ul className="flex w-full flex-col p-0" role="menu">
-        <SectionHeader label="Control" />
-        {!isOnline && (
-          <MenuItem
-            icon={Play}
-            label="Power On"
-            variant="success"
-            onClick={() => handleAction(actions.wake)}
-          />
-        )}
-        {isOnline && (
-          <>
-            <MenuItem
-              icon={RefreshCw}
-              label="Reboot"
-              variant="warning"
-              onClick={() => handleAction(actions.reboot)}
-            />
-            <MenuItem
-              icon={Power}
-              label="Shutdown"
-              variant="error"
-              onClick={() => handleAction(actions.shutdown)}
-            />
-            <MenuItem
-              icon={ScreenShare}
-              label="Remote Control"
-              variant="info"
-              onClick={() => handleAction(actions.remote)}
-            />
-          </>
-        )}
-
         {!isOnline && (
           <>
             <SectionHeader label="Maintenance" />
@@ -177,9 +142,9 @@ export const ContextMenu = ({
           </>
         )}
 
-        <SectionHeader label="Management" />
         {!isOnline && (
           <>
+            <SectionHeader label="Management" />
             <MenuItem
               icon={Settings}
               label="Edit Client"

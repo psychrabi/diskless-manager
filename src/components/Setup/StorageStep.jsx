@@ -1,4 +1,6 @@
 import { NativeSelectOption } from "@/components/ui/native-select";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { CardDescription, CardTitle } from "@/components/ui/card";
 import { AlertCircle, CheckCircle, Database } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { Button, Card, Input, Select } from "@/components/ui";
@@ -28,11 +30,11 @@ const StorageStep = ({
             <CheckCircle size={48} />
           </div>
           <div className="space-y-2">
-            <h3 className="text-xl font-bold">Storage is Ready</h3>
-            <p className="text-muted-foreground">
+            <CardTitle className="text-xl">Storage is Ready</CardTitle>
+            <CardDescription>
               ZFS pool &apos;{poolName || "zroot"}&apos; is initialized and
               ready for use.
-            </p>
+            </CardDescription>
           </div>
         </div>
       ) : (
@@ -59,13 +61,13 @@ const StorageStep = ({
               error={errors.name}
             />
           </div>
-          <div className="p-4 bg-amber-600/10 border border-amber-600/20 rounded-lg text-amber-600 text-sm flex gap-3">
-            <AlertCircle size={20} className="shrink-0" />
-            <p>
+          <Alert variant="default" className="border-amber-600/20 bg-amber-600/10 text-amber-600">
+            <AlertCircle />
+            <AlertDescription className="text-amber-600">
               Creating a ZFS pool will format the selected disk. Ensure you have
               backups of any important data before proceeding.
-            </p>
-          </div>
+            </AlertDescription>
+          </Alert>
           <Button
             variant="primary"
             className="w-full h-12 text-lg"

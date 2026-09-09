@@ -12,6 +12,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { FieldDescription } from "@/components/ui/field";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Spinner } from "@/components/ui/spinner";
@@ -97,11 +99,11 @@ const PowerActionModal = ({ client, isOpen, onClose, onSuccess, type = "shutdown
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-          <div className="rounded-lg bg-muted p-4">
-            <p className="text-sm text-muted-foreground">
+          <Alert>
+            <AlertDescription>
               {cfg.verbing}: <span className="font-semibold text-foreground">{client?.name}</span>
-            </p>
-          </div>
+            </AlertDescription>
+          </Alert>
 
           <div className="flex flex-col gap-2">
             <Label className="font-medium">{cfg.noun} Mode</Label>
@@ -153,9 +155,9 @@ const PowerActionModal = ({ client, isOpen, onClose, onSuccess, type = "shutdown
                   onChange={(e) => setDelayMinutes(Math.max(0, parseInt(e.target.value) || 0))}
                   placeholder="Enter delay in minutes"
                 />
-                <p className="text-xs text-muted-foreground">
+                <FieldDescription>
                   Client will {cfg.verb} after {delayMinutes} minute{delayMinutes !== 1 ? "s" : ""}
-                </p>
+                </FieldDescription>
               </div>
             )}
           </div>

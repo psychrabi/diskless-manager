@@ -87,6 +87,9 @@ fn storage_spec(client: &Client, prefix: &str) -> Result<ClientStorageSpec> {
         // Boot-only spec: game clones are reset separately with the
         // resolved selection in the Reset branch below.
         game_disks: Vec::new(),
+        // Resolved by the caller (Reset branch); journals from older
+        // builds deserialize this as None via serde default.
+        chap: None,
     })
 }
 
@@ -236,7 +239,19 @@ async fn process(state: &AppState, client: &Client) -> Result<()> {
         Decision::Wait => {}
         Decision::Reset => {
             ensure_no_nvme_export(client)?;
-            let spec = storage_spec(client, &settings.iscsi.target_prefix)?;
+            let mut spec = storage_spec(client, &settings.iscsi.target_prefix)?;
+            // A rebuilt target must keep its authentication: resolve (and
+            // generate, once) the client's CHAP credentials here.
+            spec.chap = crate::core::reconciliation::ensure_chap_credentials(
+                &state.db_pool,
+                &client.id,
+                &client.name,
+                client.chap_enabled.unwrap_or(false),
+            )
+            .await
+            .map_err(|error| {
+                anyhow::anyhow!("failed to resolve CHAP credentials: {error:#}")
+            })?;
             // Shared datasets are never eligible even if a legacy record claims ownership.
             let other: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM clients WHERE id <> ? AND (block_device = ? OR block_store = ? OR master = ?)")
                 .bind(&client.id).bind(spec.block_device().to_string_lossy().as_ref()).bind(spec.block_device().to_string_lossy().as_ref()).bind(&spec.dataset)
@@ -282,6 +297,7 @@ async fn process(state: &AppState, client: &Client) -> Result<()> {
                                     &client.id,
                                     &target,
                                     &masters,
+                                    operation.spec.chap.as_ref(),
                                 ) {
                                     // The boot reset already committed; game
                                     // clones heal on the next ensure. Never
@@ -338,6 +354,7 @@ mod tests {
             lun: 0,
             use_game_disk: false,
             game_disks: Vec::new(),
+            chap: None,
         });
         sqlx::query("INSERT INTO client_offline_resets(client_id, fingerprint, offline_since, retry_after, operation) VALUES ('client', 'unchanged', 100, 450, ?)")
             .bind(serde_json::to_string(&op).unwrap()).execute(&pool).await.unwrap();

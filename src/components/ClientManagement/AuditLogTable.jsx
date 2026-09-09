@@ -80,11 +80,11 @@ const AuditLogTable = ({
             <TableBody>
               {paginatedLogs.map((log) => (
                 <TableRow key={log.id}>
-                  <TableCell className="font-mono text-xs">
+                  <TableCell className=" text-xs">
                     {formatTimestamp(log.timestamp)}
                   </TableCell>
                   <TableCell className="font-semibold">{log.client_name}</TableCell>
-                  <TableCell className="font-mono text-xs">
+                  <TableCell className=" text-xs">
                     {log.client_ip}
                   </TableCell>
                   <TableCell>
@@ -98,7 +98,7 @@ const AuditLogTable = ({
                       {log.result}
                     </Badge>
                   </TableCell>
-                  <TableCell className="font-mono text-xs">
+                  <TableCell className=" text-xs">
                     {log.duration_ms || "-"}
                   </TableCell>
                 </TableRow>

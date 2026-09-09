@@ -94,14 +94,8 @@ impl DhcpService {
     /// so this only ever shows up when systemd starts the service.
     async fn ensure_daemon_readable(&self) -> anyhow::Result<()> {
         const DHCP_DIR: &str = "/etc/dhcp";
-        const RESTORECON: &str = "/usr/sbin/restorecon";
-
-        // Guarded so `restorecon` is only invoked on systems with an active
-        // policy (it errors otherwise).
-        if std::path::Path::new("/sys/fs/selinux/enforce").exists() {
-            run_sudo_command([RESTORECON, "-R", DHCP_DIR]).await?;
-        }
-
+        crate::infrastructure::command::restorecon_paths(&[DHCP_DIR])
+            .map_err(|error| anyhow::anyhow!("SELinux relabel failed: {error}"))?;
         Ok(())
     }
 

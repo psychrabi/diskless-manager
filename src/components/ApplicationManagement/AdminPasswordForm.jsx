@@ -33,9 +33,10 @@ export default function AdminPasswordForm() {
 
   return (
     <Card
-      title="Admin password"
+      title="Admin Password"
       subtitle="Change admin password"
       icon={LockKeyhole}
+      className="h-full"
     >
       <form onSubmit={handleSubmit(onSubmit)}>
         <div className="space-y-4">
@@ -63,9 +64,11 @@ export default function AdminPasswordForm() {
             placeholder="Confirm New Password"
             error={errors.confirm_new_password?.message}
           />
-          <Button variant="primary" type="submit">
-            {isSubmitting ? "Updating password" : "Update password"}
-          </Button>
+          <div className="flex justify-end">
+            <Button variant="primary" type="submit" loading={isSubmitting}>
+              Update password
+            </Button>
+          </div>
         </div>
       </form>
     </Card>

@@ -1,4 +1,5 @@
-import { Field, FieldLabel } from "@/components/ui/field";
+import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
+import { DialogFooter } from "@/components/ui/dialog";
 import { Input as TextInput } from "@/components/ui/input";
 import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -84,9 +85,9 @@ const RenameDiskModal = ({
     >
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         <div className="space-y-2">
-          <p className="text-sm text-gray-600 dark:text-gray-400">
-            Rename disk "{displayName}" to a new name.
-          </p>
+          <FieldDescription>
+            Rename disk &quot;{displayName}&quot; to a new name.
+          </FieldDescription>
           <Field>
             <FieldLabel htmlFor="newName">New Name</FieldLabel>
             <TextInput
@@ -99,24 +100,20 @@ const RenameDiskModal = ({
               aria-describedby={errors.newName ? "newName-error" : undefined}
             />
             {errors.newName && (
-              <div
-                id="newName-error"
-                role="alert"
-                className="text-destructive text-xs"
-              >
+              <FieldError id="newName-error">
                 {errors.newName.message}
-              </div>
+              </FieldError>
             )}
           </Field>
         </div>
-        <div className="mt-6 flex justify-end space-x-3">
+        <DialogFooter className="mt-6">
           <Button type="submit" variant="primary" icon={Save}>
             Rename disk
           </Button>
           <Button type="button" variant="destructive" onClick={handleClose}>
             Cancel
           </Button>
-        </div>
+        </DialogFooter>
       </form>
     </Modal>
   );

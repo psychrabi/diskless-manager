@@ -176,8 +176,29 @@ where
 /// used on Debian; on a permission error the file is read with `sudo -n cat`,
 /// which the setup grants in the diskless-manager sudoers rule. A missing file
 /// yields `Ok(None)` so callers can treat it like an absent optional config.
-pub fn read_file_with_sudo(path: &std::path::Path) -> Result<Option<String>, AppError> {
-    use std::ffi::OsStr;
+/// Whether SELinux is currently enforcing on this host.
+pub fn selinux_enforcing() -> bool {
+    std::fs::read_to_string("/sys/fs/selinux/enforce")
+        .map(|value| value.trim() == "1")
+        .unwrap_or(false)
+}
+
+/// Restore SELinux contexts on daemon-read paths after staged installs.
+///
+/// Files moved in from temp staging dirs keep `tmp_t`-family labels that
+/// confined daemons (e.g. `dhcpd_t`) are denied from opening — surfacing
+/// later as cryptic "Permission denied" service failures. No-op without
+/// an enforcing policy. Fails loudly when enforcing and relabeling fails.
+pub fn restorecon_paths(paths: &[&str]) -> Result<(), AppError> {
+    if !selinux_enforcing() {
+        return Ok(());
+    }
+    let mut args = vec!["restorecon", "-R"];
+    args.extend_from_slice(paths);
+    run_command(args)
+}
+
+pub fn read_file_with_sudo(path: &std::path::Path) -> Result<Option<String>, AppError> {    use std::ffi::OsStr;
     match std::fs::read_to_string(path) {
         Ok(content) => Ok(Some(content)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),

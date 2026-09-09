@@ -4,6 +4,8 @@ import {
   Play,
   RefreshCcw,
   StopCircle,
+  ToggleLeft,
+  ToggleRight,
 } from "lucide-react";
 import { useState } from "react";
 import { Button, Card, StatusBadge } from "@/components/ui";
@@ -24,6 +26,8 @@ export default function ServiceCard({
   startService,
   stopService,
   restartService,
+  enableServiceBoot,
+  disableServiceBoot,
 }) {
   const { success, error: showError } = useToastStore();
   const [loadingAction, setLoadingAction] = useState(null);
@@ -41,6 +45,23 @@ export default function ServiceCard({
     }
   };
 
+  const handleBootToggle = async () => {
+    const action = service.starts_on_boot ? "disable_boot" : "enable_boot";
+    const fn = service.starts_on_boot ? disableServiceBoot : enableServiceBoot;
+    const label = service.starts_on_boot
+      ? "will no longer start on boot"
+      : "will now start on boot";
+    setLoadingAction(action);
+    try {
+      await fn(service.name);
+      success(`${service.display_name} ${label}`);
+    } catch (e) {
+      showError(`Failed to change boot setting for ${service.display_name}: ${e.message || e}`);
+    } finally {
+      setLoadingAction(null);
+    }
+  };
+
   const Icon = getServiceIcon(service.name);
 
   return (
@@ -51,14 +72,14 @@ export default function ServiceCard({
 
       <div className="flex items-center justify-between px-3 py-2 bg-muted/50 rounded-lg mb-4 text-sm">
         <span className="text-muted-foreground">
-          PID: <span className="font-mono text-muted-foreground">{service.pid ?? "\u2014"}</span>
+          PID: <span className=" text-muted-foreground">{service.pid ?? "\u2014"}</span>
         </span>
         <StatusBadge
-          status={service.enabled ? "success" : "error"}
+          status={service.starts_on_boot ? "success" : "neutral"}
           size="sm"
           showIcon={false}
         >
-          {service.enabled ? "Enabled at boot" : "Disabled at boot"}
+          {service.starts_on_boot ? "Starts on boot" : "Manual start"}
         </StatusBadge>
       </div>
 
@@ -104,6 +125,16 @@ export default function ServiceCard({
           View Config
         </Button>
       </div>
+      <Button
+        icon={service.starts_on_boot ? ToggleRight : ToggleLeft}
+        variant="ghost"
+        className="w-full mt-2"
+        loading={loadingAction === "enable_boot" || loadingAction === "disable_boot"}
+        onClick={handleBootToggle}
+        title={service.starts_on_boot ? "Stop starting on boot" : "Start on boot"}
+      >
+        {service.starts_on_boot ? "On boot: on" : "On boot: off"}
+      </Button>
     </Card>
   );
 }

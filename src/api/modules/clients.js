@@ -24,6 +24,12 @@ export async function deleteClient(id) {
   });
 }
 
+export async function rotateChapSecret(id) {
+  return apiRequest(`/api/clients/${id}/chap/rotate`, {
+    method: "POST",
+  });
+}
+
 export async function getClientNvmeOfStatus(clientId) {
   return apiRequest(`/api/clients/${clientId}/nvmeof`);
 }

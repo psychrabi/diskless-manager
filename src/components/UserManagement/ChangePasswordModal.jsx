@@ -2,6 +2,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { Modal, Input, Button } from '@/components/ui';
+import { DialogFooter } from "@/components/ui/dialog";
 import { useUserManagement } from '@/hooks/useUserManagement';
 import { useToastStore } from '@/store/useToastStore';
 
@@ -69,7 +70,7 @@ export default function ChangePasswordModal({ isOpen, onClose, user }) {
           placeholder="Confirm new password"
         />
 
-        <div className="flex justify-end gap-2 pt-4">
+        <DialogFooter className="pt-4">
           <Button
             type="button"
             variant="ghost"
@@ -85,7 +86,7 @@ export default function ChangePasswordModal({ isOpen, onClose, user }) {
           >
             {isSubmitting || loading ? 'Updating...' : 'Update Password'}
           </Button>
-        </div>
+        </DialogFooter>
       </form>
     </Modal>
   );

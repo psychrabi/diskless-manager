@@ -175,7 +175,7 @@ const ScheduledOperationsList = ({ isOpen, onClose }) => {
                         {operation.operation_mode}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-xs font-mono">
+                    <TableCell className="text-xs ">
                       {formatTimestamp(operation.scheduled_time)}
                     </TableCell>
                     <TableCell>

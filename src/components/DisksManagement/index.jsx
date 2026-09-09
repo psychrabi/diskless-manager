@@ -1,8 +1,8 @@
-import { Card as ShadcnCard, CardContent, CardTitle } from "@/components/ui/card";
+import { Card as ShadcnCard, CardContent, CardDescription, CardTitle } from "@/components/ui/card";
 import { useAppStore } from "@/store/useAppStore";
 import { HardDrive, PlusCircle } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Button, Card } from "@/components/ui";
+import { Button, PageHeader } from "@/components/ui";
 import DiskFormModal from "./DiskFormModal";
 import DiskTable from "./DiskTable";
 
@@ -38,23 +38,22 @@ export default function DisksManagement() {
   }, [selectedPool, fetchDatasets, fetchDisks]);
 
   return (
-    <Card
-      title="Disk Management"
-      subtitle="Manage diskless boot server disks"
-      icon={HardDrive}
-      className="bg-muted"
-      actions={
-        datasets.length > 0 && (
-          <Button
-            variant="primary"
-            onClick={() => handleDiskFormModalOpen()}
-            icon={PlusCircle}
-          >
-            Add Disk
-          </Button>
-        )
-      }
-    >
+    <div className="flex flex-col gap-4">
+      <PageHeader
+        title="Disk Management"
+        description="Manage diskless boot server disks"
+        actions={
+          datasets.length > 0 && (
+            <Button
+              variant="primary"
+              onClick={() => handleDiskFormModalOpen()}
+              icon={PlusCircle}
+            >
+              Add Disk
+            </Button>
+          )
+        }
+      />
       <div className="min-h-[50vh]">
         {datasets.length === 0 ? (
           <ShadcnCard className="shadow-sm border border-border/50">
@@ -63,9 +62,9 @@ export default function DisksManagement() {
                 <HardDrive />
               </div>
               <CardTitle className="text-2xl mb-2">No Disks Available</CardTitle>
-              <p className="text-muted-foreground max-w-md mb-6">
+              <CardDescription className="max-w-md mb-6">
                 Create your first Boot image for clients to boot from.
-              </p>
+              </CardDescription>
               <Button
                 variant="primary"
                 onClick={handleDiskFormModalOpen}
@@ -86,6 +85,6 @@ export default function DisksManagement() {
           refresh={refresh}
         />
       )}
-    </Card>
+    </div>
   );
 }

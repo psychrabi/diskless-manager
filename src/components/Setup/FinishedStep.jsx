@@ -1,4 +1,5 @@
 import { CheckCircle } from "lucide-react";
+import { CardDescription, CardTitle } from "@/components/ui/card";
 import { Button, Card } from "@/components/ui";
 
 const FinishedStep = ({ onNavigateHome }) => {
@@ -8,11 +9,11 @@ const FinishedStep = ({ onNavigateHome }) => {
         <CheckCircle size={64} />
       </div>
       <div className="space-y-2">
-        <h2 className="text-3xl font-black">All Systems Go!</h2>
-        <p className="text-muted-foreground max-w-md mx-auto">
+        <CardTitle className="text-3xl font-black">All Systems Go!</CardTitle>
+        <CardDescription className="max-w-md mx-auto">
           Your server environment is fully configured and ready to manage
           diskless clients.
-        </p>
+        </CardDescription>
       </div>
       <div className="pt-4">
         <Button

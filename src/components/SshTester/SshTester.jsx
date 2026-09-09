@@ -1,11 +1,11 @@
-import { Card as ShadcnCard, CardContent, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Input as TextInput } from "@/components/ui/input";
-import { Alert } from "@/components/ui/alert";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Textarea } from "@/components/ui/textarea";
 import { useMemo, useState } from "react";
 import { testSshConnection, executeSshCommand, getWindowsSystemInfo } from "../../api/modules/ssh";
-import { Button } from "@/components/ui";
+import { Button, Card, PageHeader } from "@/components/ui";
+import { Monitor, Terminal, Zap } from "lucide-react";
 
 const DEFAULT_USERNAME = "Administrator";
 
@@ -46,20 +46,20 @@ const ResultAlert = ({ title, result, outputTitle }) => {
   if (!result) return null;
 
   return (
-    <Alert variant={result.success ? "default" : "destructive"} className="mt-4">
-      <div className="w-full">
-        <h3 className="font-bold">{title}</h3>
+    <Alert variant={result.success ? "default" : "destructive"}>
+      <AlertTitle>{title}</AlertTitle>
+      <AlertDescription>
         <p>{result.message}</p>
-        <p className="text-sm opacity-70">Duration: {result.duration_ms}ms</p>
+        <p className="text-xs opacity-70">Duration: {result.duration_ms}ms</p>
         {result.command_output && (
           <div className="mt-2">
-            {outputTitle && <h4 className="font-semibold">{outputTitle}</h4>}
+            {outputTitle && <p className="font-semibold text-foreground">{outputTitle}</p>}
             <pre className="text-xs bg-muted p-3 rounded overflow-x-auto whitespace-pre-wrap">
               {result.command_output}
             </pre>
           </div>
         )}
-      </div>
+      </AlertDescription>
     </Alert>
   );
 };
@@ -147,14 +147,20 @@ const SshTester = () => {
   };
 
   return (
-    <div className="p-6 max-w-4xl mx-auto">
-      <h1 className="text-2xl font-bold mb-6">SSH Connection Tester</h1>
+    <div className="flex flex-col gap-4">
+      <PageHeader
+        title="SSH Connection Tester"
+        description="Verify SSH access to Windows clients and run remote commands."
+      />
 
-      <ShadcnCard className="shadow-sm mb-6">
-        <CardContent className="flex flex-col gap-4">
-          <CardTitle className="">Test SSH Connection</CardTitle>
+      <Card
+        title="Test SSH Connection"
+        subtitle="Check connectivity and credentials for a client"
+        icon={Terminal}
+      >
+        <div className="flex flex-col gap-4">
 
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="connectionForm-host" className="flex items-center gap-2 text-sm font-medium">
                 <span className="text-sm font-medium">Host/IP Address</span>
@@ -162,7 +168,6 @@ const SshTester = () => {
               <TextInput
                 type="text"
                 placeholder="192.168.1.100"
-                className=""
                 id="connectionForm-host"
                 value={connectionForm.host}
                 onChange={(e) =>
@@ -178,7 +183,6 @@ const SshTester = () => {
               <TextInput
                 type="text"
                 placeholder={DEFAULT_USERNAME}
-                className=""
                 id="connectionForm-username"
                 value={connectionForm.username}
                 onChange={(e) =>
@@ -197,7 +201,6 @@ const SshTester = () => {
               <TextInput
                 type="password"
                 placeholder="Leave blank for key auth"
-                className=""
                 id="connectionForm-password"
                 value={connectionForm.password}
                 onChange={(e) =>
@@ -216,7 +219,6 @@ const SshTester = () => {
               <TextInput
                 type="number"
                 placeholder="22"
-                className=""
                 id="connectionForm-port"
                 value={connectionForm.port}
                 onChange={(e) =>
@@ -229,7 +231,7 @@ const SshTester = () => {
             </div>
           </div>
 
-          <div className="flex flex-wrap gap-2 justify-end mt-4">
+          <div className="flex flex-wrap gap-2 justify-end">
             <Button
               variant="primary"
               loading={loading}
@@ -249,16 +251,18 @@ const SshTester = () => {
           </div>
 
           <ResultAlert title="Connection Test Result" result={testResult} />
-        </CardContent>
-      </ShadcnCard>
+        </div>
+      </Card>
 
       {systemInfo && (
-        <ShadcnCard className="shadow-sm mb-6">
-          <CardContent className="flex flex-col gap-4">
-            <CardTitle className="">Windows System Information</CardTitle>
-
+        <Card
+          title="Windows System Information"
+          subtitle="Hardware and OS details from the client"
+          icon={Monitor}
+        >
+          <div className="flex flex-col gap-4">
             {systemInfo.error ? (
-              <Alert variant="destructive" className="">
+              <Alert variant="destructive">
                 <p>{systemInfo.error}</p>
               </Alert>
             ) : (
@@ -295,13 +299,16 @@ const SshTester = () => {
                 </div>
               </div>
             )}
-          </CardContent>
-        </ShadcnCard>
+          </div>
+        </Card>
       )}
 
-      <ShadcnCard className="shadow-sm">
-        <CardContent className="flex flex-col gap-4">
-          <CardTitle className="">Execute SSH Command</CardTitle>
+      <Card
+        title="Execute SSH Command"
+        subtitle="Run a command on a remote client"
+        icon={Terminal}
+      >
+        <div className="flex flex-col gap-4">
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="flex flex-col gap-1.5">
@@ -311,7 +318,6 @@ const SshTester = () => {
               <TextInput
                 type="text"
                 placeholder="192.168.1.100"
-                className=""
                 id="commandForm-host"
                 value={commandForm.host}
                 onChange={(e) =>
@@ -327,7 +333,6 @@ const SshTester = () => {
               <TextInput
                 type="text"
                 placeholder={DEFAULT_USERNAME}
-                className=""
                 id="commandForm-username"
                 value={commandForm.username}
                 onChange={(e) =>
@@ -346,7 +351,6 @@ const SshTester = () => {
               <TextInput
                 type="password"
                 placeholder="Leave blank for key auth"
-                className=""
                 id="commandForm-password"
                 value={commandForm.password}
                 onChange={(e) =>
@@ -395,12 +399,15 @@ const SshTester = () => {
             result={commandResult}
             outputTitle="Output:"
           />
-        </CardContent>
-      </ShadcnCard>
+        </div>
+      </Card>
 
-      <ShadcnCard className="shadow-sm mt-6">
-        <CardContent className="flex flex-col gap-4">
-          <CardTitle className="">Quick Commands</CardTitle>
+      <Card
+        title="Quick Commands"
+        subtitle="Fill the command box with a preset"
+        icon={Zap}
+      >
+        <div className="flex flex-col gap-4">
           <div className="flex flex-wrap gap-2">
             {QUICK_COMMANDS.map((entry) => (
               <Button
@@ -418,8 +425,8 @@ const SshTester = () => {
               </Button>
             ))}
           </div>
-        </CardContent>
-      </ShadcnCard>
+        </div>
+      </Card>
     </div>
   );
 };

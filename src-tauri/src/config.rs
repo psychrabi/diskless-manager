@@ -161,6 +161,9 @@ pub async fn read_config_db(pool: &sqlx::SqlitePool) -> anyhow::Result<AppConfig
             pxe_mode: Some(c.pxe_mode),
             keep_writeback: Some(c.keep_writeback),
             use_game_disk: Some(c.use_game_disk),
+            chap_user: None,
+            chap_secret: None,
+            chap_enabled: None,
         });
     }
 

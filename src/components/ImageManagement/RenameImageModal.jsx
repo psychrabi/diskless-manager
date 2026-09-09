@@ -1,4 +1,5 @@
-import { Field, FieldLabel } from "@/components/ui/field";
+import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
+import { DialogFooter } from "@/components/ui/dialog";
 import { Input as TextInput } from "@/components/ui/input";
 import { renameImage } from "@/api/modules/images";
 import { useAppStore } from "@/store/useAppStore";
@@ -73,9 +74,9 @@ const RenameImageModal = ({
     >
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         <div className="space-y-2">
-          <p className="text-sm text-gray-600 dark:text-gray-400">
-            Rename master image "{selectedImage.name}" to a new name.
-          </p>
+          <FieldDescription>
+            Rename master image &quot;{selectedImage.name}&quot; to a new name.
+          </FieldDescription>
           <Field>
             <FieldLabel htmlFor="newName">
               New Name
@@ -88,14 +89,12 @@ const RenameImageModal = ({
               className="w-full"
             />
             {errors.newName && (
-              <div className="text-destructive text-xs">
-                {errors.newName.message}
-              </div>
+              <FieldError>{errors.newName.message}</FieldError>
             )}
           </Field>
         </div>
 
-        <div className="mt-6 flex justify-end space-x-3">
+        <DialogFooter className="mt-6">
           <Button
             type="submit"
             variant="primary"
@@ -112,7 +111,7 @@ const RenameImageModal = ({
           >
             Cancel
           </Button>
-        </div>
+        </DialogFooter>
       </form>
     </Modal>
   );

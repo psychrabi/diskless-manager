@@ -1,4 +1,6 @@
 import { Label } from "@/components/ui/label";
+import { FieldError } from "@/components/ui/field";
+import { DialogFooter } from "@/components/ui/dialog";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -103,15 +105,11 @@ export default function CreateUserModal({ isOpen, onClose }) {
             <NativeSelectOption value="admin">Admin</NativeSelectOption>
           </NativeSelect>
           {errors.role && (
-            <Label className="flex items-center gap-2 text-sm font-medium">
-              <span id="role-error" role="alert" className="text-xs text-destructive">
-                {errors.role.message}
-              </span>
-            </Label>
+            <FieldError id="role-error">{errors.role.message}</FieldError>
           )}
         </div>
 
-        <div className="flex justify-end gap-2 pt-4">
+        <DialogFooter className="pt-4">
           <Button
             type="button"
             variant="ghost"
@@ -127,7 +125,7 @@ export default function CreateUserModal({ isOpen, onClose }) {
           >
             {isSubmitting || loading ? 'Creating...' : 'Create User'}
           </Button>
-        </div>
+        </DialogFooter>
       </form>
     </Modal>
   );

@@ -52,7 +52,7 @@ const BootScriptStep = ({ onSubmit, isSubmitting }) => {
       <div className="space-y-4">
         <Textarea
           aria-label="iPXE boot script"
-          className="w-full h-130 p-4 font-mono text-sm bg-muted rounded-lg outline-none focus:ring-2 focus:ring-primary/50 transition-all resize-none"
+          className="w-full h-130 p-4  text-sm bg-muted rounded-lg outline-none focus:ring-2 focus:ring-primary/50 transition-all resize-none"
           value={script}
           onChange={(e) => setScript(e.target.value)}
           spellCheck={false}

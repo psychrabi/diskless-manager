@@ -55,7 +55,7 @@ const DependencyStep = ({
                 className="hover:bg-muted/20 transition-colors"
               >
                 <TableCell className="font-medium">{svc.name}</TableCell>
-                <TableCell className="font-mono text-xs">
+                <TableCell className=" text-xs">
                   {svc.version || "---"}
                 </TableCell>
                 <TableCell className="text-center">

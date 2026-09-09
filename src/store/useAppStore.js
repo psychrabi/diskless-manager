@@ -4,7 +4,7 @@ import { shallow } from "zustand/shallow";
 import { listClients } from "../api/modules/clients";
 import { listMasters, listImages } from "../api/modules/images";
 import { listDatasets, createZfsDataset, deleteZfsDataset, getZpoolList, listZpools } from "../api/modules/zfs";
-import { listServices, startService, stopService, restartService } from "../api/modules/services";
+import { listServices, startService, stopService, restartService, enableServiceBoot, disableServiceBoot } from "../api/modules/services";
 import { getSystemInfo, getServerStatus, checkDependencies, getRamUsage, getZfsArcstat } from "../api/modules/system";
 import { getLicenseInfo } from "../api/modules/license";
 import { readConfig } from "../api/modules/config";
@@ -233,6 +233,22 @@ export const useAppStore = create()(
             action: restartService,
             status: "restarting",
             errorPrefix: "Failed to restart service:",
+          }),
+
+        enableServiceBoot: async (name) =>
+          runServiceAction({
+            name,
+            action: enableServiceBoot,
+            status: "running",
+            errorPrefix: "Failed to enable service on boot:",
+          }),
+
+        disableServiceBoot: async (name) =>
+          runServiceAction({
+            name,
+            action: disableServiceBoot,
+            status: "stopped",
+            errorPrefix: "Failed to disable service on boot:",
           }),
 
         fetchServerInfo: async () =>

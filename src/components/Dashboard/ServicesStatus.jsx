@@ -1,8 +1,8 @@
-import { RefreshCw } from "lucide-react";
+import { Activity, RefreshCw } from "lucide-react";
 import { useShallow } from "zustand/shallow";
 import { useAppStore } from "../../store/useAppStore";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { StatusDot } from "@/components/ui";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { restartAllServices } from "@/api/modules/services";
 import { useConfirm } from "@/contexts/confirmDialog";
@@ -28,9 +28,12 @@ export default function ServicesStatus() {
   }
 
   return (
-    <Card className="col-span-2">
+    <Card className="h-full md:col-span-2 xl:col-span-6">
       <CardHeader>
-        <CardTitle>Services Status</CardTitle>
+        <CardTitle className="flex items-center gap-2">
+          <Activity className="size-4 text-muted-foreground" />
+          Services Status
+        </CardTitle>
         <CardAction>
           <Button
             variant="ghost"
@@ -44,13 +47,13 @@ export default function ServicesStatus() {
       </CardHeader>
       <CardContent>
         {services.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className="flex gap-3 overflow-x-auto pb-1">
             {services.map((service) => {
               const Icon = getServiceIcon(service.name);
               return (
                 <div
                   key={service.name}
-                  className="flex items-center justify-between gap-3 p-3 rounded-xl bg-muted/50 hover:bg-muted transition-colors"
+                  className="flex min-w-52 flex-1 items-center justify-between gap-3 rounded-xl bg-muted/50 p-3 transition-colors hover:bg-muted"
                 >
                   <div className="flex items-center gap-3 min-w-0">
                     <div className="size-9 shrink-0 rounded-lg bg-muted flex items-center justify-center">
@@ -65,15 +68,13 @@ export default function ServicesStatus() {
                       </p>
                     </div>
                   </div>
-                  <Badge variant={service.running ? "outline" : "secondary"}>
-                    {service.running ? "Running" : "Stopped"}
-                  </Badge>
+                  <StatusDot running={service.running} label={service.display_name} />
                 </div>
               );
             })}
           </div>
         ) : (
-          <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
+          <div className="flex flex-col items-center justify-center py-8 text-sm text-muted-foreground">
             <p>No services found</p>
           </div>
         )}

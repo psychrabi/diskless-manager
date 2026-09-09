@@ -119,7 +119,7 @@ impl StorageService {
 mod tests {
     use super::*;
     use crate::infrastructure::{image::ImageBackendInfo, iscsi::IscsiTargetState};
-    use crate::infrastructure::iscsi::IscsiLunState;
+    use crate::infrastructure::iscsi::{ChapCredentials, IscsiLunState};
     use std::{collections::HashMap, path::Path, sync::Mutex};
 
     #[derive(Default)]
@@ -223,6 +223,9 @@ mod tests {
         fn target_exists(&self, _: &str) -> Result<bool> {
             Ok(true)
         }
+        fn set_chap_auth(&self, _: &str, _: Option<&ChapCredentials>) -> Result<()> {
+            Ok(())
+        }
         fn list_target_luns(&self, _: &str) -> Result<Vec<IscsiLunState>> {
             Ok(Vec::new())
         }
@@ -265,6 +268,7 @@ mod tests {
             lun: 0,
             use_game_disk: false,
             game_disks: Vec::new(),
+            chap: None,
         });
         (service, disks, target, operation)
     }

@@ -30,6 +30,9 @@ struct ClientRow {
 
     keep_writeback: Option<i64>,
     use_game_disk: Option<i64>,
+    chap_user: Option<String>,
+    chap_secret: Option<String>,
+    chap_enabled: Option<i64>,
 }
 
 #[derive(Clone)]
@@ -64,7 +67,10 @@ impl ClientRepository {
                 mode,
                 pxe_mode,
                 keep_writeback,
-                use_game_disk
+                use_game_disk,
+                chap_user,
+                chap_secret,
+                chap_enabled
             FROM clients
             WHERE id = ?
             "#,
@@ -99,7 +105,10 @@ impl ClientRepository {
                 mode,
                 pxe_mode,
                 keep_writeback,
-                use_game_disk
+                use_game_disk,
+                chap_user,
+                chap_secret,
+                chap_enabled
             FROM clients
             WHERE name = ?
             "#,
@@ -134,7 +143,10 @@ impl ClientRepository {
                 mode,
                 pxe_mode,
                 keep_writeback,
-                use_game_disk
+                use_game_disk,
+                chap_user,
+                chap_secret,
+                chap_enabled
             FROM clients
             WHERE mac = ?
             "#,
@@ -169,7 +181,10 @@ impl ClientRepository {
                 mode,
                 pxe_mode,
                 keep_writeback,
-                use_game_disk
+                use_game_disk,
+                chap_user,
+                chap_secret,
+                chap_enabled
             FROM clients
             ORDER BY name ASC
             "#,
@@ -205,11 +220,15 @@ impl ClientRepository {
                 mode,
                 pxe_mode,
                 keep_writeback,
-                use_game_disk
+                use_game_disk,
+                chap_user,
+                chap_secret,
+                chap_enabled
             )
             VALUES (
                 ?, ?, ?, ?, ?, ?,
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?
             )
             "#,
         )
@@ -232,6 +251,9 @@ impl ClientRepository {
         .bind(client.pxe_mode.as_str())
         .bind(if client.keep_writeback { 1 } else { 0 })
         .bind(if client.use_game_disk { 1 } else { 0 })
+        .bind(&client.chap_user)
+        .bind(&client.chap_secret)
+        .bind(if client.chap_enabled { 1 } else { 0 })
         .execute(&self.pool)
         .await
         .context("failed to insert client")?;
@@ -247,6 +269,36 @@ impl ClientRepository {
         .bind(id.as_str())
         .fetch_all(&self.pool)
         .await?)
+    }
+
+    /// Stored CHAP username/secret, if any.
+    pub async fn chap_credentials(
+        &self,
+        id: &ClientId,
+    ) -> Result<(Option<String>, Option<String>)> {
+        let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT chap_user, chap_secret FROM clients WHERE id = ?",
+        )
+        .bind(id.as_str())
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.unwrap_or((None, None)))
+    }
+
+    /// Persist (possibly rotated) CHAP credentials.
+    pub async fn set_chap_credentials(
+        &self,
+        id: &ClientId,
+        username: &str,
+        secret: &str,
+    ) -> Result<()> {
+        sqlx::query("UPDATE clients SET chap_user = ?, chap_secret = ? WHERE id = ?")
+            .bind(username)
+            .bind(secret)
+            .bind(id.as_str())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     /// Replace a client's stored game master selection wholesale.
@@ -294,7 +346,10 @@ impl ClientRepository {
                 mode = ?,
                 pxe_mode = ?,
                 keep_writeback = ?,
-                use_game_disk = ?
+                use_game_disk = ?,
+                chap_user = ?,
+                chap_secret = ?,
+                chap_enabled = ?
             WHERE id = ?
             "#,
         )
@@ -315,6 +370,9 @@ impl ClientRepository {
         .bind(client.pxe_mode.as_str())
         .bind(if client.keep_writeback { 1 } else { 0 })
         .bind(if client.use_game_disk { 1 } else { 0 })
+        .bind(&client.chap_user)
+        .bind(&client.chap_secret)
+        .bind(if client.chap_enabled { 1 } else { 0 })
         .bind(client.id.as_str())
         .execute(&self.pool)
         .await
@@ -427,6 +485,9 @@ impl ClientRepository {
             // Selection lives in `client_game_disks`; populated by the
             // service layer after fetch.
             game_disks: Vec::new(),
+            chap_user: row.chap_user,
+            chap_secret: row.chap_secret,
+            chap_enabled: row.chap_enabled.unwrap_or(0) != 0,
         })
     }
 }
@@ -524,6 +585,7 @@ mod tests {
             keep_writeback: true,
             use_game_disk: false,
             game_disks: Vec::new(),
+            chap_enabled: false,
         })
         .expect("client should be valid");
 
@@ -560,7 +622,10 @@ mod tests {
                 mode TEXT,
                 pxe_mode TEXT,
                 keep_writeback INTEGER,
-                use_game_disk INTEGER
+                use_game_disk INTEGER,
+                chap_user TEXT,
+                chap_secret TEXT,
+                chap_enabled INTEGER NOT NULL DEFAULT 0
             )
             "#,
         )
@@ -582,6 +647,7 @@ mod tests {
             keep_writeback: true,
             use_game_disk: false,
             game_disks: Vec::new(),
+            chap_enabled: false,
         })
         .expect("pending client should be valid");
 

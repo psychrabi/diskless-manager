@@ -2,6 +2,8 @@ import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { CardTitle } from "@/components/ui/card";
+import { Field } from "@/components/ui/field";
 import { Filter, X } from "lucide-react";
 
 const AuditLogFilters = ({
@@ -14,11 +16,11 @@ const AuditLogFilters = ({
     <div className="rounded-lg border border-border bg-muted/30 p-4">
       <div className="mb-3 flex items-center gap-2">
         <Filter className="size-4" />
-        <h3 className="text-sm font-semibold">Filters</h3>
+        <CardTitle className="text-sm">Filters</CardTitle>
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <div className="flex flex-col gap-1.5">
+        <Field>
           <Label htmlFor="client-filter" className="text-sm">
             Client
           </Label>
@@ -34,9 +36,9 @@ const AuditLogFilters = ({
               </NativeSelectOption>
             ))}
           </NativeSelect>
-        </div>
+        </Field>
 
-        <div className="flex flex-col gap-1.5">
+        <Field>
           <Label htmlFor="operation-filter" className="text-sm">
             Operation Type
           </Label>
@@ -50,9 +52,9 @@ const AuditLogFilters = ({
             <NativeSelectOption value="reboot">Reboot</NativeSelectOption>
             <NativeSelectOption value="remote">Remote Desktop</NativeSelectOption>
           </NativeSelect>
-        </div>
+        </Field>
 
-        <div className="flex flex-col gap-1.5">
+        <Field>
           <Label htmlFor="start-date" className="text-sm">
             Start Date
           </Label>
@@ -62,9 +64,9 @@ const AuditLogFilters = ({
             value={filters.start_date}
             onChange={(e) => onFilterChange("start_date", e.target.value)}
           />
-        </div>
+        </Field>
 
-        <div className="flex flex-col gap-1.5">
+        <Field>
           <Label htmlFor="end-date" className="text-sm">
             End Date
           </Label>
@@ -74,7 +76,7 @@ const AuditLogFilters = ({
             value={filters.end_date}
             onChange={(e) => onFilterChange("end_date", e.target.value)}
           />
-        </div>
+        </Field>
       </div>
 
       <div className="mt-3 flex justify-end">

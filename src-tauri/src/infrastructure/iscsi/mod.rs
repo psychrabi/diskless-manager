@@ -4,7 +4,7 @@ pub mod safe;
 pub mod targetcli;
 
 pub use model::{
-    IscsiLunSpec, IscsiLunState, IscsiProvisionResult, IscsiTargetSpec, IscsiTargetState,
+    ChapCredentials, IscsiLunSpec, IscsiLunState, IscsiProvisionResult, IscsiTargetSpec, IscsiTargetState,
 };
 
 pub use reconcile::target_has_active_sessions;

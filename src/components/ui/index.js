@@ -7,8 +7,10 @@ import { Error } from "./Error.jsx";
 import { Input } from "./Input.jsx";
 import { Loading } from "./Loading.jsx";
 import { Modal } from "./Modal.jsx";
+import { PageHeader } from "./PageHeader.jsx";
 import { Select } from "./Select.jsx";
 import { StatusBadge } from "./StatusBadge.jsx";
+import { StatusDot } from "./StatusDot.jsx";
 import { ToastContainer } from "./ToastContainer.jsx";
 
 export * from "./Table";
@@ -24,8 +26,10 @@ export {
   Loading,
   LoadingSkeleton,
   Modal,
+  PageHeader,
   Select,
   StatusBadge,
+  StatusDot,
   TableSkeleton,
   ToastContainer,
 };

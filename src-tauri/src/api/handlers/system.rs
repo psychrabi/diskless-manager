@@ -424,6 +424,72 @@ pub async fn close_enrollment(
     })))
 }
 
+/// Firewall status for boot-required traffic.
+///
+/// Read-only: changing firewall rules needs privileges the app is not
+/// granted, so missing entries are reported with the exact commands for
+/// the administrator instead of being applied.
+pub async fn get_firewall_status(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let nfs_managed = state.settings.read().await.nfs.enabled;
+    // firewalld service names covering the boot and data planes.
+    let mut required = vec!["dhcp", "tftp", "http", "samba", "iscsi-target"];
+    if nfs_managed {
+        required.push("nfs");
+    }
+
+    let running_output = tokio::process::Command::new("firewall-cmd")
+        .arg("--state")
+        .output()
+        .await;
+    let running = running_output
+        .map(|output| {
+            output.status.success()
+                && String::from_utf8_lossy(&output.stdout).trim() == "running"
+        })
+        .unwrap_or(false);
+
+    let mut active: Vec<String> = Vec::new();
+    if running {
+        if let Ok(output) = tokio::process::Command::new("firewall-cmd")
+            .args(["--list-services"])
+            .output()
+            .await
+        {
+            if output.status.success() {
+                active = String::from_utf8_lossy(&output.stdout)
+                    .split_whitespace()
+                    .map(str::to_string)
+                    .collect();
+            }
+        }
+    }
+
+    let missing: Vec<String> = required
+        .iter()
+        .filter(|service| !active.iter().any(|entry| entry == *service))
+        .map(|service| service.to_string())
+        .collect();
+    let fix_commands: Vec<String> = missing
+        .iter()
+        .map(|service| {
+            format!(
+                "sudo firewall-cmd --permanent --add-service={} && sudo firewall-cmd --reload",
+                service
+            )
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "firewall_running": running,
+        "required_services": required,
+        "active_services": active,
+        "missing_services": missing,
+        "fix_commands": fix_commands,
+    })))
+}
+
 pub async fn setup_privileged_access() -> Result<Json<serde_json::Value>, StatusCode> {
     match crate::commands::system::setup_privileged_access().await {
         Ok(msg) => Ok(Json(serde_json::json!({ "message": msg }))),

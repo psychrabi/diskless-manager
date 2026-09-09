@@ -44,6 +44,10 @@ pub async fn list_services(
     let mut services = Vec::new();
 
     for (name, display_name) in service_display_names {
+        // systemd boot persistence is orthogonal to app-settings
+        // management; a query failure degrades to "unknown" (false)
+        // rather than failing the whole list.
+        let starts_on_boot = service_manager.boot_enabled(name).await.unwrap_or(false);
         match service_manager.status(name).await {
             Ok(status) => {
                 // Get the enabled status from settings
@@ -63,6 +67,7 @@ pub async fn list_services(
                     running: status.running,
                     enabled: is_enabled,
                     pid: status.pid,
+                    starts_on_boot,
                 };
 
                 services.push(service_info);
@@ -86,6 +91,7 @@ pub async fn list_services(
                     running: false,
                     enabled: is_enabled,
                     pid: None,
+                    starts_on_boot,
                 };
 
                 services.push(service_info);
@@ -165,6 +171,35 @@ pub async fn restart_service(
     })?;
     let response = format!("Service {} restarted", name);
     Ok(Json(response))
+}
+
+/// Persist a service for start on boot without changing its running state.
+pub async fn enable_service_boot(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<String>, StatusCode> {
+    let settings = state.settings.read().await;
+    let service_manager = ServiceManager::new(settings.clone(), state.db_pool.clone());
+    service_manager.enable_boot(&name).await.map_err(|error| {
+        log::error!("Failed to enable '{}' on boot: {:#}", name, error);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    Ok(Json(format!("Service {} will start on boot", name)))
+}
+
+/// Stop persisting a service for start on boot without changing its
+/// running state. Use stop to halt it now.
+pub async fn disable_service_boot(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<String>, StatusCode> {
+    let settings = state.settings.read().await;
+    let service_manager = ServiceManager::new(settings.clone(), state.db_pool.clone());
+    service_manager.disable_boot(&name).await.map_err(|error| {
+        log::error!("Failed to disable '{}' on boot: {:#}", name, error);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    Ok(Json(format!("Service {} will not start on boot", name)))
 }
 
 pub async fn start_all_services(State(state): State<AppState>) -> Result<Json<String>, StatusCode> {

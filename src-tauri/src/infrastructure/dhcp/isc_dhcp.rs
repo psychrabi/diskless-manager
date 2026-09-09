@@ -12,6 +12,9 @@ pub struct BootReservation {
     pub ip: String,
     pub target_iqn: String,
     pub server_ip: String,
+    /// One-way iSCSI CHAP credentials embedded in the menu. `None`
+    /// preserves the legacy open attach.
+    pub chap: Option<crate::infrastructure::iscsi::ChapCredentials>,
 }
 
 pub trait BootReservationPublisher: Send + Sync {
@@ -69,10 +72,12 @@ pub(crate) async fn publish_client_ipxe(reservation: &BootReservation) -> Result
 
     crate::services::run_sudo_command(["mkdir", "-p", parent]).await?;
 
-    let script = crate::infrastructure::pxe::render_client_script(
+    let script = crate::infrastructure::pxe::render_client_script_with_mode(
         &reservation.client_name,
         &reservation.target_iqn,
         settings.http.port,
+        true,
+        reservation.chap.as_ref(),
     );
     crate::services::write_with_sudo_tee(path_str, &script).await?;
 

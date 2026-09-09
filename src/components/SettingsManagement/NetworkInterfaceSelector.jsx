@@ -1,7 +1,8 @@
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { Badge } from "@/components/ui/badge";
-import { RefreshCcw, Network } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { RefreshCcw, Network, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui";
 
 const NetworkInterfaceSelector = ({
@@ -31,7 +32,7 @@ const NetworkInterfaceSelector = ({
         </Button>
       </div>
       <div className="border border-border rounded-xl bg-muted/30 overflow-hidden">
-        <div className="max-h-[200px] overflow-y-auto p-2 space-y-1">
+        <div className="max-h-50 overflow-y-auto p-2 space-y-1">
           {loading ? (
             <div className="flex flex-col items-center justify-center py-8 gap-2 opacity-50">
               <Spinner className=""></Spinner>
@@ -58,10 +59,10 @@ const NetworkInterfaceSelector = ({
                       checked={Boolean(isSelected)}
                       onCheckedChange={() => onToggle(iface)}
                     />
-                    <span className="font-mono text-sm font-bold">{iface}</span>
+                    <span className=" text-sm font-bold">{iface}</span>
                   </div>
                   {isSelected && (
-                    <Badge variant="default" className="py-2 px-2 font-bold uppercase tracking-widest text-[10px]">
+                    <Badge variant="default" className="px-1.5 py-0.5 font-semibold uppercase tracking-widest text-[10px]">
                       Active
                     </Badge>
                   )}
@@ -73,7 +74,7 @@ const NetworkInterfaceSelector = ({
       </div>
       {errorMessage && (
         <p className="text-xs text-destructive font-medium flex items-center gap-1 mt-1">
-          <span>⚠️</span> {errorMessage}
+          <TriangleAlert size={12} /> {errorMessage}
         </p>
       )}
     </div>
@@ -81,4 +82,3 @@ const NetworkInterfaceSelector = ({
 };
 
 export default NetworkInterfaceSelector;
-import { Checkbox } from "@/components/ui/checkbox";

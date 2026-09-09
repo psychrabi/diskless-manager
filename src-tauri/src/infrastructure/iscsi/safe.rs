@@ -1,7 +1,7 @@
 use anyhow::{bail, Result};
 
 use super::{
-    model::{IscsiLunState, IscsiProvisionResult, IscsiTargetSpec, IscsiTargetState},
+    model::{ChapCredentials, IscsiLunState, IscsiProvisionResult, IscsiTargetSpec, IscsiTargetState},
     reconcile::target_has_active_sessions,
     IscsiProvisioner, TargetCliProvisioner,
 };
@@ -54,6 +54,14 @@ impl IscsiProvisioner for SafeIscsiProvisioner {
 
     fn target_exists(&self, target_iqn: &str) -> Result<bool> {
         self.inner.target_exists(target_iqn)
+    }
+
+    fn set_chap_auth(
+        &self,
+        target_iqn: &str,
+        chap: Option<&ChapCredentials>,
+    ) -> Result<()> {
+        self.inner.set_chap_auth(target_iqn, chap)
     }
 
     fn list_target_luns(&self, target_iqn: &str) -> Result<Vec<IscsiLunState>> {

@@ -7,7 +7,7 @@ import { serverSchema } from "@/schema";
 import { useSettings } from "@/hooks/useSettings";
 import { useAppStore } from "@/store/useAppStore";
 import { Card, Button, Input } from "@/components/ui";
-import { RefreshCcw, Shield, Globe, Network } from "lucide-react";
+import { RefreshCcw, Shield, Globe, Network, TriangleAlert } from "lucide-react";
 import NetworkInterfaceSelector from "./NetworkInterfaceSelector";
 
 const DEFAULT_FORM_VALUES = {
@@ -145,10 +145,10 @@ export default function NetworkConfig() {
     <Card
       title="Server Network Configuration"
       icon={Network}
-      className="xl:col-span-2"
+      className="h-full md:col-span-2 xl:col-span-4"
     >
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-2">
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <NetworkInterfaceSelector
             loading={loadingInterfaces}
             interfaces={interfaces}
@@ -159,7 +159,7 @@ export default function NetworkConfig() {
           />
 
           {/* Right Column: Addressing */}
-          <div className="">
+          <div>
             <Label className="text-sm font-semibold text-muted-foreground uppercase tracking-tight flex items-center gap-2">
               <Globe size={14} /> Identification
             </Label>
@@ -236,7 +236,7 @@ export default function NetworkConfig() {
 
             <Alert className="py-3 px-4 mt-3 rounded-xl border-none bg-amber-600/10 text-amber-600 text-xs leading-relaxed shadow-sm">
               <div className="flex items-start gap-3">
-                <span className="text-lg">⚠️</span>
+                <TriangleAlert size={18} className="shrink-0" />
                 <span>
                   <strong>Caution:</strong> Applying static IP settings will
                   rewrite the server network configuration
@@ -250,32 +250,28 @@ export default function NetworkConfig() {
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center justify-between pt-6 gap-4">
-          <div className="flex gap-2">
-            <Button
-              variant="ghost"
-              type="button"
-              onClick={() => reset(formatServerSettingsForForm(appConfig?.settings?.server))}
-              disabled={isSubmitting}
-            >
-              Reset
-            </Button>
-            <Button
-              variant="outline"
-              type="button"
-              onClick={handleApplyStatic}
-              disabled={isSubmitting}
-              className="border-amber-600/30 hover:bg-amber-600/10 hover:border-amber-600/50 text-amber-600"
-            >
-              Apply as Static IP
-            </Button>
-          </div>
+        <div className="flex flex-wrap items-center justify-end pt-4 gap-2">
+          <Button
+            variant="ghost"
+            type="button"
+            onClick={() => reset(formatServerSettingsForForm(appConfig?.settings?.server))}
+            disabled={isSubmitting}
+          >
+            Reset
+          </Button>
+          <Button
+            variant="warning"
+            type="button"
+            onClick={handleApplyStatic}
+            disabled={isSubmitting}
+          >
+            Apply as Static IP
+          </Button>
 
           <Button
             variant="primary"
             type="submit"
             loading={isSubmitting}
-            className="shadow-lg shadow-primary/20 px-8"
           >
             {isSubmitting ? "Saving..." : "Save Configuration"}
           </Button>

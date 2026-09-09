@@ -172,8 +172,7 @@ pub async fn repair_client_storage(
 pub(crate) async fn stored_game_selection(
     pool: &sqlx::SqlitePool,
     client_id: &str,
-) -> anyhow::Result<Vec<String>> {
-    Ok(sqlx::query_scalar::<_, String>(
+) -> anyhow::Result<Vec<String>> {    Ok(sqlx::query_scalar::<_, String>(
         "SELECT master_dataset FROM client_game_disks WHERE client_id = ?",
     )
     .bind(client_id)
@@ -201,6 +200,69 @@ pub(crate) async fn resolved_game_selection(
     ))
 }
 
+/// Stored CHAP state: (enabled, username, secret).
+pub(crate) async fn stored_chap_state(
+    pool: &sqlx::SqlitePool,
+    client_id: &str,
+) -> anyhow::Result<(bool, Option<String>, Option<String>)> {
+    let row: Option<(Option<i64>, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT chap_enabled, chap_user, chap_secret FROM clients WHERE id = ?",
+    )
+    .bind(client_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(match row {
+        Some((enabled, user, secret)) => (enabled.unwrap_or(0) != 0, user, secret),
+        None => (false, None, None),
+    })
+}
+
+/// Read-only CHAP credentials: `Some` only when stored credentials exist.
+/// Enforcement is decided by the caller from the client's `chap_enabled`
+/// flag; storage and policy stay separate here.
+pub(crate) async fn read_chap_credentials(
+    pool: &sqlx::SqlitePool,
+    client_id: &str,
+) -> anyhow::Result<Option<crate::infrastructure::iscsi::ChapCredentials>> {
+    let (_, user, secret) = stored_chap_state(pool, client_id).await?;
+    Ok(match (user, secret) {
+        (Some(username), Some(password))
+            if !username.trim().is_empty() && !password.is_empty() =>
+        {
+            Some(crate::infrastructure::iscsi::ChapCredentials { username, password })
+        }
+        _ => None,
+    })
+}
+
+/// Ensure CHAP credentials exist, generating and persisting them on first
+/// use (and marking enforcement on, since generation only happens for
+/// opted-in clients). Returns `None` when enforcement is off.
+pub(crate) async fn ensure_chap_credentials(
+    pool: &sqlx::SqlitePool,
+    client_id: &str,
+    client_name: &str,
+    chap_enabled: bool,
+) -> anyhow::Result<Option<crate::infrastructure::iscsi::ChapCredentials>> {
+    use crate::infrastructure::iscsi::ChapCredentials;
+
+    if !chap_enabled {
+        return Ok(None);
+    }
+    if let Some(creds) = read_chap_credentials(pool, client_id).await? {
+        return Ok(Some(creds));
+    }
+    let creds = ChapCredentials::generate(client_name)?;
+    sqlx::query("UPDATE clients SET chap_user = ?, chap_secret = ?, chap_enabled = 1 WHERE id = ?")
+        .bind(&creds.username)
+        .bind(&creds.password)
+        .bind(client_id)
+        .execute(pool)
+        .await?;
+    tracing::info!(client_id = %client_id, user = %creds.username, "generated iSCSI CHAP credentials");
+    Ok(Some(creds))
+}
+
 async fn storage_spec_for_client(
     pool: &sqlx::SqlitePool,
     client: &Client,
@@ -224,6 +286,17 @@ async fn storage_spec_for_client(
     let use_game_disk = client.use_game_disk.unwrap_or(false);
     let game_disks =
         resolved_game_selection(pool, &client.id, use_game_disk).await?;
+    // Enforced targets converge here too: generate on first repair so an
+    // enabled-but-credless client (e.g. pre-CHAP record) heals instead of
+    // provisioning open. Inspect gains an idempotent one-time write; the
+    // alternative is silently skipping enforcement.
+    let chap = ensure_chap_credentials(
+        pool,
+        &client.id,
+        &client.name,
+        client.chap_enabled.unwrap_or(false),
+    )
+    .await?;
 
     let source = match client.snapshot.as_deref().map(str::trim) {
         Some(snapshot) if !snapshot.is_empty() => {
@@ -243,6 +316,7 @@ async fn storage_spec_for_client(
                 lun: 0,
                 use_game_disk,
                 game_disks,
+                chap: chap.clone(),
             }));
         }
         _ => StorageSource::ExistingVolume(client.master.clone()),
@@ -256,6 +330,7 @@ async fn storage_spec_for_client(
         lun: 0,
         use_game_disk,
         game_disks,
+        chap,
         source,
     }))
 }
@@ -333,6 +408,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn chap_credentials_generate_once_and_read_back() {
+        let path = std::env::temp_dir().join(format!(
+            "diskless-chap-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let url = format!("sqlite:{}?mode=rwc", path.display());
+        let pool = sqlx::SqlitePool::connect(&url).await.unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        sqlx::query("INSERT INTO clients(id, name, mac, ip, master, created_at, updated_at) VALUES ('client', 'PC001', '00:11:22:33:44:55', '192.168.1.101', 'pool/master', 'now', 'now')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Disabled: nothing generated, nothing stored.
+        assert!(ensure_chap_credentials(&pool, "client", "PC001", false)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(read_chap_credentials(&pool, "client").await.unwrap().is_none());
+
+        // Enabled: generated once, then stable.
+        let first = ensure_chap_credentials(&pool, "client", "PC001", true)
+            .await
+            .unwrap()
+            .expect("credentials must be generated");
+        assert_eq!(first.username, "chap-pc001");
+        assert_eq!(first.password.len(), 12);
+        let second = ensure_chap_credentials(&pool, "client", "PC001", true)
+            .await
+            .unwrap()
+            .expect("credentials must persist");
+        assert_eq!(first, second);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
     async fn missing_master_skips_storage_reconciliation() {
         let path = std::env::temp_dir().join(format!(
             "diskless-recon-{}.db",
@@ -361,6 +472,9 @@ mod tests {
             pxe_mode: None,
             keep_writeback: Some(true),
             use_game_disk: Some(false),
+            chap_user: None,
+            chap_secret: None,
+            chap_enabled: Some(false),
         };
 
         let spec = storage_spec_for_client(&pool, &client).await.unwrap();

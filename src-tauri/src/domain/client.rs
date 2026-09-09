@@ -190,6 +190,16 @@ pub struct Client {
     /// `client_game_disks` table by the service layer, not the row map.
     #[serde(default)]
     pub game_disks: Vec<String>,
+
+    /// One-way iSCSI CHAP username (server-generated, stable).
+    #[serde(default)]
+    pub chap_user: Option<String>,
+    /// One-way iSCSI CHAP secret (server-generated; rotated, never input).
+    #[serde(default)]
+    pub chap_secret: Option<String>,
+    /// Whether the target enforces CHAP. Existing rows default off.
+    #[serde(default)]
+    pub chap_enabled: bool,
 }
 
 impl Client {
@@ -236,6 +246,10 @@ impl Client {
             keep_writeback: request.keep_writeback,
             use_game_disk: request.use_game_disk,
             game_disks: request.game_disks,
+            // Credentials are generated after provisioning, never input.
+            chap_user: None,
+            chap_secret: None,
+            chap_enabled: request.chap_enabled,
         })
     }
 
@@ -317,6 +331,11 @@ pub struct CreateClient {
     /// Explicit per-client game master selection.
     #[serde(default)]
     pub game_disks: Vec<String>,
+
+    /// Enforce one-way iSCSI CHAP for this client. Credentials are
+    /// server-generated at provision time, never supplied here.
+    #[serde(default = "default_true")]
+    pub chap_enabled: bool,
 }
 
 fn default_true() -> bool {

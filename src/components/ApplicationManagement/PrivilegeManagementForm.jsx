@@ -25,6 +25,7 @@ export default function PrivilegeManagementForm() {
       title="Privilege Management"
       subtitle="Authorize application to perform administrative tasks"
       icon={ShieldCheck}
+      className="h-full"
     >
       <div className="space-y-4">
         <p className="text-sm text-muted-foreground">
@@ -42,14 +43,15 @@ export default function PrivilegeManagementForm() {
           </p>
         </div>
 
-        <Button
-          variant="primary"
-          onClick={handleSetup}
-          loading={loading}
-          className="w-full"
-        >
-          Authorize Application
-        </Button>
+        <div className="flex justify-end">
+          <Button
+            variant="primary"
+            onClick={handleSetup}
+            loading={loading}
+          >
+            Authorize Application
+          </Button>
+        </div>
       </div>
     </Card>
   );

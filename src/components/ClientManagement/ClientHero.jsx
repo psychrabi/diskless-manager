@@ -5,15 +5,18 @@ import {
   CardDescription,
   CardTitle,
 } from "@/components/ui/card";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 
 function ClientHero({ handleClientFormModalOpen }) {
   return (
     <Card className="py-12 text-center">
       <CardContent className="flex flex-col items-center gap-4">
-        <span className="flex size-20 items-center justify-center rounded-full bg-muted">
-          <Laptop className="size-10 text-muted-foreground/60" />
-        </span>
+        <Avatar className="size-20">
+          <AvatarFallback className="bg-muted">
+            <Laptop className="size-10 text-muted-foreground/60" />
+          </AvatarFallback>
+        </Avatar>
         <div className="flex flex-col gap-2">
           <CardTitle className="text-lg font-semibold">
             No Clients Found

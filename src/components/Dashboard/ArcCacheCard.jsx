@@ -3,7 +3,7 @@ import { Gauge, RefreshCw } from "lucide-react";
 import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
 import { Button } from "@/components/ui/button";
-import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Spinner } from "@/components/ui/spinner";
 import { clearRamCache } from "@/api/modules/system";
@@ -24,18 +24,18 @@ const formatPercent = (value) =>
   value == null ? "—" : `${value.toFixed(1)}%`;
 
 const StatRow = ({ label, value, hint }) => (
-  <div className="flex justify-between items-center col-span-2">
-    <span className="font-semibold">{label}</span>
-    <span className="text-right">
+  <div className="flex items-center justify-between gap-4 py-2">
+    <span className="text-sm text-muted-foreground">{label}</span>
+    <span className="text-sm font-medium tabular-nums text-right">
       {value}
       {hint && (
-        <span className="text-xs ml-1 text-muted-foreground">{hint}</span>
+        <span className="text-xs ml-1 font-normal text-muted-foreground">{hint}</span>
       )}
     </span>
   </div>
 );
 
-const ArcCacheCard = ({ loading }) => {
+const ArcCacheCard = () => {
   const arcStat = useAppStore((state) => state.arcStat);
   const fetchArcStat = useAppStore((state) => state.fetchArcStat);
   const fetchArcStatRef = useRef(fetchArcStat);
@@ -71,13 +71,12 @@ const ArcCacheCard = ({ loading }) => {
   };
 
   return (
-    <Card>
+    <Card className="h-full xl:col-span-2">
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <Gauge className="size-4" />
+          <Gauge className="size-4 text-muted-foreground" />
           ZFS ARC Cache
         </CardTitle>
-        <CardDescription>ZFS Adaptive Replacement Cache</CardDescription>
         <CardAction>
           <Button
             onClick={handleClearCache}
@@ -96,56 +95,56 @@ const ArcCacheCard = ({ loading }) => {
         </CardAction>
       </CardHeader>
       <CardContent>
-        {loading ? (
-          <p className="text-sm text-muted-foreground">Loading cache stats...</p>
-        ) : arcStat ? (
-          <div className="grid grid-cols-2 gap-x-10 gap-y-2">
-            <StatRow
-              label="Cache Size:"
-              value={formatBytes(arcStat.size)}
-              hint={`/ ${formatBytes(arcStat.max_size)}`}
-            />
-            <StatRow
-              label="Cache Usage:"
-              value={formatPercent(arcStat.used_percent)}
-            />
-            <StatRow label="Hit Rate:" value={formatPercent(arcStat.hit_ratio)} />
-            <StatRow
-              label="Hit Rate (recent):"
-              value={
-                arcStat.interval_warming_up
-                  ? "Warming up..."
-                  : formatPercent(arcStat.interval_hit_ratio)
-              }
-              hint={arcStat.interval_warming_up ? null : "last ~15s"}
-            />
-            <StatRow
-              label="Demand Data:"
-              value={formatPercent(arcStat.demand_data_hit_ratio)}
-            />
-            <StatRow
-              label="Hits / Misses:"
-              value={`${arcStat.hits ?? 0} / ${arcStat.misses ?? 0}`}
-            />
-            <StatRow
-              label="L2ARC:"
-              value={
-                arcStat.l2_size > 0
-                  ? formatBytes(arcStat.l2_size)
-                  : "Not configured"
-              }
-              hint={
-                arcStat.l2_size > 0 ? formatPercent(arcStat.l2_hit_ratio) : null
-              }
-            />
+        {arcStat ? (
+          <div>
+            <div className="divide-y divide-border">
+              <StatRow
+                label="Cache Size"
+                value={formatBytes(arcStat.size)}
+                hint={`/ ${formatBytes(arcStat.max_size)}`}
+              />
+              <StatRow
+                label="Cache Usage"
+                value={formatPercent(arcStat.used_percent)}
+              />
+              <StatRow label="Hit Rate" value={formatPercent(arcStat.hit_ratio)} />
+              <StatRow
+                label="Hit Rate (recent)"
+                value={
+                  arcStat.interval_warming_up
+                    ? "Warming up..."
+                    : formatPercent(arcStat.interval_hit_ratio)
+                }
+                hint={arcStat.interval_warming_up ? null : "last ~15s"}
+              />
+              <StatRow
+                label="Demand Data"
+                value={formatPercent(arcStat.demand_data_hit_ratio)}
+              />
+              <StatRow
+                label="Hits / Misses"
+                value={`${arcStat.hits ?? 0} / ${arcStat.misses ?? 0}`}
+              />
+              <StatRow
+                label="L2ARC"
+                value={
+                  arcStat.l2_size > 0
+                    ? formatBytes(arcStat.l2_size)
+                    : "Not configured"
+                }
+                hint={
+                  arcStat.l2_size > 0 ? formatPercent(arcStat.l2_hit_ratio) : null
+                }
+              />
+            </div>
             {!arcStat.interval_warming_up && arcStat.interval_hit_ratio > 0 && (
-              <div className="col-span-2 pt-1">
+              <div className="pt-3">
                 <Progress value={arcStat.interval_hit_ratio} />
               </div>
             )}
           </div>
         ) : (
-          <div className="text-center py-4 text-destructive">
+          <div className="py-4 text-center text-sm text-destructive">
             ARC stats unavailable. Is ZFS /proc kstat present?
           </div>
         )}

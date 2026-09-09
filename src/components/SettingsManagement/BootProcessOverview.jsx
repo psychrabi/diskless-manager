@@ -1,7 +1,7 @@
 import { Check, GitPullRequestArrow } from "lucide-react";
 import { useShallow } from "zustand/shallow";
 import { useAppStore } from "@/store/useAppStore";
-import { Card, StatusBadge } from "@/components/ui";
+import { Card, StatusDot } from "@/components/ui";
 
 const bootSteps = [
   { key: "dhcp", label: "DHCP", description: "Client requests IP and boot server info" },
@@ -23,9 +23,8 @@ export default function BootProcessOverview() {
     <Card
       title="Boot Process Overview"
       icon={GitPullRequestArrow}
-      className="bg-background"
     >
-      <ol aria-label="Network boot sequence" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <ol aria-label="Network boot sequence" className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {bootSteps.map((step, i) => {
           const isRunning = step.key ? runningServices.has(step.key) : true;
           const isComplete = i < bootSteps.length - 1;
@@ -42,11 +41,7 @@ export default function BootProcessOverview() {
               <div className="flex flex-col gap-2">
                 <div className="flex items-center gap-2">
                   <span className="font-bold">{step.label}</span>
-                  <StatusBadge
-                    status={isRunning ? "running" : "stopped"}
-                    size="sm"
-                    showIcon={false}
-                  />
+                  <StatusDot running={isRunning} label={step.label} />
                 </div>
                 <span className="text-xs text-muted-foreground">
                   {step.description}

@@ -1,4 +1,5 @@
-import { Field, FieldLabel } from "@/components/ui/field";
+import { Field, FieldError, FieldLabel } from "@/components/ui/field";
+import { DialogFooter } from "@/components/ui/dialog";
 import { Input as TextInput } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { useAppStore } from "@/store/useAppStore";
@@ -69,7 +70,7 @@ const CreateImageModal = ({
             className="w-full"
           />
           {errors.name && (
-            <div className="text-destructive text-xs">{errors.name.message}</div>
+            <FieldError>{errors.name.message}</FieldError>
           )}
         </Field>
 
@@ -82,7 +83,7 @@ const CreateImageModal = ({
             <NativeSelectOption value="linux">Linux</NativeSelectOption>
           </NativeSelect>
           {errors.os_type && (
-            <div className="text-destructive text-xs">{errors.os_type.message}</div>
+            <FieldError>{errors.os_type.message}</FieldError>
           )}
         </Field>
 
@@ -100,10 +101,10 @@ const CreateImageModal = ({
             min="1"
           />
           {errors.size_gb && (
-            <div className="text-destructive text-xs">{errors.size_gb.message}</div>
+            <FieldError>{errors.size_gb.message}</FieldError>
           )}
         </Field>
-        <div className="mt-6 flex justify-end space-x-3">
+        <DialogFooter className="mt-6">
           <Button
             type="submit"
             variant="primary"
@@ -120,7 +121,7 @@ const CreateImageModal = ({
           >
             Cancel
           </Button>
-        </div>
+        </DialogFooter>
       </form>
     </Modal>
   );

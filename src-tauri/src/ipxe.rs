@@ -56,7 +56,7 @@ pub fn client_mac_script_path(mac: &str) -> String {
 
 #[must_use]
 pub fn render_client_script(client_name: &str, target_iqn: &str, http_port: u16) -> String {
-    render_client_script_with_mode(client_name, target_iqn, http_port, true)
+    render_client_script_with_mode(client_name, target_iqn, http_port, true, None)
 }
 
 /// iPXE response served to a client that is not yet registered.
@@ -152,12 +152,25 @@ pub fn render_client_script_with_mode(
     target_iqn: &str,
     http_port: u16,
     ready: bool,
+    chap: Option<&crate::infrastructure::iscsi::ChapCredentials>,
 ) -> String {
     let slug = client_script_slug(client_name);
     let port_suffix = if http_port == 80 {
         String::new()
     } else {
         format!(":{http_port}")
+    };
+    // One-way CHAP for the iSCSI attach. iPXE has no --username flag on
+    // sanboot/sanhook: authentication rides the `username`/`password`
+    // settings, which sanboot, sanhook, and the iBFT handoff all honor.
+    // The settings are emitted once up top; every attach line below stays
+    // byte-identical so unauthenticated menus never change.
+    let chap_settings = match chap {
+        Some(credentials) => format!(
+            "set username {}\nset password {}\n",
+            credentials.username, credentials.password
+        ),
+        None => String::new(),
     };
 
     if !ready {
@@ -170,7 +183,7 @@ set client {slug}
 set target-iqn {target_iqn}
 set boot-url http://${{next-server}}{port_suffix}
 set keep-san 1
-
+{chap_settings}
 isset ${{root-path}} || goto no_target
 echo Provisioning {slug}: attaching ${{root-path}}
 sanhook ${{root-path}} || goto failed
@@ -212,7 +225,7 @@ set initiator-iqn {initiator_iqn}
 set nvme-nqn {nvme_nqn}
 set boot-url http://${{next-server}}{port_suffix}
 set keep-san 1
-
+{chap_settings}
 :start
 menu Diskless Boot Menu (Client: ${{client}} - Server IP: ${{next-server}})
 item --key b boot_ubuntu    Diskless boot Ubuntu 25.10
@@ -407,6 +420,7 @@ mod tests {
             "iqn.2024-01.com.diskless:client.pc001",
             4433,
             false,
+            None,
         );
         assert!(script.contains("sanhook ${root-path}"));
         assert!(script.contains("kernel ${boot-url}/boot/winpe/wimboot"));
@@ -420,6 +434,7 @@ mod tests {
             "iqn.2024-01.com.diskless:client.pc001",
             4433,
             true,
+            None,
         );
         assert!(script.contains("sanboot ${root-path}"));
     }
@@ -431,6 +446,7 @@ mod tests {
             "iqn.2024-01.com.diskless:client.pc001",
             4433,
             true,
+            None,
         );
 
         assert!(script.contains("Windows Server NVMe/TCP (Experimental)"));
@@ -443,8 +459,31 @@ mod tests {
     }
 
     #[test]
-    fn port_80_is_not_rendered_explicitly() {
-        let script = render_client_script("PC001", "iqn.example:pc001", 80);
+    fn chap_credentials_ride_ipxe_settings_not_sanboot_flags() {
+        use crate::infrastructure::iscsi::ChapCredentials;
+
+        let chap = ChapCredentials {
+            username: "chap-pc001".to_string(),
+            password: "AbcDef123456".to_string(),
+        };
+        let script = render_client_script_with_mode(
+            "PC001",
+            "iqn.2024-01.com.diskless:client.pc001",
+            4433,
+            true,
+            Some(&chap),
+        );
+        // iPXE has no --username flag: authentication rides the
+        // username/password settings honored by sanboot, sanhook and iBFT.
+        assert!(script.contains("set username chap-pc001"));
+        assert!(script.contains("set password AbcDef123456"));
+        assert!(!script.contains("--username"), "no such iPXE option");
+        // Attach lines themselves stay plain.
+        assert!(script.contains("sanboot ${root-path}"));
+    }
+
+    #[test]
+    fn port_80_is_not_rendered_explicitly() {        let script = render_client_script("PC001", "iqn.example:pc001", 80);
         assert!(script.contains("set boot-url http://${next-server}"));
         assert!(!script.contains("${next-server}:80"));
     }

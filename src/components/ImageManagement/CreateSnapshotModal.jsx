@@ -1,4 +1,5 @@
-import { Field, FieldLabel } from "@/components/ui/field";
+import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
+import { DialogFooter } from "@/components/ui/dialog";
 import { Input as TextInput } from "@/components/ui/input";
 import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
@@ -65,14 +66,14 @@ const CreateSnapshotModal = ({
             className="w-full"
           />
           {errors.name && (
-            <div className="text-destructive text-xs">{errors.name.message}</div>
+            <FieldError>{errors.name.message}</FieldError>
           )}
         </Field>
-        <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
+        <FieldDescription className="mt-2">
           This operation will capture the current state of{" "}
           <strong className="font-semibold">{selectedImage.name}</strong>.
-        </p>
-        <div className="mt-6 flex justify-end space-x-3">
+        </FieldDescription>
+        <DialogFooter className="mt-6">
           <Button
             type="submit"
             variant="primary"
@@ -89,7 +90,7 @@ const CreateSnapshotModal = ({
           >
             Cancel
           </Button>
-        </div>
+        </DialogFooter>
       </form>
     </Modal>
   );

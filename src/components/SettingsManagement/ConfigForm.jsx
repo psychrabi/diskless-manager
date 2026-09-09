@@ -2,10 +2,10 @@ import { useSettings } from "@/hooks/useSettings";
 import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Network } from "lucide-react";
 import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { Button, Card } from "@/components/ui";
+import { getServiceIcon } from "@/constants/serviceIcons";
 
 const UPDATE_MAP = {
   client_lifecycle: "updateClientLifecycle",
@@ -49,7 +49,7 @@ const ConfigForm = ({ schema, section, title, FormComponent }) => {
   const sectionKey = section === "client_lifecycle" ? "Client Reset" : section.charAt(0).toUpperCase() + section.slice(1);
 
   return (
-    <Card title={`${title} Configuration`} icon={Network} className="xl:col-span-2">
+    <Card title={`${title} Configuration`} icon={getServiceIcon(section)} className="h-full xl:col-span-2">
       <form onSubmit={handleSubmit(onSubmit)}>
         <FormComponent
           control={control}
@@ -57,14 +57,15 @@ const ConfigForm = ({ schema, section, title, FormComponent }) => {
           errors={errors}
           config={config?.settings?.[section]}
         />
-        <Button
-          variant="primary"
-          type="submit"
-          className="mt-4"
-          loading={isSubmitting}
-        >
-          {isSubmitting ? "Saving\u2026" : `Save ${sectionKey} Settings`}
-        </Button>
+        <div className="flex justify-end mt-4">
+          <Button
+            variant="primary"
+            type="submit"
+            loading={isSubmitting}
+          >
+            {isSubmitting ? "Saving\u2026" : `Save ${sectionKey} Settings`}
+          </Button>
+        </div>
       </form>
     </Card>
   );

@@ -1,8 +1,9 @@
-import { PlayCircle, Server, StopCircle } from "lucide-react";
+import { PlayCircle, StopCircle } from "lucide-react";
 import { useCallback, useState } from "react";
 import { useServiceManager } from "../../hooks/useServiceManager";
-import { Button, Card } from "@/components/ui";
+import { Button, PageHeader } from "@/components/ui";
 import BootScript from "./BootScript";
+import FirewallBanner from "./FirewallBanner";
 import ServiceConfigModal from "./ServiceConfigModal";
 import ServicesList from "./ServicesList";
 
@@ -61,34 +62,35 @@ const ServiceManagement = () => {
   }, []);
 
   return (
-    <Card
-      title="Service Management"
-      icon={Server}
-      className="bg-muted"
-      actions={
-        <>
-          <Button
-            icon={PlayCircle}
-            variant="success"
-            loading={globalLoading === "start"}
-            onClick={() => handleGlobalAction("start", startAllServices)}
-            title="Start all services"
-          >
-            Start All
-          </Button>
-          <Button
-            icon={StopCircle}
-            variant="destructive"
-            loading={globalLoading === "stop"}
-            onClick={() => handleGlobalAction("stop", stopAllServices)}
-            title="Stop all services"
-          >
-            Stop All
-          </Button>
-        </>
-      }
-    >
+    <div className="flex flex-col gap-4">
+      <PageHeader
+        title="Service Management"
+        description="Manage and monitor system services."
+        actions={
+          <>
+            <Button
+              icon={PlayCircle}
+              variant="success"
+              loading={globalLoading === "start"}
+              onClick={() => handleGlobalAction("start", startAllServices)}
+              title="Start all services"
+            >
+              Start All
+            </Button>
+            <Button
+              icon={StopCircle}
+              variant="destructive"
+              loading={globalLoading === "stop"}
+              onClick={() => handleGlobalAction("stop", stopAllServices)}
+              title="Stop all services"
+            >
+              Stop All
+            </Button>
+          </>
+        }
+      />
       <div className="space-y-4 min-h-[50vh]">
+        <FirewallBanner />
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           <ServicesList onViewConfig={handleViewConfig} />
           <BootScript onViewConfig={handleViewConfig} />
@@ -103,7 +105,7 @@ const ServiceManagement = () => {
           path={modalState.path}
         />
       </div>
-    </Card>
+    </div>
   );
 };
 

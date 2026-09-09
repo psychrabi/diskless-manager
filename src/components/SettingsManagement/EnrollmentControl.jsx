@@ -109,8 +109,9 @@ const EnrollmentControl = () => {
       title="Client Enrollment"
       subtitle="Registration window for unknown machines"
       icon={ShieldCheck}
+      className="h-full md:col-span-2 xl:col-span-2"
     >
-      <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-4">
         <div className="flex items-center gap-2">
           <Badge variant={isOpen ? "default" : "secondary"}>
             {isOpen ? "Open" : "Closed"}
