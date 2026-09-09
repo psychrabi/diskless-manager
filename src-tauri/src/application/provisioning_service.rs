@@ -56,9 +56,19 @@ impl ProvisioningService {
             .create_client_storage(&storage_spec)
             .with_context(|| format!("failed to provision storage for client '{}'", client.name))?;
 
-        client.block_store = Some(format!("/dev/zvol/{}", storage.dataset()));
+        client.block_store = Some(storage.backstore().to_string());
         client.block_device = Some(storage.block_device().display().to_string());
         client.target_iqn = Some(storage.target_iqn().to_string());
+        // Persist the writeback dataset so inspection and repair can
+        // rebuild the spec. Only snapshot clones own one. Note
+        // `block_store` is the LIO backstore NAME, not a device path:
+        // reconciliation rebuilds LUN specs from it.
+        if matches!(
+            storage.source,
+            crate::domain::storage::StorageSource::Snapshot(_)
+        ) {
+            client.writeback = Some(storage.dataset().to_string());
+        }
         client.mark_ready();
 
         let reservation = BootReservation {
@@ -93,6 +103,14 @@ impl ProvisioningService {
             bail!(message);
         }
 
+        if let Err(error) = self
+            .clients
+            .set_game_selection(&client.id, &client.game_disks)
+            .await
+        {
+            tracing::error!(client_id = %client.id, %error, "failed to persist game selection; continuing without it");
+        }
+
         Ok(client)
     }
 }
@@ -105,7 +123,7 @@ mod tests {
         infrastructure::{
             dhcp::{BootReservation, BootReservationPublisher},
             image::{ImageBackend, ImageBackendInfo},
-            iscsi::{IscsiProvisioner, IscsiTargetSpec, IscsiTargetState},
+            iscsi::{IscsiLunState, IscsiProvisioner, IscsiTargetSpec, IscsiTargetState},
         },
     };
     use std::path::Path;
@@ -169,6 +187,9 @@ mod tests {
             unreachable!()
         }
         fn target_exists(&self, _: &str) -> Result<bool> {
+            unreachable!()
+        }
+        fn list_target_luns(&self, _: &str) -> Result<Vec<IscsiLunState>> {
             unreachable!()
         }
         fn inspect_target(&self, _: &IscsiTargetSpec) -> Result<IscsiTargetState> {
@@ -255,7 +276,11 @@ mod tests {
             Ok(())
         }
         fn target_exists(&self, _: &str) -> Result<bool> {
-            unreachable!()
+            // Prune short-circuits on a missing target.
+            Ok(false)
+        }
+        fn list_target_luns(&self, _: &str) -> Result<Vec<IscsiLunState>> {
+            Ok(Vec::new())
         }
         fn inspect_target(&self, _: &IscsiTargetSpec) -> Result<IscsiTargetState> {
             unreachable!()
@@ -306,6 +331,7 @@ mod tests {
                 pxe_mode: PxeMode::Uefi,
                 keep_writeback: true,
                 use_game_disk: false,
+                game_disks: Vec::new(),
             },
             ClientStorageSpec {
                 client_id: "ignored".into(),
@@ -315,6 +341,7 @@ mod tests {
                 target_iqn: "iqn.test:pc01".into(),
                 lun: 0,
                 use_game_disk: false,
+                game_disks: Vec::new(),
             },
         )
     }
@@ -355,6 +382,7 @@ mod tests {
             pxe_mode: PxeMode::Uefi,
             keep_writeback: true,
             use_game_disk: false,
+            game_disks: Vec::new(),
         };
         let spec = ClientStorageSpec {
             client_id: "ignored".into(),
@@ -364,6 +392,7 @@ mod tests {
             target_iqn: "iqn.test:pc01".into(),
             lun: 0,
             use_game_disk: false,
+            game_disks: Vec::new(),
         };
 
         let error = service

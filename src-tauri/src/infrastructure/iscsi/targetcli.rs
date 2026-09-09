@@ -664,10 +664,13 @@ impl IscsiProvisioner for TargetCliProvisioner {
             else {
                 continue;
             };
+            // Bracket content looks like `block/<backstore> (<device>)`:
+            // the `block/` type prefix is not part of the backstore name.
             let Some(backstore) = line
                 .split(['[', ']'])
                 .nth(1)
                 .and_then(|inner| inner.split_whitespace().next())
+                .and_then(|token| token.rsplit('/').next())
                 .filter(|name| !name.is_empty())
             else {
                 continue;

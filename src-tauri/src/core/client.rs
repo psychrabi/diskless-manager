@@ -37,6 +37,7 @@ pub struct CreateClientRequest {
     pub snapshot: Option<String>,
     pub keep_writeback: Option<bool>,
     pub use_game_disk: Option<bool>,
+    pub game_disks: Option<Vec<String>>,
     pub block_store: Option<String>,
     pub block_device: Option<String>,
     pub target_iqn: Option<String>,
@@ -360,9 +361,18 @@ impl ClientManager {
             client.master = master;
         }
         client.snapshot = req.snapshot;
-        client.block_store = req.block_store;
-        client.target_iqn = req.target_iqn;
-        client.block_device = req.block_device;
+        // Storage pointers are only overwritten when the request carries
+        // them: partial updates (game toggle, rename, IP change) must not
+        // wipe the persisted iSCSI/ZFS references.
+        if req.block_store.is_some() {
+            client.block_store = req.block_store;
+        }
+        if req.target_iqn.is_some() {
+            client.target_iqn = req.target_iqn;
+        }
+        if req.block_device.is_some() {
+            client.block_device = req.block_device;
+        }
         // Only overwrite when the request carries a value: partial updates
         // (rename, IP change) must not wipe the persisted writeback.
         if req.writeback.is_some() {

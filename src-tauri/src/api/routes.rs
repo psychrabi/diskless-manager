@@ -55,7 +55,7 @@ use crate::api::handlers::{
     system_reconciliation::inspect_system_reconciliation_handler,
     users::{create_user, delete_user, get_user, list_users, update_user, update_user_password},
     ws::ws_metrics_handler,
-    zfs::{create_dataset, delete_dataset, get_zpool_stats, list_datasets, list_zpools},
+    zfs::{create_dataset, delete_dataset, get_zpool_stats, list_datasets, list_game_disks, list_zpools},
 };
 use crate::api::middleware::{cors_layer, rate_limit_auth, require_auth, AuthRateLimiter};
 use tower::limit::ConcurrencyLimitLayer;
@@ -234,6 +234,7 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route("/api/zfs/pools", get(list_zpools))
         .route("/api/zfs/pools/stats", get(get_zpool_stats))
         .route("/api/zfs/datasets", get(list_datasets).post(create_dataset))
+        .route("/api/zfs/game-disks", get(list_game_disks))
         .route("/api/zfs/datasets/{dataset}", delete(delete_dataset))
         .route("/api/dashboard/default-image", get(get_default_image))
         .route("/api/dashboard/clients", get(get_client_overview))

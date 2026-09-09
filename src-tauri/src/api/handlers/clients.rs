@@ -222,6 +222,28 @@ fn game_configuration_changed(
             .is_some_and(|selection| selection.as_slice() != stored_game_disks)
 }
 
+/// Resolve an effective game selection against discovered masters.
+///
+/// Empty + switch on means all currently discovered masters; otherwise
+/// the stored/requested list intersected with discovery.
+fn resolve_effective_game_selection(
+    use_game_disk: bool,
+    stored_or_requested: &[String],
+) -> anyhow::Result<Vec<String>> {
+    let discovered =
+        crate::application::storage_service::StorageService::discover_game_masters()?
+            .into_iter()
+            .map(|master| master.dataset)
+            .collect::<Vec<_>>();
+    Ok(
+        crate::application::storage_service::resolve_game_selection(
+            use_game_disk,
+            stored_or_requested,
+            &discovered,
+        ),
+    )
+}
+
 /// Replace a client's stored game master selection wholesale.
 async fn persist_game_selection(
     pool: &sqlx::SqlitePool,
@@ -423,7 +445,7 @@ pub async fn create_client(
     // Build desired storage state.
     // ------------------------------------------------------------------------
 
-    let storage_spec = build_storage_spec(
+    let mut storage_spec = build_storage_spec(
         &settings,
         &request.name,
         &request.name,
@@ -438,6 +460,21 @@ pub async fn create_client(
         );
 
         StatusCode::BAD_REQUEST
+    })?;
+
+    // Resolve the game selection up front: empty + switch on means all
+    // currently discovered masters.
+    storage_spec.game_disks = resolve_effective_game_selection(
+        request.use_game_disk.unwrap_or(false),
+        request.game_disks.as_deref().unwrap_or(&[]),
+    )
+    .map_err(|error| {
+        error!(
+            "Failed to resolve game selection for client '{}': {}",
+            request.name, error
+        );
+
+        StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
     // ------------------------------------------------------------------------
@@ -457,6 +494,7 @@ pub async fn create_client(
         pxe_mode: crate::domain::PxeMode::Uefi,
         keep_writeback: request.keep_writeback.unwrap_or(true),
         use_game_disk: request.use_game_disk.unwrap_or(false),
+        game_disks: request.game_disks.clone().unwrap_or_default(),
     };
 
     let client = state
@@ -949,6 +987,7 @@ pub async fn update_client(
                         ),
                         lun: 0,
                         use_game_disk: existing_client.use_game_disk.unwrap_or(false),
+                        game_disks: Vec::new(),
                     };
 
                     preserve_persisted_target_iqn(&mut spec, &existing_client);
@@ -1311,10 +1350,36 @@ pub async fn update_client(
     if request.master.is_none() && request.snapshot.is_none() {
         request.snapshot = existing_client.snapshot.clone();
     }
-    if !storage_configuration_changed(&existing_client, &request) {
+    let stored_game_disks =
+        crate::core::reconciliation::stored_game_selection(&state.db_pool, &id)
+            .await
+            .map_err(|error| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        status: 500,
+                        error: error.to_string(),
+                    }),
+                )
+            })?;
+    let existing_game_flag = existing_client.use_game_disk.unwrap_or(false);
+    let boot_changed = storage_configuration_changed(&existing_client, &request);
+    let game_changed =
+        game_configuration_changed(existing_game_flag, &stored_game_disks, &request);
+
+    if !boot_changed && !game_changed {
         request.block_store = existing_client.block_store.clone();
         request.block_device = existing_client.block_device.clone();
         request.target_iqn = existing_client.target_iqn.clone();
+        // Persist an explicit selection even on persistence-only updates.
+        if request.game_disks.is_some() {
+            persist_game_selection(
+                &state.db_pool,
+                &id,
+                request.game_disks.as_deref().unwrap_or(&[]),
+            )
+            .await?;
+        }
         let client = manager.update(&id, request).await.map_err(|error| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1327,6 +1392,64 @@ pub async fn update_client(
         sqlx::query("DELETE FROM client_offline_resets WHERE client_id = ? AND operation IS NULL AND ? <> ?")
             .bind(&id).bind(client.keep_writeback).bind(existing_client.keep_writeback).execute(&state.db_pool).await
             .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { status: 500, error: error.to_string() })))?;
+        let _ = state.refresh_client_ips().await;
+        refresh_dhcp(&state, &settings, "updating client").await;
+        return Ok(Json(client));
+    }
+
+    if !boot_changed {
+        // Game-only change: synchronize clones and LUNs without touching
+        // the boot clone.
+        let effective_flag = request.use_game_disk.unwrap_or(existing_game_flag);
+        let effective_stored = request
+            .game_disks
+            .clone()
+            .unwrap_or_else(|| stored_game_disks.clone());
+        let resolved =
+            resolve_effective_game_selection(effective_flag, &effective_stored).map_err(
+                |error| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ErrorResponse {
+                            status: 500,
+                            error: format!(
+                                "Failed to resolve game selection: {}",
+                                error
+                            ),
+                        }),
+                    )
+                },
+            )?;
+        let target_iqn = existing_client.target_iqn.clone().unwrap_or_else(|| {
+            format!(
+                "{}:client.{}",
+                settings.iscsi.target_prefix,
+                existing_client.name.trim().to_lowercase()
+            )
+        });
+        state
+            .application
+            .storage
+            .sync_game_storage(&id, &target_iqn, &resolved)
+            .map_err(|error| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        status: 500,
+                        error: format!("Failed to synchronize game storage: {}", error),
+                    }),
+                )
+            })?;
+        persist_game_selection(&state.db_pool, &id, &effective_stored).await?;
+        let client = manager.update(&id, request).await.map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    status: 500,
+                    error: error.to_string(),
+                }),
+            )
+        })?;
         let _ = state.refresh_client_ips().await;
         refresh_dhcp(&state, &settings, "updating client").await;
         return Ok(Json(client));
@@ -1364,6 +1487,40 @@ pub async fn update_client(
         )
     })?;
 
+    // Refuse to rebuild storage under an active session, mirroring the
+    // repair guard: tearing down LUNs under a booted client corrupts it.
+    {
+        let sessions =
+            crate::infrastructure::iscsi::target_has_active_sessions(
+                current_storage.target_iqn(),
+            )
+            .map_err(|error| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        status: 500,
+                        error: format!(
+                            "Failed to check iSCSI sessions: {}",
+                            error
+                        ),
+                    }),
+                )
+            })?;
+        crate::core::reconciliation::ensure_storage_repair_safe(
+            current_storage.target_iqn(),
+            sessions,
+        )
+        .map_err(|error| {
+            (
+                StatusCode::CONFLICT,
+                Json(ErrorResponse {
+                    status: 409,
+                    error: error.to_string(),
+                }),
+            )
+        })?;
+    }
+
     if let Err(error) = state
         .application
         .storage
@@ -1400,6 +1557,28 @@ pub async fn update_client(
             }),
         )
     })?;
+
+    // Resolve the game selection for the rebuild: explicit request wins,
+    // otherwise the stored selection (empty + switch on = all discovered).
+    let effective_game_flag = request
+        .use_game_disk
+        .or(existing_client.use_game_disk)
+        .unwrap_or(false);
+    let effective_game_stored = request
+        .game_disks
+        .clone()
+        .unwrap_or_else(|| stored_game_disks.clone());
+    storage_spec.game_disks =
+        resolve_effective_game_selection(effective_game_flag, &effective_game_stored)
+            .map_err(|error| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        status: 500,
+                        error: format!("Failed to resolve game selection: {}", error),
+                    }),
+                )
+            })?;
 
     preserve_persisted_target_iqn(&mut storage_spec, &existing_client);
 
@@ -1440,6 +1619,23 @@ pub async fn update_client(
             }),
         )
     })?;
+
+    // Persist the effective selection and destroy clone datasets that are
+    // no longer selected (their LUNs were already pruned by provisioning).
+    // Clone cleanup is best-effort: the boot storage above is healthy, and
+    // orphans are retried on the next sync.
+    persist_game_selection(&state.db_pool, &id, &effective_game_stored).await?;
+    if let Err(error) = state
+        .application
+        .storage
+        .destroy_game_clones_except(&id, &storage_spec.game_disks)
+    {
+        tracing::warn!(
+            "Failed to destroy deselected game clones for client '{}': {}",
+            client.name,
+            error
+        );
+    }
 
     info!("Updated client: {}", client.name);
 
@@ -1506,6 +1702,26 @@ pub async fn delete_client(
                 error
             );
         }
+    }
+
+    // ------------------------------------------------------------------------
+    // Remove per-client game clones.
+    //
+    // Game LUNs are detached before their datasets are destroyed. Runs
+    // before the database delete; the selection rows disappear with it
+    // through `ON DELETE CASCADE`.
+    // ------------------------------------------------------------------------
+
+    if let Err(error) = state
+        .application
+        .storage
+        .destroy_client_game_clones(&id, client.target_iqn.as_deref())
+    {
+        tracing::warn!(
+            "Failed to completely remove game clones for client '{}': {}",
+            client.name,
+            error
+        );
     }
 
     // ------------------------------------------------------------------------

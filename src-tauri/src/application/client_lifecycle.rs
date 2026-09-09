@@ -337,6 +337,7 @@ mod tests {
             target_iqn: "iqn.test:pc001".into(),
             lun: 0,
             use_game_disk: false,
+            game_disks: Vec::new(),
         });
         sqlx::query("INSERT INTO client_offline_resets(client_id, fingerprint, offline_since, retry_after, operation) VALUES ('client', 'unchanged', 100, 450, ?)")
             .bind(serde_json::to_string(&op).unwrap()).execute(&pool).await.unwrap();

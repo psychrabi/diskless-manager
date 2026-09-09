@@ -16,11 +16,28 @@ impl ClientService {
     }
 
     pub async fn get(&self, id: &ClientId) -> Result<Option<Client>> {
-        self.repository.find_by_id(id).await
+        let client = self.repository.find_by_id(id).await?;
+        match client {
+            Some(mut client) => {
+                client.game_disks = self.repository.game_selection(id).await?;
+                Ok(Some(client))
+            }
+            None => Ok(None),
+        }
     }
 
     pub async fn list(&self) -> Result<Vec<Client>> {
-        self.repository.find_all().await
+        let mut clients = self.repository.find_all().await?;
+        for client in &mut clients {
+            client.game_disks = self
+                .repository
+                .game_selection(&client.id)
+                .await
+                .with_context(|| {
+                    format!("failed to load game selection for client '{}'", client.id)
+                })?;
+        }
+        Ok(clients)
     }
 
     pub async fn create(&self, request: CreateClient) -> Result<Client> {

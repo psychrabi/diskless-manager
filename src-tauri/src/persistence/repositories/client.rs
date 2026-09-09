@@ -239,6 +239,40 @@ impl ClientRepository {
         Ok(())
     }
 
+    /// Stored per-client game master selection (possibly empty).
+    pub async fn game_selection(&self, id: &ClientId) -> Result<Vec<String>> {
+        Ok(sqlx::query_scalar::<_, String>(
+            "SELECT master_dataset FROM client_game_disks WHERE client_id = ?",
+        )
+        .bind(id.as_str())
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    /// Replace a client's stored game master selection wholesale.
+    pub async fn set_game_selection(
+        &self,
+        id: &ClientId,
+        masters: &[String],
+    ) -> Result<()> {
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query("DELETE FROM client_game_disks WHERE client_id = ?")
+            .bind(id.as_str())
+            .execute(&mut *transaction)
+            .await?;
+        for master in masters {
+            sqlx::query(
+                "INSERT INTO client_game_disks (client_id, master_dataset) VALUES (?, ?)",
+            )
+            .bind(id.as_str())
+            .bind(master)
+            .execute(&mut *transaction)
+            .await?;
+        }
+        transaction.commit().await?;
+        Ok(())
+    }
+
     pub async fn update(&self, client: &Client) -> Result<()> {
         sqlx::query(
             r#"
@@ -390,6 +424,9 @@ impl ClientRepository {
 
             keep_writeback: row.keep_writeback.unwrap_or(1) != 0,
             use_game_disk: row.use_game_disk.unwrap_or(0) != 0,
+            // Selection lives in `client_game_disks`; populated by the
+            // service layer after fetch.
+            game_disks: Vec::new(),
         })
     }
 }
@@ -486,6 +523,7 @@ mod tests {
             pxe_mode: PxeMode::Uefi,
             keep_writeback: true,
             use_game_disk: false,
+            game_disks: Vec::new(),
         })
         .expect("client should be valid");
 
@@ -543,6 +581,7 @@ mod tests {
             pxe_mode: PxeMode::Uefi,
             keep_writeback: true,
             use_game_disk: false,
+            game_disks: Vec::new(),
         })
         .expect("pending client should be valid");
 

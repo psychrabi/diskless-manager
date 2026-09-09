@@ -1,4 +1,4 @@
-use crate::application::storage_service::StorageService;
+use crate::application::storage_service::{resolve_game_selection, StorageService};
 use crate::core::client::{Client, ClientManager};
 use crate::core::provisioning::ClientStoragePaths;
 use crate::domain::storage::{
@@ -77,7 +77,7 @@ pub async fn inspect_storage(state: &AppState) -> anyhow::Result<ReconciliationS
     let mut summary = ReconciliationSummary::new();
 
     for client in clients {
-        match storage_spec_for_client(state, &client).await {
+        match storage_spec_for_client(&state.db_pool, &client).await {
             Ok(Some(spec)) => match state.application.storage.reconcile_client_storage(&spec) {
                 Ok(result) => summary.push(entry_from_result(&client, &spec, result)),
                 Err(error) => summary.push(ReconciliationEntry {
@@ -141,7 +141,7 @@ pub async fn repair_client_storage(
 ) -> anyhow::Result<ReconciliationEntry> {
     let manager = ClientManager::new(state.db_pool.clone());
     let client = manager.get(client_id).await?;
-    let spec = storage_spec_for_client(state, &client).await?.ok_or_else(|| {
+    let spec = storage_spec_for_client(&state.db_pool, &client).await?.ok_or_else(|| {
         anyhow::anyhow!(
             "client '{}' has no storage configuration to reconcile",
             client_id
@@ -194,7 +194,7 @@ pub(crate) async fn resolved_game_selection(
         .into_iter()
         .map(|master| master.dataset)
         .collect::<Vec<_>>();
-    Ok(StorageService::resolve_game_selection(
+    Ok(resolve_game_selection(
         use_game_disk,
         &stored,
         &discovered,
@@ -202,7 +202,7 @@ pub(crate) async fn resolved_game_selection(
 }
 
 async fn storage_spec_for_client(
-    state: &AppState,
+    pool: &sqlx::SqlitePool,
     client: &Client,
 ) -> anyhow::Result<Option<ClientStorageSpec>> {
     if !client.enabled || client.master.trim().is_empty() {
@@ -223,7 +223,7 @@ async fn storage_spec_for_client(
 
     let use_game_disk = client.use_game_disk.unwrap_or(false);
     let game_disks =
-        resolved_game_selection(&state.db_pool, &client.id, use_game_disk).await?;
+        resolved_game_selection(pool, &client.id, use_game_disk).await?;
 
     let source = match client.snapshot.as_deref().map(str::trim) {
         Some(snapshot) if !snapshot.is_empty() => {
@@ -332,8 +332,15 @@ mod tests {
         assert_eq!(summary.skipped, 0);
     }
 
-    #[test]
-    fn missing_master_skips_storage_reconciliation() {
+    #[tokio::test]
+    async fn missing_master_skips_storage_reconciliation() {
+        let path = std::env::temp_dir().join(format!(
+            "diskless-recon-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let url = format!("sqlite:{}?mode=rwc", path.display());
+        let pool = sqlx::SqlitePool::connect(&url).await.unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
         let client = Client {
             id: "client-1".to_string(),
             name: "PC001".to_string(),
@@ -356,7 +363,9 @@ mod tests {
             use_game_disk: Some(false),
         };
 
-        assert!(storage_spec_for_client(&client).unwrap().is_none());
+        let spec = storage_spec_for_client(&pool, &client).await.unwrap();
+        assert!(spec.is_none());
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

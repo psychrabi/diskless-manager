@@ -2,7 +2,7 @@ import { memo } from "react";
 import { TableCell } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { formatUptime } from "@/utils/formatUptime";
-import { Clock, Monitor, MoveDown, MoveUp } from "lucide-react";
+import { Clock, Gamepad2, Monitor, MoveDown, MoveUp } from "lucide-react";
 import ControlActionButtons from "./ControlActionButtons";
 import { formatDiskBytes } from "@/utils/formatDiskBytes";
 
@@ -40,8 +40,25 @@ const ClientModeBadge = memo(({ client }) => {
   }
 
   return (
-    <Badge variant="default" title={`Persistent: ${client.block_store}`}>
+    <Badge variant="default" title={`Persistent: ${client.block_device || client.block_store}`}>
       Persistent
+    </Badge>
+  );
+});
+
+const ClientGameBadge = memo(({ client }) => {
+  if (!client.use_game_disk) {
+    return null;
+  }
+  const selected = client.game_disks ?? [];
+  const title =
+    selected.length > 0
+      ? `Game disks: ${selected.map((disk) => disk.split("/").pop()).join(", ")}`
+      : "Game disks: all available game disks";
+  return (
+    <Badge variant="secondary" className="ml-2" title={title}>
+      <Gamepad2 data-icon="inline-start" />
+      {selected.length > 0 ? selected.length : "All"}
     </Badge>
   );
 });
@@ -114,6 +131,7 @@ const ClientTableRow = ({ client, clientMetrics }) => {
       </TableCell>
       <TableCell className="text-center">
         <ClientModeBadge client={client} />
+        <ClientGameBadge client={client} />
       </TableCell>
       <TableCell className="hidden text-center font-mono text-xs lg:table-cell">
         <UptimeCell uptimeSeconds={clientMetrics?.uptime_seconds} />

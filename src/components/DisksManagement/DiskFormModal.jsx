@@ -11,16 +11,24 @@ const diskSchema = z
   .object({
     zpool: z.string().min(1, "Zpool is required"),
     name: z.string().min(4, "Disk name is required"),
-    usage_type: z.string().min(1, "Disk type is required"),
+    usage_type: z.enum(["image", "writeback", "game"]),
     size: z.string().optional(),
   })
   .superRefine((value, context) => {
-    if (value.usage_type === "game" && !value.size?.trim()) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["size"],
-        message: "Game disk size is required",
-      });
+    if (value.usage_type === "game") {
+      if (!value.size?.trim()) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["size"],
+          message: "Game disk size is required",
+        });
+      } else if (!/^\d+(\.\d+)?[KMGTPE]?$/i.test(value.size.trim())) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["size"],
+          message: "Size must look like 50G (number with optional K/M/G/T/P/E suffix)",
+        });
+      }
     }
   });
 
@@ -68,7 +76,12 @@ const DiskFormModal = ({ zpools, isOpen, setIsOpen, refresh }) => {
         <Select
           label="Select zpool"
           register={register("zpool")}
-          onChange={(e) => setValue("zpool", e.target.value)}
+          onChange={(e) =>
+            setValue("zpool", e.target.value, {
+              shouldValidate: true,
+              shouldDirty: true,
+            })
+          }
           error={errors.zpool?.message}
         >
           <NativeSelectOption value="">Select zpool</NativeSelectOption>
@@ -82,7 +95,20 @@ const DiskFormModal = ({ zpools, isOpen, setIsOpen, refresh }) => {
         <Select
           label="Disk type"
           register={register("usage_type")}
-          onChange={(e) => setValue("usage_type", e.target.value)}
+          onChange={(e) => {
+            const next = e.target.value;
+            setValue("usage_type", next, {
+              shouldValidate: true,
+              shouldDirty: true,
+            });
+            // A stale game size must not leak into other disk types.
+            if (next !== "game") {
+              setValue("size", "", {
+                shouldValidate: true,
+                shouldDirty: true,
+              });
+            }
+          }}
           error={errors.usage_type?.message}
         >
           <NativeSelectOption value="">Select disk type</NativeSelectOption>
@@ -110,7 +136,7 @@ const DiskFormModal = ({ zpools, isOpen, setIsOpen, refresh }) => {
         )}
         <div className="mt-6 flex justify-end space-x-3">
           <Button type="submit" variant="primary" icon={Save}>
-            Create Master
+            {usageType === "game" ? "Create Game Disk" : "Create Master"}
           </Button>
           <Button
             type="button"

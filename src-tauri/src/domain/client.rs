@@ -185,6 +185,11 @@ pub struct Client {
 
     pub keep_writeback: bool,
     pub use_game_disk: bool,
+
+    /// Stored per-client game master selection. Populated from the
+    /// `client_game_disks` table by the service layer, not the row map.
+    #[serde(default)]
+    pub game_disks: Vec<String>,
 }
 
 impl Client {
@@ -230,6 +235,7 @@ impl Client {
 
             keep_writeback: request.keep_writeback,
             use_game_disk: request.use_game_disk,
+            game_disks: request.game_disks,
         })
     }
 
@@ -307,6 +313,10 @@ pub struct CreateClient {
 
     #[serde(default)]
     pub use_game_disk: bool,
+
+    /// Explicit per-client game master selection.
+    #[serde(default)]
+    pub game_disks: Vec<String>,
 }
 
 fn default_true() -> bool {

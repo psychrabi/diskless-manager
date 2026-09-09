@@ -119,6 +119,7 @@ impl StorageService {
 mod tests {
     use super::*;
     use crate::infrastructure::{image::ImageBackendInfo, iscsi::IscsiTargetState};
+    use crate::infrastructure::iscsi::IscsiLunState;
     use std::{collections::HashMap, path::Path, sync::Mutex};
 
     #[derive(Default)]
@@ -221,6 +222,9 @@ mod tests {
         }
         fn target_exists(&self, _: &str) -> Result<bool> {
             Ok(true)
+        }
+        fn list_target_luns(&self, _: &str) -> Result<Vec<IscsiLunState>> {
+            Ok(Vec::new())
         }
         fn inspect_target(&self, spec: &IscsiTargetSpec) -> Result<IscsiTargetState> {
             let attached = *self.attached.lock().unwrap();

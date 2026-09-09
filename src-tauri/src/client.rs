@@ -100,6 +100,7 @@ pub async fn add_client_impl(
         .to_string(),
         lun: 0,
         use_game_disk: req.use_game_disk.unwrap_or(false),
+        game_disks: Vec::new(),
     };
     let client = state
         .application
@@ -117,6 +118,7 @@ pub async fn add_client_impl(
                 pxe_mode: crate::domain::PxeMode::Uefi,
                 keep_writeback: req.keep_writeback.unwrap_or(true),
                 use_game_disk: req.use_game_disk.unwrap_or(false),
+                game_disks: Vec::new(),
             },
             storage_spec,
             &settings.dhcp.next_server_ip,

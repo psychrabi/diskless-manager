@@ -186,6 +186,7 @@ async fn register_pending_client(
         pxe_mode: PxeMode::Uefi,
         keep_writeback: true,
         use_game_disk: false,
+        game_disks: Vec::new(),
     };
     let client = crate::domain::Client::create(request)
         .map_err(|error| anyhow::anyhow!("invalid enrolled client: {error}"))?;

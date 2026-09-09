@@ -4,10 +4,6 @@ pub mod iscsi;
 pub mod nvmeof;
 pub mod zfs;
 
-pub mod storage {
-    // Future storage infrastructure.
-}
-
 pub mod dhcp;
 
 pub mod pxe;

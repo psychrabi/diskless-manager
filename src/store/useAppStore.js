@@ -159,7 +159,7 @@ export const useAppStore = create()(
 
         createDataset: async (data) => {
           try {
-            await createZfsDataset({
+            const result = await createZfsDataset({
               zpool: data.zpool,
               name: data.name,
               usage_type: data.usage_type,
@@ -167,7 +167,12 @@ export const useAppStore = create()(
             });
             return {
               success: true,
-              message: `Dataset ${data.name} created successfully.`,
+              // The backend resolves the effective dataset name (game
+              // disks gain a `-games` suffix); prefer it over the input.
+              dataset: result?.dataset,
+              message:
+                result?.message ||
+                `Dataset ${data.name} created successfully.`,
             };
           } catch (err) {
             return {
@@ -190,8 +195,10 @@ export const useAppStore = create()(
           } catch (err) {
             return {
               success: false,
+              // apiRequest throws Error with the server message in `message`
+              // (e.g. the 409 dependency guard); surface it verbatim.
               error: `Failed to delete disk: ${
-                err.error || "An unknown error occurred"
+                err.message || "An unknown error occurred"
               }`,
             };
           }

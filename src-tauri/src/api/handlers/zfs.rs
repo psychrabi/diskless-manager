@@ -191,10 +191,37 @@ pub async fn create_dataset(
     Json(request): Json<CreateDatasetRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let is_game_disk = request.usage_type == "game" || request.usage_type == "game_disk";
-    let dataset_name = if is_game_disk {
-        format!("{}/games/{}-games", request.zpool, request.name)
+    // Strip a pre-existing `-games` suffix so retries and explicit names
+    // never double it (`steam-games` stays `steam-games`).
+    let base_name = request.name.trim();
+    let base_name = if is_game_disk {
+        base_name.strip_suffix("-games").unwrap_or(base_name)
     } else {
-        format!("{}/{}", request.zpool, request.name)
+        base_name
+    };
+    let dataset_name = if is_game_disk {
+        format!("{}/games/{}-games", request.zpool, base_name)
+    } else {
+        format!("{}/{}", request.zpool, base_name)
+    };
+
+    // Validate before creating anything so a 400 leaves no parent dataset
+    // behind as a side effect.
+    let game_size: Option<&str> = if is_game_disk {
+        match request
+            .size
+            .as_deref()
+            .map(str::trim)
+            .filter(|size| !size.is_empty())
+        {
+            Some(size) => Some(size),
+            None => {
+                tracing::error!("Game disks require a size");
+                return Err(StatusCode::BAD_REQUEST);
+            }
+        }
+    } else {
+        None
     };
 
     // zfs create requires root
@@ -214,16 +241,7 @@ pub async fn create_dataset(
                 &games_parent,
             ])
             .output();
-        let Some(size) = request
-            .size
-            .as_deref()
-            .map(str::trim)
-            .filter(|size| !size.is_empty())
-        else {
-            tracing::error!("Game disks require a size");
-            return Err(StatusCode::BAD_REQUEST);
-        };
-        cmd.args(["-V", size]);
+        cmd.args(["-V", game_size.unwrap_or_default()]);
     }
 
     if !is_game_disk {
@@ -259,6 +277,7 @@ pub async fn create_dataset(
 
             Ok(Json(serde_json::json!({
                 "success": true,
+                "dataset": dataset_name,
                 "message": format!("Dataset {} created successfully", dataset_name)
             })))
         }
@@ -275,9 +294,55 @@ pub async fn create_dataset(
 }
 
 pub async fn delete_dataset(
+    State(state): State<AppState>,
     Path(dataset): Path<String>,
     Json(request): Json<DeleteDatasetRequest>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> (StatusCode, Json<serde_json::Value>) {
+    // Game masters must not be destroyed while clients depend on them:
+    // per-client clones would be left pointing at a dead zvol, breaking
+    // every opted-in target until manual targetcli cleanup. This applies
+    // to recursive deletes too: remove the clients' selections (or the
+    // clients) first.
+    {
+        let mut dependents: Vec<String> = Vec::new();
+        if let Ok(clones) =
+            crate::application::storage_service::StorageService::list_game_clones()
+        {
+            dependents.extend(
+                clones
+                    .into_iter()
+                    .filter(|clone| clone.master_dataset == dataset)
+                    .map(|clone| clone.client_id),
+            );
+        }
+        if let Ok(rows) = sqlx::query_scalar::<_, String>(
+            "SELECT DISTINCT client_id FROM client_game_disks WHERE master_dataset = ?",
+        )
+        .bind(&dataset)
+        .fetch_all(&state.db_pool)
+        .await
+        {
+            dependents.extend(rows);
+        }
+        dependents.sort();
+        dependents.dedup();
+        if !dependents.is_empty() {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "success": false,
+                    "dataset": dataset,
+                    "dependents": dependents,
+                    "message": format!(
+                        "Dataset {} is used by game selections of clients: {}. Remove the selections or delete the clients first.",
+                        dataset,
+                        dependents.join(", ")
+                    )
+                })),
+            );
+        }
+    }
+
     let mut cmd = Command::new("sudo");
     cmd.args(["-n", "zfs", "destroy"]);
 
@@ -288,20 +353,105 @@ pub async fn delete_dataset(
     cmd.arg(&dataset);
 
     match cmd.output() {
-        Ok(output) if output.status.success() => Ok(Json(serde_json::json!({
-            "success": true,
-            "message": format!("Dataset {} deleted successfully", dataset)
-        }))),
+        Ok(output) if output.status.success() => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "success": true,
+                "message": format!("Dataset {} deleted successfully", dataset)
+            })),
+        ),
         Ok(output) => {
             let error = String::from_utf8_lossy(&output.stderr);
             tracing::error!("Failed to delete dataset {}: {}", dataset, error);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "success": false,
+                    "message": format!("Failed to delete dataset {}: {}", dataset, error.trim())
+                })),
+            )
         }
         Err(e) => {
             tracing::error!("Failed to execute zfs destroy for {}: {}", dataset, e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "success": false,
+                    "message": format!("Failed to execute zfs destroy for {}: {}", dataset, e)
+                })),
+            )
         }
     }
+}
+
+/// List game master volumes with their per-client clones and selection
+/// usage. Powers the client game-disk picker.
+///
+/// `GET /api/zfs/game-disks` returns
+/// `{ disks: [{ dataset, disk_type, size_bytes, used_by, clones }] }`
+/// where `used_by` is the sorted union of clone owners and selection
+/// rows, and `clones` lists `{ client_id, clone_dataset }`.
+pub async fn list_game_disks(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    use crate::application::storage_service::StorageService;
+
+    let masters = StorageService::discover_game_masters().map_err(|error| {
+        tracing::error!("Failed to list game disks: {}", error);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    let clones = StorageService::list_game_clones().map_err(|error| {
+        tracing::error!("Failed to list game clones: {}", error);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    let selections: Vec<(String, String)> =
+        sqlx::query_as::<_, (String, String)>(
+            "SELECT client_id, master_dataset FROM client_game_disks",
+        )
+        .fetch_all(&state.db_pool)
+        .await
+        .map_err(|error| {
+            tracing::error!("Failed to list game selections: {}", error);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    let disks: Vec<serde_json::Value> = masters
+        .into_iter()
+        .map(|master| {
+            let mut used_by: Vec<String> = clones
+                .iter()
+                .filter(|clone| clone.master_dataset == master.dataset)
+                .map(|clone| clone.client_id.clone())
+                .chain(
+                    selections
+                        .iter()
+                        .filter(|(_, selected)| selected == &master.dataset)
+                        .map(|(client_id, _)| client_id.clone()),
+                )
+                .collect();
+            used_by.sort();
+            used_by.dedup();
+            let master_clones: Vec<serde_json::Value> = clones
+                .iter()
+                .filter(|clone| clone.master_dataset == master.dataset)
+                .map(|clone| {
+                    serde_json::json!({
+                        "client_id": clone.client_id,
+                        "clone_dataset": clone.clone_dataset,
+                    })
+                })
+                .collect();
+            serde_json::json!({
+                "dataset": master.dataset,
+                "disk_type": master.disk_type,
+                "size_bytes": master.size_bytes,
+                "used_by": used_by,
+                "clones": master_clones,
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({ "disks": disks })))
 }
 
 #[cfg(test)]

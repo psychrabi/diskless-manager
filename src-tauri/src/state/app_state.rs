@@ -545,7 +545,13 @@ mod migration_tests {
         assert_eq!(client_name, "PC-01");
         assert_eq!(image_name, "Windows 11");
 
-        for column in ["snapshot", "target_iqn", "pxe_mode", "keep_writeback"] {
+        for column in [
+            "snapshot",
+            "target_iqn",
+            "pxe_mode",
+            "keep_writeback",
+            "use_game_disk",
+        ] {
             let exists: i64 = sqlx::query_scalar(
                 "SELECT COUNT(*) FROM pragma_table_info('clients') WHERE name = ?",
             )
@@ -555,5 +561,13 @@ mod migration_tests {
             .expect("client schema should be readable");
             assert_eq!(exists, 1, "missing migrated client column: {column}");
         }
+
+        let game_table: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'client_game_disks'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("schema should be readable");
+        assert_eq!(game_table, 1, "missing client_game_disks table");
     }
 }

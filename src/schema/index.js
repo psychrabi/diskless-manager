@@ -86,6 +86,7 @@ export const clientSchema = z.object({
   snapshot: z.string().optional().nullable(),
   keep_writeback: z.boolean().default(false),
   use_game_disk: z.boolean().default(false),
+  game_disks: z.array(z.string()).default([]),
   enabled: z.boolean().default(true),
 });
 

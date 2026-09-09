@@ -5,7 +5,7 @@ use crate::{
     },
     infrastructure::{
         image::ImageBackend,
-        iscsi::{IscsiLunSpec, IscsiLunState, IscsiProvisionResult, IscsiProvisioner, IscsiTargetSpec},
+        iscsi::{IscsiLunSpec, IscsiProvisionResult, IscsiProvisioner, IscsiTargetSpec},
     },
 };
 use anyhow::{bail, Context, Result};
@@ -75,6 +75,116 @@ pub struct GameCloneRecord {
     pub clone_dataset: String,
 }
 
+/// Make a client id safe for use in ZFS dataset and backstore names.
+fn sanitize_client_id(client_id: &str) -> String {
+    let sanitized: String = client_id
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|c| {
+            if matches!(c, 'a'..='z' | '0'..='9' | '-' | '_' | '.' | ':') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if sanitized.is_empty() {
+        "client".to_string()
+    } else {
+        sanitized
+    }
+}
+
+/// Deterministic per-client clone dataset for a game master.
+///
+/// `("client-01", "diskless/games/steam")` becomes
+/// `"diskless/games/client-01-steam-games"`. A master basename that
+/// already ends in `-games` (the on-disk naming for created masters)
+/// is stripped first so the suffix is never doubled.
+pub fn game_clone_dataset(client_id: &str, master: &str) -> String {
+    let parent = master.rfind('/').map(|index| &master[..index]);
+    let mut base = master.rsplit('/').next().unwrap_or(master);
+    base = base.strip_suffix("-games").unwrap_or(base);
+    let client = sanitize_client_id(client_id);
+    match parent {
+        Some(parent) if !parent.is_empty() => {
+            format!("{parent}/{client}-{base}-games")
+        }
+        _ => format!("{client}-{base}-games"),
+    }
+}
+
+/// Parse `zfs list -o name,org.diskless:type` output into game masters.
+///
+/// Only volumes tagged `game` or `game_disk` qualify. Per-client
+/// clones (`client_game`), untagged volumes, and every other type are
+/// excluded so clones are never discovered as masters.
+pub fn parse_game_master_datasets(zfs_list_output: &str) -> Vec<String> {
+    zfs_list_output
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split('\t');
+            let dataset = fields.next()?.trim();
+            let disk_type = fields.next().map(str::trim).unwrap_or_default();
+            if !dataset.is_empty() && matches!(disk_type, "game" | "game_disk") {
+                Some(dataset.to_string())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Describe the per-client writable clones for every game master in a
+/// `zfs list` output. Pure metadata: creates nothing.
+pub fn game_disks_from_zfs_list(
+    zfs_list_output: &str,
+    client_id: &str,
+) -> Vec<GameDiskClone> {
+    parse_game_master_datasets(zfs_list_output)
+        .into_iter()
+        .map(|master| {
+            let clone = game_clone_dataset(client_id, &master);
+            GameDiskClone {
+                block_device: PathBuf::from(format!("/dev/zvol/{clone}")),
+                master_dataset: master,
+                client_clone_dataset: clone,
+                writable: true,
+            }
+        })
+        .collect()
+}
+
+/// Resolve the effective game masters for a client.
+///
+/// An explicit non-empty stored selection wins (intersected with
+/// discovered masters so deleted masters drop out). An empty stored
+/// selection combined with the master switch resolves to all
+/// discovered masters; a cleared switch resolves to none. Output is
+/// sorted so LUN numbering is stable.
+pub fn resolve_game_selection(
+    use_game_disk: bool,
+    stored: &[String],
+    discovered: &[String],
+) -> Vec<String> {
+    let mut selected: Vec<String> = if stored.is_empty() {
+        if !use_game_disk {
+            return Vec::new();
+        }
+        discovered.to_vec()
+    } else {
+        stored
+            .iter()
+            .filter(|master| discovered.contains(master))
+            .cloned()
+            .collect()
+    };
+    selected.sort();
+    selected.dedup();
+    selected
+}
+
 impl StorageService {
     pub fn new(image_backend: Arc<dyn ImageBackend>, iscsi: Arc<dyn IscsiProvisioner>) -> Self {
         Self {
@@ -92,116 +202,6 @@ impl StorageService {
 
     /// ZFS property value tagging a per-client game clone.
     pub const GAME_CLONE_TYPE: &'static str = "client_game";
-
-    /// Make a client id safe for use in ZFS dataset and backstore names.
-    fn sanitize_client_id(client_id: &str) -> String {
-        let sanitized: String = client_id
-            .trim()
-            .to_lowercase()
-            .chars()
-            .map(|c| {
-                if matches!(c, 'a'..='z' | '0'..='9' | '-' | '_' | '.' | ':') {
-                    c
-                } else {
-                    '_'
-                }
-            })
-            .collect();
-        if sanitized.is_empty() {
-            "client".to_string()
-        } else {
-            sanitized
-        }
-    }
-
-    /// Deterministic per-client clone dataset for a game master.
-    ///
-    /// `("client-01", "diskless/games/steam")` becomes
-    /// `"diskless/games/client-01-steam-games"`. A master basename that
-    /// already ends in `-games` (the on-disk naming for created masters)
-    /// is stripped first so the suffix is never doubled.
-    pub fn game_clone_dataset(client_id: &str, master: &str) -> String {
-        let parent = master.rfind('/').map(|index| &master[..index]);
-        let mut base = master.rsplit('/').next().unwrap_or(master);
-        base = base.strip_suffix("-games").unwrap_or(base);
-        let client = Self::sanitize_client_id(client_id);
-        match parent {
-            Some(parent) if !parent.is_empty() => {
-                format!("{parent}/{client}-{base}-games")
-            }
-            _ => format!("{client}-{base}-games"),
-        }
-    }
-
-    /// Parse `zfs list -o name,org.diskless:type` output into game masters.
-    ///
-    /// Only volumes tagged `game` or `game_disk` qualify. Per-client
-    /// clones (`client_game`), untagged volumes, and every other type are
-    /// excluded so clones are never discovered as masters.
-    pub fn parse_game_master_datasets(zfs_list_output: &str) -> Vec<String> {
-        zfs_list_output
-            .lines()
-            .filter_map(|line| {
-                let mut fields = line.split('\t');
-                let dataset = fields.next()?.trim();
-                let disk_type = fields.next().map(str::trim).unwrap_or_default();
-                if !dataset.is_empty() && matches!(disk_type, "game" | "game_disk") {
-                    Some(dataset.to_string())
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
-
-    /// Describe the per-client writable clones for every game master in a
-    /// `zfs list` output. Pure metadata: creates nothing.
-    pub fn game_disks_from_zfs_list(
-        zfs_list_output: &str,
-        client_id: &str,
-    ) -> Vec<GameDiskClone> {
-        Self::parse_game_master_datasets(zfs_list_output)
-            .into_iter()
-            .map(|master| {
-                let clone = Self::game_clone_dataset(client_id, &master);
-                GameDiskClone {
-                    block_device: PathBuf::from(format!("/dev/zvol/{clone}")),
-                    master_dataset: master,
-                    client_clone_dataset: clone,
-                    writable: true,
-                }
-            })
-            .collect()
-    }
-
-    /// Resolve the effective game masters for a client.
-    ///
-    /// An explicit non-empty stored selection wins (intersected with
-    /// discovered masters so deleted masters drop out). An empty stored
-    /// selection combined with the master switch resolves to all
-    /// discovered masters; a cleared switch resolves to none. Output is
-    /// sorted so LUN numbering is stable.
-    pub fn resolve_game_selection(
-        use_game_disk: bool,
-        stored: &[String],
-        discovered: &[String],
-    ) -> Vec<String> {
-        let mut selected: Vec<String> = if stored.is_empty() {
-            if !use_game_disk {
-                return Vec::new();
-            }
-            discovered.to_vec()
-        } else {
-            stored
-                .iter()
-                .filter(|master| discovered.contains(master))
-                .cloned()
-                .collect()
-        };
-        selected.sort();
-        selected.dedup();
-        selected
-    }
 
     /// Discover all ZFS game-master volumes.
     ///
@@ -324,7 +324,7 @@ impl StorageService {
         };
         format!(
             "game_{}_{}",
-            sanitize(&Self::sanitize_client_id(client_id)),
+            sanitize(&sanitize_client_id(client_id)),
             sanitize(base)
         )
     }
@@ -340,7 +340,7 @@ impl StorageService {
             .iter()
             .enumerate()
             .map(|(index, master)| {
-                let clone = Self::game_clone_dataset(client_id, master);
+                let clone = game_clone_dataset(client_id, master);
                 IscsiLunSpec::new(
                     (index + 1) as u32,
                     Self::game_backstore_name(client_id, master),
@@ -393,7 +393,7 @@ impl StorageService {
 
     /// Ensure a client's writable clone of a master exists and return it.
     pub fn ensure_game_clone(&self, client_id: &str, master: &str) -> Result<String> {
-        let clone = Self::game_clone_dataset(client_id, master);
+        let clone = game_clone_dataset(client_id, master);
         if !self.image_backend.exists(&clone).with_context(|| {
             format!("failed to inspect game clone '{clone}'")
         })? {
@@ -484,7 +484,7 @@ impl StorageService {
         masters: &[String],
     ) -> Result<()> {
         for master in masters {
-            let clone = Self::game_clone_dataset(client_id, master);
+            let clone = game_clone_dataset(client_id, master);
             if self.image_backend.exists(&clone)? {
                 tracing::info!(
                     client_id = %client_id,
@@ -498,8 +498,14 @@ impl StorageService {
             self.ensure_game_clone(client_id, master)?;
         }
         // Re-add any LUN missing after the swap; existing LUNs keep
-        // working because the device path is unchanged. create_target is
-        // idempotent for resources that already exist.
+        // working because the device path is unchanged. Stale game LUNs
+        // are pruned first so their numbers are free: `create_target`
+        // only adds LUNs whose numbers are unoccupied.
+        let desired: Vec<String> = Self::build_game_luns(client_id, masters)
+            .into_iter()
+            .map(|lun| lun.backstore)
+            .collect();
+        self.prune_game_luns(target_iqn, &desired)?;
         let luns = Self::build_game_luns(client_id, masters);
         if !luns.is_empty() {
             let spec = IscsiTargetSpec::with_luns(target_iqn, luns)?;
@@ -507,11 +513,6 @@ impl StorageService {
                 format!("failed to re-expose game LUNs for client '{client_id}'")
             })?;
         }
-        let desired: Vec<String> = Self::build_game_luns(client_id, masters)
-            .into_iter()
-            .map(|lun| lun.backstore)
-            .collect();
-        self.prune_game_luns(target_iqn, &desired)?;
         Ok(())
     }
 
@@ -565,6 +566,9 @@ impl StorageService {
         let luns = Self::build_game_luns(client_id, masters);
         let desired: Vec<String> =
             luns.iter().map(|lun| lun.backstore.clone()).collect();
+        // Prune before exposing: stale LUNs occupying desired numbers are
+        // removed first so `create_target` attaches the fresh clones.
+        self.prune_game_luns(target_iqn, &desired)?;
         if !luns.is_empty() {
             let spec = IscsiTargetSpec::with_luns(target_iqn, luns)?;
             // Additive and idempotent: existing LUNs are left alone.
@@ -572,13 +576,25 @@ impl StorageService {
                 format!("failed to expose game LUNs for client '{client_id}'")
             })?;
         }
-        self.prune_game_luns(target_iqn, &desired)?;
 
         // Destroy clone datasets that are no longer selected. Their LUNs
         // are already detached by the prune above.
-        let wanted: Vec<String> = masters
+        self.destroy_game_clones_except(client_id, masters)?;
+        Ok(())
+    }
+
+    /// Destroy a client's game clones whose master is not wanted.
+    ///
+    /// LUNs must already be detached (prune first); this only removes the
+    /// ZVOLs so deselected data does not accumulate on the pool.
+    pub fn destroy_game_clones_except(
+        &self,
+        client_id: &str,
+        wanted_masters: &[String],
+    ) -> Result<()> {
+        let wanted: Vec<String> = wanted_masters
             .iter()
-            .map(|master| Self::game_clone_dataset(client_id, master))
+            .map(|master| game_clone_dataset(client_id, master))
             .collect();
         for record in Self::list_game_clones()?
             .into_iter()
@@ -729,7 +745,7 @@ impl StorageService {
             let discovered = Self::discover_game_masters()?;
             let discovered_names: Vec<String> =
                 discovered.into_iter().map(|master| master.dataset).collect();
-            let selected = Self::resolve_game_selection(
+            let selected = resolve_game_selection(
                 spec.use_game_disk,
                 &spec.game_disks,
                 &discovered_names,
@@ -751,6 +767,28 @@ impl StorageService {
         }
 
         let iscsi_spec = IscsiTargetSpec::with_luns(&spec.target_iqn, luns)?;
+
+        // ---------------------------------------------------------------
+        // Step 2b: Prune stale game attachments BEFORE creating LUNs.
+        // ---------------------------------------------------------------
+        //
+        // Legacy shared read-only LUNs and deselected clones are removed
+        // here, freeing their LUN numbers for the desired attachments:
+        // `create_lun` skips occupied numbers, so pruning must come first.
+        // Only `game_*` backstores are touched. A prune failure is logged
+        // but does not fail provisioning: the transaction below still
+        // converges the desired state, and the next provision or repair
+        // retries the prune.
+        if let Err(error) =
+            self.prune_game_luns(&spec.target_iqn, &desired_game_backstores)
+        {
+            tracing::error!(
+                client_id = %spec.client_id,
+                target_iqn = %spec.target_iqn,
+                error = %error,
+                "failed to prune stale game LUNs before provisioning"
+            );
+        }
 
         // ---------------------------------------------------------------
         // Step 3: Create iSCSI transactionally.
@@ -797,25 +835,6 @@ impl StorageService {
                 });
             }
         };
-
-        // ---------------------------------------------------------------
-        // Step 3b: Prune stale game attachments.
-        // ---------------------------------------------------------------
-        //
-        // Legacy shared read-only LUNs and deselected clones are removed
-        // here. Only `game_*` backstores are touched. A prune failure is
-        // logged but does not fail provisioning: the boot LUN is already
-        // healthy, and the next provision or repair retries the prune.
-        if let Err(error) =
-            self.prune_game_luns(&spec.target_iqn, &desired_game_backstores)
-        {
-            tracing::error!(
-                client_id = %spec.client_id,
-                target_iqn = %spec.target_iqn,
-                error = %error,
-                "failed to prune stale game LUNs after provisioning"
-            );
-        }
 
         // ---------------------------------------------------------------
         // Step 4: Build application result.
@@ -1008,7 +1027,7 @@ impl StorageService {
             let discovered = Self::discover_game_masters()?;
             let discovered_names: Vec<String> =
                 discovered.into_iter().map(|master| master.dataset).collect();
-            let selected = Self::resolve_game_selection(
+            let selected = resolve_game_selection(
                 spec.use_game_disk,
                 &spec.game_disks,
                 &discovered_names,

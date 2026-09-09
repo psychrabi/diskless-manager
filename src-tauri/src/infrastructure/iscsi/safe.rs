@@ -1,7 +1,7 @@
 use anyhow::{bail, Result};
 
 use super::{
-    model::{IscsiProvisionResult, IscsiTargetSpec, IscsiTargetState},
+    model::{IscsiLunState, IscsiProvisionResult, IscsiTargetSpec, IscsiTargetState},
     reconcile::target_has_active_sessions,
     IscsiProvisioner, TargetCliProvisioner,
 };
@@ -54,6 +54,10 @@ impl IscsiProvisioner for SafeIscsiProvisioner {
 
     fn target_exists(&self, target_iqn: &str) -> Result<bool> {
         self.inner.target_exists(target_iqn)
+    }
+
+    fn list_target_luns(&self, target_iqn: &str) -> Result<Vec<IscsiLunState>> {
+        self.inner.list_target_luns(target_iqn)
     }
 
     fn inspect_target(&self, spec: &IscsiTargetSpec) -> Result<IscsiTargetState> {

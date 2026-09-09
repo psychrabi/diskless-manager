@@ -18,6 +18,10 @@ export async function deleteZfsDataset(dataset, recursive = true) {
   });
 }
 
+export async function listGameDisks() {
+  return apiRequest("/api/zfs/game-disks");
+}
+
 export async function getZpoolList() {
   return apiRequest("/api/zfs/pools/stats");
 }

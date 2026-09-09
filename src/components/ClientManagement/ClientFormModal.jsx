@@ -6,7 +6,9 @@ import {
   removeClientNvmeOf,
   updateClient,
 } from "@/api/modules/clients";
+import { listGameDisks } from "@/api/modules/zfs";
 import { readConfig } from "@/api/modules/config";
+import ClientGameDiskPicker from "./ClientGameDiskPicker";
 import { clientSchema } from "@/schema";
 import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -39,12 +41,18 @@ const ClientFormModal = (props) => (
   <ClientFormModalContent key={`${props.client?.id ?? "new"}:${props.isOpen}`} {...props} />
 );
 
+// Explicit game defaults: a new client starts with the switch off and an
+// empty selection instead of `undefined` values.
+const gameDefaults = { use_game_disk: false, game_disks: [] };
+
 const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) => {
   const { success, error } = useToastStore();
   const [nvmeStatus, setNvmeStatus] = useState(null);
   const [nvmeLoading, setNvmeLoading] = useState(Boolean(isOpen && client?.id));
   const [nvmeAction, setNvmeAction] = useState(null);
   const [nvmeError, setNvmeError] = useState("");
+  // `null` means not fetched yet (loading); an array may be empty.
+  const [gameDisks, setGameDisks] = useState(null);
 
   const {
     register,
@@ -56,14 +64,35 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
   } = useForm({
     mode: "onChange",
     resolver: zodResolver(clientSchema),
-    defaultValues: client,
+    defaultValues: { ...gameDefaults, ...client },
   });
 
   useEffect(() => {
     if (isOpen && client) {
-      reset(client || {});
+      reset({ ...gameDefaults, ...client });
     }
   }, [client, isOpen, reset]);
+
+  // Game masters power the per-client picker. A failed fetch degrades to
+  // the zero-state hint instead of breaking the form. State updates only
+  // happen in the async continuations, never synchronously in the effect.
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    listGameDisks().then(
+      (data) => {
+        if (cancelled) return;
+        setGameDisks(data?.disks ?? []);
+      },
+      () => {
+        if (cancelled) return;
+        setGameDisks([]);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen]);
 
   const loadNvmeStatus = useCallback(async () => {
     if (!isOpen || !client?.id) {
@@ -161,8 +190,6 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
 
   const onSubmit = async (data) => {
     try {
-      const mode = !data.snapshot ? "super" : data.mode || "normal";
-
       if (!client?.id) {
         await addClient({
           name: data.name,
@@ -170,9 +197,9 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
           ip: data.ip,
           master: data.master,
           snapshot: data.snapshot || null,
-          mode: mode,
           keep_writeback: data.keep_writeback,
           use_game_disk: data.use_game_disk,
+          game_disks: data.game_disks || [],
         });
         success("Client Management", `Client ${data.name} added successfully.`);
       } else {
@@ -182,9 +209,9 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
           ip: data.ip,
           master: data.master,
           snapshot: data.snapshot || null,
-          mode: mode,
           keep_writeback: data.keep_writeback,
           use_game_disk: data.use_game_disk,
+          game_disks: data.game_disks || [],
         });
         success(
           "Client Management",
@@ -204,11 +231,6 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
     name: "master",
   });
 
-  const selectedSnapshot = useWatch({
-    control,
-    name: "snapshot",
-  });
-
   const keepWriteback = useWatch({
     control,
     name: "keep_writeback",
@@ -219,11 +241,46 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
     name: "use_game_disk",
   });
 
-  useEffect(() => {
-    if (!selectedSnapshot) {
-      setValue("mode", "super", { shouldValidate: true });
+  const selectedGameDisks = useWatch({
+    control,
+    name: "game_disks",
+  });
+
+  const toggleGameDisk = (dataset) => {
+    const current = selectedGameDisks ?? [];
+    const next = current.includes(dataset)
+      ? current.filter((disk) => disk !== dataset)
+      : [...current, dataset];
+    setValue("game_disks", next, {
+      shouldValidate: true,
+      shouldDirty: true,
+    });
+  };
+
+  const handleGameDiskSwitch = (checked) => {
+    const enabled = Boolean(checked);
+    setValue("use_game_disk", enabled, {
+      shouldValidate: true,
+      shouldDirty: true,
+    });
+    if (enabled) {
+      // Pre-check every discovered master when enabling with an empty
+      // selection; the user can deselect from there.
+      const discovered = gameDisks ?? [];
+      if ((selectedGameDisks ?? []).length === 0 && discovered.length > 0) {
+        setValue(
+          "game_disks",
+          discovered.map((disk) => disk.dataset),
+          { shouldValidate: true, shouldDirty: true },
+        );
+      }
+    } else {
+      setValue("game_disks", [], {
+        shouldValidate: true,
+        shouldDirty: true,
+      });
     }
-  }, [selectedSnapshot, setValue]);
+  };
 
   const nvmeReady = Boolean(
     nvmeStatus?.subsystem_present &&
@@ -373,20 +430,27 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
               <Checkbox
                 id="use-game-disk"
                 checked={Boolean(useGameDisk)}
-                onCheckedChange={(checked) =>
-                  setValue("use_game_disk", Boolean(checked), {
-                    shouldValidate: true,
-                    shouldDirty: true,
-                  })
-                }
+                onCheckedChange={handleGameDiskSwitch}
               />
               <Label htmlFor="use-game-disk" className="flex cursor-pointer flex-col items-start gap-1">
                 <span className="font-medium">Use Game Disk</span>
                 <span className="text-xs text-muted-foreground text-wrap">
-                  If checked, available game disks will be mounted via iSCSI
+                  If checked, each selected game disk gets a private writable
+                  clone attached to this client via iSCSI
                 </span>
               </Label>
             </div>
+            {Boolean(useGameDisk) && (
+              <div className="mt-3">
+                <ClientGameDiskPicker
+                  masters={gameDisks ?? []}
+                  loading={gameDisks === null}
+                  selected={selectedGameDisks ?? []}
+                  onToggle={toggleGameDisk}
+                  onNavigateAway={onClose}
+                />
+              </div>
+            )}
           </div>
 
           {client?.id && (
