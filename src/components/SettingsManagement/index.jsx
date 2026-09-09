@@ -10,6 +10,7 @@ import HTTPForm from "./Forms/HTTPForm";
 import SambaForm from "./Forms/SambaForm";
 import ISCSIForm from "./Forms/ISCSIForm";
 import BootProcessOverview from "./BootProcessOverview";
+import EnrollmentControl from "./EnrollmentControl";
 import NetworkConfig from "./NetworkConfig";
 import { clientLifecycleSchema } from "@/schema";
 import ClientLifecycleForm from "./Forms/ClientLifecycleForm";
@@ -35,6 +36,7 @@ const SettingsManagement = () => {
 
       <div className="grid gap-4 xl:grid-cols-4 mb-4">
         <NetworkConfig />
+        <EnrollmentControl />
         {SECTIONS.map(({ section, title, schema, Form }) => (
           <ConfigForm
             key={section}

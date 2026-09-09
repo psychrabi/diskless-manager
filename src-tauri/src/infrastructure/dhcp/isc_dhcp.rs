@@ -94,6 +94,31 @@ async fn remove_generated_ipxe(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Remove a client's MAC-specific iPXE menu so it can no longer boot.
+///
+/// The dispatcher falls through to the enrollment service when the menu
+/// is absent, which denies disabled and unknown machines. Idempotent:
+/// a missing file is not an error. This is the enforcement behind the
+/// client `enabled` switch for already-provisioned machines (whose boots
+/// otherwise never consult the enrollment endpoint).
+pub(crate) async fn remove_client_ipxe_menu(mac: &str) -> Result<()> {
+    let settings = runtime_settings();
+    let root = PathBuf::from(&settings.http.root_dir);
+    let relative = crate::infrastructure::pxe::client_mac_script_path(mac);
+
+    if !crate::infrastructure::pxe::is_managed_script_path(&root, &relative) {
+        anyhow::bail!("refusing unsafe generated iPXE path: {relative}");
+    }
+
+    let path = root.join(&relative);
+    if !path.exists() {
+        return Ok(());
+    }
+    remove_generated_ipxe(&path).await?;
+    tracing::info!(mac = %mac, path = %path.display(), "removed per-client iPXE menu");
+    Ok(())
+}
+
 async fn cleanup_boot_artifacts(
     script_cleanup: impl Future<Output = Result<()>>,
     dhcp_cleanup: impl Future<Output = Result<()>>,

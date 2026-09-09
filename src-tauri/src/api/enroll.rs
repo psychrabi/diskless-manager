@@ -156,7 +156,20 @@ async fn ensure_client_menu(
     }
 }
 
-/// Register an unknown MAC as a pending client pinning its current lease IP.
+/// Whether unknown MACs may currently self-register.
+///
+/// The window is lazy-expiring: no background job closes it, the check
+/// itself enforces the deadline. `None` means closed.
+pub fn enrollment_window_open(open_until: Option<i64>, now_unix: i64) -> bool {
+    open_until.is_some_and(|until| now_unix < until)
+}
+
+/// Register an unknown MAC as a pending (disabled) client pinning its
+/// current lease IP.
+///
+/// Pool semantics: the machine appears in the clients list but cannot
+/// boot until an administrator enables and provisions it. Registration
+/// itself is gated on the enrollment window by the caller.
 async fn register_pending_client(
     state: &AppState,
     mac: MacAddress,
@@ -188,8 +201,11 @@ async fn register_pending_client(
         use_game_disk: false,
         game_disks: Vec::new(),
     };
-    let client = crate::domain::Client::create(request)
+    let mut client = crate::domain::Client::create(request)
         .map_err(|error| anyhow::anyhow!("invalid enrolled client: {error}"))?;
+    // Pool, not provisioned: visible in the UI, barred from booting until
+    // an administrator enables the record and assigns an image.
+    client.enabled = false;
 
     clients.insert(&client).await?;
     tracing::info!(
@@ -243,30 +259,62 @@ async fn enroll_client(
     let clients = ClientRepository::new(state.db_pool.clone());
     let script = match clients.find_by_mac(&parsed).await {
         Ok(Some(client)) => {
-            let provisioning = client
-                .target_iqn
-                .as_deref()
-                .is_some_and(|iqn| !iqn.trim().is_empty());
-            if provisioning {
-                let settings = state.settings.read().await;
-                ensure_client_menu(&client, &settings).await;
-                crate::infrastructure::pxe::render_enrollment_redirect()
-            } else {
+            // Binding gate: a disabled record never boots, even when it
+            // is fully provisioned. This is what stops decommissioned
+            // machines and lets admins quarantine a client instantly.
+            if !client.enabled {
                 tracing::info!(
                     client = %client.name,
                     mac = %parsed.as_str(),
-                    "enrolled client is awaiting an image assignment"
+                    "disabled client attempted to boot; denying"
                 );
-                crate::infrastructure::pxe::render_enrollment_pending()
+                crate::infrastructure::pxe::render_enrollment_disabled()
+            } else {
+                let provisioning = client
+                    .target_iqn
+                    .as_deref()
+                    .is_some_and(|iqn| !iqn.trim().is_empty());
+                if provisioning {
+                    let settings = state.settings.read().await;
+                    ensure_client_menu(&client, &settings).await;
+                    crate::infrastructure::pxe::render_enrollment_redirect()
+                } else {
+                    tracing::info!(
+                        client = %client.name,
+                        mac = %parsed.as_str(),
+                        "enrolled client is awaiting an image assignment"
+                    );
+                    crate::infrastructure::pxe::render_enrollment_pending()
+                }
             }
         }
-        Ok(None) => match register_pending_client(&state, parsed, remote.ip()).await {
-            Ok(_) => crate::infrastructure::pxe::render_enrollment_pending(),
-            Err(error) => {
-                error!("failed to register enrolled client: {error:#}");
-                crate::infrastructure::pxe::render_enrollment_pending()
+        Ok(None) => {
+            // Unknown machines may only self-register inside an
+            // admin-opened window. Outside it they cannot distinguish
+            // "closed" from "nonexistent" beyond the reboot loop.
+            let window_open = {
+                let settings = state.settings.read().await;
+                enrollment_window_open(
+                    settings.enrollment.open_until,
+                    chrono::Utc::now().timestamp(),
+                )
+            };
+            if !window_open {
+                tracing::info!(
+                    mac = %parsed.as_str(),
+                    "rejected enrollment outside the registration window"
+                );
+                crate::infrastructure::pxe::render_enrollment_closed()
+            } else {
+                match register_pending_client(&state, parsed, remote.ip()).await {
+                    Ok(_) => crate::infrastructure::pxe::render_enrollment_pending(),
+                    Err(error) => {
+                        error!("failed to register enrolled client: {error:#}");
+                        crate::infrastructure::pxe::render_enrollment_pending()
+                    }
+                }
             }
-        },
+        }
         Err(error) => {
             error!("failed to look up client during enrollment: {error:#}");
             crate::infrastructure::pxe::render_enrollment_pending()
@@ -306,5 +354,21 @@ mod tests {
     fn auto_names_are_derived_from_the_mac_address() {
         let mac = MacAddress::parse("AA:BB:CC:DD:EE:FF").expect("MAC should parse");
         assert_eq!(client_name_from_mac(&mac), "client-aabbccddeeff");
+    }
+
+    #[test]
+    fn enrollment_window_is_closed_without_a_deadline() {
+        assert!(!enrollment_window_open(None, 1_700_000_000));
+    }
+
+    #[test]
+    fn enrollment_window_is_open_before_the_deadline() {
+        assert!(enrollment_window_open(Some(1_700_000_600), 1_700_000_000));
+    }
+
+    #[test]
+    fn enrollment_window_expires_at_the_deadline() {
+        assert!(!enrollment_window_open(Some(1_700_000_600), 1_700_000_600));
+        assert!(!enrollment_window_open(Some(1_700_000_600), 1_700_000_601));
     }
 }

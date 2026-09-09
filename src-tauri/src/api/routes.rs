@@ -48,9 +48,9 @@ use crate::api::handlers::{
     ssh::{execute_ssh_command, get_windows_system_info, test_ssh_connection},
     system::{
         apply_network_settings, check_dependencies, check_privileged_access, clear_cache,
-        detect_server_network, get_interface_ip, get_network_interfaces, get_ram_usage,
-        get_server_status, get_settings, get_system_info, get_zfs_arcstat, initialize_server,
-        save_settings, setup_privileged_access,
+        close_enrollment, detect_server_network, get_interface_ip, get_network_interfaces,
+        get_ram_usage, get_server_status, get_settings, get_system_info, get_zfs_arcstat,
+        initialize_server, open_enrollment, save_settings, setup_privileged_access,
     },
     system_reconciliation::inspect_system_reconciliation_handler,
     users::{create_user, delete_user, get_user, list_users, update_user, update_user_password},
@@ -203,6 +203,8 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route("/api/system/network/detect", post(detect_server_network))
         .route("/api/system/network/apply", post(apply_network_settings))
         .route("/api/system/settings", get(get_settings).put(save_settings))
+        .route("/api/system/enrollment/open", post(open_enrollment))
+        .route("/api/system/enrollment/close", post(close_enrollment))
         .route(
             "/api/system/privileged-access",
             get(check_privileged_access).post(setup_privileged_access),

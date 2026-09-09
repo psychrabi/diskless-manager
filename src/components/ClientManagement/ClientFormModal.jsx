@@ -41,9 +41,9 @@ const ClientFormModal = (props) => (
   <ClientFormModalContent key={`${props.client?.id ?? "new"}:${props.isOpen}`} {...props} />
 );
 
-// Explicit game defaults: a new client starts with the switch off and an
-// empty selection instead of `undefined` values.
-const gameDefaults = { use_game_disk: false, game_disks: [] };
+// Explicit form defaults: a new client starts enabled, with the game
+// switch off and an empty selection, instead of `undefined` values.
+const formDefaults = { enabled: true, use_game_disk: false, game_disks: [] };
 
 const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) => {
   const { success, error } = useToastStore();
@@ -64,12 +64,12 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
   } = useForm({
     mode: "onChange",
     resolver: zodResolver(clientSchema),
-    defaultValues: { ...gameDefaults, ...client },
+    defaultValues: { ...formDefaults, ...client },
   });
 
   useEffect(() => {
     if (isOpen && client) {
-      reset({ ...gameDefaults, ...client });
+      reset({ ...formDefaults, ...client });
     }
   }, [client, isOpen, reset]);
 
@@ -200,6 +200,7 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
           keep_writeback: data.keep_writeback,
           use_game_disk: data.use_game_disk,
           game_disks: data.game_disks || [],
+          enabled: data.enabled ?? true,
         });
         success("Client Management", `Client ${data.name} added successfully.`);
       } else {
@@ -212,6 +213,7 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
           keep_writeback: data.keep_writeback,
           use_game_disk: data.use_game_disk,
           game_disks: data.game_disks || [],
+          enabled: data.enabled ?? true,
         });
         success(
           "Client Management",
@@ -234,6 +236,11 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
   const keepWriteback = useWatch({
     control,
     name: "keep_writeback",
+  });
+
+  const clientEnabled = useWatch({
+    control,
+    name: "enabled",
   });
 
   const useGameDisk = useWatch({
@@ -400,6 +407,30 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
               <FieldError>{errors.snapshot?.message}</FieldError>
             </FieldContent>
           </Field>
+
+          <div>
+            <div className="flex items-start gap-3">
+              <Checkbox
+                id="client-enabled"
+                checked={clientEnabled ?? true}
+                onCheckedChange={(checked) =>
+                  setValue("enabled", Boolean(checked), {
+                    shouldValidate: true,
+                    shouldDirty: true,
+                  })
+                }
+              />
+              <Label htmlFor="client-enabled" className="flex cursor-pointer flex-col items-start gap-1">
+                <span className="font-medium">
+                  Enabled
+                </span>
+                <span className="text-xs text-muted-foreground text-wrap">
+                  If unchecked, this machine is denied at boot even when it is
+                  fully provisioned
+                </span>
+              </Label>
+            </div>
+          </div>
 
           <div>
             <div className="flex items-start gap-3">

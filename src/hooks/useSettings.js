@@ -199,6 +199,10 @@ export const useSettings = () => {
       section: "client_lifecycle", config, toastTitle: "Client Reset Settings",
       successMessage: "Offline reset delay saved",
     }),
+    updateEnrollment: (config) => updateSettingsSection({
+      section: "enrollment", config, toastTitle: "Enrollment Settings",
+      successMessage: "Enrollment window length saved",
+    }),
     updateDhcp,
     updateTftp,
     updateHttp,

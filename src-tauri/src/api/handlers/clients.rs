@@ -1367,6 +1367,70 @@ pub async fn update_client(
     let game_changed =
         game_configuration_changed(existing_game_flag, &stored_game_disks, &request);
 
+    // Boot-menu lifecycle for the enabled switch.
+    //
+    // Provisioned clients boot through their static per-client iPXE menu
+    // and never consult the enrollment endpoint, so flipping `enabled`
+    // must add/remove that file: removal denies the next boot (the
+    // dispatcher falls through to enrollment, which denies disabled
+    // machines), regeneration restores it.
+    let will_be_enabled = request.enabled.unwrap_or(existing_client.enabled);
+    if existing_client.enabled && !will_be_enabled {
+        // Remove BEFORE persisting: if the file cannot go, the record
+        // must stay enabled so disk and database cannot disagree about
+        // whether this machine boots.
+        crate::infrastructure::dhcp::remove_client_ipxe_menu(&existing_client.mac)
+            .await
+            .map_err(|error| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        status: 500,
+                        error: format!(
+                            "Failed to remove boot menu for '{}': {}",
+                            existing_client.name, error
+                        ),
+                    }),
+                )
+            })?;
+    } else if !existing_client.enabled && will_be_enabled {
+        // Best-effort: a missing menu self-heals on the next boot via the
+        // enrollment redirect path, so regeneration must not fail saves.
+        if let Some(target_iqn) = existing_client
+            .target_iqn
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let server_ip = {
+                let next = settings.dhcp.next_server_ip.trim();
+                if next.is_empty() {
+                    settings.server.ip_address.trim().to_string()
+                } else {
+                    next.to_string()
+                }
+            };
+            let reservation = crate::infrastructure::dhcp::BootReservation {
+                client_name: existing_client.name.clone(),
+                mac: existing_client.mac.clone(),
+                ip: existing_client.ip.clone(),
+                target_iqn: target_iqn.to_string(),
+                server_ip,
+            };
+            if let Err(error) = crate::infrastructure::dhcp::publish_client_ipxe(
+                &reservation,
+            )
+            .await
+            {
+                tracing::warn!(
+                    "Failed to regenerate boot menu for client '{}': {}",
+                    existing_client.name,
+                    error
+                );
+            }
+        }
+    }
+
     if !boot_changed && !game_changed {
         request.block_store = existing_client.block_store.clone();
         request.block_device = existing_client.block_device.clone();
@@ -1719,6 +1783,19 @@ pub async fn delete_client(
     {
         tracing::warn!(
             "Failed to completely remove game clones for client '{}': {}",
+            client.name,
+            error
+        );
+    }
+
+    // Remove the static boot menu: without it the dispatcher falls through
+    // to enrollment, which denies deleted (unknown) machines. Otherwise a
+    // deleted client keeps booting from its orphaned menu indefinitely.
+    if let Err(error) =
+        crate::infrastructure::dhcp::remove_client_ipxe_menu(&client.mac).await
+    {
+        tracing::warn!(
+            "Failed to remove boot menu for deleted client '{}': {}",
             client.name,
             error
         );

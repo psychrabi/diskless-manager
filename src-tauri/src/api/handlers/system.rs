@@ -305,6 +305,23 @@ pub async fn save_settings(
 
     // Persist settings only. Rewriting cached client rows here could resurrect
     // deleted clients or overwrite their persistence choice.
+    persist_settings_snapshot(&state, &new_config, &settings).await?;
+    *state.settings.write().await = settings.clone();
+
+    Ok(Json(
+        serde_json::json!({ "message": "Settings saved successfully" }),
+    ))
+}
+
+/// Write settings to the database, the global config, and the TOML mirror.
+///
+/// Shared by full settings saves and surgical mutations (e.g. enrollment
+/// window open/close) so every path persists identically.
+async fn persist_settings_snapshot(
+    state: &AppState,
+    new_config: &crate::types::AppConfig,
+    settings: &crate::core::config::Settings,
+) -> Result<(), StatusCode> {
     let mut transaction = state
         .db_pool
         .begin()
@@ -320,18 +337,91 @@ pub async fn save_settings(
         .commit()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    crate::config::set_config(&new_config);
-    *state.settings.write().await = settings.clone();
+    crate::config::set_config(new_config);
 
     // Also persist to config.toml for redundancy and manual editing support
     let toml_path = state.config_path.with_extension("toml");
-    if state.settings.read().await.save(&toml_path).is_err() {
+    if settings.save(&toml_path).is_err() {
         // Log but don't fail if TOML save fails
     }
 
-    Ok(Json(
-        serde_json::json!({ "message": "Settings saved successfully" }),
-    ))
+    Ok(())
+}
+
+/// Request body for opening the enrollment window.
+#[derive(Debug, serde::Deserialize)]
+pub struct OpenEnrollmentRequest {
+    /// Window length in minutes. Defaults to the configured
+    /// `enrollment.window_minutes`. Clamped to 1..=60.
+    pub minutes: Option<u32>,
+}
+
+/// Open the PXE enrollment window for self-registering unknown machines.
+///
+/// Admitted machines land disabled (pool) until enabled and provisioned.
+/// There is no permanent auto-register: the window always expires.
+pub async fn open_enrollment(
+    State(state): State<AppState>,
+    Json(request): Json<OpenEnrollmentRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let _client_guard = state.client_mutations.lock().await;
+
+    let default_minutes = state.settings.read().await.enrollment.window_minutes;
+    let minutes = request.minutes.unwrap_or(default_minutes).clamp(1, 60);
+    let open_until = chrono::Utc::now().timestamp() + i64::from(minutes) * 60;
+
+    let settings = {
+        let mut guard = state.settings.write().await;
+        guard.enrollment.open_until = Some(open_until);
+        guard.clone()
+    };
+
+    let current_config = crate::config::get_config();
+    let mut new_config = current_config;
+    new_config.settings = serde_json::to_value(&settings)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    persist_settings_snapshot(&state, &new_config, &settings).await?;
+    *state.settings.write().await = settings.clone();
+
+    tracing::info!(
+        open_until = open_until,
+        minutes = minutes,
+        "enrollment window opened"
+    );
+    Ok(Json(serde_json::json!({
+        "message": format!("Enrollment opened for {} minutes", minutes),
+        "open_until": open_until,
+        "window_minutes": minutes,
+    })))
+}
+
+/// Close the PXE enrollment window immediately.
+///
+/// Unknown machines are denied from this point on; already-registered
+/// (even pending) records are unaffected.
+pub async fn close_enrollment(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let _client_guard = state.client_mutations.lock().await;
+
+    let settings = {
+        let mut guard = state.settings.write().await;
+        guard.enrollment.open_until = None;
+        guard.clone()
+    };
+
+    let current_config = crate::config::get_config();
+    let mut new_config = current_config;
+    new_config.settings = serde_json::to_value(&settings)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    persist_settings_snapshot(&state, &new_config, &settings).await?;
+    *state.settings.write().await = settings.clone();
+
+    tracing::info!("enrollment window closed");
+    Ok(Json(serde_json::json!({
+        "message": "Enrollment closed",
+        "open_until": serde_json::Value::Null,
+    })))
 }
 
 pub async fn setup_privileged_access() -> Result<Json<serde_json::Value>, StatusCode> {

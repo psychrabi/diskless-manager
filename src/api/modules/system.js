@@ -41,6 +41,19 @@ export async function saveSettings(settings) {
   });
 }
 
+export async function openEnrollment(minutes) {
+  return apiRequest("/api/system/enrollment/open", {
+    method: "POST",
+    body: JSON.stringify({ minutes }),
+  });
+}
+
+export async function closeEnrollment() {
+  return apiRequest("/api/system/enrollment/close", {
+    method: "POST",
+  });
+}
+
 export async function checkPrivilegedAccess() {
   return apiRequest("/api/system/privileged-access");
 }

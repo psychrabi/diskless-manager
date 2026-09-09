@@ -105,6 +105,47 @@ reboot
     .to_string()
 }
 
+/// iPXE response served to a client whose record is disabled.
+///
+/// A disabled client must never boot, even if it is fully provisioned:
+/// this is the binding gate that e.g. decommissioned or quarantined
+/// machines hit. Polls slowly so re-enabling takes effect without hurry.
+#[must_use]
+pub fn render_enrollment_disabled() -> String {
+    r##"#!ipxe
+echo ##########################################################
+echo # Diskless Manager - client disabled                   #
+echo #                                                        #
+echo # This machine is disabled by an administrator.         #
+echo # Booting is not permitted.                             #
+echo ##########################################################
+sleep 60
+reboot
+"##
+    .to_string()
+}
+
+/// iPXE response served to an unknown client while the registration
+/// window is closed.
+///
+/// Deliberately reveals nothing about when enrollment opens: unknown
+/// machines outside an admin-opened window cannot distinguish "closed"
+/// from "nonexistent" beyond this message.
+#[must_use]
+pub fn render_enrollment_closed() -> String {
+    r##"#!ipxe
+echo ##########################################################
+echo # Diskless Manager - enrollment closed                  #
+echo #                                                        #
+echo # This machine is not registered.                       #
+echo # Ask an administrator to open enrollment and retry.    #
+echo ##########################################################
+sleep 60
+reboot
+"##
+    .to_string()
+}
+
 #[must_use]
 pub fn render_client_script_with_mode(
     client_name: &str,
@@ -328,6 +369,16 @@ mod tests {
     fn slug_is_deterministic_and_safe() {
         assert_eq!(client_script_slug("PC 001/West"), "pc_001_west");
         assert_eq!(client_script_path("PC 001/West"), "pc_001_west.ipxe");
+    }
+
+    #[test]
+    fn deny_scripts_reboot_loop_without_booting() {
+        for script in [render_enrollment_disabled(), render_enrollment_closed()] {
+            assert!(script.starts_with("#!ipxe"), "must be an iPXE script");
+            assert!(script.contains("reboot"), "deny scripts must loop, never boot");
+            assert!(!script.contains("sanboot"), "deny scripts must not boot");
+            assert!(!script.contains("chain "), "deny scripts must not chain");
+        }
     }
 
     #[test]

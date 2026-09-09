@@ -6,6 +6,8 @@ pub struct Settings {
     #[serde(default)]
     pub client_lifecycle: ClientLifecycleConfig,
     #[serde(default)]
+    pub enrollment: EnrollmentConfig,
+    #[serde(default)]
     pub server: ServerConfig,
     #[serde(default)]
     pub dhcp: DhcpConfig,
@@ -34,6 +36,32 @@ impl Default for ClientLifecycleConfig {
     fn default() -> Self {
         Self {
             non_persistent_reset_delay_minutes: 5,
+        }
+    }
+}
+
+/// Self-registration of unknown PXE clients.
+///
+/// Unknown MACs may only self-register while a registration window is
+/// open. There is deliberately no permanent auto-register: an admin
+/// opens the window for a bounded time, machines admitted during it
+/// appear disabled (pool) until enabled and provisioned.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EnrollmentConfig {
+    /// Default window length in minutes when an admin opens enrollment.
+    /// Clamped to 1..=60 on use.
+    pub window_minutes: u32,
+    /// Unix timestamp until which self-registration is allowed.
+    /// `None` means the window is closed.
+    pub open_until: Option<i64>,
+}
+
+impl Default for EnrollmentConfig {
+    fn default() -> Self {
+        Self {
+            window_minutes: 15,
+            open_until: None,
         }
     }
 }
