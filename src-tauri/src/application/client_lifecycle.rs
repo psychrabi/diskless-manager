@@ -84,6 +84,9 @@ fn storage_spec(client: &Client, prefix: &str) -> Result<ClientStorageSpec> {
             .unwrap_or_else(|| format!("{prefix}:client.{}", client.name.trim().to_lowercase())),
         lun: 0,
         use_game_disk: client.use_game_disk.unwrap_or(false),
+        // Boot-only spec: game clones are reset separately with the
+        // resolved selection in the Reset branch below.
+        game_disks: Vec::new(),
     })
 }
 
@@ -262,6 +265,35 @@ async fn process(state: &AppState, client: &Client) -> Result<()> {
                     sqlx::query("UPDATE client_offline_resets SET completed = 1, failures = 0, last_error = NULL, operation = ? WHERE client_id = ?")
                         .bind(serde_json::to_string(&operation)?).bind(&client.id).execute(&state.db_pool).await?;
                     tracing::info!(client_id = %client.id, "non-persistent clone reset completed");
+                    // Game clones follow the boot image lifetime: reset
+                    // them now for non-persistent clients. Super clients
+                    // never reach this branch (`eligible` is false when
+                    // `keep_writeback` is set), so their clones persist.
+                    if client.use_game_disk.unwrap_or(false) {
+                        match crate::core::reconciliation::resolved_game_selection(
+                            &state.db_pool,
+                            &client.id,
+                            true,
+                        )
+                        .await
+                        {
+                            Ok(masters) => {
+                                if let Err(error) = state.application.storage.reset_game_clones(
+                                    &client.id,
+                                    &target,
+                                    &masters,
+                                ) {
+                                    // The boot reset already committed; game
+                                    // clones heal on the next ensure. Never
+                                    // fail a boot reset over games.
+                                    tracing::error!(client_id = %client.id, %error, "game clone reset failed; will retry on next ensure");
+                                }
+                            }
+                            Err(error) => {
+                                tracing::error!(client_id = %client.id, %error, "failed to resolve game selection for reset");
+                            }
+                        }
+                    }
                 }
                 Err(error) => {
                     sqlx::query("UPDATE client_offline_resets SET failures = failures + 1, retry_after = ?, last_error = ? WHERE client_id = ?")

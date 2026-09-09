@@ -160,15 +160,7 @@ impl DhcpService {
         let service = crate::platform::detect().dhcp_service();
         let running = is_systemd_service_running(service).await?;
         let pid = get_service_pid(service).await?;
-        Ok(ServiceStatus {
-            running,
-            pid,
-            message: if running {
-                "DHCP server is running".to_string()
-            } else {
-                "DHCP server is not running".to_string()
-            },
-        })
+        Ok(ServiceStatus { running, pid })
     }
 
     pub async fn generate_client_configs(&self) -> anyhow::Result<()> {
@@ -477,29 +469,6 @@ fn validate_boot_filename(value: &str) -> anyhow::Result<()> {
         anyhow::bail!("boot filename must be a safe relative filename: {value:?}");
     }
     Ok(())
-}
-
-#[expect(
-    dead_code,
-    reason = "Utility function kept for potential future DHCP network calculations"
-)]
-fn calculate_network(ip: &str, netmask: &str) -> anyhow::Result<String> {
-    let ip_parts: Vec<u8> = ip
-        .split('.')
-        .map(|s| s.parse())
-        .collect::<Result<Vec<_>, _>>()?;
-    let mask_parts: Vec<u8> = netmask
-        .split('.')
-        .map(|s| s.parse())
-        .collect::<Result<Vec<_>, _>>()?;
-
-    let network: Vec<String> = ip_parts
-        .iter()
-        .zip(mask_parts.iter())
-        .map(|(ip, mask)| (ip & mask).to_string())
-        .collect();
-
-    Ok(network.join("."))
 }
 
 #[cfg(test)]

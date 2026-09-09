@@ -1,9 +1,6 @@
 use anyhow::{Context, Result};
 
-use super::{
-    provider::{ZfsProvider, ZfsSnapshotInfo},
-    ZfsCommand,
-};
+use super::{provider::ZfsSnapshotInfo, ZfsCommand};
 
 #[derive(Debug, Clone)]
 pub struct ZfsSnapshotOperations {
@@ -92,56 +89,6 @@ impl ZfsSnapshotOperations {
     }
 }
 
-impl ZfsProvider for ZfsSnapshotOperations {
-    fn exists(&self, name: &str) -> Result<bool> {
-        Ok(self.command.check(["zfs", "list", "-H", name]))
-    }
-
-    fn dataset(&self, _name: &str) -> Result<Option<super::provider::ZfsDatasetInfo>> {
-        Ok(None)
-    }
-
-    fn list_datasets(&self, _root: &str) -> Result<Vec<super::provider::ZfsDatasetInfo>> {
-        Ok(Vec::new())
-    }
-
-    fn list_snapshots(&self, root: &str) -> Result<Vec<ZfsSnapshotInfo>> {
-        self.list(root)
-    }
-
-    fn create_dataset(&self, _dataset: &str, _properties: &[(&str, &str)]) -> Result<()> {
-        anyhow::bail!("dataset creation must use ZfsDatasetOperations")
-    }
-
-    fn create_volume(
-        &self,
-        _volume: &str,
-        _size: &str,
-        _properties: &[(&str, &str)],
-    ) -> Result<()> {
-        anyhow::bail!("volume creation must use ZfsVolumeOperations")
-    }
-
-    fn create_snapshot(&self, dataset: &str, snapshot: &str) -> Result<()> {
-        self.create(dataset, snapshot)
-    }
-
-    fn clone_snapshot(&self, _snapshot: &str, _destination: &str) -> Result<()> {
-        anyhow::bail!("clone operations must use ZfsCloneOperations")
-    }
-
-    fn destroy(&self, name: &str) -> Result<()> {
-        self.command.execute(["zfs", "destroy", name])
-    }
-
-    fn get_property(&self, property: &str, dataset: &str) -> Result<Option<String>> {
-        self.command.get_property(property, dataset)
-    }
-
-    fn set_property(&self, property: &str, value: &str, dataset: &str) -> Result<()> {
-        self.command.set_property(property, value, dataset)
-    }
-}
 #[cfg(test)]
 mod tests {
     use super::*;

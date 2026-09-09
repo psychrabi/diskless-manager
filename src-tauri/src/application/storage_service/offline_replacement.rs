@@ -260,6 +260,7 @@ mod tests {
             target_iqn: "iqn.test:pc001".into(),
             lun: 0,
             use_game_disk: false,
+            game_disks: Vec::new(),
         });
         (service, disks, target, operation)
     }

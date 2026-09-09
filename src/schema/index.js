@@ -96,8 +96,3 @@ export const imageSchema = z.object({
   format: z.enum(["raw", "qcow2"]).optional().default("raw"),
   description: z.string().optional(),
 });
-
-export const cloneSchema = z.object({
-  image_id: z.string().min(1, "Image ID is required"),
-  name: z.string().min(1, "Image name is required"),
-});

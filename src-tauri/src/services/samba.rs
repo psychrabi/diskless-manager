@@ -13,16 +13,6 @@ pub struct SambaService {
 }
 
 impl SambaService {
-    #[expect(
-        dead_code,
-        reason = "Constructed directly by ServiceManager::new, not by external callers"
-    )]
-    pub fn new(settings: Settings) -> Self {
-        Self {
-            settings: Arc::new(settings),
-        }
-    }
-
     pub async fn start(&self) -> anyhow::Result<()> {
         // Create share directory if it doesn't exist using elevated privileges
         let share_path = &self.settings.samba.share_path;
@@ -72,22 +62,7 @@ impl SambaService {
             None
         };
 
-        Ok(ServiceStatus {
-            running,
-            pid,
-            message: if running {
-                format!(
-                    "Samba server is running ({} + {})",
-                    samba_services[0], samba_services[1]
-                )
-            } else if first_running {
-                format!("Only {} is running", samba_services[0])
-            } else if second_running {
-                format!("Only {} is running", samba_services[1])
-            } else {
-                "Samba server is not running".to_string()
-            },
-        })
+        Ok(ServiceStatus { running, pid })
     }
 
     pub async fn get_config(&self) -> anyhow::Result<String> {

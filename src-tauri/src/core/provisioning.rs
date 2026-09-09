@@ -359,6 +359,9 @@ pub async fn add_client_provisioning(
         lun: 0,
 
         use_game_disk: use_game_disk.unwrap_or(false),
+
+        // Legacy provisioning path: no per-client game selection.
+        game_disks: Vec::new(),
     };
 
     let (_storage, iscsi_result) = match state

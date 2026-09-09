@@ -7,7 +7,3 @@ export async function getDefaultImageOverview() {
 export async function getClientOverview() {
   return apiRequest("/api/dashboard/clients");
 }
-
-export async function getClientIOMetrics() {
-  return apiRequest("/api/dashboard/clients/io-metrics");
-}

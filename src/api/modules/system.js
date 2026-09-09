@@ -22,10 +22,6 @@ export async function getServerStatus() {
   return apiRequest("/api/system/status");
 }
 
-export async function initializeServer() {
-  return apiRequest("/api/system/initialize", { method: "POST" });
-}
-
 export async function checkDependencies() {
   return apiRequest("/api/system/dependencies");
 }

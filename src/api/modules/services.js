@@ -4,10 +4,6 @@ export async function listServices() {
   return apiRequest("/api/services");
 }
 
-export async function getServiceStatus(name) {
-  return apiRequest(`/api/services/${name}/status`);
-}
-
 export async function startService(name) {
   return apiRequest(`/api/services/${name}/start`, { method: "POST" });
 }
@@ -32,13 +28,6 @@ export async function stopAllServices() {
 
 export async function restartAllServices() {
   return apiRequest("/api/services/all/restart", { method: "POST" });
-}
-
-export async function configureServiceConfig(name, config) {
-  return apiRequest(`/api/services/${name}/configure`, {
-    method: "POST",
-    body: JSON.stringify(config),
-  });
 }
 
 export async function installService(service) {

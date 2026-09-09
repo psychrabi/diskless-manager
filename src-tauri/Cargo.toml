@@ -31,10 +31,6 @@ dirs = "6.0.0"
 async-process = "2.4.0"
 futures = "0.3.31"
 tokio = { version = "1.47.1", features = ["full"] }
-sysinfo = { version = "0.36.1", default-features = false, features = [
-    "serde",
-    "system",
-] }
 jsonwebtoken = "9.3.0"
 bcrypt = "0.15.0"
 lazy_static = "1.4.0"
@@ -47,7 +43,7 @@ tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "ansi"] }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1.0.100"
-sqlx = { version = "0.8.6", features = ["runtime-tokio", "postgres", "sqlite"] }
+sqlx = { version = "0.8.6", features = ["runtime-tokio", "sqlite"] }
 hostname = "0.4.2"
 num_cpus = "1.17.0"
 uuid = { version = "1.19.0", features = ["v4", "serde"] }
@@ -59,9 +55,7 @@ tauri-plugin-shell = "2"
 axum = { version = "0.8.4", features = ["ws", "multipart"] }
 tower-http = { version = "0.6", features = ["cors", "trace", "timeout"] }
 tower = { version = "0.5.2", features = ["limit"] }
-tokio-tungstenite = "0.23"
 ssh2 = "0.9"
-parking_lot = "0.12"
 tempfile = "3"
 
 

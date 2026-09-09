@@ -17,13 +17,6 @@ pub struct HttpService {
 }
 
 impl HttpService {
-    #[expect(dead_code, reason = "Constructed directly by ServiceManager::new")]
-    pub fn new(settings: Settings) -> Self {
-        Self {
-            settings: Arc::new(settings),
-        }
-    }
-
     pub async fn generate_config(&self) -> anyhow::Result<()> {
         let distro = crate::platform::detect();
         let root_dir = PathBuf::from(&self.settings.http.root_dir);
@@ -218,14 +211,6 @@ impl HttpService {
             None
         };
 
-        Ok(ServiceStatus {
-            running,
-            pid,
-            message: if running {
-                format!("HTTP server is running on port {}", self.settings.http.port)
-            } else {
-                "HTTP server is not running".to_string()
-            },
-        })
+        Ok(ServiceStatus { running, pid })
     }
 }

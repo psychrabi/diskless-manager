@@ -350,7 +350,10 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
                 id="keep-writeback"
                 checked={Boolean(keepWriteback)}
                 onCheckedChange={(checked) =>
-                  setValue("keep_writeback", Boolean(checked), { shouldValidate: true })
+                  setValue("keep_writeback", Boolean(checked), {
+                    shouldValidate: true,
+                    shouldDirty: true,
+                  })
                 }
               />
               <Label htmlFor="keep-writeback" className="flex cursor-pointer flex-col items-start gap-1">
@@ -371,7 +374,10 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
                 id="use-game-disk"
                 checked={Boolean(useGameDisk)}
                 onCheckedChange={(checked) =>
-                  setValue("use_game_disk", Boolean(checked), { shouldValidate: true })
+                  setValue("use_game_disk", Boolean(checked), {
+                    shouldValidate: true,
+                    shouldDirty: true,
+                  })
                 }
               />
               <Label htmlFor="use-game-disk" className="flex cursor-pointer flex-col items-start gap-1">

@@ -51,10 +51,15 @@ pub struct UpdateClientRequest {
     pub snapshot: Option<String>,
     pub keep_writeback: Option<bool>,
     pub use_game_disk: Option<bool>,
+    /// Explicit per-client game master selection. `None` keeps the stored
+    /// selection; `Some` replaces it wholesale.
+    pub game_disks: Option<Vec<String>>,
     pub enabled: Option<bool>,
     pub block_store: Option<String>,
     pub block_device: Option<String>,
     pub target_iqn: Option<String>,
+    /// Writeback dataset. Set by storage provisioning; preserved otherwise.
+    pub writeback: Option<String>,
     pub action: Option<String>,
     pub make_super: Option<bool>,
 }
@@ -358,6 +363,11 @@ impl ClientManager {
         client.block_store = req.block_store;
         client.target_iqn = req.target_iqn;
         client.block_device = req.block_device;
+        // Only overwrite when the request carries a value: partial updates
+        // (rename, IP change) must not wipe the persisted writeback.
+        if req.writeback.is_some() {
+            client.writeback = req.writeback;
+        }
         if let Some(keep_writeback) = req.keep_writeback {
             client.keep_writeback = Some(keep_writeback);
         }

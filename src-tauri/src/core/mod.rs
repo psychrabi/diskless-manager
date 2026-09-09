@@ -7,4 +7,3 @@ pub mod provisioning_transaction;
 pub mod reconciliation;
 pub mod service;
 pub mod system_reconciliation;
-pub mod version;

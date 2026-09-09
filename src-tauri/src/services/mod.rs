@@ -10,7 +10,6 @@ pub use nfs::NfsService;
 pub use samba::SambaService;
 pub use tftp::TftpService;
 
-use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::Arc;
 
@@ -25,12 +24,6 @@ use sqlx::SqlitePool;
 pub struct ServiceStatus {
     pub running: bool,
     pub pid: Option<u32>,
-
-    #[expect(
-        dead_code,
-        reason = "Part of ServiceStatus struct, used for debug display"
-    )]
-    pub message: String,
 }
 
 pub struct ServiceManager {
@@ -139,15 +132,7 @@ impl ServiceManager {
         let running = is_systemd_service_running(service).await?;
         let pid = get_service_pid(service).await?;
 
-        Ok(ServiceStatus {
-            running,
-            pid,
-            message: if running {
-                "iSCSI target service is active".to_string()
-            } else {
-                "iSCSI target service is not active".to_string()
-            },
-        })
+        Ok(ServiceStatus { running, pid })
     }
 
     // ========================================================================
@@ -246,23 +231,6 @@ impl ServiceManager {
     // STATUS
     // ========================================================================
 
-    #[expect(
-        dead_code,
-        reason = "Used for debugging - can be exposed via API later"
-    )]
-    pub async fn status_all(&self) -> anyhow::Result<HashMap<String, ServiceStatus>> {
-        let mut statuses = HashMap::new();
-
-        statuses.insert("dhcp".to_string(), self.dhcp.status().await?);
-        statuses.insert("tftp".to_string(), self.tftp.status().await?);
-        statuses.insert("iscsi".to_string(), self.iscsi_status().await?);
-        statuses.insert("nfs".to_string(), self.nfs.status().await?);
-        statuses.insert("http".to_string(), self.http.status().await?);
-        statuses.insert("samba".to_string(), self.samba.status().await?);
-
-        Ok(statuses)
-    }
-
     // ========================================================================
     // INDIVIDUAL SERVICE CONTROL
     // ========================================================================
@@ -318,13 +286,6 @@ impl ServiceManager {
     // ========================================================================
     // DHCP HELPERS
     // ========================================================================
-
-    #[expect(dead_code, reason = "Utility function for DHCP-only regeneration")]
-    pub async fn regenerate_dhcp_config(&self) -> anyhow::Result<()> {
-        self.dhcp.generate_config().await?;
-        self.dhcp.validate_config().await?;
-        self.dhcp.reload().await
-    }
 
     // ========================================================================
     // SERVICE CONFIGURATION

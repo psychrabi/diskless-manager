@@ -138,6 +138,9 @@ fn build_storage_spec(
                 target_iqn,
                 lun: 0,
                 use_game_disk,
+                // Resolved selection is filled in by callers that manage
+                // game disks (create/update); otherwise empty.
+                game_disks: Vec::new(),
             })
         }
 
@@ -149,6 +152,7 @@ fn build_storage_spec(
             target_iqn,
             lun: 0,
             use_game_disk,
+            game_disks: Vec::new(),
         }),
     }
 }
@@ -172,11 +176,20 @@ fn preserve_persisted_target_iqn(spec: &mut ClientStorageSpec, client: &Client) 
 /// Convert application storage information into the legacy client fields
 /// stored in the clients table.
 fn apply_storage_to_update_request(request: &mut UpdateClientRequest, storage: &ClientStorage) {
-    request.block_store = Some(format!("/dev/zvol/{}", storage.dataset()));
+    // `block_store` is the LIO backstore NAME (reconciliation rebuilds LUN
+    // specs from it); the device path lives in `block_device`. Storing a
+    // device path here breaks repair, so never mix the two.
+    request.block_store = Some(storage.backstore().to_string());
 
     request.block_device = Some(storage.block_device().display().to_string());
 
     request.target_iqn = Some(storage.target_iqn().to_string());
+
+    // Persist the writeback dataset so inspection and repair can rebuild
+    // the spec. Only snapshot clones own a writeback dataset.
+    if matches!(storage.source, StorageSource::Snapshot(_)) {
+        request.writeback = Some(storage.dataset().to_string());
+    }
 }
 
 fn storage_configuration_changed(client: &Client, request: &UpdateClientRequest) -> bool {
@@ -189,9 +202,82 @@ fn storage_configuration_changed(client: &Client, request: &UpdateClientRequest)
             .as_deref()
             .is_some_and(|master| master != client.master)
         || request.snapshot != client.snapshot
+}
+
+/// Whether the game-disk configuration changed.
+///
+/// Game-only changes take a lightweight path that never touches the boot
+/// clone: the flag flipped, or an explicit selection differs from storage.
+fn game_configuration_changed(
+    existing_use_game_disk: bool,
+    stored_game_disks: &[String],
+    request: &UpdateClientRequest,
+) -> bool {
+    request
+        .use_game_disk
+        .is_some_and(|enabled| enabled != existing_use_game_disk)
         || request
-            .use_game_disk
-            .is_some_and(|enabled| enabled != client.use_game_disk.unwrap_or(false))
+            .game_disks
+            .as_ref()
+            .is_some_and(|selection| selection.as_slice() != stored_game_disks)
+}
+
+/// Replace a client's stored game master selection wholesale.
+async fn persist_game_selection(
+    pool: &sqlx::SqlitePool,
+    client_id: &str,
+    selection: &[String],
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    let mut transaction = pool.begin().await.map_err(|error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                status: 500,
+                error: error.to_string(),
+            }),
+        )
+    })?;
+    sqlx::query("DELETE FROM client_game_disks WHERE client_id = ?")
+        .bind(client_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    status: 500,
+                    error: error.to_string(),
+                }),
+            )
+        })?;
+    for master in selection {
+        sqlx::query(
+            "INSERT INTO client_game_disks (client_id, master_dataset) VALUES (?, ?)",
+        )
+        .bind(client_id)
+        .bind(master)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    status: 500,
+                    error: error.to_string(),
+                }),
+            )
+        })?;
+    }
+    transaction.commit().await.map_err(|error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                status: 500,
+                error: error.to_string(),
+            }),
+        )
+    })?;
+    Ok(())
 }
 
 /// Reconstruct the application-level storage object from the persisted

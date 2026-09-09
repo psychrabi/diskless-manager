@@ -2,11 +2,6 @@ use anyhow::{Context, Result};
 use std::fs;
 use std::path::PathBuf;
 
-use super::{
-    model::{IscsiTargetSpec, IscsiTargetState},
-    IscsiProvisioner,
-};
-
 /// Return the configfs file that tracks dynamic iSCSI sessions for a target.
 fn dynamic_sessions_path(target_iqn: &str) -> PathBuf {
     PathBuf::from(format!(
@@ -63,35 +58,6 @@ pub fn target_has_active_sessions(target_iqn: &str) -> Result<bool> {
         Ok(_) => confirmed_sessions_at(&dynamic_sessions_path(target_iqn)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(error).context("failed to inspect active iSCSI sessions"),
-    }
-}
-
-/// Reconciles desired iSCSI state with the actual LIO configuration.
-pub struct IscsiReconciler<P>
-where
-    P: IscsiProvisioner,
-{
-    provisioner: P,
-}
-
-impl<P> IscsiReconciler<P>
-where
-    P: IscsiProvisioner,
-{
-    pub fn new(provisioner: P) -> Self {
-        Self { provisioner }
-    }
-
-    pub fn inspect(&self, spec: &IscsiTargetSpec) -> Result<IscsiTargetState> {
-        self.provisioner.inspect_target(spec)
-    }
-
-    pub fn reconcile(&self, spec: &IscsiTargetSpec) -> Result<()> {
-        self.provisioner.reconcile(spec)
-    }
-
-    pub fn remove(&self, target_iqn: &str) -> Result<()> {
-        self.provisioner.remove_target(target_iqn)
     }
 }
 

@@ -74,16 +74,6 @@ async fn ensure_root_has_selinux_context(root: &str) {
 }
 
 impl TftpService {
-    #[expect(
-        dead_code,
-        reason = "Constructed directly by ServiceManager::new, not by external callers"
-    )]
-    pub fn new(settings: Settings) -> Self {
-        Self {
-            settings: Arc::new(settings),
-        }
-    }
-
     pub async fn generate_config(&self) -> anyhow::Result<()> {
         let distro = crate::platform::detect();
 
@@ -226,14 +216,6 @@ TFTP_OPTIONS="{}"
         let service = crate::platform::detect().tftp_service();
         let running = is_systemd_service_running(service).await?;
         let pid = get_service_pid(service).await?;
-        Ok(ServiceStatus {
-            running,
-            pid,
-            message: if running {
-                "TFTP server is running".to_string()
-            } else {
-                "TFTP server is not running".to_string()
-            },
-        })
+        Ok(ServiceStatus { running, pid })
     }
 }

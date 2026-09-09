@@ -1,9 +1,6 @@
 use anyhow::{bail, Context, Result};
 
-use super::{
-    provider::{ZfsDatasetInfo, ZfsProvider},
-    ZfsCommand,
-};
+use super::{provider::ZfsDatasetInfo, ZfsCommand};
 
 #[derive(Debug, Clone)]
 pub struct ZfsDatasetOperations {
@@ -34,14 +31,12 @@ impl ZfsDatasetOperations {
             available,
         })
     }
-}
 
-impl ZfsProvider for ZfsDatasetOperations {
-    fn exists(&self, name: &str) -> Result<bool> {
+    pub fn exists(&self, name: &str) -> Result<bool> {
         Ok(self.command.check(["zfs", "list", "-H", name]))
     }
 
-    fn dataset(&self, name: &str) -> Result<Option<ZfsDatasetInfo>> {
+    pub fn dataset(&self, name: &str) -> Result<Option<ZfsDatasetInfo>> {
         if !self.exists(name)? {
             return Ok(None);
         }
@@ -58,7 +53,7 @@ impl ZfsProvider for ZfsDatasetOperations {
         Ok(output.lines().find_map(Self::parse_dataset_line))
     }
 
-    fn list_datasets(&self, root: &str) -> Result<Vec<ZfsDatasetInfo>> {
+    pub fn list_datasets(&self, root: &str) -> Result<Vec<ZfsDatasetInfo>> {
         let output = self.command.execute_output([
             "zfs",
             "list",
@@ -77,16 +72,7 @@ impl ZfsProvider for ZfsDatasetOperations {
             .collect())
     }
 
-    fn list_snapshots(&self, _root: &str) -> Result<Vec<super::provider::ZfsSnapshotInfo>> {
-        /*
-         * Snapshot operations are implemented by ZfsSnapshotOperations.
-         *
-         * This method intentionally isn't duplicated here.
-         */
-        bail!("snapshot listing must use ZfsSnapshotOperations")
-    }
-
-    fn create_dataset(&self, dataset: &str, properties: &[(&str, &str)]) -> Result<()> {
+    pub fn create_dataset(&self, dataset: &str, properties: &[(&str, &str)]) -> Result<()> {
         if self.exists(dataset)? {
             return Ok(());
         }
@@ -105,7 +91,7 @@ impl ZfsProvider for ZfsDatasetOperations {
             .with_context(|| format!("failed to create ZFS dataset '{dataset}'"))
     }
 
-    fn create_volume(&self, volume: &str, size: &str, properties: &[(&str, &str)]) -> Result<()> {
+    pub fn create_volume(&self, volume: &str, size: &str, properties: &[(&str, &str)]) -> Result<()> {
         if self.exists(volume)? {
             bail!("ZFS volume already exists: {volume}");
         }
@@ -130,25 +116,17 @@ impl ZfsProvider for ZfsDatasetOperations {
             .with_context(|| format!("failed to create ZFS volume '{volume}'"))
     }
 
-    fn create_snapshot(&self, _dataset: &str, _snapshot: &str) -> Result<()> {
-        bail!("snapshot creation must use ZfsSnapshotOperations")
-    }
-
-    fn clone_snapshot(&self, _snapshot: &str, _destination: &str) -> Result<()> {
-        bail!("clone operations must use ZfsCloneOperations")
-    }
-
-    fn destroy(&self, name: &str) -> Result<()> {
+    pub fn destroy(&self, name: &str) -> Result<()> {
         self.command
             .execute(["zfs", "destroy", name])
             .with_context(|| format!("failed to destroy ZFS object '{name}'"))
     }
 
-    fn get_property(&self, property: &str, dataset: &str) -> Result<Option<String>> {
+    pub fn get_property(&self, property: &str, dataset: &str) -> Result<Option<String>> {
         self.command.get_property(property, dataset)
     }
 
-    fn set_property(&self, property: &str, value: &str, dataset: &str) -> Result<()> {
+    pub fn set_property(&self, property: &str, value: &str, dataset: &str) -> Result<()> {
         self.command.set_property(property, value, dataset)
     }
 }

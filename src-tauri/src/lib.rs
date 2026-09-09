@@ -3,14 +3,8 @@ pub mod client;
 mod config;
 mod disks;
 mod error;
-pub mod ipxe {
-    //! Compatibility export. New code should use `infrastructure::pxe`.
-    pub use crate::infrastructure::pxe::*;
-}
 mod license;
 pub mod metrics;
-mod middleware;
-mod service;
 pub mod types;
 
 pub mod application;
@@ -19,14 +13,9 @@ pub mod infrastructure;
 pub mod persistence;
 
 pub mod audit_logger;
-pub mod command_builder;
 mod commands;
-pub mod control_handler;
 pub mod core;
-pub mod error_logger;
-pub mod os_detector;
 pub mod platform;
-pub mod remote_desktop_launcher;
 mod services;
 pub mod ssh_executor;
 pub mod state;
@@ -41,10 +30,8 @@ use tauri::Manager;
 
 use state::AppState;
 
-// Legacy constants for backward compatibility - prefer using AppConfig
 const DHCP_CONFIG_PATH: &str = "/etc/dhcp/dhcpd.conf";
 const DHCP_CLIENTS_PATH: &str = "/etc/dhcp/clients.conf";
-pub const TFTP_AUTOEXEC_PATH: &str = "/srv/tftp/autoexec.ipxe";
 
 /// Resolve the canonical log file path used by both the Tauri GUI and CLI.
 pub fn log_file_path() -> std::path::PathBuf {

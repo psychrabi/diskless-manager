@@ -4,10 +4,6 @@ export async function listUsers() {
   return apiRequest("/api/users");
 }
 
-export async function getUser(userId) {
-  return apiRequest(`/api/users/${userId}`);
-}
-
 export async function createUser(userData) {
   return apiRequest("/api/users", {
     method: "POST",

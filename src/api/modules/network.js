@@ -4,12 +4,6 @@ export async function getNetworkInterfaces() {
   return apiRequest("/api/system/network/interfaces");
 }
 
-export async function getInterfaceIp(interfaceName) {
-  return apiRequest(
-    `/api/system/network/interfaces/${encodeURIComponent(interfaceName)}/ip`,
-  );
-}
-
 export async function detectServerNetwork() {
   return apiRequest("/api/system/network/detect", { method: "POST" });
 }

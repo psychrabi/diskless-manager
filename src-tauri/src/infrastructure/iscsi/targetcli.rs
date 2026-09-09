@@ -45,6 +45,12 @@ pub trait IscsiProvisioner: Send + Sync {
     /// Check whether an iSCSI target exists.
     fn target_exists(&self, target_iqn: &str) -> Result<bool>;
 
+    /// List every LUN currently attached to a target.
+    ///
+    /// Used to find stale attachments (e.g. deselected game disks) that
+    /// are not part of any desired spec.
+    fn list_target_luns(&self, target_iqn: &str) -> Result<Vec<IscsiLunState>>;
+
     /// Inspect actual target state.
     fn inspect_target(&self, spec: &IscsiTargetSpec) -> Result<IscsiTargetState>;
 
@@ -219,30 +225,46 @@ impl TargetCliProvisioner {
     }
 
     fn create_backstore(&self, lun: &IscsiLunSpec) -> Result<()> {
-        if self.backstore_exists(&lun.backstore)? {
-            return Ok(());
+        if !self.backstore_exists(&lun.backstore)? {
+            let device = lun.block_device.to_str().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "block device path is not valid UTF-8: {}",
+                    lun.block_device.display()
+                )
+            })?;
+
+            self.execute([
+                "targetcli",
+                "/backstores/block",
+                "create",
+                &lun.backstore,
+                device,
+            ])
+            .with_context(|| {
+                format!(
+                    "failed to create iSCSI backstore '{}' for '{}'",
+                    lun.backstore, device
+                )
+            })?;
         }
 
-        let device = lun.block_device.to_str().ok_or_else(|| {
-            anyhow::anyhow!(
-                "block device path is not valid UTF-8: {}",
-                lun.block_device.display()
-            )
-        })?;
+        if lun.readonly {
+            self.execute([
+                "targetcli",
+                &format!("/backstores/block/{}", lun.backstore),
+                "set",
+                "attribute",
+                "readonly=1",
+            ])
+            .with_context(|| {
+                format!(
+                    "failed to make iSCSI backstore '{}' read-only",
+                    lun.backstore
+                )
+            })?;
+        }
 
-        self.execute([
-            "targetcli",
-            "/backstores/block",
-            "create",
-            &lun.backstore,
-            device,
-        ])
-        .with_context(|| {
-            format!(
-                "failed to create iSCSI backstore '{}' for '{}'",
-                lun.backstore, device
-            )
-        })
+        Ok(())
     }
 
     fn remove_backstore(&self, backstore: &str) -> Result<()> {
@@ -497,8 +519,10 @@ impl IscsiProvisioner for TargetCliProvisioner {
                             lun.backstore
                         );
                     }
-                } else {
-                    self.create_backstore(lun)?;
+                }
+
+                self.create_backstore(lun)?;
+                if !existed {
                     created.backstores_created.push(lun.backstore.clone());
                 }
             }
@@ -617,6 +641,46 @@ impl IscsiProvisioner for TargetCliProvisioner {
 
         self.save()?;
         Ok(())
+    }
+
+    fn list_target_luns(&self, target_iqn: &str) -> Result<Vec<IscsiLunState>> {
+        if !self.target_exists(target_iqn)? {
+            return Ok(Vec::new());
+        }
+        let lun_output = self.output(["targetcli", &Self::lun_path(target_iqn), "ls"])?;
+        // Lines look like `lun1 [block_pc001 (/dev/zvol/diskless/PC001-disk)]`.
+        // Unparseable lines are skipped: listing must never fail a prune.
+        let mut luns = Vec::new();
+        for line in lun_output.lines() {
+            let Some(number) = line
+                .split_whitespace()
+                .find_map(|token| token.strip_prefix("lun"))
+                .and_then(|value| {
+                    value
+                        .trim_matches(|c: char| !c.is_ascii_digit())
+                        .parse::<u32>()
+                        .ok()
+                })
+            else {
+                continue;
+            };
+            let Some(backstore) = line
+                .split(['[', ']'])
+                .nth(1)
+                .and_then(|inner| inner.split_whitespace().next())
+                .filter(|name| !name.is_empty())
+            else {
+                continue;
+            };
+            luns.push(IscsiLunState {
+                lun: number,
+                backstore: backstore.to_string(),
+                exists: true,
+                backstore_exists: self.backstore_exists(backstore).unwrap_or(false),
+                block_device_matches: false,
+            });
+        }
+        Ok(luns)
     }
 
     fn target_exists(&self, target_iqn: &str) -> Result<bool> {

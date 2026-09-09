@@ -674,7 +674,7 @@ impl ImageService {
     /// the whole scan.
     pub async fn import_existing_images(&self) -> Result<ImportScanResult> {
         use crate::infrastructure::zfs::{
-            ZfsCommand, ZfsDatasetOperations, ZfsProvider, ZfsSnapshotOperations,
+            ZfsCommand, ZfsDatasetOperations, ZfsSnapshotOperations,
         };
 
         let parent = self.backend.image_parent()?;

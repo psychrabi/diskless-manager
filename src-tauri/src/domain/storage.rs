@@ -99,6 +99,14 @@ pub struct ClientStorageSpec {
     /// Whether shared game disks should also be exposed.
     #[serde(default)]
     pub use_game_disk: bool,
+
+    /// Stored per-client selection of game master datasets.
+    ///
+    /// Callers resolve this against discovered masters via
+    /// `StorageService::resolve_game_selection`; an empty selection with
+    /// `use_game_disk` set means "all discovered masters".
+    #[serde(default)]
+    pub game_disks: Vec<String>,
 }
 
 impl ClientStorageSpec {

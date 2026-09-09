@@ -31,3 +31,6 @@ src-tauri/config.json
 gha-creds-*.json
 .kiro
 .cache/
+.agents/
+skills-lock.json
+docs/

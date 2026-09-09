@@ -4,17 +4,6 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Dataset information structure
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct DatasetInfo {
-    pub name: String,
-    pub disk_type: Option<String>,
-    pub used: String,
-    pub available: String,
-    pub referenced: String,
-    pub mountpoint: String,
-}
-
 /// Disk information structure
 #[derive(Serialize, Deserialize)]
 pub struct Disk {
@@ -37,22 +26,6 @@ pub struct MemoryStats {
 #[derive(Serialize, Deserialize)]
 pub struct RamUsage {
     pub memory: MemoryStats,
-}
-
-/// ZFS pool creation request
-#[derive(Debug, Deserialize)]
-pub struct CreateZpoolRequest {
-    pub name: String,
-    pub disk: String,
-}
-
-/// ZFS dataset creation request
-#[derive(Debug, Deserialize)]
-pub struct CreateDatasetRequest {
-    pub zpool: String,
-    pub name: String,
-    pub usage_type: String,
-    pub size: Option<String>,
 }
 
 /// Dataset operation response

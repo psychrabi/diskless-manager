@@ -14,9 +14,6 @@ pub enum DomainError {
     #[error("invalid client ID")]
     InvalidClientId,
 
-    #[error("invalid image ID")]
-    InvalidImageId,
-
     #[error("client name cannot be empty")]
     EmptyClientName,
 

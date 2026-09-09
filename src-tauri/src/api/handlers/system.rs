@@ -6,7 +6,6 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::sync::{Mutex, OnceLock};
 
-use crate::core::service::ServiceManager;
 use crate::state::AppState;
 
 /// Snapshot of cumulative ARC counters used to derive per-interval hit rates.
@@ -38,10 +37,19 @@ pub async fn get_system_info(
 pub async fn get_server_status(
     State(state): State<AppState>,
 ) -> Result<Json<crate::commands::system::ServerStatus>, StatusCode> {
-    // Replicate the logic from the Tauri command
-    let service_manager = ServiceManager::new();
-    let services = service_manager.list_services();
-    let services_running = services.iter().filter(|s| s.running).count() as u32;
+    let settings = state.settings.read().await.clone();
+    let service_manager = crate::services::ServiceManager::new(settings, state.db_pool.clone());
+    let service_names = ["dhcp", "tftp", "iscsi", "nfs", "samba", "http"];
+    let mut services_running = 0;
+    for name in service_names {
+        if service_manager
+            .status(name)
+            .await
+            .is_ok_and(|status| status.running)
+        {
+            services_running += 1;
+        }
+    }
 
     let clients_count: (i64,) = match sqlx::query_as("SELECT COUNT(*) FROM clients")
         .fetch_one(&state.db_pool)
@@ -62,7 +70,7 @@ pub async fn get_server_status(
     let status = crate::commands::system::ServerStatus {
         initialized: true,
         services_running,
-        services_total: services.len() as u32,
+        services_total: service_names.len() as u32,
         clients_count: clients_count.0 as u32,
         images_count: images_count.0 as u32,
     };

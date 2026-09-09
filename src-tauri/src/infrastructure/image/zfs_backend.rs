@@ -10,7 +10,7 @@ use crate::{
     infrastructure::{
         nvmeof::remove_exports_for_block_device,
         zfs::{
-            ZfsCloneOperations, ZfsCommand, ZfsDatasetOperations, ZfsProvider,
+            ZfsCloneOperations, ZfsCommand, ZfsDatasetOperations,
             ZfsSnapshotOperations, ZfsVolumeOperations,
         },
     },

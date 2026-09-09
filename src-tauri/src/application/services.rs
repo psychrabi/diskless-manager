@@ -41,11 +41,3 @@ impl ApplicationServices {
         }
     }
 }
-
-pub fn build_storage_service() -> StorageService {
-    let image_backend = Arc::new(ZfsImageBackend::new());
-
-    let iscsi: Arc<dyn IscsiProvisioner> = Arc::new(SafeIscsiProvisioner::new());
-
-    StorageService::new(image_backend, iscsi)
-}

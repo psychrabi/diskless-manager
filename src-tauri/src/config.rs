@@ -1,11 +1,9 @@
 use once_cell::sync::OnceCell;
 use std::sync::RwLock;
 
-use crate::state::AppState;
 use crate::types::AppConfig;
 use log::info;
 use serde_json::{json, Value};
-use tauri::State;
 
 static CONFIG_CACHE: OnceCell<RwLock<AppConfig>> = OnceCell::new();
 
@@ -59,10 +57,6 @@ pub async fn write_config(pool: &sqlx::SqlitePool, config: &AppConfig) -> anyhow
     }
 
     Ok(())
-}
-
-pub async fn read_config(state: State<'_, AppState>) -> anyhow::Result<AppConfig> {
-    read_config_db(&state.db_pool).await
 }
 
 pub async fn read_config_db(pool: &sqlx::SqlitePool) -> anyhow::Result<AppConfig> {
@@ -173,26 +167,6 @@ pub async fn read_config_db(pool: &sqlx::SqlitePool) -> anyhow::Result<AppConfig
     // Update cache with the loaded config
     set_config(&config);
     Ok(config)
-}
-
-#[expect(
-    dead_code,
-    reason = "Old Tauri command - config saving handled by Axum"
-)]
-pub async fn save_config(state: State<'_, AppState>, pool_name: String) -> anyhow::Result<()> {
-    let mut cfg = get_config();
-    // Ensure settings is an object
-    let mut settings = cfg.settings.as_object().cloned().unwrap_or_else(|| {
-        // Create an empty object if settings is not an object
-        serde_json::Map::new()
-    });
-    settings.insert("zpool_name".to_string(), json!(pool_name.clone()));
-    settings.insert("zfsPool".to_string(), json!(pool_name));
-    cfg.settings = json!(settings);
-
-    // Write to DB and update cache using the unified write_config
-    write_config(&state.db_pool, &cfg).await?;
-    Ok(())
 }
 
 /// Returns the configured ZFS pool name from config.settings.

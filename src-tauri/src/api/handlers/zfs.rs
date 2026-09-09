@@ -190,16 +190,48 @@ fn should_include_managed_disk(name: &str, origin: &str) -> bool {
 pub async fn create_dataset(
     Json(request): Json<CreateDatasetRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let dataset_name = format!("{}/{}", request.zpool, request.name);
+    let is_game_disk = request.usage_type == "game" || request.usage_type == "game_disk";
+    let dataset_name = if is_game_disk {
+        format!("{}/games/{}-games", request.zpool, request.name)
+    } else {
+        format!("{}/{}", request.zpool, request.name)
+    };
 
     // zfs create requires root
     let mut cmd = Command::new("sudo");
     cmd.args(["-n", "zfs", "create"]);
 
-    if let Some(size) = request.size {
-        let size = size.trim();
-        if !size.is_empty() {
-            cmd.args(["-o", &format!("quota={}", size)]);
+    if is_game_disk {
+        let games_parent = format!("{}/games", request.zpool);
+        let _ = Command::new("sudo")
+            .args([
+                "-n",
+                "zfs",
+                "create",
+                "-p",
+                "-o",
+                "org.diskless:type=games",
+                &games_parent,
+            ])
+            .output();
+        let Some(size) = request
+            .size
+            .as_deref()
+            .map(str::trim)
+            .filter(|size| !size.is_empty())
+        else {
+            tracing::error!("Game disks require a size");
+            return Err(StatusCode::BAD_REQUEST);
+        };
+        cmd.args(["-V", size]);
+    }
+
+    if !is_game_disk {
+        if let Some(size) = request.size {
+            let size = size.trim();
+            if !size.is_empty() {
+                cmd.args(["-o", &format!("quota={}", size)]);
+            }
         }
     }
 

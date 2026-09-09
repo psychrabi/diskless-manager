@@ -8,7 +8,7 @@ use sqlx::SqlitePool;
 use std::{env, fs::OpenOptions, io::Write, path::Path, sync::OnceLock};
 use uuid::Uuid;
 
-use crate::types::{AuthError, Claims, LoginRequest, LoginResponse, UserResponse};
+use crate::types::{AuthError, Claims, LoginResponse, UserResponse};
 
 #[derive(Debug, thiserror::Error)]
 pub enum BootstrapAdminError {
@@ -255,101 +255,6 @@ pub fn validate_token(token: &str) -> Result<Claims, AuthError> {
     }
 
     Ok(decoded.claims)
-}
-
-// Tauri command for login
-
-#[expect(dead_code, reason = "Old Tauri command - login handled by Axum")]
-pub async fn login(
-    state: tauri::State<'_, crate::state::AppState>,
-    request: LoginRequest,
-) -> Result<LoginResponse, AuthError> {
-    let username = request.username.clone();
-    let password = request.password.clone();
-
-    info!("login attempt: user={}", username);
-
-    // gate login behind activated license
-    // ensure_license_valid()?;
-
-    let auth_result = authenticate_user(&state.db_pool, &username, &password).await;
-
-    match &auth_result {
-        Ok(response) => {
-            info!("login success: user={}", username);
-            Ok(response.clone())
-        }
-        Err(_) => {
-            warn!("login failed: user={}", username);
-            Err(AuthError {
-                message: "Invalid username or password".to_string(),
-            })
-        }
-    }
-}
-
-// Tauri command for token validation
-
-#[expect(dead_code, reason = "Old Tauri command - validation handled by Axum")]
-pub fn validate_auth_token(token: &str) -> Result<Claims, AuthError> {
-    validate_token(token)
-}
-
-// Tauri command for updating admin password
-
-#[expect(dead_code, reason = "Old Tauri command - update handled by Axum")]
-pub async fn update_admin_password(
-    state: tauri::State<'_, crate::state::AppState>,
-    token: &str,
-    old_password: &str,
-    new_password: &str,
-) -> Result<String, AuthError> {
-    // validate token and ensure caller is admin
-    let claims = validate_token(token)?;
-    if claims.role != "admin" {
-        return Err(AuthError {
-            message: "Forbidden: admin role required".to_string(),
-        });
-    }
-
-    // Fetch current user from database
-    let user = get_user_by_username(&state.db_pool, &claims.username).await?;
-
-    // verify provided old_password
-    let valid = verify(old_password, &user.password_hash).map_err(|_| AuthError {
-        message: "Failed to verify current password".to_string(),
-    })?;
-    if !valid {
-        return Err(AuthError {
-            message: "Old password is incorrect".to_string(),
-        });
-    }
-
-    // hash the new password
-    let hashed = hash(new_password, DEFAULT_COST).map_err(|e| AuthError {
-        message: format!("Failed to hash password: {}", e),
-    })?;
-
-    // update password in database
-    let now = Utc::now().to_rfc3339();
-    sqlx::query(
-        r#"
-        UPDATE users
-        SET password_hash = ?, updated_at = ?
-        WHERE id = ?
-        "#,
-    )
-    .bind(&hashed)
-    .bind(&now)
-    .bind(&user.id)
-    .execute(&state.db_pool)
-    .await
-    .map_err(|e| AuthError {
-        message: format!("Failed to update password: {}", e),
-    })?;
-
-    info!("password updated for user: {}", claims.username);
-    Ok("Password updated successfully".to_string())
 }
 
 #[cfg(test)]

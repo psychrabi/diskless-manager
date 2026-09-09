@@ -332,14 +332,3 @@ pub struct UpdateClient {
     pub pxe_mode: Option<PxeMode>,
     pub mode: Option<BootMode>,
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BootLog {
-    pub id: String,
-    pub client_id: ClientId,
-    pub image_id: Option<String>,
-    pub boot_time: DateTime<Utc>,
-    pub success: bool,
-    pub duration_ms: Option<i64>,
-    pub message: Option<String>,
-}

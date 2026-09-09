@@ -7,6 +7,6 @@ pub use model::{
     IscsiLunSpec, IscsiLunState, IscsiProvisionResult, IscsiTargetSpec, IscsiTargetState,
 };
 
-pub use reconcile::{target_has_active_sessions, IscsiReconciler};
+pub use reconcile::target_has_active_sessions;
 pub use safe::SafeIscsiProvisioner;
 pub use targetcli::{IscsiProvisioner, TargetCliProvisioner};

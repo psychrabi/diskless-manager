@@ -1,3 +1,4 @@
+use crate::application::storage_service::StorageService;
 use crate::core::client::{Client, ClientManager};
 use crate::core::provisioning::ClientStoragePaths;
 use crate::domain::storage::{
@@ -76,7 +77,7 @@ pub async fn inspect_storage(state: &AppState) -> anyhow::Result<ReconciliationS
     let mut summary = ReconciliationSummary::new();
 
     for client in clients {
-        match storage_spec_for_client(&client) {
+        match storage_spec_for_client(state, &client).await {
             Ok(Some(spec)) => match state.application.storage.reconcile_client_storage(&spec) {
                 Ok(result) => summary.push(entry_from_result(&client, &spec, result)),
                 Err(error) => summary.push(ReconciliationEntry {
@@ -117,7 +118,10 @@ pub async fn inspect_storage(state: &AppState) -> anyhow::Result<ReconciliationS
 }
 
 /// Refuse destructive storage repair while an initiator is connected.
-fn ensure_storage_repair_safe(target_iqn: &str, active_sessions: bool) -> anyhow::Result<()> {
+pub(crate) fn ensure_storage_repair_safe(
+    target_iqn: &str,
+    active_sessions: bool,
+) -> anyhow::Result<()> {
     if active_sessions {
         anyhow::bail!(
             "Client storage is in use: active iSCSI session on target '{}'. Disconnect the client before repair.",
@@ -137,7 +141,7 @@ pub async fn repair_client_storage(
 ) -> anyhow::Result<ReconciliationEntry> {
     let manager = ClientManager::new(state.db_pool.clone());
     let client = manager.get(client_id).await?;
-    let spec = storage_spec_for_client(&client)?.ok_or_else(|| {
+    let spec = storage_spec_for_client(state, &client).await?.ok_or_else(|| {
         anyhow::anyhow!(
             "client '{}' has no storage configuration to reconcile",
             client_id
@@ -164,7 +168,43 @@ pub async fn repair_client_storage(
     })
 }
 
-fn storage_spec_for_client(client: &Client) -> anyhow::Result<Option<ClientStorageSpec>> {
+/// Stored per-client game master selection (possibly empty).
+pub(crate) async fn stored_game_selection(
+    pool: &sqlx::SqlitePool,
+    client_id: &str,
+) -> anyhow::Result<Vec<String>> {
+    Ok(sqlx::query_scalar::<_, String>(
+        "SELECT master_dataset FROM client_game_disks WHERE client_id = ?",
+    )
+    .bind(client_id)
+    .fetch_all(pool)
+    .await?)
+}
+
+/// Effective game masters: stored selection intersected with discovered
+/// masters, or all discovered masters when the switch is on with an
+/// empty selection. See `StorageService::resolve_game_selection`.
+pub(crate) async fn resolved_game_selection(
+    pool: &sqlx::SqlitePool,
+    client_id: &str,
+    use_game_disk: bool,
+) -> anyhow::Result<Vec<String>> {
+    let stored = stored_game_selection(pool, client_id).await?;
+    let discovered = StorageService::discover_game_masters()?
+        .into_iter()
+        .map(|master| master.dataset)
+        .collect::<Vec<_>>();
+    Ok(StorageService::resolve_game_selection(
+        use_game_disk,
+        &stored,
+        &discovered,
+    ))
+}
+
+async fn storage_spec_for_client(
+    state: &AppState,
+    client: &Client,
+) -> anyhow::Result<Option<ClientStorageSpec>> {
     if !client.enabled || client.master.trim().is_empty() {
         return Ok(None);
     }
@@ -180,6 +220,10 @@ fn storage_spec_for_client(client: &Client) -> anyhow::Result<Option<ClientStora
         .block_store
         .clone()
         .unwrap_or_else(|| defaults.backstore.clone());
+
+    let use_game_disk = client.use_game_disk.unwrap_or(false);
+    let game_disks =
+        resolved_game_selection(&state.db_pool, &client.id, use_game_disk).await?;
 
     let source = match client.snapshot.as_deref().map(str::trim) {
         Some(snapshot) if !snapshot.is_empty() => {
@@ -197,7 +241,8 @@ fn storage_spec_for_client(client: &Client) -> anyhow::Result<Option<ClientStora
                 backstore,
                 target_iqn,
                 lun: 0,
-                use_game_disk: client.use_game_disk.unwrap_or(false),
+                use_game_disk,
+                game_disks,
             }));
         }
         _ => StorageSource::ExistingVolume(client.master.clone()),
@@ -209,7 +254,8 @@ fn storage_spec_for_client(client: &Client) -> anyhow::Result<Option<ClientStora
         backstore,
         target_iqn,
         lun: 0,
-        use_game_disk: client.use_game_disk.unwrap_or(false),
+        use_game_disk,
+        game_disks,
         source,
     }))
 }

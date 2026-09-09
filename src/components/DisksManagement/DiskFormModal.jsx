@@ -7,12 +7,22 @@ import { useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
 import { Button, Input, Modal, Select } from "@/components/ui";
 
-const diskSchema = z.object({
-  zpool: z.string().min(1, "Zpool is required"),
-  name: z.string().min(4, "Disk name is required"),
-  usage_type: z.string().min(1, "Disk type is required"),
-  size: z.string().optional(),
-});
+const diskSchema = z
+  .object({
+    zpool: z.string().min(1, "Zpool is required"),
+    name: z.string().min(4, "Disk name is required"),
+    usage_type: z.string().min(1, "Disk type is required"),
+    size: z.string().optional(),
+  })
+  .superRefine((value, context) => {
+    if (value.usage_type === "game" && !value.size?.trim()) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["size"],
+        message: "Game disk size is required",
+      });
+    }
+  });
 
 const DiskFormModal = ({ zpools, isOpen, setIsOpen, refresh }) => {
   const createDataset = useAppStore((state) => state.createDataset);

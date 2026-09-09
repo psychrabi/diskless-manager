@@ -1,12 +1,7 @@
-use crate::core::config::Settings;
-use crate::core::service::ServiceManager;
 use crate::ssh_executor::{SshConfig, SshExecutor};
-use crate::state::AppState;
 use crate::utils::network::InterfaceInfo;
-use log::info;
 use serde::{Deserialize, Serialize};
 use std::process::Command;
-use tauri::State;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SystemInfo {
@@ -120,56 +115,6 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
-#[expect(dead_code, reason = "Old Tauri command - handler implements its own")]
-pub async fn get_server_status(state: State<'_, AppState>) -> Result<ServerStatus, String> {
-    let service_manager = ServiceManager::new();
-    let services = service_manager.list_services();
-    let services_running = services.iter().filter(|s| s.running).count() as u32;
-
-    let clients_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM clients")
-        .fetch_one(&state.db_pool)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let images_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM images")
-        .fetch_one(&state.db_pool)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    Ok(ServerStatus {
-        initialized: true,
-        services_running,
-        services_total: services.len() as u32,
-        clients_count: clients_count.0 as u32,
-        images_count: images_count.0 as u32,
-    })
-}
-
-#[expect(dead_code, reason = "Old Tauri command - handler implements its own")]
-pub async fn initialize_server(state: State<'_, AppState>) -> Result<String, String> {
-    let settings = state.settings.read().await;
-
-    // Create directories
-    std::fs::create_dir_all(&settings.tftp.root_dir)
-        .map_err(|e| format!("Failed to create {:?}: {}", settings.tftp.root_dir, e))?;
-    std::fs::create_dir_all(&settings.iscsi.targets_dir)
-        .map_err(|e| format!("Failed to create {:?}: {}", settings.iscsi.targets_dir, e))?;
-    std::fs::create_dir_all(&settings.nfs.exports_dir)
-        .map_err(|e| format!("Failed to create {:?}: {}", settings.nfs.exports_dir, e))?;
-    std::fs::create_dir_all(&settings.samba.share_path)
-        .map_err(|e| format!("Failed to create {:?}: {}", settings.samba.share_path, e))?;
-    std::fs::create_dir_all(&settings.storage.images_dir)
-        .map_err(|e| format!("Failed to create {:?}: {}", settings.storage.images_dir, e))?;
-    std::fs::create_dir_all(&settings.storage.snapshots_dir).map_err(|e| {
-        format!(
-            "Failed to create {:?}: {}",
-            settings.storage.snapshots_dir, e
-        )
-    })?;
-
-    Ok("Server initialized successfully".to_string())
-}
-
 pub async fn check_dependencies() -> Result<Vec<DependencyStatus>, String> {
     let distro = crate::platform::detect();
 
@@ -245,52 +190,6 @@ pub async fn check_dependencies() -> Result<Vec<DependencyStatus>, String> {
     }
 
     Ok(statuses)
-}
-
-#[expect(dead_code, reason = "Old Tauri command - handler implements its own")]
-pub async fn get_settings(state: State<'_, AppState>) -> Result<Settings, String> {
-    let settings = state.settings.read().await;
-    Ok(settings.clone())
-}
-
-#[expect(dead_code, reason = "Old Tauri command - handler implements its own")]
-pub async fn save_settings(state: State<'_, AppState>, settings: Settings) -> Result<(), String> {
-    // Update the in-memory settings
-    let mut current = state.settings.write().await;
-    *current = settings.clone();
-
-    // Update the settings in the database (merging with existing fields to avoid losing zpool_name etc)
-    let current_config = crate::config::get_config();
-    let mut new_config = current_config;
-
-    let new_settings_value = serde_json::to_value(&*current)
-        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-
-    if let (Some(obj), Some(new_obj)) = (
-        new_config.settings.as_object_mut(),
-        new_settings_value.as_object(),
-    ) {
-        for (k, v) in new_obj {
-            obj.insert(k.clone(), v.clone());
-        }
-    } else {
-        new_config.settings = new_settings_value;
-    }
-
-    crate::config::write_config(&state.db_pool, &new_config)
-        .await
-        .map_err(|e| format!("Failed to write config to database: {}", e))?;
-
-    // Also persist to config.toml for redundancy and manual editing support
-    let toml_path = state.config_path.with_extension("toml");
-    if let Err(e) = current.save(&toml_path) {
-        tracing::error!("Failed to save settings to {}: {}", toml_path.display(), e);
-        // We don't necessarily want to return error here if DB save succeeded,
-        // but it's good to log it. Actually, better to inform user if both fail.
-    }
-
-    info!("Settings saved to database and TOML");
-    Ok(())
 }
 
 pub async fn setup_privileged_access() -> Result<String, String> {
@@ -411,92 +310,6 @@ pub async fn detect_server_network() -> Result<NetworkDetection, String> {
         hostname,
         domain,
     })
-}
-
-#[expect(dead_code, reason = "Old Tauri command - handler implements its own")]
-pub async fn apply_network_settings(state: State<'_, AppState>) -> Result<String, String> {
-    let mut settings = state.settings.read().await.clone();
-    let server = &settings.server;
-
-    if server.interface.is_empty() {
-        return Err("No interface selected".to_string());
-    }
-
-    let interface = &server.interface[0];
-    let ip = &server.ip_address;
-    let mask = &server.netmask;
-    let gateway = &server.gateway;
-    let dns = &server.dns;
-
-    // Convert dotted mask to prefix
-    let prefix = mask_to_prefix(mask).unwrap_or(24);
-
-    crate::platform::apply_static_network_config(interface, ip, prefix, gateway, dns).await?;
-
-    // Update related service configurations with the new static IP
-    settings.tftp.server_ip = ip.clone();
-    settings.http.server_ip = ip.clone();
-
-    // Update DHCP settings
-    settings.dhcp.next_server_ip = ip.clone();
-    settings.dhcp.boot_server_ip = ip.clone();
-    settings.dhcp.subnet_mask = mask.clone();
-    settings.dhcp.gateway_ip = gateway.clone();
-
-    // Calculate subnet and broadcast based on IP and Mask
-    if let Ok(subnet) = crate::utils::network::calculate_network(ip, mask) {
-        settings.dhcp.subnet_ip = subnet;
-    }
-    if let Ok(broadcast) = crate::utils::network::calculate_broadcast(ip, mask) {
-        settings.dhcp.broadcast_ip = broadcast;
-    }
-
-    // Persist the updated settings
-    {
-        // 1. Update in-memory state
-        let mut write_lock = state.settings.write().await;
-        *write_lock = settings.clone();
-
-        // 2. Save to TOML
-        write_lock
-            .save(&state.config_path)
-            .map_err(|e| format!("Failed to save settings to file: {}", e))?;
-
-        // 3. Save to Database to ensure consistency on restart
-        let current_config = crate::config::get_config();
-        let mut new_config = current_config;
-
-        let new_settings_value = serde_json::to_value(&settings)
-            .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-
-        if let (Some(obj), Some(new_obj)) = (
-            new_config.settings.as_object_mut(),
-            new_settings_value.as_object(),
-        ) {
-            for (k, v) in new_obj {
-                obj.insert(k.clone(), v.clone());
-            }
-        } else {
-            new_config.settings = new_settings_value;
-        }
-
-        crate::config::write_config(&state.db_pool, &new_config)
-            .await
-            .map_err(|e| format!("Failed to write config to database: {}", e))?;
-    }
-
-    // Regenerate and reload all services
-    let service_manager = crate::services::ServiceManager::new(settings, state.db_pool.clone());
-    service_manager
-        .generate_all_configs()
-        .await
-        .map_err(|e| format!("Failed to regenerate service configs: {}", e))?;
-    service_manager
-        .restart_all()
-        .await
-        .map_err(|e| format!("Failed to restart services: {}", e))?;
-
-    Ok("Network settings applied and services updated successfully.".to_string())
 }
 
 /// Test SSH connectivity to a remote host
@@ -704,18 +517,6 @@ pub struct SshTestResult {
     pub message: String,
     pub duration_ms: u64,
     pub command_output: Option<String>,
-}
-
-fn mask_to_prefix(mask: &str) -> Option<u32> {
-    let parts: Vec<u32> = mask.split('.').filter_map(|s| s.parse().ok()).collect();
-    if parts.len() != 4 {
-        return None;
-    }
-    let mut full_mask = 0u32;
-    for part in parts {
-        full_mask = (full_mask << 8) | part;
-    }
-    Some(full_mask.count_ones())
 }
 
 pub async fn install_package(service: String) -> Result<String, String> {
