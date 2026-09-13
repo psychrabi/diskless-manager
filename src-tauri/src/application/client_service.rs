@@ -26,6 +26,13 @@ impl ClientService {
         }
     }
 
+    /// Compatibility lookup for existing transport/control code that still
+    /// receives client identifiers as raw strings.
+    pub async fn get_by_string(&self, id: &str) -> Result<Option<Client>> {
+        let id = ClientId::from_string(id.to_owned()).map_err(anyhow::Error::from)?;
+        self.get(&id).await
+    }
+
     pub async fn list(&self) -> Result<Vec<Client>> {
         let mut clients = self.repository.find_all().await?;
         for client in &mut clients {
