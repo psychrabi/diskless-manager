@@ -3,69 +3,7 @@ use axum::{
     http::StatusCode,
 };
 
-use crate::{
-    domain::storage::{ClientStorage, StorageSource, StorageVolume},
-    state::AppState,
-};
-
-fn storage_from_client(
-    settings: &crate::core::config::Settings,
-    client: &crate::domain::Client,
-) -> Result<ClientStorage, String> {
-    let client_name = client.name.trim();
-    if client_name.is_empty() {
-        return Err("Client name cannot be empty".to_string());
-    }
-    if client.master.trim().is_empty() {
-        return Err("Master image cannot be empty".to_string());
-    }
-
-    let target_iqn = client
-        .target_iqn
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            format!(
-                "{}:client.{}",
-                settings.iscsi.target_prefix,
-                client_name.to_lowercase()
-            )
-        });
-    let backstore = format!("block_{}", client_name.to_lowercase());
-
-    let (source, dataset) = match client.snapshot.as_deref() {
-        Some(snapshot) if !snapshot.trim().is_empty() => (
-            StorageSource::Snapshot(snapshot.to_string()),
-            crate::infrastructure::zfs::legacy::get_writeback_or_default_dataset(client_name),
-        ),
-        _ => {
-            crate::validation::validate_managed_dataset(
-                &client.master,
-                &crate::config::get_zpool_name(),
-            )
-            .map_err(|error| format!("Invalid master dataset: {error}"))?;
-            (
-                StorageSource::ExistingVolume(client.master.clone()),
-                client.master.clone(),
-            )
-        }
-    };
-
-    Ok(ClientStorage {
-        client_id: client.id.to_string(),
-        source,
-        volume: StorageVolume::new(
-            dataset.clone(),
-            format!("/dev/zvol/{dataset}"),
-            backstore,
-            target_iqn,
-            0,
-        ),
-        use_game_disk: client.use_game_disk,
-    })
-}
+use crate::state::AppState;
 
 async fn refresh_dhcp(
     state: &AppState,
@@ -118,7 +56,7 @@ pub async fn delete_client(
 
     let settings = state.settings.read().await.clone();
 
-    match storage_from_client(&settings, &client) {
+    match crate::application::client_storage_mapping::storage_from_client(&settings, &client) {
         Ok(storage) => {
             if let Err(error) = state.application.storage.destroy_client_storage(&storage) {
                 tracing::warn!(client_id = %id, %error, "failed to completely remove client storage");
