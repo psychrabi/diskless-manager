@@ -11,8 +11,8 @@ use crate::{
     state::AppState,
 };
 
-fn is_enabled_only_update(request: &UpdateClientRequest) -> bool {
-    request.enabled.is_some()
+fn is_chap_only_update(request: &UpdateClientRequest) -> bool {
+    request.chap_enabled.is_some()
         && request.action.is_none()
         && request.make_super.is_none()
         && request.name.is_none()
@@ -23,7 +23,7 @@ fn is_enabled_only_update(request: &UpdateClientRequest) -> bool {
         && request.keep_writeback.is_none()
         && request.use_game_disk.is_none()
         && request.game_disks.is_none()
-        && request.chap_enabled.is_none()
+        && request.enabled.is_none()
         && request.block_store.is_none()
         && request.block_device.is_none()
         && request.target_iqn.is_none()
@@ -86,6 +86,10 @@ async fn publish_boot_menu(
     client: &crate::domain::Client,
     chap: Option<&crate::infrastructure::iscsi::ChapCredentials>,
 ) {
+    if !client.enabled {
+        return;
+    }
+
     let Some(target_iqn) = client
         .target_iqn
         .as_deref()
@@ -115,7 +119,7 @@ async fn publish_boot_menu(
         tracing::warn!(
             client_id = %client.id,
             %error,
-            "failed to regenerate boot menu while enabling client"
+            "failed to regenerate boot menu while updating CHAP enforcement"
         );
     }
 }
@@ -127,15 +131,15 @@ async fn refresh_dhcp(state: &AppState, settings: &crate::core::config::Settings
 
     let service = crate::services::DhcpService::new(settings.clone(), state.db_pool.clone());
     if let Err(error) = service.generate_client_configs().await {
-        tracing::warn!(%error, "failed to regenerate DHCP client configuration after enabled-state update");
+        tracing::warn!(%error, "failed to regenerate DHCP client configuration after CHAP update");
         return;
     }
     if let Err(error) = service.validate_config().await {
-        tracing::warn!(%error, "DHCP validation failed after enabled-state update; service was not reloaded");
+        tracing::warn!(%error, "DHCP validation failed after CHAP update; service was not reloaded");
         return;
     }
     if let Err(error) = service.reload().await {
-        tracing::warn!(%error, "failed to reload DHCP service after enabled-state update");
+        tracing::warn!(%error, "failed to reload DHCP service after CHAP update");
     }
 }
 
@@ -144,8 +148,8 @@ pub async fn update_client(
     Path(id): Path<String>,
     Json(request): Json<UpdateClientRequest>,
 ) -> Result<Json<Client>, (StatusCode, Json<ErrorResponse>)> {
-    if !is_enabled_only_update(&request) {
-        return super::client_game_update::update_client(State(state), Path(id), Json(request))
+    if !is_chap_only_update(&request) {
+        return super::client_enabled_update::update_client(State(state), Path(id), Json(request))
             .await;
     }
 
@@ -200,12 +204,13 @@ pub async fn update_client(
         ));
     }
 
-    let enabled = request
-        .enabled
-        .expect("enabled-only request has enabled value");
+    let chap_enabled = request
+        .chap_enabled
+        .expect("CHAP-only request has chap_enabled value");
+    let chap_changed = chap_enabled != existing.chap_enabled;
     let settings = state.settings.read().await.clone();
 
-    let chap = if existing.chap_enabled {
+    let chap = if chap_enabled {
         crate::core::reconciliation::ensure_chap_credentials(
             &state.db_pool,
             &id,
@@ -226,29 +231,37 @@ pub async fn update_client(
         None
     };
 
-    if existing.enabled && !enabled {
-        crate::infrastructure::dhcp::remove_client_ipxe_menu(existing.mac.as_str())
-            .await
-            .map_err(|error| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        status: 500,
-                        error: format!(
-                            "Failed to remove boot menu for '{}': {error}",
-                            existing.name
-                        ),
-                    }),
-                )
-            })?;
-    } else if enabled {
-        publish_boot_menu(&settings, &existing, chap.as_ref()).await;
+    // Preserve the legacy ordering: update the enabled client's boot menu
+    // before changing live target authentication.
+    publish_boot_menu(&settings, &existing, chap.as_ref()).await;
+
+    if chap_changed {
+        if let Some(target_iqn) = existing
+            .target_iqn
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            state
+                .application
+                .storage
+                .set_target_chap(target_iqn, chap.as_ref())
+                .map_err(|error| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ErrorResponse {
+                            status: 500,
+                            error: format!("Failed to apply CHAP change: {error}"),
+                        }),
+                    )
+                })?;
+        }
     }
 
     let client = state
         .application
         .clients
-        .set_enabled_flag(&id, enabled)
+        .set_chap_enabled_flag(&id, chap_enabled)
         .await
         .map_err(|error| {
             (
@@ -261,7 +274,7 @@ pub async fn update_client(
         })?;
 
     if let Err(error) = state.refresh_client_ips().await {
-        tracing::warn!(%error, "failed to refresh client IP cache after enabled-state update");
+        tracing::warn!(%error, "failed to refresh client IP cache after CHAP update");
     }
     refresh_dhcp(&state, &settings).await;
 
@@ -270,10 +283,10 @@ pub async fn update_client(
 
 #[cfg(test)]
 mod tests {
-    use super::is_enabled_only_update;
+    use super::is_chap_only_update;
     use crate::core::client::UpdateClientRequest;
 
-    fn enabled_request() -> UpdateClientRequest {
+    fn chap_request() -> UpdateClientRequest {
         UpdateClientRequest {
             name: None,
             mac: None,
@@ -283,8 +296,8 @@ mod tests {
             keep_writeback: None,
             use_game_disk: None,
             game_disks: None,
-            chap_enabled: None,
-            enabled: Some(false),
+            chap_enabled: Some(true),
+            enabled: None,
             block_store: None,
             block_device: None,
             target_iqn: None,
@@ -295,22 +308,22 @@ mod tests {
     }
 
     #[test]
-    fn enabled_only_request_uses_typed_path() {
-        assert!(is_enabled_only_update(&enabled_request()));
+    fn chap_only_request_uses_typed_path() {
+        assert!(is_chap_only_update(&chap_request()));
     }
 
     #[test]
-    fn enabled_plus_other_changes_delegate() {
-        let mut request = enabled_request();
-        request.ip = Some("192.168.1.42".into());
-        assert!(!is_enabled_only_update(&request));
+    fn chap_plus_other_changes_delegate() {
+        let mut request = chap_request();
+        request.enabled = Some(false);
+        assert!(!is_chap_only_update(&request));
 
-        let mut request = enabled_request();
-        request.chap_enabled = Some(true);
-        assert!(!is_enabled_only_update(&request));
-
-        let mut request = enabled_request();
+        let mut request = chap_request();
         request.game_disks = Some(vec!["tank/game/a".into()]);
-        assert!(!is_enabled_only_update(&request));
+        assert!(!is_chap_only_update(&request));
+
+        let mut request = chap_request();
+        request.ip = Some("192.168.1.42".into());
+        assert!(!is_chap_only_update(&request));
     }
 }

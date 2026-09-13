@@ -223,6 +223,29 @@ impl ClientService {
         Ok(client)
     }
 
+    /// Update only whether CHAP authentication is enforced. Existing
+    /// credentials are retained when enforcement is disabled so a later
+    /// re-enable can reuse the same server-managed secret.
+    pub async fn set_chap_enabled_flag(&self, id: &str, enabled: bool) -> Result<Client> {
+        let client_id = ClientId::from_string(id.to_owned()).map_err(anyhow::Error::from)?;
+        let mut client = self
+            .repository
+            .find_by_id(&client_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("client not found: {id}"))?;
+
+        client.chap_enabled = enabled;
+        client.updated_at = Utc::now();
+        client.last_modified = Some(client.updated_at);
+
+        self.repository
+            .update(&client)
+            .await
+            .context("failed to persist client CHAP enforcement state")?;
+
+        Ok(client)
+    }
+
     pub async fn game_selection(&self, id: &str) -> Result<Vec<String>> {
         let id = ClientId::from_string(id.to_owned()).map_err(anyhow::Error::from)?;
         self.repository.game_selection(&id).await
