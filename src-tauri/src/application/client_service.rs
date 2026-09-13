@@ -194,6 +194,25 @@ impl ClientService {
         Ok(client)
     }
 
+    /// Compatibility update for transport paths that still carry raw string IDs.
+    pub async fn update_by_string(&self, id: &str, request: UpdateClient) -> Result<Client> {
+        let id = ClientId::from_string(id.to_owned()).map_err(anyhow::Error::from)?;
+        self.update(&id, request).await
+    }
+
+    pub async fn game_selection(&self, id: &str) -> Result<Vec<String>> {
+        let id = ClientId::from_string(id.to_owned()).map_err(anyhow::Error::from)?;
+        self.repository.game_selection(&id).await
+    }
+
+    pub async fn set_game_selection(&self, id: &str, masters: &[String]) -> Result<()> {
+        let id = ClientId::from_string(id.to_owned()).map_err(anyhow::Error::from)?;
+        self.repository
+            .set_game_selection(&id, masters)
+            .await
+            .context("failed to persist client game selection")
+    }
+
     pub async fn delete(&self, id: &ClientId) -> Result<()> {
         /*
          * IMPORTANT:
