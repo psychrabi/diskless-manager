@@ -1,4 +1,5 @@
 use crate::domain::{Client, ClientId, CreateClient, DomainError, UpdateClient};
+use crate::infrastructure::iscsi::ChapCredentials;
 use crate::persistence::ClientRepository;
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
@@ -64,6 +65,38 @@ impl ClientService {
             .context("failed to persist new client")?;
 
         Ok(client)
+    }
+
+    /// Rotate the server-managed one-way CHAP credentials and persist the
+    /// resulting enforcement state. Applying credentials to the live target
+    /// and boot menu remains orchestration owned by the caller.
+    pub async fn rotate_chap(&self, id: &str) -> Result<(Client, ChapCredentials)> {
+        let client_id = ClientId::from_string(id.to_owned())?;
+        let mut client = self
+            .repository
+            .find_by_id(&client_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("client not found: {id}"))?;
+
+        let username = client
+            .chap_user
+            .clone()
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| ChapCredentials::username_for_client(&client.name));
+
+        let mut credentials = ChapCredentials::generate(&client.name)?;
+        credentials.username = username;
+
+        client.chap_user = Some(credentials.username.clone());
+        client.chap_secret = Some(credentials.password.clone());
+        client.chap_enabled = true;
+
+        self.repository
+            .update(&client)
+            .await
+            .context("failed to persist rotated CHAP credentials")?;
+
+        Ok((client, credentials))
     }
 
     pub async fn update(&self, id: &ClientId, request: UpdateClient) -> Result<Client> {

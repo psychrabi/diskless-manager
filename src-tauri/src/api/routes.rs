@@ -14,7 +14,8 @@ use crate::api::handlers::{
         bootstrap_first_admin, check_admin_exists, login, update_admin_password,
         validate_auth_token,
     },
-    clients::{create_client, delete_client, rotate_client_chap, update_client},
+    client_chap::rotate_client_chap,
+    clients::{create_client, delete_client, update_client},
     clients_v2::{get_client, get_client_boot_history, list_clients},
     config::get_config,
     control::{
