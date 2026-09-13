@@ -4,6 +4,7 @@ use axum::{
         State,
     },
     response::IntoResponse,
+    Extension,
 };
 use futures::{sink::SinkExt, stream::StreamExt};
 use serde::Serialize;
@@ -16,6 +17,7 @@ use tokio::time::interval;
 use crate::{
     metrics::{StorageTrafficMetrics, Throughput},
     state::AppState,
+    types::Claims,
 };
 
 // Track when clients established their current iSCSI session.
@@ -68,15 +70,16 @@ pub struct MetricsUpdate {
 pub async fn ws_metrics_handler(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
 ) -> impl IntoResponse {
     log::info!("WebSocket upgrade request received");
     ws.protocols(["diskless-auth"]).on_upgrade(|socket| {
         log::info!("WebSocket connection established");
-        handle_metrics_socket(socket, state)
+        handle_metrics_socket(socket, state, claims)
     })
 }
 
-async fn handle_metrics_socket(socket: WebSocket, state: AppState) {
+async fn handle_metrics_socket(socket: WebSocket, state: AppState, claims: Claims) {
     let (mut sender, mut receiver) = socket.split();
     let state_clone = state.clone();
     let mut interval = interval(Duration::from_secs(1));
@@ -85,23 +88,35 @@ async fn handle_metrics_socket(socket: WebSocket, state: AppState) {
         tokio::select! {
             // Send metrics every 1 second
             _ = interval.tick() => {
-                match fetch_metrics(&state_clone).await {
-                    Ok(metrics) => {
-                        match serde_json::to_string(&metrics) {
-                            Ok(msg) => {
-                                if let Err(e) = sender.send(axum::extract::ws::Message::Text(msg.into())).await {
-                                    log::debug!("WebSocket client disconnected: {}", e);
-                                    break;
+                // Bound the whole update (including collection and close flushing),
+                // so a stalled peer cannot indefinitely defer session revalidation.
+                let update = async {
+                    if crate::auth::validate_session(&state.db_pool, &claims).await.is_err() {
+                        let _ = sender.send(axum::extract::ws::Message::Close(None)).await;
+                        return false;
+                    }
+                    match fetch_metrics(&state_clone).await {
+                        Ok(metrics) => {
+                            match serde_json::to_string(&metrics) {
+                                Ok(msg) => {
+                                    if let Err(e) = sender.send(axum::extract::ws::Message::Text(msg.into())).await {
+                                        log::debug!("WebSocket client disconnected: {}", e);
+                                        return false;
+                                    }
+                                }
+                                Err(e) => {
+                                    log::error!("Failed to serialize metrics: {}", e);
                                 }
                             }
-                            Err(e) => {
-                                log::error!("Failed to serialize metrics: {}", e);
-                            }
+                        }
+                        Err(e) => {
+                            log::error!("Failed to fetch metrics: {}", e);
                         }
                     }
-                    Err(e) => {
-                        log::error!("Failed to fetch metrics: {}", e);
-                    }
+                    true
+                };
+                if !tokio::time::timeout(Duration::from_secs(3), update).await.unwrap_or(false) {
+                    break;
                 }
             }
 
@@ -214,6 +229,63 @@ pub(crate) async fn fetch_metrics(state: &AppState) -> Result<MetricsUpdate, Str
 mod tests {
     use super::session_uptime;
     use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn stalled_metrics_reader_cannot_keep_a_revoked_socket_alive() {
+        use axum::{extract::WebSocketUpgrade, routing::get, Router};
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+
+        let (state, _, _, token) = crate::api::security_tests::setup().await;
+        let claims = crate::auth::validate_token(&state.db_pool, &token)
+            .await
+            .unwrap();
+        // A frame larger than TCP buffers makes send wait for the peer to read.
+        *state.client_ips.write().await = vec!["127.0.0.1".to_string(); 50_000];
+        let pool = state.db_pool.clone();
+        let (closed_tx, closed_rx) = tokio::sync::oneshot::channel();
+        let closed_tx = std::sync::Arc::new(tokio::sync::Mutex::new(Some(closed_tx)));
+        let app = Router::new().route(
+            "/",
+            get(move |ws: WebSocketUpgrade| {
+                let state = state.clone();
+                let claims = claims.clone();
+                let closed_tx = closed_tx.clone();
+                async move {
+                    ws.on_upgrade(move |socket| async move {
+                        super::handle_metrics_socket(socket, state, claims).await;
+                        if let Some(sender) = closed_tx.lock().await.take() {
+                            let _ = sender.send(());
+                        }
+                    })
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let result = tokio::time::timeout(std::time::Duration::from_secs(8), async {
+            let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+            socket.write_all(format!("GET / HTTP/1.1\r\nHost: {address}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n").as_bytes()).await.unwrap();
+            let mut reader = BufReader::new(socket);
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            assert!(line.starts_with("HTTP/1.1 101"));
+            loop {
+                line.clear();
+                reader.read_line(&mut line).await.unwrap();
+                if line == "\r\n" { break; }
+            }
+            assert_eq!(reader.read_u8().await.unwrap() & 0x0f, 1);
+            sqlx::query("DELETE FROM users WHERE id = 'operator'").execute(&pool).await.unwrap();
+            // Keep the transport open without draining its unread metrics frame.
+            closed_rx.await.expect("socket handler should terminate under backpressure");
+            drop(reader);
+        }).await;
+        server.abort();
+        result.expect("backpressure must not prevent session termination");
+    }
 
     #[test]
     fn uptime_tracks_the_current_iscsi_connection_only() {

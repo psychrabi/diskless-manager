@@ -12,6 +12,8 @@ pub struct User {
     pub username: String,
     pub password_hash: String,
     pub role: String, // admin, user
+    #[serde(skip_serializing)]
+    pub session_version: i64,
 }
 
 /// JWT claims structure
@@ -22,6 +24,7 @@ pub struct Claims {
     pub role: String,     // user role
     pub exp: i64,         // expiration time
     pub iat: usize,       // issued at time
+    pub session_version: i64,
 }
 
 /// Login request structure

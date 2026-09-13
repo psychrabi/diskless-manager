@@ -1,7 +1,7 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    Json,
+    Extension, Json,
 };
 use serde_json::Value;
 
@@ -273,9 +273,13 @@ pub async fn get_service_config(
 
 pub async fn configure_service(
     State(state): State<AppState>,
+    Extension(claims): Extension<crate::types::Claims>,
     Path(name): Path<String>,
     body: String,
 ) -> Result<Json<String>, StatusCode> {
+    if claims.role != "admin" {
+        return Err(StatusCode::FORBIDDEN);
+    }
     // If the body contains JSON with a "content" field, write raw content.
     // Otherwise, regenerate the config from the current settings.
     let raw_content = serde_json::from_str::<Value>(&body)

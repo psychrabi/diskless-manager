@@ -4,7 +4,6 @@ use axum::{
     middleware::Next,
     response::Response,
 };
-use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use log::info;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -165,7 +164,7 @@ fn user_request_is_allowed(method: &Method, path: &str) -> bool {
 }
 
 pub async fn require_auth(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     request: Request<axum::body::Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
@@ -184,36 +183,19 @@ pub async fn require_auth(
     // Browsers cannot attach an Authorization header to WebSocket handshakes.
     // Carry the token in the subprotocol header so it is not exposed in URLs,
     // browser history, proxy logs, or request logging.
-    if path == "/ws/metrics" {
-        let token = websocket_token(request.headers()).ok_or(StatusCode::UNAUTHORIZED)?;
-        decode::<crate::types::auth::Claims>(
-            token,
-            &DecodingKey::from_secret(crate::auth::jwt_secret()),
-            &Validation::new(Algorithm::HS256),
-        )
-        .map_err(|_| StatusCode::UNAUTHORIZED)?;
-        return Ok(next.run(request).await);
+    let token = if path == "/ws/metrics" {
+        websocket_token(request.headers())
+    } else {
+        request
+            .headers()
+            .get(header::AUTHORIZATION)
+            .and_then(|h| h.to_str().ok())
+            .and_then(|h| h.strip_prefix("Bearer "))
     }
-
-    let headers = request.headers();
-    let auth_header = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|h| h.to_str().ok())
-        .and_then(|h| h.strip_prefix("Bearer "));
-
-    let token = match auth_header {
-        Some(t) => t,
-        None => return Err(StatusCode::UNAUTHORIZED),
-    };
-
-    let token_data = decode::<crate::types::auth::Claims>(
-        token,
-        &DecodingKey::from_secret(crate::auth::jwt_secret()),
-        &Validation::new(Algorithm::HS256),
-    )
-    .map_err(|_| StatusCode::UNAUTHORIZED)?;
-
-    let claims = token_data.claims;
+    .ok_or(StatusCode::UNAUTHORIZED)?;
+    let claims = crate::auth::validate_token(&state.db_pool, token)
+        .await
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
     if claims.role != "admin" && !user_request_is_allowed(request.method(), path) {
         return Err(StatusCode::FORBIDDEN);
     }
@@ -259,11 +241,23 @@ mod tests {
         assert!(user_request_is_allowed(&Method::OPTIONS, "/api/clients"));
         assert!(user_request_is_allowed(&Method::POST, "/api/clients"));
         assert!(user_request_is_allowed(&Method::PUT, "/api/clients/id"));
-        assert!(user_request_is_allowed(&Method::POST, "/api/services/http/start"));
-        assert!(user_request_is_allowed(&Method::POST, "/api/system/network/apply"));
+        assert!(user_request_is_allowed(
+            &Method::POST,
+            "/api/services/http/start"
+        ));
+        assert!(user_request_is_allowed(
+            &Method::POST,
+            "/api/system/network/apply"
+        ));
         assert!(!user_request_is_allowed(&Method::DELETE, "/api/clients/id"));
-        assert!(!user_request_is_allowed(&Method::PUT, "/api/system/settings"));
-        assert!(!user_request_is_allowed(&Method::PATCH, "/api/system/settings"));
+        assert!(!user_request_is_allowed(
+            &Method::PUT,
+            "/api/system/settings"
+        ));
+        assert!(!user_request_is_allowed(
+            &Method::PATCH,
+            "/api/system/settings"
+        ));
     }
 
     #[test]

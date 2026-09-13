@@ -149,7 +149,7 @@ pub fn jwt_secret() -> &'static [u8] {
 async fn get_user_by_username(pool: &SqlitePool, username: &str) -> Result<User, AuthError> {
     sqlx::query_as::<_, User>(
         r#"
-        SELECT id, username, password_hash, role
+        SELECT id, username, password_hash, role, session_version
         FROM users
         WHERE username = ?
         "#,
@@ -218,6 +218,7 @@ pub async fn authenticate_user(
         role: user.role.clone(),
         exp: expiration,
         iat: Utc::now().timestamp() as usize,
+        session_version: user.session_version,
     };
 
     let token = encode(
@@ -239,22 +240,48 @@ pub async fn authenticate_user(
     })
 }
 
-pub fn validate_token(token: &str) -> Result<Claims, AuthError> {
+pub async fn validate_token(pool: &SqlitePool, token: &str) -> Result<Claims, AuthError> {
     let validation = Validation::default();
     let decoded = decode::<Claims>(token, &DecodingKey::from_secret(jwt_secret()), &validation)
         .map_err(|_| AuthError {
             message: "Invalid token".to_string(),
         })?;
 
-    // Check if token is expired
-    let now = Utc::now().timestamp();
-    if decoded.claims.exp < now {
+    validate_session(pool, &decoded.claims).await
+}
+
+/// Recheck account state for both HTTP requests and established WebSockets.
+pub async fn validate_session(pool: &SqlitePool, claims: &Claims) -> Result<Claims, AuthError> {
+    if claims.exp <= Utc::now().timestamp() {
         return Err(AuthError {
             message: "Token expired".to_string(),
         });
     }
 
-    Ok(decoded.claims)
+    let account: Option<(String, String, i64)> =
+        sqlx::query_as("SELECT username, role, session_version FROM users WHERE id = ?")
+            .bind(&claims.sub)
+            .fetch_optional(pool)
+            .await
+            .map_err(|_| AuthError {
+                message: "Session validation failed".to_string(),
+            })?;
+    let (username, role, version) = account.ok_or_else(|| AuthError {
+        message: "Session revoked".to_string(),
+    })?;
+    if version != claims.session_version
+        || role != claims.role
+        || !matches!(role.as_str(), "admin" | "user")
+    {
+        return Err(AuthError {
+            message: "Session revoked".to_string(),
+        });
+    }
+    Ok(Claims {
+        username,
+        role,
+        ..claims.clone()
+    })
 }
 
 #[cfg(test)]
@@ -281,7 +308,8 @@ mod bootstrap_tests {
                 role TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
-                last_login TEXT
+                last_login TEXT,
+                session_version INTEGER NOT NULL DEFAULT 0
             )
             "#,
         )

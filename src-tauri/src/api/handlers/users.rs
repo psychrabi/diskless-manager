@@ -2,7 +2,7 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    Json,
+    Extension, Json,
 };
 use bcrypt::{hash, DEFAULT_COST};
 use chrono::Utc;
@@ -11,9 +11,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    auth::validate_token,
     state::AppState,
-    types::{AuthError, User, UserResponse},
+    types::{AuthError, Claims, User, UserResponse},
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -45,26 +44,15 @@ impl From<AuthError> for ErrorResponse {
     }
 }
 
-/// Extract and validate JWT token from Authorization header
-fn extract_token(headers: &axum::http::HeaderMap) -> Result<String, StatusCode> {
-    let auth_header = headers
-        .get("Authorization")
-        .and_then(|h| h.to_str().ok())
-        .ok_or(StatusCode::UNAUTHORIZED)?;
-
-    if let Some(token) = auth_header.strip_prefix("Bearer ") {
-        Ok(token.to_string())
-    } else {
-        Err(StatusCode::UNAUTHORIZED)
-    }
-}
-
-/// Validate token and ensure user is admin
-fn validate_admin_token(token: &str) -> Result<(), StatusCode> {
-    let claims = validate_token(token).map_err(|_| StatusCode::UNAUTHORIZED)?;
-
+/// Authentication middleware supplies claims checked against the current account.
+fn require_admin(claims: &Claims) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
     if claims.role != "admin" {
-        return Err(StatusCode::FORBIDDEN);
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: "Forbidden: admin role required".to_string(),
+            }),
+        ));
     }
 
     Ok(())
@@ -73,29 +61,13 @@ fn validate_admin_token(token: &str) -> Result<(), StatusCode> {
 /// List all users
 pub async fn list_users(
     State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
+    Extension(claims): Extension<Claims>,
 ) -> Result<Json<Vec<UserResponse>>, (StatusCode, Json<ErrorResponse>)> {
-    let token = extract_token(&headers).map_err(|e| {
-        (
-            e,
-            Json(ErrorResponse {
-                error: "Unauthorized".to_string(),
-            }),
-        )
-    })?;
-
-    validate_admin_token(&token).map_err(|e| {
-        (
-            e,
-            Json(ErrorResponse {
-                error: "Forbidden: admin role required".to_string(),
-            }),
-        )
-    })?;
+    require_admin(&claims)?;
 
     let users = sqlx::query_as::<_, User>(
         r#"
-        SELECT id, username, password_hash, role
+        SELECT id, username, password_hash, role, session_version
         FROM users
         ORDER BY username
         "#,
@@ -126,30 +98,14 @@ pub async fn list_users(
 /// Get a specific user by ID
 pub async fn get_user(
     State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
+    Extension(claims): Extension<Claims>,
     Path(user_id): Path<String>,
 ) -> Result<Json<UserResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let token = extract_token(&headers).map_err(|e| {
-        (
-            e,
-            Json(ErrorResponse {
-                error: "Unauthorized".to_string(),
-            }),
-        )
-    })?;
-
-    validate_admin_token(&token).map_err(|e| {
-        (
-            e,
-            Json(ErrorResponse {
-                error: "Forbidden: admin role required".to_string(),
-            }),
-        )
-    })?;
+    require_admin(&claims)?;
 
     let user = sqlx::query_as::<_, User>(
         r#"
-        SELECT id, username, password_hash, role
+        SELECT id, username, password_hash, role, session_version
         FROM users
         WHERE id = ?
         "#,
@@ -176,26 +132,10 @@ pub async fn get_user(
 /// Create a new user
 pub async fn create_user(
     State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
+    Extension(claims): Extension<Claims>,
     Json(request): Json<CreateUserRequest>,
 ) -> Result<(StatusCode, Json<UserResponse>), (StatusCode, Json<ErrorResponse>)> {
-    let token = extract_token(&headers).map_err(|e| {
-        (
-            e,
-            Json(ErrorResponse {
-                error: "Unauthorized".to_string(),
-            }),
-        )
-    })?;
-
-    validate_admin_token(&token).map_err(|e| {
-        (
-            e,
-            Json(ErrorResponse {
-                error: "Forbidden: admin role required".to_string(),
-            }),
-        )
-    })?;
+    require_admin(&claims)?;
 
     // Validate role
     if request.role != "admin" && request.role != "user" {
@@ -261,32 +201,16 @@ pub async fn create_user(
 /// Update user details (username and/or role)
 pub async fn update_user(
     State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
+    Extension(claims): Extension<Claims>,
     Path(user_id): Path<String>,
     Json(request): Json<UpdateUserRequest>,
 ) -> Result<Json<UserResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let token = extract_token(&headers).map_err(|e| {
-        (
-            e,
-            Json(ErrorResponse {
-                error: "Unauthorized".to_string(),
-            }),
-        )
-    })?;
-
-    validate_admin_token(&token).map_err(|e| {
-        (
-            e,
-            Json(ErrorResponse {
-                error: "Forbidden: admin role required".to_string(),
-            }),
-        )
-    })?;
+    require_admin(&claims)?;
 
     // Fetch current user
     let user = sqlx::query_as::<_, User>(
         r#"
-        SELECT id, username, password_hash, role
+        SELECT id, username, password_hash, role, session_version
         FROM users
         WHERE id = ?
         "#,
@@ -321,7 +245,7 @@ pub async fn update_user(
     sqlx::query(
         r#"
         UPDATE users
-        SET username = ?, role = ?, updated_at = ?
+        SET username = ?, role = ?, updated_at = ?, session_version = session_version + 1
         WHERE id = ?
         "#,
     )
@@ -352,27 +276,11 @@ pub async fn update_user(
 /// Update user password (admin can change any user's password)
 pub async fn update_user_password(
     State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
+    Extension(claims): Extension<Claims>,
     Path(user_id): Path<String>,
     Json(request): Json<UpdateUserPasswordRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
-    let token = extract_token(&headers).map_err(|e| {
-        (
-            e,
-            Json(ErrorResponse {
-                error: "Unauthorized".to_string(),
-            }),
-        )
-    })?;
-
-    validate_admin_token(&token).map_err(|e| {
-        (
-            e,
-            Json(ErrorResponse {
-                error: "Forbidden: admin role required".to_string(),
-            }),
-        )
-    })?;
+    require_admin(&claims)?;
 
     // Hash new password
     let password_hash = hash(&request.password, DEFAULT_COST).map_err(|e| {
@@ -389,7 +297,7 @@ pub async fn update_user_password(
     let result = sqlx::query(
         r#"
         UPDATE users
-        SET password_hash = ?, updated_at = ?
+        SET password_hash = ?, updated_at = ?, session_version = session_version + 1
         WHERE id = ?
         "#,
     )
@@ -426,35 +334,10 @@ pub async fn update_user_password(
 /// Delete a user
 pub async fn delete_user(
     State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
+    Extension(claims): Extension<Claims>,
     Path(user_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
-    let token = extract_token(&headers).map_err(|e| {
-        (
-            e,
-            Json(ErrorResponse {
-                error: "Unauthorized".to_string(),
-            }),
-        )
-    })?;
-
-    let claims = validate_token(&token).map_err(|_| {
-        (
-            StatusCode::UNAUTHORIZED,
-            Json(ErrorResponse {
-                error: "Invalid token".to_string(),
-            }),
-        )
-    })?;
-
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: "Forbidden: admin role required".to_string(),
-            }),
-        ));
-    }
+    require_admin(&claims)?;
 
     // Prevent deleting yourself
     if claims.sub == user_id {
@@ -469,7 +352,7 @@ pub async fn delete_user(
     // Fetch user to get username for logging
     let user = sqlx::query_as::<_, User>(
         r#"
-        SELECT id, username, password_hash, role
+        SELECT id, username, password_hash, role, session_version
         FROM users
         WHERE id = ?
         "#,

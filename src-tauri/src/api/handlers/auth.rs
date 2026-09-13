@@ -41,9 +41,10 @@ pub struct ValidateTokenResponse {
 }
 
 pub async fn validate_auth_token(
+    State(state): State<AppState>,
     Json(request): Json<ValidateTokenRequest>,
 ) -> Result<Json<ValidateTokenResponse>, StatusCode> {
-    match validate_token(&request.token) {
+    match validate_token(&state.db_pool, &request.token).await {
         Ok(claims) => {
             info!("token validation success: user={}", claims.username);
             Ok(Json(ValidateTokenResponse {
@@ -109,12 +110,12 @@ pub async fn update_admin_password(
     // Fetch the authenticated administrator from database
     let admin_user = sqlx::query_as::<_, crate::types::User>(
         r#"
-        SELECT id, username, password_hash, role
+        SELECT id, username, password_hash, role, session_version
         FROM users
-        WHERE username = ?
+        WHERE id = ?
         "#,
     )
-    .bind(&claims.username)
+    .bind(&claims.sub)
     .fetch_one(&state.db_pool)
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -136,7 +137,7 @@ pub async fn update_admin_password(
     sqlx::query(
         r#"
         UPDATE users
-        SET password_hash = ?, updated_at = ?
+        SET password_hash = ?, updated_at = ?, session_version = session_version + 1
         WHERE id = ?
         "#,
     )

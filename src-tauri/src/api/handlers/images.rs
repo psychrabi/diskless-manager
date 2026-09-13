@@ -396,8 +396,12 @@ pub async fn set_default_image(
 
 pub async fn rollback_snapshot(
     State(state): State<AppState>,
+    axum::Extension(claims): axum::Extension<crate::types::Claims>,
     Path((master_name, snapshot_name)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    if claims.role != "admin" {
+        return Err(StatusCode::FORBIDDEN);
+    }
     /*
      * Rollback is intentionally left as a legacy operation
      * for this stage.
