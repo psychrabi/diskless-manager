@@ -1,6 +1,7 @@
 use crate::{
-    core::client::ClientManager,
+    domain::ClientId,
     infrastructure::dhcp::{create_dhcp_entry_for_server, dhcp_entry_matches, format_client_name},
+    persistence::ClientRepository,
     state::AppState,
     DHCP_CLIENTS_PATH,
 };
@@ -93,8 +94,7 @@ fn dhcp_host_exists(content: &str, client_name: &str) -> bool {
 }
 
 pub async fn inspect_dhcp(state: &AppState) -> anyhow::Result<DhcpReconciliationSummary> {
-    let manager = ClientManager::new(state.db_pool.clone());
-    let clients = manager.list().await?;
+    let clients = ClientRepository::new(state.db_pool.clone()).find_all().await?;
     let content = tokio::fs::read_to_string(DHCP_CLIENTS_PATH)
         .await
         .unwrap_or_default();
@@ -105,7 +105,7 @@ pub async fn inspect_dhcp(state: &AppState) -> anyhow::Result<DhcpReconciliation
     for client in clients {
         if !client.enabled || client.master.trim().is_empty() {
             summary.push(DhcpReconciliationEntry {
-                client_id: client.id,
+                client_id: client.id.to_string(),
                 client_name: client.name,
                 outcome: DhcpReconciliationOutcome::Skipped,
                 message: "Client has no enabled DHCP configuration to reconcile".to_string(),
@@ -117,7 +117,7 @@ pub async fn inspect_dhcp(state: &AppState) -> anyhow::Result<DhcpReconciliation
             Some(value) if !value.trim().is_empty() => value,
             _ => {
                 summary.push(DhcpReconciliationEntry {
-                    client_id: client.id,
+                    client_id: client.id.to_string(),
                     client_name: client.name,
                     outcome: DhcpReconciliationOutcome::Error,
                     message: "Client has no persisted iSCSI target IQN".to_string(),
@@ -126,10 +126,11 @@ pub async fn inspect_dhcp(state: &AppState) -> anyhow::Result<DhcpReconciliation
             }
         };
 
+        let client_ip = client.ip.to_string();
         let desired = create_dhcp_entry_for_server(
             &client.name,
-            &client.mac,
-            &client.ip,
+            client.mac.as_str(),
+            &client_ip,
             target_iqn,
             &server_ip,
         );
@@ -147,7 +148,7 @@ pub async fn inspect_dhcp(state: &AppState) -> anyhow::Result<DhcpReconciliation
         };
 
         summary.push(DhcpReconciliationEntry {
-            client_id: client.id,
+            client_id: client.id.to_string(),
             client_name: client.name,
             outcome,
             message,
@@ -161,8 +162,11 @@ pub async fn repair_client_dhcp(
     state: &AppState,
     client_id: &str,
 ) -> anyhow::Result<DhcpReconciliationEntry> {
-    let manager = ClientManager::new(state.db_pool.clone());
-    let client = manager.get(client_id).await?;
+    let id = ClientId::from_string(client_id.to_owned()).map_err(anyhow::Error::msg)?;
+    let client = ClientRepository::new(state.db_pool.clone())
+        .find_by_id(&id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("client '{}' not found", client_id))?;
 
     if !client.enabled || client.master.trim().is_empty() {
         anyhow::bail!("client '{}' has no enabled DHCP configuration", client_id);
@@ -177,10 +181,11 @@ pub async fn repair_client_dhcp(
         })?;
 
     let server_ip = state.settings.read().await.dhcp.next_server_ip.clone();
+    let client_ip = client.ip.to_string();
     let desired = create_dhcp_entry_for_server(
         &client.name,
-        &client.mac,
-        &client.ip,
+        client.mac.as_str(),
+        &client_ip,
         target_iqn,
         &server_ip,
     );
@@ -197,7 +202,7 @@ pub async fn repair_client_dhcp(
     }
 
     Ok(DhcpReconciliationEntry {
-        client_id: client.id,
+        client_id: client.id.to_string(),
         client_name: client.name,
         outcome: DhcpReconciliationOutcome::Ready,
         message: "DHCP entry reconciled successfully".to_string(),
