@@ -1,39 +1,17 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    response::{IntoResponse, Response},
     Json,
 };
-use serde::Serialize;
 
+use super::clients::ErrorResponse;
 use crate::state::AppState;
-
-#[derive(Debug, Serialize)]
-pub struct ChapRotationError {
-    pub status: u16,
-    pub error: String,
-}
-
-impl IntoResponse for ChapRotationError {
-    fn into_response(self) -> Response {
-        let status = StatusCode::from_u16(self.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-        (
-            status,
-            Json(serde_json::json!({
-                "code": if status == StatusCode::NOT_FOUND { "not_found" } else { "internal_error" },
-                "message": self.error,
-                "details": {},
-            })),
-        )
-            .into_response()
-    }
-}
 
 /// Rotate a client's iSCSI CHAP secret without rebuilding storage.
 pub async fn rotate_client_chap(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<serde_json::Value>, ChapRotationError> {
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     let _client_guard = state.client_mutations.lock().await;
 
     let (client, credentials) = state
@@ -43,14 +21,22 @@ pub async fn rotate_client_chap(
         .await
         .map_err(|error| {
             let not_found = error.to_string().contains("client not found");
-            ChapRotationError {
-                status: if not_found { 404 } else { 500 },
-                error: if not_found {
-                    format!("Client not found: {id}")
-                } else {
-                    format!("Failed to rotate CHAP credentials: {error}")
-                },
-            }
+            let status = if not_found {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            (
+                status,
+                Json(ErrorResponse {
+                    status: status.as_u16(),
+                    error: if not_found {
+                        format!("Client not found: {id}")
+                    } else {
+                        format!("Failed to rotate CHAP credentials: {error}")
+                    },
+                }),
+            )
         })?;
 
     if let Some(target_iqn) = client
@@ -63,9 +49,14 @@ pub async fn rotate_client_chap(
             .application
             .storage
             .set_target_chap(target_iqn, Some(&credentials))
-            .map_err(|error| ChapRotationError {
-                status: 500,
-                error: format!("Failed to apply CHAP secret: {error}"),
+            .map_err(|error| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                        error: format!("Failed to apply CHAP secret: {error}"),
+                    }),
+                )
             })?;
 
         let settings = state.settings.read().await;
