@@ -44,14 +44,15 @@ impl BootLogRepository {
         .await
         .context("failed to query client boot history")?;
 
-        rows.into_iter()
-            .map(
+        Ok(rows
+            .into_iter()
+            .filter_map(
                 |(id, client_id, image_id, boot_time, success, duration_ms, message)| {
                     let boot_time = DateTime::parse_from_rfc3339(&boot_time)
-                        .map(|value| value.with_timezone(&Utc))
-                        .with_context(|| format!("invalid stored boot timestamp: {boot_time}"))?;
+                        .ok()?
+                        .with_timezone(&Utc);
 
-                    Ok(BootLogEntry {
+                    Some(BootLogEntry {
                         id,
                         client_id,
                         image_id,
@@ -62,6 +63,6 @@ impl BootLogRepository {
                     })
                 },
             )
-            .collect()
+            .collect())
     }
 }
