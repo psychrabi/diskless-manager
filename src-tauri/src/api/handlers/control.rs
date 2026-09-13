@@ -318,6 +318,54 @@ impl IntoResponse for ErrorResponse {
     }
 }
 
+/// Minimal transport-facing view used by the legacy control handlers.
+/// Client loading itself is delegated to the authoritative application service.
+struct ControlClient {
+    id: String,
+    name: String,
+    ip: String,
+    master: String,
+}
+
+async fn load_control_client(
+    state: &AppState,
+    client_id: &str,
+) -> Result<ControlClient, (StatusCode, Json<ErrorResponse>)> {
+    let client = state
+        .application
+        .clients
+        .get_by_string(client_id)
+        .await
+        .map_err(|e| {
+            error!("Failed to get client {}: {}", client_id, e);
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    status: StatusCode::NOT_FOUND.as_u16(),
+                    error: format!("Client not found: {}", client_id),
+                    details: None,
+                }),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    status: StatusCode::NOT_FOUND.as_u16(),
+                    error: format!("Client not found: {}", client_id),
+                    details: None,
+                }),
+            )
+        })?;
+
+    Ok(ControlClient {
+        id: client.id.to_string(),
+        name: client.name,
+        ip: client.ip.to_string(),
+        master: client.master,
+    })
+}
+
 /// Handle shutdown request for a client
 pub async fn shutdown_client(
     State(state): State<AppState>,
@@ -332,19 +380,7 @@ pub async fn shutdown_client(
         client_id, force, delay_minutes
     );
 
-    // Get the client
-    let manager = crate::core::client::ClientManager::new(state.db_pool.clone());
-    let client = manager.get(&client_id).await.map_err(|e| {
-        error!("Failed to get client {}: {}", client_id, e);
-        (
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                status: StatusCode::NOT_FOUND.as_u16(),
-                error: format!("Client not found: {}", client_id),
-                details: None,
-            }),
-        )
-    })?;
+    let client = load_control_client(&state, &client_id).await?;
 
     let ip = &client.ip;
     if ip.is_empty() {
@@ -510,19 +546,7 @@ pub async fn reboot_client(
         client_id, force, delay_minutes
     );
 
-    // Get the client
-    let manager = crate::core::client::ClientManager::new(state.db_pool.clone());
-    let client = manager.get(&client_id).await.map_err(|e| {
-        error!("Failed to get client {}: {}", client_id, e);
-        (
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                status: StatusCode::NOT_FOUND.as_u16(),
-                error: format!("Client not found: {}", client_id),
-                details: None,
-            }),
-        )
-    })?;
+    let client = load_control_client(&state, &client_id).await?;
 
     let ip = &client.ip;
     if ip.is_empty() {
@@ -683,19 +707,7 @@ pub async fn remote_desktop_client(
 ) -> Result<Json<RemoteDesktopResponse>, (StatusCode, Json<ErrorResponse>)> {
     info!("Remote desktop request for client {}", client_id);
 
-    // Get the client
-    let manager = crate::core::client::ClientManager::new(state.db_pool.clone());
-    let client = manager.get(&client_id).await.map_err(|e| {
-        error!("Failed to get client {}: {}", client_id, e);
-        (
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                status: StatusCode::NOT_FOUND.as_u16(),
-                error: format!("Client not found: {}", client_id),
-                details: None,
-            }),
-        )
-    })?;
+    let client = load_control_client(&state, &client_id).await?;
 
     let ip = client.ip.clone();
     if ip.is_empty() {
