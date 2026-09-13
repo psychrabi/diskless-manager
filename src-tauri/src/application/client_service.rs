@@ -90,8 +90,6 @@ impl ClientService {
         client.chap_user = Some(credentials.username.clone());
         client.chap_secret = Some(credentials.password.clone());
         client.chap_enabled = true;
-        client.updated_at = Utc::now();
-        client.last_modified = Some(client.updated_at);
 
         self.repository
             .update(&client)
