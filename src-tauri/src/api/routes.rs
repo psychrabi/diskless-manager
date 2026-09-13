@@ -14,7 +14,8 @@ use crate::api::handlers::{
         bootstrap_first_admin, check_admin_exists, login, update_admin_password,
         validate_auth_token,
     },
-    clients::{create_client, delete_client, rotate_client_chap, update_client},
+    client_chap::rotate_client_chap,
+    clients::{create_client, delete_client, update_client},
     clients_v2::{get_client, get_client_boot_history, list_clients},
     config::get_config,
     control::{
@@ -66,7 +67,6 @@ pub fn create_app(state: crate::state::AppState) -> Router {
     let cors = cors_layer();
     let rate_limiter = AuthRateLimiter::new();
 
-    // Periodically purge stale rate-limit entries.
     {
         let limiter = rate_limiter.clone();
         tokio::spawn(async move {
@@ -78,7 +78,6 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         });
     }
 
-    // Health check checks DB connectivity.
     let health_pool = state.db_pool.clone();
     let public_router = Router::new()
         .route(
