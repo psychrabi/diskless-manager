@@ -200,6 +200,29 @@ impl ClientService {
         self.update(&id, request).await
     }
 
+    /// Update only whether the client is allowed to boot, preserving its
+    /// lifecycle status. The legacy update path treats `enabled` as a boot
+    /// permission flag independent from provisioning/online/offline status.
+    pub async fn set_enabled_flag(&self, id: &str, enabled: bool) -> Result<Client> {
+        let client_id = ClientId::from_string(id.to_owned()).map_err(anyhow::Error::from)?;
+        let mut client = self
+            .repository
+            .find_by_id(&client_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("client not found: {id}"))?;
+
+        client.enabled = enabled;
+        client.updated_at = Utc::now();
+        client.last_modified = Some(client.updated_at);
+
+        self.repository
+            .update(&client)
+            .await
+            .context("failed to persist client boot permission")?;
+
+        Ok(client)
+    }
+
     pub async fn game_selection(&self, id: &str) -> Result<Vec<String>> {
         let id = ClientId::from_string(id.to_owned()).map_err(anyhow::Error::from)?;
         self.repository.game_selection(&id).await
