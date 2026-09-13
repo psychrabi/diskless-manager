@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use super::ClientService;
 use super::NvmeOfBootService;
 use super::ProvisioningService;
 use super::StorageService;
@@ -17,6 +18,7 @@ use crate::infrastructure::{
 /// Infrastructure implementations are constructed here and injected
 /// into application services.
 pub struct ApplicationServices {
+    pub clients: ClientService,
     pub storage: Arc<StorageService>,
     pub provisioning: ProvisioningService,
     pub nvmeof_boot: NvmeOfBootService,
@@ -30,11 +32,13 @@ impl ApplicationServices {
 
         let storage = Arc::new(StorageService::new(image_backend, iscsi));
         let clients = ClientRepository::new(pool);
+        let client_service = ClientService::new(clients.clone());
         let provisioning =
             ProvisioningService::new(storage.clone(), clients.clone(), Arc::new(IscDhcpPublisher));
         let nvmeof_boot = NvmeOfBootService::new(clients);
 
         Self {
+            clients: client_service,
             storage,
             provisioning,
             nvmeof_boot,

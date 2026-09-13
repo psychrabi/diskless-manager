@@ -6,7 +6,7 @@ use axum::{
 };
 use serde::Serialize;
 
-use crate::{application::ClientService, domain::ClientId, state::AppState};
+use crate::{domain::ClientId, state::AppState};
 
 #[derive(Debug, Serialize)]
 pub struct ClientApiError {
@@ -19,12 +19,6 @@ impl IntoResponse for ClientApiError {
     }
 }
 
-fn service(state: &AppState) -> ClientService {
-    ClientService::new(crate::persistence::ClientRepository::new(
-        state.db_pool.clone(),
-    ))
-}
-
 /// GET /api/clients
 ///
 /// V2 read path.
@@ -35,16 +29,22 @@ fn service(state: &AppState) -> ClientService {
 pub async fn list_clients(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<crate::domain::Client>>, ClientApiError> {
-    service(&state).list().await.map(Json).map_err(|error| {
-        tracing::error!(
-            error = %error,
-            "failed to list clients"
-        );
+    state
+        .application
+        .clients
+        .list()
+        .await
+        .map(Json)
+        .map_err(|error| {
+            tracing::error!(
+                error = %error,
+                "failed to list clients"
+            );
 
-        ClientApiError {
-            error: "Failed to load clients".to_string(),
-        }
-    })
+            ClientApiError {
+                error: "Failed to load clients".to_string(),
+            }
+        })
 }
 
 /// GET /api/clients/{id}
@@ -58,7 +58,9 @@ pub async fn get_client(
         error: error.to_string(),
     })?;
 
-    match service(&state)
+    match state
+        .application
+        .clients
         .get(&client_id)
         .await
         .map_err(|error| ClientApiError {
