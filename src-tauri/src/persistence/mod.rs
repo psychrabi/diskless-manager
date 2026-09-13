@@ -1,3 +1,3 @@
 pub mod repositories;
 
-pub use repositories::ClientRepository;
+pub use repositories::{BootLogRepository, ClientRepository};
