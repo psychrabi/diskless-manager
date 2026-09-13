@@ -1,10 +1,11 @@
 use crate::application::storage_service::{resolve_game_selection, StorageService};
-use crate::core::client::{Client, ClientManager};
 use crate::core::provisioning::ClientStoragePaths;
-use crate::domain::storage::{
-    ClientStorageSpec, StorageReconcileResult, StorageSource, StorageState,
+use crate::domain::{
+    storage::{ClientStorageSpec, StorageReconcileResult, StorageSource, StorageState},
+    Client, ClientId,
 };
 use crate::infrastructure::iscsi::target_has_active_sessions;
+use crate::persistence::ClientRepository;
 use crate::state::AppState;
 use serde::Serialize;
 
@@ -71,8 +72,7 @@ impl ReconciliationSummary {
 ///
 /// Inspection never changes infrastructure. Repair is a separate operation.
 pub async fn inspect_storage(state: &AppState) -> anyhow::Result<ReconciliationSummary> {
-    let manager = ClientManager::new(state.db_pool.clone());
-    let clients = manager.list().await?;
+    let clients = ClientRepository::new(state.db_pool.clone()).find_all().await?;
 
     let mut summary = ReconciliationSummary::new();
 
@@ -81,7 +81,7 @@ pub async fn inspect_storage(state: &AppState) -> anyhow::Result<ReconciliationS
             Ok(Some(spec)) => match state.application.storage.reconcile_client_storage(&spec) {
                 Ok(result) => summary.push(entry_from_result(&client, &spec, result)),
                 Err(error) => summary.push(ReconciliationEntry {
-                    client_id: client.id.clone(),
+                    client_id: client.id.to_string(),
                     client_name: client.name.clone(),
                     outcome: ReconciliationOutcome::Error,
                     message: error.to_string(),
@@ -90,7 +90,7 @@ pub async fn inspect_storage(state: &AppState) -> anyhow::Result<ReconciliationS
                 }),
             },
             Ok(None) => summary.push(ReconciliationEntry {
-                client_id: client.id.clone(),
+                client_id: client.id.to_string(),
                 client_name: client.name.clone(),
                 outcome: ReconciliationOutcome::Skipped,
                 message: "Client has no storage configuration to reconcile".to_string(),
@@ -101,7 +101,7 @@ pub async fn inspect_storage(state: &AppState) -> anyhow::Result<ReconciliationS
                     .or_else(|| (!client.master.is_empty()).then(|| client.master.clone())),
             }),
             Err(error) => summary.push(ReconciliationEntry {
-                client_id: client.id.clone(),
+                client_id: client.id.to_string(),
                 client_name: client.name.clone(),
                 outcome: ReconciliationOutcome::Error,
                 message: error.to_string(),
@@ -139,8 +139,11 @@ pub async fn repair_client_storage(
     state: &AppState,
     client_id: &str,
 ) -> anyhow::Result<ReconciliationEntry> {
-    let manager = ClientManager::new(state.db_pool.clone());
-    let client = manager.get(client_id).await?;
+    let id = ClientId::from_string(client_id.to_owned()).map_err(|error| anyhow::anyhow!(error))?;
+    let client = ClientRepository::new(state.db_pool.clone())
+        .find_by_id(&id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("client '{}' not found", client_id))?;
     let spec = storage_spec_for_client(&state.db_pool, &client).await?.ok_or_else(|| {
         anyhow::anyhow!(
             "client '{}' has no storage configuration to reconcile",
@@ -159,7 +162,7 @@ pub async fn repair_client_storage(
         .reconcile_client_storage_in_place(&spec)?;
 
     Ok(ReconciliationEntry {
-        client_id: client.id,
+        client_id: client.id.to_string(),
         client_name: client.name,
         outcome: ReconciliationOutcome::Ready,
         message: format!("Storage reconciled successfully for '{}'", client_id),
@@ -172,7 +175,8 @@ pub async fn repair_client_storage(
 pub(crate) async fn stored_game_selection(
     pool: &sqlx::SqlitePool,
     client_id: &str,
-) -> anyhow::Result<Vec<String>> {    Ok(sqlx::query_scalar::<_, String>(
+) -> anyhow::Result<Vec<String>> {
+    Ok(sqlx::query_scalar::<_, String>(
         "SELECT master_dataset FROM client_game_disks WHERE client_id = ?",
     )
     .bind(client_id)
@@ -271,7 +275,7 @@ async fn storage_spec_for_client(
         return Ok(None);
     }
 
-    let defaults = ClientStoragePaths::new(&client.name, &client.mac);
+    let defaults = ClientStoragePaths::new(&client.name, client.mac.as_str());
 
     let target_iqn = client
         .target_iqn
@@ -283,18 +287,17 @@ async fn storage_spec_for_client(
         .clone()
         .unwrap_or_else(|| defaults.backstore.clone());
 
-    let use_game_disk = client.use_game_disk.unwrap_or(false);
-    let game_disks =
-        resolved_game_selection(pool, &client.id, use_game_disk).await?;
+    let use_game_disk = client.use_game_disk;
+    let game_disks = resolved_game_selection(pool, client.id.as_str(), use_game_disk).await?;
     // Enforced targets converge here too: generate on first repair so an
     // enabled-but-credless client (e.g. pre-CHAP record) heals instead of
     // provisioning open. Inspect gains an idempotent one-time write; the
     // alternative is silently skipping enforcement.
     let chap = ensure_chap_credentials(
         pool,
-        &client.id,
+        client.id.as_str(),
         &client.name,
-        client.chap_enabled.unwrap_or(false),
+        client.chap_enabled,
     )
     .await?;
 
@@ -308,7 +311,7 @@ async fn storage_spec_for_client(
             })?;
 
             return Ok(Some(ClientStorageSpec {
-                client_id: client.id.clone(),
+                client_id: client.id.to_string(),
                 source: StorageSource::Snapshot(snapshot.to_string()),
                 dataset,
                 backstore,
@@ -323,7 +326,7 @@ async fn storage_spec_for_client(
     };
 
     Ok(Some(ClientStorageSpec {
-        client_id: client.id.clone(),
+        client_id: client.id.to_string(),
         dataset: client.master.clone(),
         backstore,
         target_iqn,
@@ -364,7 +367,7 @@ fn entry_from_result(
     };
 
     ReconciliationEntry {
-        client_id: client.id.clone(),
+        client_id: client.id.to_string(),
         client_name: client.name.clone(),
         outcome,
         message,
@@ -376,6 +379,7 @@ fn entry_from_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::{BootMode, ClientStatus, MacAddress, PxeMode};
 
     #[test]
     fn summary_counts_outcomes() {
@@ -453,10 +457,10 @@ mod tests {
         let pool = sqlx::SqlitePool::connect(&url).await.unwrap();
         sqlx::migrate!("./migrations").run(&pool).await.unwrap();
         let client = Client {
-            id: "client-1".to_string(),
+            id: ClientId::from_string("client-1").unwrap(),
             name: "PC001".to_string(),
-            mac: "00:11:22:33:44:55".to_string(),
-            ip: "192.168.1.100".to_string(),
+            mac: MacAddress::parse("00:11:22:33:44:55").unwrap(),
+            ip: "192.168.1.100".parse().unwrap(),
             master: String::new(),
             enabled: true,
             created_at: chrono::Utc::now(),
@@ -467,14 +471,15 @@ mod tests {
             writeback: None,
             last_modified: None,
             block_device: None,
-            status: None,
-            mode: None,
-            pxe_mode: None,
-            keep_writeback: Some(true),
-            use_game_disk: Some(false),
+            status: ClientStatus::Offline,
+            mode: BootMode::Normal,
+            pxe_mode: PxeMode::Uefi,
+            keep_writeback: true,
+            use_game_disk: false,
+            game_disks: Vec::new(),
             chap_user: None,
             chap_secret: None,
-            chap_enabled: Some(false),
+            chap_enabled: false,
         };
 
         let spec = storage_spec_for_client(&pool, &client).await.unwrap();
