@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod client_chap;
 pub mod client_delete;
+pub mod client_update;
 pub mod clients;
 pub mod clients_v2;
 pub mod config;
