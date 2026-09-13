@@ -1,8 +1,12 @@
 use once_cell::sync::OnceCell;
+use std::net::IpAddr;
+use std::str::FromStr;
 use std::sync::RwLock;
 
+use crate::domain::{BootMode, ClientId, ClientStatus, MacAddress, PxeMode};
+use crate::persistence::ClientRepository;
 use crate::types::AppConfig;
-use log::info;
+use log::{info, warn};
 use serde_json::{json, Value};
 
 static CONFIG_CACHE: OnceCell<RwLock<AppConfig>> = OnceCell::new();
@@ -36,6 +40,112 @@ async fn upsert_config_value(
     Ok(())
 }
 
+fn parse_legacy_datetime(value: &str) -> anyhow::Result<chrono::DateTime<chrono::Utc>> {
+    if let Ok(value) = chrono::DateTime::parse_from_rfc3339(value) {
+        return Ok(value.with_timezone(&chrono::Utc));
+    }
+
+    if let Ok(value) = chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S") {
+        return Ok(value.and_utc());
+    }
+
+    anyhow::bail!("invalid legacy datetime: {value}")
+}
+
+fn legacy_client_to_domain(client: &crate::core::client::Client) -> anyhow::Result<crate::domain::Client> {
+    let status = match client.status.as_deref().map(str::to_ascii_lowercase).as_deref() {
+        None | Some("provisioning") => ClientStatus::Provisioning,
+        Some("ready") => ClientStatus::Ready,
+        Some("online") => ClientStatus::Online,
+        Some("offline") => ClientStatus::Offline,
+        Some("error") => ClientStatus::Error,
+        Some("disabled") => ClientStatus::Disabled,
+        Some(value) => anyhow::bail!("unsupported legacy client status: {value}"),
+    };
+
+    let mode = match client.mode.as_deref().map(str::to_ascii_lowercase).as_deref() {
+        None | Some("normal") => BootMode::Normal,
+        Some("super") => BootMode::Super,
+        Some(value) => anyhow::bail!("unsupported legacy client mode: {value}"),
+    };
+
+    let pxe_mode = match client
+        .pxe_mode
+        .as_deref()
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        None | Some("uefi") => PxeMode::Uefi,
+        Some("bios") | Some("legacy") => PxeMode::Bios,
+        Some(value) => anyhow::bail!("unsupported legacy PXE mode: {value}"),
+    };
+
+    let last_modified = client
+        .last_modified
+        .as_deref()
+        .map(parse_legacy_datetime)
+        .transpose()?;
+
+    Ok(crate::domain::Client {
+        id: ClientId::from_string(client.id.clone())?,
+        name: client.name.clone(),
+        mac: MacAddress::parse(&client.mac)?,
+        ip: IpAddr::from_str(client.ip.trim())
+            .map_err(|_| anyhow::anyhow!("invalid legacy client IP: {}", client.ip))?,
+        master: client.master.clone(),
+        enabled: client.enabled,
+        created_at: client.created_at,
+        updated_at: client.updated_at,
+        snapshot: client.snapshot.clone(),
+        block_store: client.block_store.clone(),
+        target_iqn: client.target_iqn.clone(),
+        writeback: client.writeback.clone(),
+        last_modified,
+        block_device: client.block_device.clone(),
+        status,
+        mode,
+        pxe_mode,
+        keep_writeback: client.keep_writeback.unwrap_or(true),
+        use_game_disk: client.use_game_disk.unwrap_or(false),
+        game_disks: Vec::new(),
+        chap_user: client.chap_user.clone(),
+        chap_secret: client.chap_secret.clone(),
+        chap_enabled: client.chap_enabled.unwrap_or(false),
+    })
+}
+
+async fn persist_config_client(
+    pool: &sqlx::SqlitePool,
+    client: &crate::core::client::Client,
+) -> anyhow::Result<()> {
+    let domain_client = match legacy_client_to_domain(client) {
+        Ok(client) => client,
+        Err(error) => {
+            warn!(
+                "legacy config client '{}' is not domain-compatible ({}); using compatibility upsert",
+                client.id, error
+            );
+            return crate::core::client::ClientManager::upsert_client(pool, client).await;
+        }
+    };
+
+    let repository = ClientRepository::new(pool.clone());
+    match repository.find_by_id(&domain_client.id).await {
+        Ok(Some(_)) => repository.update(&domain_client).await,
+        Ok(None) => repository.insert(&domain_client).await,
+        Err(error) => {
+            // An existing historical row can still contain placeholder values
+            // that the strict domain mapper intentionally rejects. Preserve the
+            // upgrade path instead of making config writes fail on those rows.
+            warn!(
+                "client '{}' could not be loaded through ClientRepository ({}); using compatibility upsert",
+                client.id, error
+            );
+            crate::core::client::ClientManager::upsert_client(pool, client).await
+        }
+    }
+}
+
 pub async fn write_config(pool: &sqlx::SqlitePool, config: &AppConfig) -> anyhow::Result<()> {
     set_config(config);
 
@@ -51,9 +161,11 @@ pub async fn write_config(pool: &sqlx::SqlitePool, config: &AppConfig) -> anyhow
         }
     }
 
-    // 3. Persist clients using ClientManager's upsert function
+    // 3. Persist domain-compatible clients through the authoritative repository.
+    // Historical rows that cannot yet be represented by the strict domain model
+    // retain the legacy upsert as an explicit compatibility fallback.
     for client in &config.clients {
-        crate::core::client::ClientManager::upsert_client(pool, client).await?;
+        persist_config_client(pool, client).await?;
     }
 
     Ok(())
@@ -123,7 +235,9 @@ pub async fn read_config_db(pool: &sqlx::SqlitePool) -> anyhow::Result<AppConfig
         last_modified: Option<String>,
     }
 
-    // Get clients from DB
+    // Get clients from DB. This remains intentionally compatibility-oriented:
+    // config export must still be able to surface historical rows containing
+    // placeholder values that the strict domain repository would reject.
     let clients = sqlx::query_as::<_, ClientRow>(
         r#"
         SELECT id, name, mac, ip, master, enabled, snapshot, block_store, target_iqn,
