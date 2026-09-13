@@ -180,7 +180,8 @@ pub async fn update_client(
     Json(request): Json<UpdateClientRequest>,
 ) -> Result<Json<Client>, (StatusCode, Json<ErrorResponse>)> {
     if !is_game_only_candidate(&request) {
-        return super::client_update_base::update_client(State(state), Path(id), Json(request)).await;
+        return super::client_update_base::update_client(State(state), Path(id), Json(request))
+            .await;
     }
 
     let client_guard = state.client_mutations.lock().await;
@@ -211,7 +212,8 @@ pub async fn update_client(
 
     if !is_actual_game_only_update(&request, &existing) {
         drop(client_guard);
-        return super::client_update_base::update_client(State(state), Path(id), Json(request)).await;
+        return super::client_update_base::update_client(State(state), Path(id), Json(request))
+            .await;
     }
 
     let recovering: i64 = sqlx::query_scalar(
@@ -245,8 +247,8 @@ pub async fn update_client(
         .game_disks
         .clone()
         .unwrap_or_else(|| existing.game_disks.clone());
-    let resolved = resolve_effective_game_selection(effective_flag, &effective_stored).map_err(
-        |error| {
+    let resolved =
+        resolve_effective_game_selection(effective_flag, &effective_stored).map_err(|error| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
@@ -254,8 +256,7 @@ pub async fn update_client(
                     error: format!("Failed to resolve game selection: {error}"),
                 }),
             )
-        },
-    )?;
+        })?;
 
     let chap = if existing.chap_enabled {
         crate::core::reconciliation::ensure_chap_credentials(
