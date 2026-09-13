@@ -16,6 +16,7 @@ use tokio::time::interval;
 
 use crate::{
     metrics::{StorageTrafficMetrics, Throughput},
+    persistence::ClientRepository,
     state::AppState,
     types::Claims,
 };
@@ -86,10 +87,7 @@ async fn handle_metrics_socket(socket: WebSocket, state: AppState, claims: Claim
 
     loop {
         tokio::select! {
-            // Send metrics every 1 second
             _ = interval.tick() => {
-                // Bound the whole update (including collection and close flushing),
-                // so a stalled peer cannot indefinitely defer session revalidation.
                 let update = async {
                     if crate::auth::validate_session(&state.db_pool, &claims).await.is_err() {
                         let _ = sender.send(axum::extract::ws::Message::Close(None)).await;
@@ -119,8 +117,6 @@ async fn handle_metrics_socket(socket: WebSocket, state: AppState, claims: Claim
                     break;
                 }
             }
-
-            // Handle incoming messages
             msg = receiver.next() => {
                 match msg {
                     Some(Ok(axum::extract::ws::Message::Close(_))) => {
@@ -130,9 +126,7 @@ async fn handle_metrics_socket(socket: WebSocket, state: AppState, claims: Claim
                     Some(Ok(axum::extract::ws::Message::Ping(_))) => {
                         log::debug!("WebSocket ping received");
                     }
-                    Some(Ok(_)) => {
-                        // Ignore other message types
-                    }
+                    Some(Ok(_)) => {}
                     Some(Err(e)) => {
                         log::debug!("WebSocket receive error: {}", e);
                         break;
@@ -151,8 +145,8 @@ pub(crate) async fn fetch_metrics(state: &AppState) -> Result<MetricsUpdate, Str
     let client_ips = state.client_ips.read().await.clone();
     let settings = state.settings.read().await.clone();
     let iscsi_port = settings.iscsi.portal_port;
-    let registered_clients = crate::core::client::ClientManager::new(state.db_pool.clone())
-        .list()
+    let registered_clients = ClientRepository::new(state.db_pool.clone())
+        .find_all()
         .await
         .map_err(|error| format!("failed to load clients for metrics: {error}"))?;
     let mut target_by_ip = HashMap::new();
@@ -165,8 +159,9 @@ pub(crate) async fn fetch_metrics(state: &AppState) -> Result<MetricsUpdate, Str
                 settings.iscsi.target_prefix, normalized_name
             )
         });
-        lio_sources.push((client.ip.clone(), format!("block_{normalized_name}")));
-        target_by_ip.insert(client.ip, target_iqn);
+        let ip = client.ip.to_string();
+        lio_sources.push((ip.clone(), format!("block_{normalized_name}")));
+        target_by_ip.insert(ip, target_iqn);
     }
     let collector = Arc::clone(&state.metrics_collector);
     let (snapshot, lio_rates) = tokio::task::spawn_blocking(move || {
@@ -183,12 +178,9 @@ pub(crate) async fn fetch_metrics(state: &AppState) -> Result<MetricsUpdate, Str
 
     for mut sample in snapshot.clients {
         let ip = sample.ip;
-        // Disk totals must come from storage counters, not TCP packet accounting.
         sample.iscsi = lio_rates.get(&ip).cloned();
         if let Some(lio) = lio_rates.get(&ip).cloned() {
             sample.iscsi = Some(lio.clone());
-            // When conntrack accounting is unavailable, LIO still provides a
-            // measured lower bound for this client's network traffic.
             sample.network.get_or_insert(lio);
         }
         let connected = target_by_ip
@@ -239,7 +231,6 @@ mod tests {
         let claims = crate::auth::validate_token(&state.db_pool, &token)
             .await
             .unwrap();
-        // A frame larger than TCP buffers makes send wait for the peer to read.
         *state.client_ips.write().await = vec!["127.0.0.1".to_string(); 50_000];
         let pool = state.db_pool.clone();
         let (closed_tx, closed_rx) = tokio::sync::oneshot::channel();
@@ -279,7 +270,6 @@ mod tests {
             }
             assert_eq!(reader.read_u8().await.unwrap() & 0x0f, 1);
             sqlx::query("DELETE FROM users WHERE id = 'operator'").execute(&pool).await.unwrap();
-            // Keep the transport open without draining its unread metrics frame.
             closed_rx.await.expect("socket handler should terminate under backpressure");
             drop(reader);
         }).await;
