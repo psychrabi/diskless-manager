@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod client_chap;
 pub mod clients;
 pub mod clients_v2;
 pub mod config;
