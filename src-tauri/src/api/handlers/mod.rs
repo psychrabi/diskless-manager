@@ -2,6 +2,8 @@ pub mod auth;
 pub mod client_chap;
 pub mod client_delete;
 #[path = "client_update_entry.rs"]
+pub mod client_game_update;
+#[path = "client_enabled_update.rs"]
 pub mod client_update;
 #[path = "client_update.rs"]
 pub mod client_update_base;
