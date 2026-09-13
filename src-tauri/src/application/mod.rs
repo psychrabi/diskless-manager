@@ -1,6 +1,7 @@
 pub mod boot_history_service;
 pub mod client_lifecycle;
 pub mod client_service;
+pub mod client_storage_mapping;
 pub mod image_service;
 pub mod nvmeof_boot_service;
 pub mod provisioning_service;
