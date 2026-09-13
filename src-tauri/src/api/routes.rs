@@ -67,6 +67,7 @@ pub fn create_app(state: crate::state::AppState) -> Router {
     let cors = cors_layer();
     let rate_limiter = AuthRateLimiter::new();
 
+    // Periodically purge stale rate-limit entries.
     {
         let limiter = rate_limiter.clone();
         tokio::spawn(async move {
@@ -78,6 +79,7 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         });
     }
 
+    // Health check checks DB connectivity.
     let health_pool = state.db_pool.clone();
     let public_router = Router::new()
         .route(
