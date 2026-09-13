@@ -286,7 +286,7 @@ mod tests {
     use super::is_chap_only_update;
     use crate::core::client::UpdateClientRequest;
 
-    fn request() -> UpdateClientRequest {
+    fn chap_request() -> UpdateClientRequest {
         UpdateClientRequest {
             name: None,
             mac: None,
@@ -309,20 +309,20 @@ mod tests {
 
     #[test]
     fn chap_only_request_uses_typed_path() {
-        assert!(is_chap_only_update(&request()));
+        assert!(is_chap_only_update(&chap_request()));
     }
 
     #[test]
     fn chap_plus_other_changes_delegate() {
-        let mut request = request();
+        let mut request = chap_request();
         request.enabled = Some(false);
         assert!(!is_chap_only_update(&request));
 
-        let mut request = request();
+        let mut request = chap_request();
         request.game_disks = Some(vec!["tank/game/a".into()]);
         assert!(!is_chap_only_update(&request));
 
-        let mut request = request();
+        let mut request = chap_request();
         request.ip = Some("192.168.1.42".into());
         assert!(!is_chap_only_update(&request));
     }
