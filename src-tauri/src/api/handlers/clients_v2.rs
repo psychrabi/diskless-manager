@@ -1,10 +1,10 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     Json,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{domain::ClientId, state::AppState};
 
@@ -17,6 +17,11 @@ impl IntoResponse for ClientApiError {
     fn into_response(self) -> axum::response::Response {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(self)).into_response()
     }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BootHistoryQuery {
+    pub limit: Option<i32>,
 }
 
 /// GET /api/clients
@@ -72,4 +77,29 @@ pub async fn get_client(
             error: "Client not found".to_string(),
         }),
     }
+}
+
+/// GET /api/clients/{id}/boot-history
+///
+/// Read-only boot-history path backed by the application service rather than
+/// the legacy client manager.
+pub async fn get_client_boot_history(
+    State(state): State<AppState>,
+    Path(client_id): Path<String>,
+    Query(params): Query<BootHistoryQuery>,
+) -> Result<Json<Vec<crate::domain::BootLogEntry>>, ClientApiError> {
+    let limit = params.limit.unwrap_or(50);
+
+    state
+        .application
+        .boot_history
+        .list_for_client(&client_id, limit)
+        .await
+        .map(Json)
+        .map_err(|error| {
+            tracing::error!(client_id = %client_id, %error, "failed to load client boot history");
+            ClientApiError {
+                error: "Failed to load client boot history".to_string(),
+            }
+        })
 }
