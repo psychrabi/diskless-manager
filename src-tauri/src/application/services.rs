@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
+use super::BootHistoryService;
 use super::ClientService;
 use super::NvmeOfBootService;
 use super::ProvisioningService;
 use super::StorageService;
-use crate::persistence::ClientRepository;
+use crate::persistence::{BootLogRepository, ClientRepository};
 use sqlx::SqlitePool;
 
 use crate::infrastructure::{
@@ -19,6 +20,7 @@ use crate::infrastructure::{
 /// into application services.
 pub struct ApplicationServices {
     pub clients: ClientService,
+    pub boot_history: BootHistoryService,
     pub storage: Arc<StorageService>,
     pub provisioning: ProvisioningService,
     pub nvmeof_boot: NvmeOfBootService,
@@ -31,6 +33,7 @@ impl ApplicationServices {
         let iscsi: Arc<dyn IscsiProvisioner> = Arc::new(SafeIscsiProvisioner::new());
 
         let storage = Arc::new(StorageService::new(image_backend, iscsi));
+        let boot_history = BootHistoryService::new(BootLogRepository::new(pool.clone()));
         let clients = ClientRepository::new(pool);
         let client_service = ClientService::new(clients.clone());
         let provisioning =
@@ -39,6 +42,7 @@ impl ApplicationServices {
 
         Self {
             clients: client_service,
+            boot_history,
             storage,
             provisioning,
             nvmeof_boot,
