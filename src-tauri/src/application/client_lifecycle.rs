@@ -2,8 +2,11 @@
 use super::storage_service::OfflineReplacement;
 use crate::infrastructure::iscsi::reconcile::confirmed_target_connected as session_state;
 use crate::{
-    core::client::{Client, ClientManager},
-    domain::storage::{ClientStorageSpec, StorageSource},
+    domain::{
+        storage::{ClientStorageSpec, StorageSource},
+        Client, ClientId,
+    },
+    persistence::ClientRepository,
     state::AppState,
 };
 use anyhow::{bail, Context, Result};
@@ -74,7 +77,7 @@ fn storage_spec(client: &Client, prefix: &str) -> Result<ClientStorageSpec> {
         bail!("refusing to reset a master or invalid dataset");
     }
     Ok(ClientStorageSpec {
-        client_id: client.id.clone(),
+        client_id: client.id.to_string(),
         source: StorageSource::Snapshot(snapshot.to_owned()),
         dataset: dataset.to_owned(),
         backstore: format!("block_{}", client.name.trim().to_lowercase()),
@@ -83,7 +86,7 @@ fn storage_spec(client: &Client, prefix: &str) -> Result<ClientStorageSpec> {
             .clone()
             .unwrap_or_else(|| format!("{prefix}:client.{}", client.name.trim().to_lowercase())),
         lun: 0,
-        use_game_disk: client.use_game_disk.unwrap_or(false),
+        use_game_disk: client.use_game_disk,
         // Boot-only spec: game clones are reset separately with the
         // resolved selection in the Reset branch below.
         game_disks: Vec::new(),
@@ -117,25 +120,31 @@ pub async fn run(state: AppState) {
 }
 
 async fn tick(state: &AppState) -> Result<()> {
-    let clients = ClientManager::new(state.db_pool.clone()).list().await?;
+    let repository = ClientRepository::new(state.db_pool.clone());
+    let clients = repository.find_all().await?;
     for client in clients {
         // Shares a lock with edits/deletion/NVMe export creation. Re-read after
         // acquiring it so an old snapshot of configuration cannot trigger a reset.
         let _guard = state.client_mutations.lock().await;
-        let current = ClientManager::new(state.db_pool.clone())
-            .get(&client.id)
-            .await?;
+        let current = repository
+            .find_by_id(&client.id)
+            .await?
+            .with_context(|| format!("client '{}' disappeared during lifecycle processing", client.id))?;
         if let Err(error) = process(state, &current).await {
             tracing::warn!(client_id = %client.id, %error, "automatic client reset deferred");
             let failures: Option<i64> = sqlx::query_scalar(
                 "SELECT failures FROM client_offline_resets WHERE client_id = ?",
             )
-            .bind(&client.id)
+            .bind(client.id.as_str())
             .fetch_optional(&state.db_pool)
             .await?;
             if let Some(failures) = failures {
                 sqlx::query("UPDATE client_offline_resets SET failures = failures + 1, retry_after = ?, last_error = ? WHERE client_id = ?")
-                    .bind(chrono::Utc::now().timestamp() + retry_delay(failures)).bind(format!("{error:#}")).bind(&client.id).execute(&state.db_pool).await?;
+                    .bind(chrono::Utc::now().timestamp() + retry_delay(failures))
+                    .bind(format!("{error:#}"))
+                    .bind(client.id.as_str())
+                    .execute(&state.db_pool)
+                    .await?;
             }
         }
     }
@@ -145,7 +154,7 @@ async fn tick(state: &AppState) -> Result<()> {
 async fn process(state: &AppState, client: &Client) -> Result<()> {
     let settings = state.settings.read().await.clone();
     let now = chrono::Utc::now().timestamp();
-    let eligible = client.keep_writeback == Some(false)
+    let eligible = !client.keep_writeback
         && client.snapshot.as_deref().is_some_and(|s| !s.is_empty());
     let fingerprint = serde_json::to_string(&(
         client.snapshot.as_ref(),
@@ -155,8 +164,12 @@ async fn process(state: &AppState, client: &Client) -> Result<()> {
         &client.name,
         client.keep_writeback,
     ))?;
-    let saved = sqlx::query_as::<_, ResetState>("SELECT fingerprint, offline_since, completed, failures, retry_after, operation FROM client_offline_resets WHERE client_id = ?")
-        .bind(&client.id).fetch_optional(&state.db_pool).await?;
+    let saved = sqlx::query_as::<_, ResetState>(
+        "SELECT fingerprint, offline_since, completed, failures, retry_after, operation FROM client_offline_resets WHERE client_id = ?",
+    )
+    .bind(client.id.as_str())
+    .fetch_optional(&state.db_pool)
+    .await?;
     let mut saved = saved.unwrap_or_default();
     let target = client.target_iqn.clone().unwrap_or_else(|| {
         format!(
@@ -185,13 +198,15 @@ async fn process(state: &AppState, client: &Client) -> Result<()> {
                         "UPDATE client_offline_resets SET operation = ? WHERE client_id = ?",
                     )
                     .bind(serde_json::to_string(&operation)?)
-                    .bind(&client.id)
+                    .bind(client.id.as_str())
                     .execute(&state.db_pool)
                     .await?;
                 }
             }
             sqlx::query("UPDATE client_offline_resets SET offline_since = NULL, completed = 0, failures = 0, retry_after = 0 WHERE client_id = ?")
-                .bind(&client.id).execute(&state.db_pool).await?;
+                .bind(client.id.as_str())
+                .execute(&state.db_pool)
+                .await?;
             return Ok(());
         }
         if connected.is_none() {
@@ -205,7 +220,7 @@ async fn process(state: &AppState, client: &Client) -> Result<()> {
         let storage = state.application.storage.clone();
         tokio::task::spawn_blocking(move || storage.recover_offline(&operation)).await??;
         sqlx::query("UPDATE client_offline_resets SET operation = NULL WHERE client_id = ?")
-            .bind(&client.id)
+            .bind(client.id.as_str())
             .execute(&state.db_pool)
             .await?;
         saved.operation = None;
@@ -216,7 +231,10 @@ async fn process(state: &AppState, client: &Client) -> Result<()> {
             ..Default::default()
         };
         sqlx::query("INSERT INTO client_offline_resets (client_id, fingerprint) VALUES (?, ?) ON CONFLICT(client_id) DO UPDATE SET fingerprint = excluded.fingerprint, offline_since = NULL, completed = 0, failures = 0, retry_after = 0, last_error = NULL")
-            .bind(&client.id).bind(&fingerprint).execute(&state.db_pool).await?;
+            .bind(client.id.as_str())
+            .bind(&fingerprint)
+            .execute(&state.db_pool)
+            .await?;
     }
     match decide(
         &saved,
@@ -227,12 +245,14 @@ async fn process(state: &AppState, client: &Client) -> Result<()> {
     ) {
         Decision::Cancel => {
             sqlx::query("UPDATE client_offline_resets SET offline_since = NULL, completed = 0, failures = 0, retry_after = 0 WHERE client_id = ?")
-                .bind(&client.id).execute(&state.db_pool).await?;
+                .bind(client.id.as_str())
+                .execute(&state.db_pool)
+                .await?;
         }
         Decision::Start => {
             sqlx::query("UPDATE client_offline_resets SET offline_since = ? WHERE client_id = ?")
                 .bind(now)
-                .bind(&client.id)
+                .bind(client.id.as_str())
                 .execute(&state.db_pool)
                 .await?;
         }
@@ -244,25 +264,31 @@ async fn process(state: &AppState, client: &Client) -> Result<()> {
             // generate, once) the client's CHAP credentials here.
             spec.chap = crate::core::reconciliation::ensure_chap_credentials(
                 &state.db_pool,
-                &client.id,
+                client.id.as_str(),
                 &client.name,
-                client.chap_enabled.unwrap_or(false),
+                client.chap_enabled,
             )
             .await
             .map_err(|error| {
                 anyhow::anyhow!("failed to resolve CHAP credentials: {error:#}")
             })?;
             // Shared datasets are never eligible even if a legacy record claims ownership.
-            let other: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM clients WHERE id <> ? AND (block_device = ? OR block_store = ? OR master = ?)")
-                .bind(&client.id).bind(spec.block_device().to_string_lossy().as_ref()).bind(spec.block_device().to_string_lossy().as_ref()).bind(&spec.dataset)
-                .fetch_one(&state.db_pool).await?;
+            let other: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM clients WHERE id <> ? AND (block_device = ? OR block_store = ? OR master = ?)",
+            )
+            .bind(client.id.as_str())
+            .bind(spec.block_device().to_string_lossy().as_ref())
+            .bind(spec.block_device().to_string_lossy().as_ref())
+            .bind(&spec.dataset)
+            .fetch_one(&state.db_pool)
+            .await?;
             if other != 0 {
                 bail!("client disk is shared with another client");
             }
             let mut operation = OfflineReplacement::new(spec);
             sqlx::query("UPDATE client_offline_resets SET operation = ? WHERE client_id = ?")
                 .bind(serde_json::to_string(&operation)?)
-                .bind(&client.id)
+                .bind(client.id.as_str())
                 .execute(&state.db_pool)
                 .await?;
             let storage = state.application.storage.clone();
@@ -278,23 +304,26 @@ async fn process(state: &AppState, client: &Client) -> Result<()> {
                 Ok(()) => {
                     operation.committed = true;
                     sqlx::query("UPDATE client_offline_resets SET completed = 1, failures = 0, last_error = NULL, operation = ? WHERE client_id = ?")
-                        .bind(serde_json::to_string(&operation)?).bind(&client.id).execute(&state.db_pool).await?;
+                        .bind(serde_json::to_string(&operation)?)
+                        .bind(client.id.as_str())
+                        .execute(&state.db_pool)
+                        .await?;
                     tracing::info!(client_id = %client.id, "non-persistent clone reset completed");
                     // Game clones follow the boot image lifetime: reset
                     // them now for non-persistent clients. Super clients
                     // never reach this branch (`eligible` is false when
                     // `keep_writeback` is set), so their clones persist.
-                    if client.use_game_disk.unwrap_or(false) {
+                    if client.use_game_disk {
                         match crate::core::reconciliation::resolved_game_selection(
                             &state.db_pool,
-                            &client.id,
+                            client.id.as_str(),
                             true,
                         )
                         .await
                         {
                             Ok(masters) => {
                                 if let Err(error) = state.application.storage.reset_game_clones(
-                                    &client.id,
+                                    client.id.as_str(),
                                     &target,
                                     &masters,
                                     operation.spec.chap.as_ref(),
@@ -313,7 +342,11 @@ async fn process(state: &AppState, client: &Client) -> Result<()> {
                 }
                 Err(error) => {
                     sqlx::query("UPDATE client_offline_resets SET failures = failures + 1, retry_after = ?, last_error = ? WHERE client_id = ?")
-                        .bind(now + retry_delay(saved.failures)).bind(format!("{error:#}")).bind(&client.id).execute(&state.db_pool).await?;
+                        .bind(now + retry_delay(saved.failures))
+                        .bind(format!("{error:#}"))
+                        .bind(client.id.as_str())
+                        .execute(&state.db_pool)
+                        .await?;
                     tracing::error!(client_id = %client.id, %error, "clone reset failed; restoring previous clone");
                 }
             }
@@ -327,7 +360,7 @@ async fn process(state: &AppState, client: &Client) -> Result<()> {
             })
             .await??;
             sqlx::query("UPDATE client_offline_resets SET operation = NULL WHERE client_id = ?")
-                .bind(&client.id)
+                .bind(client.id.as_str())
                 .execute(&state.db_pool)
                 .await?;
         }
@@ -338,13 +371,17 @@ async fn process(state: &AppState, client: &Client) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[tokio::test]
     async fn pending_deadline_and_replacement_journal_survive_database_restart() {
         let path = std::env::temp_dir().join(format!("diskless-reset-{}.db", uuid::Uuid::new_v4()));
         let url = format!("sqlite:{}?mode=rwc", path.display());
         let pool = sqlx::SqlitePool::connect(&url).await.unwrap();
         sqlx::migrate!("./migrations").run(&pool).await.unwrap();
-        sqlx::query("INSERT INTO clients(id, name, mac, ip, master, created_at, updated_at) VALUES ('client', 'PC001', '00:11:22:33:44:55', '192.168.1.101', 'pool/master', 'now', 'now')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO clients(id, name, mac, ip, master, created_at, updated_at) VALUES ('client', 'PC001', '00:11:22:33:44:55', '192.168.1.101', 'pool/master', '2026-09-13T00:00:00+00:00', '2026-09-13T00:00:00+00:00')")
+            .execute(&pool)
+            .await
+            .unwrap();
         let op = OfflineReplacement::new(ClientStorageSpec {
             client_id: "client".into(),
             source: StorageSource::Snapshot("pool/master@ready".into()),
@@ -357,11 +394,18 @@ mod tests {
             chap: None,
         });
         sqlx::query("INSERT INTO client_offline_resets(client_id, fingerprint, offline_since, retry_after, operation) VALUES ('client', 'unchanged', 100, 450, ?)")
-            .bind(serde_json::to_string(&op).unwrap()).execute(&pool).await.unwrap();
+            .bind(serde_json::to_string(&op).unwrap())
+            .execute(&pool)
+            .await
+            .unwrap();
         pool.close().await;
+
         let pool = sqlx::SqlitePool::connect(&url).await.unwrap();
         sqlx::migrate!("./migrations").run(&pool).await.unwrap();
-        let recovered = sqlx::query_as::<_, ResetState>("SELECT fingerprint, offline_since, completed, failures, retry_after, operation FROM client_offline_resets WHERE client_id = 'client'").fetch_one(&pool).await.unwrap();
+        let recovered = sqlx::query_as::<_, ResetState>("SELECT fingerprint, offline_since, completed, failures, retry_after, operation FROM client_offline_resets WHERE client_id = 'client'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(
             decide(&recovered, Some(false), true, 449, 300),
             Decision::Wait
@@ -375,17 +419,25 @@ mod tests {
         assert_eq!(restored.backup, op.backup);
         assert_eq!(restored.spec.dataset, "pool/pc001");
         assert!(!restored.committed);
-        let mut client = ClientManager::new(pool.clone())
-            .get("client")
+
+        let repository = ClientRepository::new(pool.clone());
+        let client_id = ClientId::from_string("client").unwrap();
+        let mut client = repository
+            .find_by_id(&client_id)
+            .await
+            .unwrap()
+            .expect("client should exist");
+        client.ip = "192.168.1.102".parse().unwrap();
+        repository.update(&client).await.unwrap();
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM client_offline_resets WHERE client_id = 'client' AND offline_since = 100")
+            .fetch_one(&pool)
             .await
             .unwrap();
-        client.ip = "192.168.1.102".into();
-        ClientManager::upsert_client(&pool, &client).await.unwrap();
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM client_offline_resets WHERE client_id = 'client' AND offline_since = 100").fetch_one(&pool).await.unwrap();
         assert_eq!(count, 1, "a client edit must preserve the reset journal");
         pool.close().await;
         std::fs::remove_file(path).unwrap();
     }
+
     #[test]
     fn reset_requires_confirmed_offline_for_full_delay() {
         let state = ResetState {
@@ -401,6 +453,7 @@ mod tests {
             Decision::Cancel
         );
     }
+
     #[test]
     fn settings_changes_apply_to_pending_deadline() {
         let state = ResetState {
@@ -410,6 +463,7 @@ mod tests {
         assert_eq!(decide(&state, Some(false), true, 250, 300), Decision::Wait);
         assert_eq!(decide(&state, Some(false), true, 250, 120), Decision::Reset);
     }
+
     #[test]
     fn successful_reset_is_not_repeated_until_next_connection() {
         let state = ResetState {
@@ -427,6 +481,7 @@ mod tests {
             Decision::Start
         );
     }
+
     #[test]
     fn retries_respect_deadline_and_backoff_is_bounded() {
         let state = ResetState {
