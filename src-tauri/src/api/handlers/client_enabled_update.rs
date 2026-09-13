@@ -145,7 +145,8 @@ pub async fn update_client(
     Json(request): Json<UpdateClientRequest>,
 ) -> Result<Json<Client>, (StatusCode, Json<ErrorResponse>)> {
     if !is_enabled_only_update(&request) {
-        return super::client_game_update::update_client(State(state), Path(id), Json(request)).await;
+        return super::client_game_update::update_client(State(state), Path(id), Json(request))
+            .await;
     }
 
     let _client_guard = state.client_mutations.lock().await;
@@ -199,7 +200,9 @@ pub async fn update_client(
         ));
     }
 
-    let enabled = request.enabled.expect("enabled-only request has enabled value");
+    let enabled = request
+        .enabled
+        .expect("enabled-only request has enabled value");
     let settings = state.settings.read().await.clone();
 
     let chap = if existing.chap_enabled {
