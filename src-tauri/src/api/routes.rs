@@ -15,7 +15,8 @@ use crate::api::handlers::{
         validate_auth_token,
     },
     client_chap::rotate_client_chap,
-    clients::{create_client, delete_client, update_client},
+    client_delete::delete_client,
+    clients::{create_client, update_client},
     clients_v2::{get_client, get_client_boot_history, list_clients},
     config::get_config,
     control::{
