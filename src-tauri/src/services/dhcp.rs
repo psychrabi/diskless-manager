@@ -1,15 +1,25 @@
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 
+use crate::application::ClientService;
 use crate::core::client::ClientManager;
 use crate::core::config::{DhcpConfig, Settings};
+use crate::persistence::ClientRepository;
 use crate::services::{
     get_service_pid, is_systemd_service_running, run_sudo_command, write_with_sudo_tee,
     ServiceStatus,
 };
-use log::info;
+use log::{info, warn};
 use sqlx::SqlitePool;
 use std::path::PathBuf;
+
+struct DhcpClientView {
+    name: String,
+    mac: String,
+    ip: String,
+    target_iqn: Option<String>,
+    enabled: bool,
+}
 
 pub struct DhcpService {
     pub(crate) settings: Arc<Settings>,
@@ -21,6 +31,43 @@ impl DhcpService {
         Self {
             settings: Arc::new(settings),
             db_pool,
+        }
+    }
+
+    async fn load_clients_for_dhcp(&self) -> anyhow::Result<Vec<DhcpClientView>> {
+        let service = ClientService::new(ClientRepository::new(self.db_pool.clone()));
+        match service.list().await {
+            Ok(clients) => Ok(clients
+                .into_iter()
+                .map(|client| DhcpClientView {
+                    name: client.name,
+                    mac: client.mac.to_string(),
+                    ip: client.ip.to_string(),
+                    target_iqn: client.target_iqn,
+                    enabled: client.enabled,
+                })
+                .collect()),
+            Err(error) => {
+                // Historical databases can still contain placeholder IP/MAC/date
+                // values that the strict domain repository intentionally rejects.
+                // Preserve DHCP regeneration for those installations until their
+                // rows are migrated, but keep the normal path on ClientService.
+                warn!(
+                    "failed to load DHCP clients through ClientService ({}); using legacy compatibility reader",
+                    error
+                );
+                let clients = ClientManager::new(self.db_pool.clone()).list().await?;
+                Ok(clients
+                    .into_iter()
+                    .map(|client| DhcpClientView {
+                        name: client.name,
+                        mac: client.mac,
+                        ip: client.ip,
+                        target_iqn: client.target_iqn,
+                        enabled: client.enabled,
+                    })
+                    .collect())
+            }
         }
     }
 
@@ -158,8 +205,7 @@ impl DhcpService {
     }
 
     pub async fn generate_client_configs(&self) -> anyhow::Result<()> {
-        let client_manager = ClientManager::new(self.db_pool.clone());
-        let clients = client_manager.list().await?;
+        let clients = self.load_clients_for_dhcp().await?;
         let server_ip = self.settings.dhcp.next_server_ip.trim();
         let server_ip = if server_ip.is_empty() {
             self.settings.server.ip_address.trim()
