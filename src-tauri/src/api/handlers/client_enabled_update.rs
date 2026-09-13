@@ -273,7 +273,7 @@ mod tests {
     use super::is_enabled_only_update;
     use crate::core::client::UpdateClientRequest;
 
-    fn request() -> UpdateClientRequest {
+    fn enabled_request() -> UpdateClientRequest {
         UpdateClientRequest {
             name: None,
             mac: None,
@@ -296,20 +296,20 @@ mod tests {
 
     #[test]
     fn enabled_only_request_uses_typed_path() {
-        assert!(is_enabled_only_update(&request()));
+        assert!(is_enabled_only_update(&enabled_request()));
     }
 
     #[test]
     fn enabled_plus_other_changes_delegate() {
-        let mut request = request();
+        let mut request = enabled_request();
         request.ip = Some("192.168.1.42".into());
         assert!(!is_enabled_only_update(&request));
 
-        let mut request = request();
+        let mut request = enabled_request();
         request.chap_enabled = Some(true);
         assert!(!is_enabled_only_update(&request));
 
-        let mut request = request();
+        let mut request = enabled_request();
         request.game_disks = Some(vec!["tank/game/a".into()]);
         assert!(!is_enabled_only_update(&request));
     }

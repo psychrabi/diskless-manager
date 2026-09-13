@@ -108,7 +108,7 @@ fn resolve_effective_game_selection(
         .map(|master| master.dataset)
         .collect::<Vec<_>>();
 
-    Ok(StorageService::resolve_game_selection(
+    Ok(crate::application::storage_service::resolve_game_selection(
         use_game_disk,
         stored_or_requested,
         &discovered,
