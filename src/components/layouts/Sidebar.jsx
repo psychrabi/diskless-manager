@@ -7,11 +7,21 @@ import {
 } from "@/components/ui/sidebar";
 import { navSections } from "./navigation";
 import NavUser from "./NavUser";
+import { useAuth } from "@/contexts/auth";
 
 // Application navigation adapted from shadcn's sidebar-07 block.
 export default function Sidebar() {
   const { pathname } = useLocation();
   const { setOpenMobile } = useSidebar();
+  const { user } = useAuth();
+  const visibleSections = navSections
+    .map((section) => ({
+      ...section,
+      items: section.items.filter(
+        (item) => user?.role === "admin" || !["users", "license"].includes(item.id),
+      ),
+    }))
+    .filter((section) => section.items.length > 0);
   const closeMobile = () => setOpenMobile(false);
 
   return (
@@ -34,7 +44,7 @@ export default function Sidebar() {
       <SidebarSeparator />
       <SidebarContent className="group-data-[collapsible=icon]:overflow-y-auto">
         <nav aria-label="Main navigation">
-          {navSections.map((section) => (
+          {visibleSections.map((section) => (
             <SidebarGroup key={section.label}>
               <SidebarGroupLabel>{section.label}</SidebarGroupLabel>
               <SidebarMenu>

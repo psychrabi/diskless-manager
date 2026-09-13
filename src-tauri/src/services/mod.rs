@@ -110,13 +110,13 @@ impl ServiceManager {
             .await?;
 
         if output.status.success() {
-            return Ok(String::from_utf8_lossy(&output.stdout).to_string());
+            return Ok(redact_iscsi_config(&String::from_utf8_lossy(&output.stdout)));
         }
 
         let config_path = std::path::Path::new("/etc/target/saveconfig.json");
 
         if config_path.exists() {
-            return Ok(std::fs::read_to_string(config_path)?);
+            return Ok(redact_iscsi_config(&std::fs::read_to_string(config_path)?));
         }
 
         Ok(r#"{
@@ -140,6 +140,7 @@ impl ServiceManager {
     // ========================================================================
 
     pub async fn generate_all_configs(&self) -> anyhow::Result<()> {
+        self.settings.validate()?;
         if self.settings.dhcp.enabled {
             self.dhcp.generate_config().await?;
         }
@@ -163,6 +164,7 @@ impl ServiceManager {
     }
 
     pub async fn generate_service_config(&self, service: &str) -> anyhow::Result<()> {
+        self.settings.validate()?;
         match service {
             "dhcp" => self.dhcp.generate_config().await,
             "tftp" => self.tftp.generate_config().await,
@@ -315,7 +317,7 @@ impl ServiceManager {
         if units.is_empty() {
             anyhow::bail!("Unknown service: {}", service);
         }
-        set_boot_units_enabled(&units, true).await
+        set_boot_units_enabled(units, true).await
     }
 
     /// Stop persisting a service across reboots without changing its
@@ -325,7 +327,7 @@ impl ServiceManager {
         if units.is_empty() {
             anyhow::bail!("Unknown service: {}", service);
         }
-        set_boot_units_enabled(&units, false).await
+        set_boot_units_enabled(units, false).await
     }
 
     /// Enable every settings-enabled service for start on boot.
@@ -381,6 +383,34 @@ impl ServiceManager {
             _ => Err(anyhow::anyhow!("Unknown service: {}", internal_service)),
         }
     }
+}
+
+fn redact_iscsi_config(config: &str) -> String {
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(config) else {
+        return "[redacted: iSCSI configuration is not JSON]".to_string();
+    };
+
+    fn redact(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(object) => {
+                object.retain(|key, _| {
+                    !matches!(key.to_ascii_lowercase().as_str(), "password" | "chap_secret")
+                });
+                for value in object.values_mut() {
+                    redact(value);
+                }
+            }
+            serde_json::Value::Array(values) => {
+                for value in values {
+                    redact(value);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    redact(&mut value);
+    serde_json::to_string_pretty(&value).unwrap_or_else(|_| config.to_string())
 }
 
 // ============================================================================
@@ -504,5 +534,25 @@ pub async fn write_with_sudo_tee(path: &str, content: &str) -> Result<(), AppErr
         )))
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::redact_iscsi_config;
+
+    #[test]
+    fn iscsi_config_redaction_removes_password_fields() {
+        let redacted = redact_iscsi_config(
+            r#"{"targets":{"target":{"password":"secret","name":"client"}}}"#,
+        );
+        assert!(!redacted.contains("secret"));
+        assert!(redacted.contains("client"));
+    }
+
+    #[test]
+    fn malformed_iscsi_config_is_not_returned() {
+        let redacted = redact_iscsi_config("password=secret");
+        assert!(!redacted.contains("secret"));
     }
 }

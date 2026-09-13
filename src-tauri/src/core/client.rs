@@ -26,7 +26,9 @@ pub struct Client {
     pub pxe_mode: Option<String>,
     pub keep_writeback: Option<bool>,
     pub use_game_disk: Option<bool>,
+    #[serde(skip_serializing)]
     pub chap_user: Option<String>,
+    #[serde(skip_serializing)]
     pub chap_secret: Option<String>,
     pub chap_enabled: Option<bool>,
 }
@@ -524,5 +526,43 @@ impl ClientManager {
             .collect();
 
         Ok(logs)
+    }
+}
+
+#[cfg(test)]
+mod response_tests {
+    use super::Client;
+    use chrono::Utc;
+
+    #[test]
+    fn serialized_clients_do_not_include_chap_credentials() {
+        let client = Client {
+            id: "id".to_string(),
+            name: "PC001".to_string(),
+            mac: "00:11:22:33:44:55".to_string(),
+            ip: "192.168.1.10".to_string(),
+            master: "diskless/master".to_string(),
+            enabled: true,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            snapshot: None,
+            block_store: None,
+            target_iqn: None,
+            writeback: None,
+            last_modified: None,
+            block_device: None,
+            status: None,
+            mode: None,
+            pxe_mode: None,
+            keep_writeback: None,
+            use_game_disk: None,
+            chap_user: Some("chap-pc001".to_string()),
+            chap_secret: Some("secret".to_string()),
+            chap_enabled: Some(true),
+        };
+
+        let encoded = serde_json::to_value(client).unwrap();
+        assert!(encoded.get("chap_user").is_none());
+        assert!(encoded.get("chap_secret").is_none());
     }
 }

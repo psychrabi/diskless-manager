@@ -5,6 +5,7 @@
 
 use regex::Regex;
 use std::net::Ipv4Addr;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use thiserror::Error;
 
@@ -55,6 +56,84 @@ pub enum ValidationError {
 
     #[error("Empty value not allowed")]
     EmptyValue,
+
+    #[error("Path must be inside the managed boot root")]
+    InvalidBootRoot,
+
+    #[error("Dataset must be inside the configured ZFS pool")]
+    InvalidManagedDataset,
+
+    #[error("TLS certificate paths must be absolute and cannot contain path traversal")]
+    InvalidTlsPath,
+}
+
+pub const MANAGED_BOOT_ROOT: &str = "/srv/tftp";
+
+pub fn validate_boot_root(path: &str) -> Result<(), ValidationError> {
+    let path = Path::new(path);
+    if !path.is_absolute() || path.components().any(|component| component == std::path::Component::ParentDir) {
+        return Err(ValidationError::InvalidBootRoot);
+    }
+
+    let root = Path::new(MANAGED_BOOT_ROOT);
+    if path != root && !path.starts_with(root) {
+        return Err(ValidationError::InvalidBootRoot);
+    }
+
+    let canonical_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    if root.exists() && canonical_root != root {
+        return Err(ValidationError::InvalidBootRoot);
+    }
+    let canonical_path = canonicalize_with_missing_tail(path)?;
+    if canonical_path != canonical_root && !canonical_path.starts_with(&canonical_root) {
+        return Err(ValidationError::InvalidBootRoot);
+    }
+    Ok(())
+}
+
+fn canonicalize_with_missing_tail(path: &Path) -> Result<PathBuf, ValidationError> {
+    let mut existing = path.to_path_buf();
+    let mut missing = Vec::new();
+    while !existing.exists() {
+        let Some(name) = existing.file_name() else {
+            return Err(ValidationError::InvalidBootRoot);
+        };
+        missing.push(name.to_owned());
+        if !existing.pop() {
+            return Err(ValidationError::InvalidBootRoot);
+        }
+    }
+
+    let mut canonical = std::fs::canonicalize(existing)
+        .map_err(|_| ValidationError::InvalidBootRoot)?;
+    for component in missing.iter().rev() {
+        canonical.push(component);
+    }
+    Ok(canonical)
+}
+
+pub fn validate_tls_path(path: &str) -> Result<(), ValidationError> {
+    let path = Path::new(path);
+    if path.is_absolute()
+        && !path
+            .components()
+            .any(|component| component == std::path::Component::ParentDir)
+    {
+        Ok(())
+    } else {
+        Err(ValidationError::InvalidTlsPath)
+    }
+}
+
+pub fn validate_managed_dataset(dataset: &str, pool: &str) -> Result<(), ValidationError> {
+    validate_dataset_name(dataset).map_err(|_| ValidationError::InvalidManagedDataset)?;
+    validate_pool_name(pool).map_err(|_| ValidationError::InvalidManagedDataset)?;
+    let prefix = format!("{pool}/");
+    if dataset.strip_prefix(&prefix).is_some_and(|value| !value.is_empty()) {
+        Ok(())
+    } else {
+        Err(ValidationError::InvalidManagedDataset)
+    }
 }
 
 /// Validates a client ID
@@ -152,7 +231,11 @@ pub fn validate_dataset_name(name: &str) -> Result<(), ValidationError> {
         return Err(ValidationError::PathTraversal);
     }
 
-    if DATASET_NAME_RE.is_match(name) {
+    if DATASET_NAME_RE.is_match(name)
+        && !name.starts_with('/')
+        && !name.ends_with('/')
+        && !name.contains("//")
+    {
         Ok(())
     } else {
         Err(ValidationError::InvalidDatasetName)
@@ -284,6 +367,21 @@ pub fn validate_size(size: &str) -> Result<(), ValidationError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn boot_root_must_be_under_manager_root() {
+        assert!(validate_boot_root("/srv/tftp/clients").is_ok());
+        assert!(validate_boot_root("/etc").is_err());
+        assert!(validate_boot_root("/srv/tftp/../etc").is_err());
+    }
+
+    #[test]
+    fn managed_dataset_must_be_inside_configured_pool() {
+        assert!(validate_managed_dataset("diskless/images/windows", "diskless").is_ok());
+        assert!(validate_managed_dataset("tank/other", "diskless").is_err());
+        assert!(validate_managed_dataset("/dev/sda", "diskless").is_err());
+        assert!(validate_managed_dataset("diskless/../etc", "diskless").is_err());
+    }
 
     #[test]
     fn test_client_id_validation() {

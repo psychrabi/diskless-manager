@@ -146,7 +146,11 @@ fn build_storage_spec(
             })
         }
 
-        _ => Ok(ClientStorageSpec {
+        _ => {
+            crate::validation::validate_managed_dataset(master, &crate::config::get_zpool_name())
+                .map_err(|error| format!("Invalid master dataset: {error}"))?;
+
+            Ok(ClientStorageSpec {
             client_id: client_id.to_string(),
             source: StorageSource::ExistingVolume(master.to_string()),
             dataset: master.to_string(),
@@ -156,7 +160,8 @@ fn build_storage_spec(
             use_game_disk,
             game_disks: Vec::new(),
             chap: None,
-        }),
+            })
+        }
     }
 }
 
@@ -1013,6 +1018,20 @@ pub async fn update_client(
                         "Enabling Super mode for client '{}' using master '{}'",
                         existing_client.name, master
                     );
+
+                    state
+                        .application
+                        .storage
+                        .validate_existing_dataset(&master)
+                        .map_err(|error| {
+                        (
+                            StatusCode::BAD_REQUEST,
+                            Json(ErrorResponse {
+                                status: StatusCode::BAD_REQUEST.as_u16(),
+                                error: error.to_string(),
+                            }),
+                        )
+                    })?;
 
                     let current_storage = storage_from_client(&settings, &existing_client)
                         .map_err(|error| {

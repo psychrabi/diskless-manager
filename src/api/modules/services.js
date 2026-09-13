@@ -4,16 +4,17 @@ export async function listServices() {
   return apiRequest("/api/services");
 }
 
-export async function startService(name) {
-  return apiRequest(`/api/services/${name}/start`, { method: "POST" });
+export async function startService(name, authToken) {
+  return apiRequest(`/api/services/${name}/start`, { method: "POST", authToken });
 }
-export async function stopService(name) {
-  return apiRequest(`/api/services/${name}/stop`, { method: "POST" });
+export async function stopService(name, authToken) {
+  return apiRequest(`/api/services/${name}/stop`, { method: "POST", authToken });
 }
 
-export async function restartService(name) {
+export async function restartService(name, authToken) {
   return apiRequest(`/api/services/${encodeURIComponent(name)}/restart`, {
     method: "POST",
+    authToken,
   });
 }
 

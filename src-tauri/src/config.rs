@@ -105,6 +105,7 @@ pub async fn read_config_db(pool: &sqlx::SqlitePool) -> anyhow::Result<AppConfig
         mac: String,
         ip: String,
         master: Option<String>,
+        enabled: bool,
         snapshot: Option<String>,
         block_store: Option<String>,
         target_iqn: Option<String>,
@@ -115,6 +116,9 @@ pub async fn read_config_db(pool: &sqlx::SqlitePool) -> anyhow::Result<AppConfig
         pxe_mode: String,
         keep_writeback: bool,
         use_game_disk: bool,
+        chap_user: Option<String>,
+        chap_secret: Option<String>,
+        chap_enabled: Option<bool>,
         created_at: Option<String>,
         last_modified: Option<String>,
     }
@@ -122,9 +126,10 @@ pub async fn read_config_db(pool: &sqlx::SqlitePool) -> anyhow::Result<AppConfig
     // Get clients from DB
     let clients = sqlx::query_as::<_, ClientRow>(
         r#"
-        SELECT id, name, mac, ip, master, snapshot, block_store, target_iqn,
+        SELECT id, name, mac, ip, master, enabled, snapshot, block_store, target_iqn,
                writeback, block_device, status, mode, pxe_mode, keep_writeback,
-               use_game_disk, created_at, last_modified
+               use_game_disk, chap_user, chap_secret, chap_enabled,
+               created_at, last_modified
         FROM clients
         "#,
     )
@@ -138,7 +143,7 @@ pub async fn read_config_db(pool: &sqlx::SqlitePool) -> anyhow::Result<AppConfig
             mac: c.mac,
             ip: c.ip,
             master: c.master.unwrap_or_default(),
-            enabled: true, // Default to enabled
+            enabled: c.enabled,
             created_at: c
                 .created_at
                 .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
@@ -161,9 +166,9 @@ pub async fn read_config_db(pool: &sqlx::SqlitePool) -> anyhow::Result<AppConfig
             pxe_mode: Some(c.pxe_mode),
             keep_writeback: Some(c.keep_writeback),
             use_game_disk: Some(c.use_game_disk),
-            chap_user: None,
-            chap_secret: None,
-            chap_enabled: None,
+            chap_user: c.chap_user,
+            chap_secret: c.chap_secret,
+            chap_enabled: c.chap_enabled,
         });
     }
 

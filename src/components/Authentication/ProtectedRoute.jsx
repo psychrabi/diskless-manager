@@ -1,13 +1,18 @@
 import { useAuth } from "@/contexts/auth";
 import { checkAdminExists } from "@/api/modules/auth";
 import { useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 
 const ProtectedRoute = ({ children }) => {
   const { user, token } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
 
   useEffect(() => {
+    if (user && token && user.role !== "admin" && ["/users", "/license"].includes(location.pathname)) {
+      navigate("/", { replace: true });
+      return;
+    }
     if (user && token) {
       return;
     }
@@ -34,7 +39,7 @@ const ProtectedRoute = ({ children }) => {
     return () => {
       cancelled = true;
     };
-  }, [user, token, navigate]);
+  }, [user, token, navigate, location.pathname]);
 
   if (user && token) {
     return children;

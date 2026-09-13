@@ -322,7 +322,7 @@ pub async fn test_ssh_connection(request: SshTestRequest) -> Result<SshTestResul
         command_timeout: 30,
         username: request.username,
         password: request.password,
-        disable_host_key_verification: true,
+        disable_host_key_verification: false,
         max_retries: 1,
     };
 
@@ -392,7 +392,7 @@ pub async fn execute_ssh_command(
         command_timeout: 60, // Longer timeout for custom commands
         username,
         password,
-        disable_host_key_verification: true,
+        disable_host_key_verification: false,
         max_retries: 1,
     };
 
@@ -448,7 +448,7 @@ pub async fn get_windows_system_info(
         command_timeout: 30,
         username,
         password,
-        disable_host_key_verification: true,
+        disable_host_key_verification: false,
         max_retries: 1,
     };
 

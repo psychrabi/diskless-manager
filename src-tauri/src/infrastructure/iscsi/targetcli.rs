@@ -1,13 +1,57 @@
 use anyhow::{bail, Context, Result};
 use std::path::Path;
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use crate::infrastructure::command::{run_command, run_command_output};
+use crate::infrastructure::command::{run_command, run_command_input_redacted, run_command_output};
 
 use super::model::{
     ChapCredentials, IscsiLunSpec, IscsiLunState, IscsiProvisionResult, IscsiTargetSpec,
     IscsiTargetState,
 };
+
+fn tree_has_node(output: &str, name: &str) -> bool {
+    output
+        .lines()
+        .any(|line| line.strip_prefix("  o- ").is_some_and(|line| line.split_whitespace().next() == Some(name)))
+}
+
+fn parse_luns(output: &str) -> Vec<(u32, &str)> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let mut tokens = line.split_whitespace();
+            while tokens.next()? != "o-" {}
+            let lun = tokens.next()?.strip_prefix("lun")?.parse().ok()?;
+            let backstore = tokens
+                .next()?
+                .strip_prefix('[')?
+                .rsplit('/')
+                .next()?;
+            Some((lun, backstore))
+        })
+        .collect()
+}
+
+fn parse_backstore<'a>(output: &'a str, name: &str) -> Option<(&'a str, bool)> {
+    output.lines().find_map(|line| {
+        let mut tokens = line.split_whitespace();
+        while tokens.next()? != "o-" {}
+        if tokens.next()? != name {
+            return None;
+        }
+        let device = tokens.next()?.strip_prefix('[')?;
+        Some((device, line.contains(") ro ")))
+    })
+}
+
+static TARGETCLI_MUTATION: Mutex<()> = Mutex::new(());
+
+fn lock_mutations() -> Result<MutexGuard<'static, ()>> {
+    TARGETCLI_MUTATION
+        .lock()
+        .map_err(|_| anyhow::anyhow!("targetcli mutation lock poisoned"))
+}
 
 /// Abstraction over the iSCSI/LIO provisioning layer.
 ///
@@ -98,6 +142,16 @@ impl TargetCliProvisioner {
             .context("targetcli command failed")
     }
 
+    fn set_chap(&self, tpg: &str, chap: &ChapCredentials) -> Result<()> {
+        let input = format!(
+            "{tpg} set auth userid={} password={}\nexit\n",
+            chap.username, chap.password
+        );
+        run_command_input_redacted(["targetcli"], &input)
+            .map_err(anyhow::Error::from)
+            .context("targetcli CHAP command failed")
+    }
+
     fn tpg_path(target_iqn: &str) -> String {
         format!("/iscsi/{target_iqn}/tpg1")
     }
@@ -185,8 +239,8 @@ impl TargetCliProvisioner {
         Ok(())
     }
 
-    fn create_target_object(&self, spec: &IscsiTargetSpec) -> Result<()> {
-        if self.target_exists(&spec.target_iqn)? {
+    fn create_target_object(&self, spec: &IscsiTargetSpec, exists: bool) -> Result<()> {
+        if exists {
             return Ok(());
         }
 
@@ -194,50 +248,36 @@ impl TargetCliProvisioner {
             .with_context(|| format!("failed to create iSCSI target '{}'", spec.target_iqn))
     }
 
+    fn delete_target_object(&self, target_iqn: &str) -> Result<()> {
+        self.execute(["targetcli", "/iscsi", "delete", target_iqn])
+            .with_context(|| format!("failed to remove iSCSI target '{target_iqn}'"))
+    }
+
     fn configure_tpg(&self, spec: &IscsiTargetSpec) -> Result<()> {
         let tpg = Self::tpg_path(&spec.target_iqn);
 
-        self.execute([
+        let mut attributes = vec![
             "targetcli",
-            &tpg,
+            tpg.as_str(),
             "set",
             "attribute",
             "generate_node_acls=1",
-        ])
-        .context("failed to enable generated node ACLs")?;
-
-        self.execute([
-            "targetcli",
-            &tpg,
-            "set",
-            "attribute",
             "cache_dynamic_acls=1",
-        ])
-        .context("failed to enable dynamic ACL caching")?;
-
-        self.execute([
-            "targetcli",
-            &tpg,
-            "set",
-            "attribute",
             "demo_mode_write_protect=0",
-        ])
-        .context("failed to disable demo-mode write protection")?;
-
-        self.execute(["targetcli", &tpg, "set", "attribute", "authentication=0"])
-            .context("failed to disable iSCSI authentication")?;
+        ];
+        if spec.chap.is_none() {
+            attributes.push("authentication=0");
+        }
+        self.execute(attributes)
+        .context("failed to configure iSCSI target attributes")?;
 
         // One-way CHAP: the target authenticates the initiator. Secrets
         // are server-generated alphanumeric strings, safe to interpolate.
         if let Some(chap) = spec.chap.as_ref() {
-            self.execute([
-                "targetcli",
-                &tpg,
-                "set",
-                "auth",
-                &format!("userid={}", chap.username),
-                &format!("password={}", chap.password),
-            ])
+            self.execute(["targetcli", &tpg, "set", "attribute", "authentication=1"])
+                .context("failed to enable iSCSI authentication")?;
+            self.save().context("failed to persist fail-closed authentication")?;
+            self.set_chap(&tpg, chap)
             .with_context(|| {
                 format!(
                     "failed to set iSCSI CHAP credentials for user '{}'",
@@ -245,8 +285,6 @@ impl TargetCliProvisioner {
                 )
             })?;
 
-            self.execute(["targetcli", &tpg, "set", "attribute", "authentication=1"])
-                .context("failed to enable iSCSI authentication")?;
         }
 
         Ok(())
@@ -254,11 +292,11 @@ impl TargetCliProvisioner {
 
     fn backstore_exists(&self, name: &str) -> Result<bool> {
         let output = self.output(["targetcli", "/backstores/block", "ls"])?;
-        Ok(output.lines().any(|line| line.contains(name)))
+        Ok(tree_has_node(&output, name))
     }
 
-    fn create_backstore(&self, lun: &IscsiLunSpec) -> Result<()> {
-        if !self.backstore_exists(&lun.backstore)? {
+    fn create_backstore(&self, lun: &IscsiLunSpec, exists: bool) -> Result<()> {
+        if !exists {
             let device = lun.block_device.to_str().ok_or_else(|| {
                 anyhow::anyhow!(
                     "block device path is not valid UTF-8: {}",
@@ -272,27 +310,12 @@ impl TargetCliProvisioner {
                 "create",
                 &lun.backstore,
                 device,
+                &format!("readonly={}", lun.readonly),
             ])
             .with_context(|| {
                 format!(
                     "failed to create iSCSI backstore '{}' for '{}'",
                     lun.backstore, device
-                )
-            })?;
-        }
-
-        if lun.readonly {
-            self.execute([
-                "targetcli",
-                &format!("/backstores/block/{}", lun.backstore),
-                "set",
-                "attribute",
-                "readonly=1",
-            ])
-            .with_context(|| {
-                format!(
-                    "failed to make iSCSI backstore '{}' read-only",
-                    lun.backstore
                 )
             })?;
         }
@@ -309,20 +332,19 @@ impl TargetCliProvisioner {
             .with_context(|| format!("failed to remove iSCSI backstore '{}'", backstore))
     }
 
-    fn backstore_points_to_device(&self, backstore: &str, device: &Path) -> Result<bool> {
+    fn backstore_matches(&self, lun: &IscsiLunSpec) -> Result<bool> {
+        let backstore = &lun.backstore;
         let output = self.output(["targetcli", &Self::backstore_path(backstore), "ls"])?;
-        let device_string = device.to_string_lossy();
-        Ok(output.contains(device_string.as_ref()))
+        Ok(parse_backstore(&output, backstore) == lun.block_device.to_str().map(|p| (p, lun.readonly)))
     }
 
     fn lun_exists(&self, target_iqn: &str, lun_number: u32) -> Result<bool> {
         let output = self.output(["targetcli", &Self::lun_path(target_iqn), "ls"])?;
-        let expected = format!("lun{lun_number}");
-        Ok(output.lines().any(|line| line.contains(&expected)))
+        Ok(parse_luns(&output).iter().any(|(lun, _)| *lun == lun_number))
     }
 
-    fn create_lun(&self, target_iqn: &str, lun: &IscsiLunSpec) -> Result<()> {
-        if self.lun_exists(target_iqn, lun.lun)? {
+    fn create_lun(&self, target_iqn: &str, lun: &IscsiLunSpec, exists: bool) -> Result<()> {
+        if exists {
             return Ok(());
         }
 
@@ -384,12 +406,12 @@ impl TargetCliProvisioner {
         }))
     }
 
-    fn create_portal(&self, spec: &IscsiTargetSpec) -> Result<()> {
+    fn create_portal(&self, spec: &IscsiTargetSpec, exists: bool) -> Result<()> {
         // targetcli-fb may automatically create [::0]:3260 when
         // auto_add_default_portal=true. That wildcard portal already
         // provides the listener required by iSCSI clients, so creating
         // 0.0.0.0:3260 again is unnecessary and fails on targetcli-fb.
-        if self.portal_exists(spec)? {
+        if exists {
             return Ok(());
         }
 
@@ -429,10 +451,14 @@ impl TargetCliProvisioner {
     }
 
     fn inspect_lun(&self, target_iqn: &str, lun: &IscsiLunSpec) -> Result<IscsiLunState> {
-        let exists = self.lun_exists(target_iqn, lun.lun)?;
+        let output = self.output(["targetcli", &Self::lun_path(target_iqn), "ls"])?;
+        let mapped_backstore = parse_luns(&output)
+            .into_iter()
+            .find_map(|(number, backstore)| (number == lun.lun).then_some(backstore));
+        let exists = mapped_backstore.is_some();
         let backstore_exists = self.backstore_exists(&lun.backstore)?;
-        let block_device_matches = if backstore_exists {
-            self.backstore_points_to_device(&lun.backstore, &lun.block_device)?
+        let block_device_matches = if backstore_exists && mapped_backstore == Some(&lun.backstore) {
+            self.backstore_matches(lun)?
         } else {
             false
         };
@@ -459,7 +485,7 @@ impl TargetCliProvisioner {
         let mut rollback_error: Option<anyhow::Error> = None;
 
         if created.target_created {
-            if let Err(error) = self.remove_target(&spec.target_iqn) {
+            if let Err(error) = self.delete_target_object(&spec.target_iqn) {
                 rollback_error = Some(error);
             }
         } else {
@@ -527,6 +553,7 @@ impl IscsiProvisioner for TargetCliProvisioner {
     }
 
     fn create_target_transaction(&self, spec: &IscsiTargetSpec) -> Result<IscsiProvisionResult> {
+        let _guard = lock_mutations()?;
         Self::validate_spec(spec)?;
 
         let mut created = IscsiProvisionResult::new();
@@ -534,7 +561,7 @@ impl IscsiProvisioner for TargetCliProvisioner {
         let operation = (|| -> Result<()> {
             let target_existed = self.target_exists(&spec.target_iqn)?;
 
-            self.create_target_object(spec)?;
+            self.create_target_object(spec, target_existed)?;
 
             if !target_existed {
                 created.target_created = true;
@@ -545,32 +572,50 @@ impl IscsiProvisioner for TargetCliProvisioner {
             for lun in &spec.luns {
                 let existed = self.backstore_exists(&lun.backstore)?;
 
-                if existed {
-                    if !self.backstore_points_to_device(&lun.backstore, &lun.block_device)? {
-                        bail!(
-                            "existing iSCSI backstore '{}' points to a different block device",
-                            lun.backstore
-                        );
-                    }
+                if existed
+                    && !self.backstore_matches(lun)?
+                {
+                    bail!(
+                        "existing iSCSI backstore '{}' has a different device or readonly state",
+                        lun.backstore
+                    );
                 }
 
-                self.create_backstore(lun)?;
+                self.create_backstore(lun, existed)?;
                 if !existed {
                     created.backstores_created.push(lun.backstore.clone());
                 }
             }
 
             for lun in &spec.luns {
-                let existed = self.lun_exists(&spec.target_iqn, lun.lun)?;
+                let output = self.output([
+                    "targetcli",
+                    &Self::lun_path(&spec.target_iqn),
+                    "ls",
+                ])?;
+                let existing_backstore = parse_luns(&output)
+                    .into_iter()
+                    .find_map(|(number, backstore)| (number == lun.lun).then_some(backstore));
 
-                if !existed {
-                    self.create_lun(&spec.target_iqn, lun)?;
+                if let Some(backstore) = existing_backstore {
+                    if backstore != lun.backstore {
+                        bail!(
+                            "existing LUN {} points to backstore '{}', expected '{}'",
+                            lun.lun,
+                            backstore,
+                            lun.backstore
+                        );
+                    }
+                }
+
+                if existing_backstore.is_none() {
+                    self.create_lun(&spec.target_iqn, lun, false)?;
                     created.luns_created.push(lun.lun);
                 }
             }
 
             let portal_existed = self.portal_exists(spec)?;
-            self.create_portal(spec)?;
+            self.create_portal(spec, portal_existed)?;
 
             if !portal_existed {
                 created.portal_created = true;
@@ -602,18 +647,19 @@ impl IscsiProvisioner for TargetCliProvisioner {
     }
 
     fn remove_target(&self, target_iqn: &str) -> Result<()> {
+        let _guard = lock_mutations()?;
         if !self.target_exists(target_iqn)? {
             return Ok(());
         }
 
-        self.execute(["targetcli", "/iscsi", "delete", target_iqn])
-            .with_context(|| format!("failed to remove iSCSI target '{}'", target_iqn))?;
+        self.delete_target_object(target_iqn)?;
 
         self.save()?;
         Ok(())
     }
 
     fn remove_target_with_backstores(&self, target_iqn: &str, backstores: &[String]) -> Result<()> {
+        let _guard = lock_mutations()?;
         if !self.target_exists(target_iqn)? {
             for backstore in backstores {
                 if !backstore.trim().is_empty() {
@@ -634,25 +680,9 @@ impl IscsiProvisioner for TargetCliProvisioner {
         let mut owned_lun_numbers = Vec::new();
         let lun_output = self.output(["targetcli", &Self::lun_path(target_iqn), "ls"])?;
 
-        for backstore in backstores.iter().filter(|item| !item.trim().is_empty()) {
-            let marker = format!("{backstore}]");
-            let marker_without_bracket = backstore.as_str();
-
-            for line in lun_output.lines() {
-                if line.contains(&marker) || line.contains(marker_without_bracket) {
-                    if let Some(number) = line
-                        .split_whitespace()
-                        .find_map(|token| token.strip_prefix("lun"))
-                        .and_then(|value| {
-                            value
-                                .trim_matches(|c: char| !c.is_ascii_digit())
-                                .parse::<u32>()
-                                .ok()
-                        })
-                    {
-                        owned_lun_numbers.push(number);
-                    }
-                }
+        for (number, backstore) in parse_luns(&lun_output) {
+            if backstores.iter().any(|owned| owned == backstore) {
+                owned_lun_numbers.push(number);
             }
         }
 
@@ -681,25 +711,20 @@ impl IscsiProvisioner for TargetCliProvisioner {
         target_iqn: &str,
         chap: Option<&ChapCredentials>,
     ) -> Result<()> {
+        let _guard = lock_mutations()?;
         let tpg = Self::tpg_path(target_iqn);
         match chap {
             Some(chap) => {
-                self.execute([
-                    "targetcli",
-                    &tpg,
-                    "set",
-                    "auth",
-                    &format!("userid={}", chap.username),
-                    &format!("password={}", chap.password),
-                ])
+                self.execute(["targetcli", &tpg, "set", "attribute", "authentication=1"])
+                    .context("failed to enable iSCSI authentication")?;
+                self.save().context("failed to persist fail-closed authentication")?;
+                self.set_chap(&tpg, chap)
                 .with_context(|| {
                     format!(
                         "failed to set iSCSI CHAP credentials for user '{}'",
                         chap.username
                     )
                 })?;
-                self.execute(["targetcli", &tpg, "set", "attribute", "authentication=1"])
-                    .context("failed to enable iSCSI authentication")?;
             }
             None => {
                 self.execute(["targetcli", &tpg, "set", "attribute", "authentication=0"])
@@ -709,37 +734,15 @@ impl IscsiProvisioner for TargetCliProvisioner {
         self.save()
     }
 
-    fn list_target_luns(&self, target_iqn: &str) -> Result<Vec<IscsiLunState>> {        if !self.target_exists(target_iqn)? {
+    fn list_target_luns(&self, target_iqn: &str) -> Result<Vec<IscsiLunState>> {
+        if !self.target_exists(target_iqn)? {
             return Ok(Vec::new());
         }
         let lun_output = self.output(["targetcli", &Self::lun_path(target_iqn), "ls"])?;
         // Lines look like `lun1 [block_pc001 (/dev/zvol/diskless/PC001-disk)]`.
         // Unparseable lines are skipped: listing must never fail a prune.
         let mut luns = Vec::new();
-        for line in lun_output.lines() {
-            let Some(number) = line
-                .split_whitespace()
-                .find_map(|token| token.strip_prefix("lun"))
-                .and_then(|value| {
-                    value
-                        .trim_matches(|c: char| !c.is_ascii_digit())
-                        .parse::<u32>()
-                        .ok()
-                })
-            else {
-                continue;
-            };
-            // Bracket content looks like `block/<backstore> (<device>)`:
-            // the `block/` type prefix is not part of the backstore name.
-            let Some(backstore) = line
-                .split(['[', ']'])
-                .nth(1)
-                .and_then(|inner| inner.split_whitespace().next())
-                .and_then(|token| token.rsplit('/').next())
-                .filter(|name| !name.is_empty())
-            else {
-                continue;
-            };
+        for (number, backstore) in parse_luns(&lun_output) {
             luns.push(IscsiLunState {
                 lun: number,
                 backstore: backstore.to_string(),
@@ -753,7 +756,7 @@ impl IscsiProvisioner for TargetCliProvisioner {
 
     fn target_exists(&self, target_iqn: &str) -> Result<bool> {
         let output = self.output(["targetcli", "/iscsi", "ls"])?;
-        Ok(output.lines().any(|line| line.contains(target_iqn)))
+        Ok(tree_has_node(&output, target_iqn))
     }
 
     fn inspect_target(&self, spec: &IscsiTargetSpec) -> Result<IscsiTargetState> {
@@ -811,7 +814,7 @@ impl IscsiProvisioner for TargetCliProvisioner {
 
 #[cfg(test)]
 mod tests {
-    use super::TargetCliProvisioner;
+    use super::{parse_backstore, parse_luns, tree_has_node, TargetCliProvisioner};
     use crate::infrastructure::iscsi::IscsiTargetSpec;
     use std::{fs, thread, time::Duration};
 
@@ -836,5 +839,34 @@ mod tests {
         creator.join().unwrap();
         let _ = fs::remove_file(path);
         assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[test]
+    fn tree_lookup_matches_complete_node_names() {
+        let output = "  o- block_pc001 [...]\n  o- block_pc0010 [...]";
+
+        assert!(tree_has_node(output, "block_pc001"));
+        assert!(!tree_has_node(output, "block_pc00"));
+    }
+
+    #[test]
+    fn lun_parser_does_not_confuse_prefixes() {
+        let output = "  o- lun1 [block/game_1 (/dev/zvol/game-1)]\n  o- lun10 [block/game_10 (/dev/zvol/game-10)]";
+        let luns = parse_luns(output);
+
+        assert_eq!(luns, vec![(1, "game_1"), (10, "game_10")]);
+    }
+
+    #[test]
+    fn backstore_device_parser_matches_complete_path() {
+        let output = "o- block_pc001 [/dev/zvol/diskless/PC001-disk (50.0GiB) write-thru activated]";
+
+        assert_eq!(
+            parse_backstore(output, "block_pc001"),
+            Some(("/dev/zvol/diskless/PC001-disk", false))
+        );
+
+        let readonly = "o- games [/dev/zvol/games (50.0GiB) ro write-thru activated]";
+        assert_eq!(parse_backstore(readonly, "games"), Some(("/dev/zvol/games", true)));
     }
 }

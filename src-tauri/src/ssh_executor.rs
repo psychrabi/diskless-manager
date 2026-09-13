@@ -1,5 +1,5 @@
 use crate::error::AppError;
-use ssh2::Session;
+use ssh2::{CheckResult, KnownHostFileKind, Session};
 use std::io::Read;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
@@ -38,7 +38,7 @@ impl Default for SshConfig {
             command_timeout: 30,
             username: "root".to_string(),
             password: None,
-            disable_host_key_verification: true,
+            disable_host_key_verification: false,
             max_retries: 1,
         }
     }
@@ -121,6 +121,7 @@ impl SshExecutor {
         let password = self.config.password.clone();
         let connection_timeout = self.config.connection_timeout;
         let timeout_secs = self.config.command_timeout;
+        let disable_host_key_verification = self.config.disable_host_key_verification;
 
         // Each worker owns its SSH session. If the async timeout fires, the
         // blocking worker may take until its socket deadline to unwind, but it
@@ -134,6 +135,7 @@ impl SshExecutor {
                     password.as_deref(),
                     connection_timeout,
                     timeout_secs,
+                    disable_host_key_verification,
                 )?;
                 Self::execute_command_internal_blocking(&session, &command_owned)
             }),
@@ -188,6 +190,7 @@ impl SshExecutor {
         let user = self.config.username.clone();
         let password = self.config.password.clone();
         let connection_timeout = self.config.connection_timeout;
+        let disable_host_key_verification = self.config.disable_host_key_verification;
 
         // All blocking libssh2 / network calls must run off the async runtime.
         tokio::task::spawn_blocking(move || {
@@ -197,6 +200,7 @@ impl SshExecutor {
                 password.as_deref(),
                 connection_timeout,
                 connection_timeout,
+                disable_host_key_verification,
             )
         })
         .await
@@ -213,6 +217,7 @@ impl SshExecutor {
         password: Option<&str>,
         connection_timeout: u64,
         io_timeout: u64,
+        disable_host_key_verification: bool,
     ) -> Result<Session, AppError> {
         let address = format!("{}:22", host)
             .to_socket_addrs()
@@ -250,6 +255,10 @@ impl SshExecutor {
             AppError::SshConnection(format!("SSH handshake failed: {}", e))
         })?;
 
+        if !disable_host_key_verification {
+            Self::verify_host_key(&session, host)?;
+        }
+
         // Authenticate. Prefer the password when provided; fall back to the
         // SSH agent (public key) so existing key-based setups keep working.
         let auth_result = match password {
@@ -276,6 +285,46 @@ impl SshExecutor {
         info!("SSH connection established to {}", host);
 
         Ok(session)
+    }
+
+    fn verify_host_key(session: &Session, host: &str) -> Result<(), AppError> {
+        let (key, _) = session.host_key().ok_or_else(|| {
+            AppError::SshConnection("SSH server did not provide a host key".to_string())
+        })?;
+        let mut known_hosts = session
+            .known_hosts()
+            .map_err(|error| AppError::SshConnection(format!("failed to initialize known hosts: {error}")))?;
+        let mut loaded = 0;
+        for path in [
+            std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".ssh/known_hosts")),
+            Some(std::path::PathBuf::from("/etc/ssh/ssh_known_hosts")),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if path.exists() {
+                loaded += known_hosts.read_file(&path, KnownHostFileKind::OpenSSH).map_err(|error| {
+                    AppError::SshConnection(format!("failed to read known hosts {}: {error}", path.display()))
+                })?;
+            }
+        }
+        if loaded == 0 {
+            return Err(AppError::SshConnection(
+                "no known host key is configured for SSH verification".to_string(),
+            ));
+        }
+        match known_hosts.check(host, key) {
+            CheckResult::Match => Ok(()),
+            CheckResult::Mismatch => Err(AppError::SshConnection(
+                "SSH host key does not match known hosts".to_string(),
+            )),
+            CheckResult::NotFound => Err(AppError::SshConnection(
+                "SSH host is not present in known hosts".to_string(),
+            )),
+            CheckResult::Failure => Err(AppError::SshConnection(
+                "failed to verify SSH host key".to_string(),
+            )),
+        }
     }
 
     /// Internal command execution (blocking-only, runs inside spawn_blocking).
@@ -347,7 +396,7 @@ mod tests {
         assert_eq!(config.connection_timeout, 5);
         assert_eq!(config.command_timeout, 30);
         assert_eq!(config.username, "root");
-        assert!(config.disable_host_key_verification);
+        assert!(!config.disable_host_key_verification);
         assert_eq!(config.max_retries, 1);
     }
 

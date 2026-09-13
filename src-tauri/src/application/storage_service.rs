@@ -196,6 +196,18 @@ impl StorageService {
         }
     }
 
+    pub fn validate_existing_dataset(&self, dataset: &str) -> Result<()> {
+        crate::validation::validate_managed_dataset(
+            dataset,
+            &crate::config::get_zpool_name(),
+        )
+        .map_err(|error| anyhow::anyhow!("invalid existing volume: {error}"))?;
+        if !self.image_backend.exists(dataset)? {
+            bail!("existing ZFS volume does not exist: {dataset}");
+        }
+        Ok(())
+    }
+
     /// ZFS snapshot on a game master that per-client clones are created from.
     ///
     /// Created on demand when the first client clone is provisioned. ZFS
@@ -720,6 +732,8 @@ impl StorageService {
             }
 
             StorageSource::ExistingVolume(dataset) => {
+                crate::validation::validate_dataset_name(dataset)
+                    .map_err(|error| anyhow::anyhow!("invalid existing volume: {error}"))?;
                 if dataset != &spec.dataset {
                     bail!(
                         "existing volume source '{}' does not match destination '{}'",
@@ -740,6 +754,8 @@ impl StorageService {
             }
 
             StorageSource::ExistingClientVolume(dataset) => {
+                crate::validation::validate_dataset_name(dataset)
+                    .map_err(|error| anyhow::anyhow!("invalid existing client volume: {error}"))?;
                 if dataset != &spec.dataset {
                     bail!(
                         "existing client volume source '{}' does not match destination '{}'",

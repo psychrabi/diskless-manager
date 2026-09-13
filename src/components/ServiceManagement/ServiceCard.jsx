@@ -1,4 +1,5 @@
 import { useToastStore } from "@/store/useToastStore";
+import { authenticateAdmin } from "@/api/modules/auth";
 import {
   Eye,
   Play,
@@ -8,14 +9,14 @@ import {
   ToggleRight,
 } from "lucide-react";
 import { useState } from "react";
-import { Button, Card, StatusBadge } from "@/components/ui";
+import { Button, Card, Input, Modal, StatusBadge } from "@/components/ui";
 import { getServiceIcon } from "@/constants/serviceIcons";
 
 const serviceDescriptions = {
-  dhcp: "Provides IP addresses and PXE boot parameters to network clients.",
-  tftp: "Serves boot files (bootloader, kernel, initrd) via TFTP protocol.",
+  dhcp: "Provides IP addresses and PXE boot parameters to network boot clients.",
+  tftp: "Serves boot files (bootloader, kernel, initrd, boot menu ipxe files) via TFTP protocol.",
   iscsi: "iSCSI Target (LIO) — serves disk images as network block devices via LIO/ConfigFS.",
-  nfs: "Network File System server for sharing filesystems.",
+  nfs: "Network File System server for sharing filesystems (used for linux OSes).",
   samba: "Samba file server for Windows-compatible network file sharing.",
   http: "Apache2 HTTP server for serving boot files and iPXE scripts.",
 };
@@ -31,6 +32,9 @@ export default function ServiceCard({
 }) {
   const { success, error: showError } = useToastStore();
   const [loadingAction, setLoadingAction] = useState(null);
+  const [elevation, setElevation] = useState(null);
+  const [adminUsername, setAdminUsername] = useState("admin");
+  const [adminPassword, setAdminPassword] = useState("");
 
   const handleAction = async (action, fn) => {
     setLoadingAction(action);
@@ -39,7 +43,29 @@ export default function ServiceCard({
       await fn(service.name);
       success(`${service.display_name} ${labels[action] || action} successfully`);
     } catch (e) {
+      if (e.status === 403) {
+        setElevation({ action, fn });
+        return;
+      }
       showError(`Failed to ${action} ${service.display_name}: ${e.message || e}`);
+    } finally {
+      setLoadingAction(null);
+    }
+  };
+
+  const authorizeAndRetry = async (event) => {
+    event.preventDefault();
+    setLoadingAction(elevation.action);
+    try {
+      const response = await authenticateAdmin(adminUsername, adminPassword);
+      if (response.user?.role !== "admin") throw new Error("Administrator account required");
+      await elevation.fn(service.name, response.token);
+      const labels = { start: "started", stop: "stopped", restart: "restarted" };
+      success(`${service.display_name} ${labels[elevation.action]} successfully`);
+      setElevation(null);
+      setAdminPassword("");
+    } catch (e) {
+      showError(`Authorization failed: ${e.message || e}`);
     } finally {
       setLoadingAction(null);
     }
@@ -135,6 +161,14 @@ export default function ServiceCard({
       >
         {service.starts_on_boot ? "On boot: on" : "On boot: off"}
       </Button>
+      <Modal isOpen={!!elevation} onClose={() => setElevation(null)} title="Administrator authorization" size="sm">
+        <form onSubmit={authorizeAndRetry} className="space-y-4">
+          <p className="text-sm text-muted-foreground">Enter administrator credentials to perform this action.</p>
+          <Input label="Administrator username" value={adminUsername} onChange={(e) => setAdminUsername(e.target.value)} required autoComplete="username" />
+          <Input label="Administrator password" type="password" value={adminPassword} onChange={(e) => setAdminPassword(e.target.value)} required autoComplete="current-password" />
+          <Button type="submit" className="w-full" loading={loadingAction === elevation?.action}>Authorize</Button>
+        </form>
+      </Modal>
     </Card>
   );
 }

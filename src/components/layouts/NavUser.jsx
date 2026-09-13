@@ -55,7 +55,9 @@ export default function NavUser() {
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={() => goTo("/application-settings")}><Settings />Application settings</DropdownMenuItem>
-            <DropdownMenuItem onClick={() => goTo("/license")}><KeyRound />License</DropdownMenuItem>
+            {user?.role === "admin" && (
+              <DropdownMenuItem onClick={() => goTo("/license")}><KeyRound />License</DropdownMenuItem>
+            )}
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={() => { logout(); goTo("/login"); }}><LogOut />Sign out</DropdownMenuItem>
             <DropdownMenuItem variant="destructive" onClick={handleExit}><Power />Exit application</DropdownMenuItem>

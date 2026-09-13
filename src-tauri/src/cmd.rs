@@ -1,6 +1,7 @@
 use crate::error::AppError;
 use crate::types::disk::{Disk, MemoryStats, RamUsage};
 use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::process::{Command, Output, Stdio};
 
 #[derive(thiserror::Error, Debug)]
@@ -135,6 +136,38 @@ where
     }
 }
 
+pub fn run_command_input_redacted<II>(args: II, input: &str) -> Result<(), AppError>
+where
+    II: IntoIterator,
+    II::Item: AsRef<std::ffi::OsStr>,
+{
+    let mut child = Command::new("sudo")
+        .arg("-n")
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| AppError::Command(format!("failed to execute redacted command: {error}")))?;
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| AppError::Command("failed to open command stdin".to_string()))?
+        .write_all(input.as_bytes())
+        .map_err(|error| AppError::Command(format!("failed to write command stdin: {error}")))?;
+    let status = child
+        .wait()
+        .map_err(|error| AppError::Command(format!("failed to wait for command: {error}")))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(AppError::Command(format!(
+            "redacted command failed with status {}",
+            status.code().unwrap_or(-1)
+        )))
+    }
+}
+
 pub fn run_command_check<II>(args: II) -> i32
 where
     II: IntoIterator,
@@ -167,7 +200,8 @@ where
         .join(" ");
     #[cfg(debug_assertions)]
     log::info!("Executing command: sudo {}", cmd_str);
-    let output = exec_sudo_cmd(args_vec.iter()).map_err(|e| AppError::Command(e.to_string()))?;
+    let output =
+        exec_sudo_cmd(args_vec.iter()).map_err(|e| AppError::Command(e.to_string()))?;
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 

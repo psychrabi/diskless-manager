@@ -19,6 +19,7 @@ export function getAuthToken() {
 }
 
 export async function apiRequest(endpoint, options = {}) {
+  const { authToken, ...fetchOptions } = options;
   const url = `${API_BASE_URL}${endpoint}`;
   const headers = {
     "Content-Type": "application/json",
@@ -26,12 +27,13 @@ export async function apiRequest(endpoint, options = {}) {
   };
 
   const token = getAuthToken();
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
+  const requestToken = authToken === undefined ? token : authToken;
+  if (requestToken) {
+    headers.Authorization = `Bearer ${requestToken}`;
   }
 
   const response = await fetch(url, {
-    ...options,
+    ...fetchOptions,
     headers,
   });
 
@@ -48,7 +50,9 @@ export async function apiRequest(endpoint, options = {}) {
     } catch {
       // Use fallback message when response body cannot be parsed.
     }
-    throw new Error(errorMessage);
+    const error = new Error(errorMessage);
+    error.status = response.status;
+    throw error;
   }
 
   const contentType = response.headers.get("content-type");

@@ -30,6 +30,11 @@ impl AppState {
             .unwrap_or_else(|| PathBuf::from("./config"));
 
         std::fs::create_dir_all(&config_dir)?;
+        #[cfg(unix)]
+        std::fs::set_permissions(
+            &config_dir,
+            std::os::unix::fs::PermissionsExt::from_mode(0o700),
+        )?;
         crate::auth::initialize_jwt_secret(&config_dir)?;
 
         let config_path = config_dir.join("config.json");
@@ -41,6 +46,11 @@ impl AppState {
         let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
 
         let pool = SqlitePool::connect(&db_url).await?;
+        #[cfg(unix)]
+        std::fs::set_permissions(
+            &db_path,
+            std::os::unix::fs::PermissionsExt::from_mode(0o600),
+        )?;
 
         // Run migrations
         Self::init_database(&pool).await?;
@@ -51,8 +61,12 @@ impl AppState {
             crate::config::set_config(&config);
             // Sync settings from DB to the current settings struct if available
             if let Ok(db_settings) = serde_json::from_value::<Settings>(config.settings) {
-                info!("Merged settings from database");
-                settings = db_settings;
+                if db_settings.validate().is_ok() {
+                    info!("Merged settings from database");
+                    settings = db_settings;
+                } else {
+                    log::warn!("Ignored unsafe settings loaded from database");
+                }
             }
         }
 

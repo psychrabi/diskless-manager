@@ -8,6 +8,7 @@ use crate::state::AppState;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LicenseInfoResponse {
+    #[serde(skip_serializing)]
     pub license_key: Option<String>,
     pub license_status: Option<String>,
     pub license_expires: Option<String>,
@@ -54,5 +55,22 @@ pub async fn activate_license_handler(
             info!("failed to activate license: {}", e);
             Err((axum::http::StatusCode::BAD_REQUEST, e))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LicenseInfoResponse;
+
+    #[test]
+    fn license_info_response_hides_the_key() {
+        let value = serde_json::to_value(LicenseInfoResponse {
+            license_key: Some("secret-key".to_string()),
+            license_status: Some("valid".to_string()),
+            license_expires: None,
+        })
+        .unwrap();
+
+        assert!(value.get("license_key").is_none());
     }
 }

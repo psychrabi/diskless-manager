@@ -74,15 +74,17 @@ export const useAppStore = create()(
         action,
         status,
         errorPrefix,
+        authToken,
       }) => {
         try {
-          await action(name);
+          await action(name, authToken);
           set({
             services: updateServiceStatus(get().services, name, status),
           });
           await get().fetchServices();
         } catch (err) {
           console.error(errorPrefix, err);
+          throw err;
         }
       };
 
@@ -211,28 +213,31 @@ export const useAppStore = create()(
             "Failed to fetch services:"
           ),
 
-        startService: async (name) =>
+        startService: async (name, authToken) =>
           runServiceAction({
             name,
             action: startService,
             status: "running",
             errorPrefix: "Failed to start service:",
+            authToken,
           }),
 
-        stopService: async (name) =>
+        stopService: async (name, authToken) =>
           runServiceAction({
             name,
             action: stopService,
             status: "stopped",
             errorPrefix: "Failed to stop service:",
+            authToken,
           }),
 
-        restartService: async (name) =>
+        restartService: async (name, authToken) =>
           runServiceAction({
             name,
             action: restartService,
             status: "restarting",
             errorPrefix: "Failed to restart service:",
+            authToken,
           }),
 
         enableServiceBoot: async (name) =>

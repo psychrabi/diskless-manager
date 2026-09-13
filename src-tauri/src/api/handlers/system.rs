@@ -282,6 +282,10 @@ pub async fn save_settings(
     Json(settings): Json<crate::core::config::Settings>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let _client_guard = state.client_mutations.lock().await;
+    settings.validate().map_err(|error| {
+        tracing::warn!(error = %error, "rejected unsafe settings");
+        StatusCode::BAD_REQUEST
+    })?;
 
     // Update the settings in the database (merging with existing fields to avoid losing zpool_name etc)
     let current_config = crate::config::get_config();

@@ -10,6 +10,14 @@ export async function login(username, password) {
   return data;
 }
 
+export async function authenticateAdmin(username, password) {
+  return apiRequest("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ username, password }),
+    authToken: null,
+  });
+}
+
 export async function logout() {
   const data = await apiRequest("/api/auth/logout", {
     method: "POST",

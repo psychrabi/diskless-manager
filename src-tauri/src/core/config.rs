@@ -190,6 +190,9 @@ pub struct HttpConfig {
     pub root_dir: String,
     pub server_ip: String,
     pub port: u16,
+    pub tls_enabled: bool,
+    pub tls_cert_path: String,
+    pub tls_key_path: String,
 }
 
 impl Default for HttpConfig {
@@ -198,7 +201,10 @@ impl Default for HttpConfig {
             enabled: true,
             root_dir: PathBuf::from("/srv/tftp").display().to_string(),
             server_ip: "192.168.1.250".to_string(),
-            port: 80,
+            port: 443,
+            tls_enabled: true,
+            tls_cert_path: "/etc/diskless-manager/boot.crt".to_string(),
+            tls_key_path: "/etc/diskless-manager/boot.key".to_string(),
         }
     }
 }
@@ -302,10 +308,21 @@ impl Default for StorageConfig {
 }
 
 impl Settings {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        crate::validation::validate_boot_root(&self.http.root_dir)?;
+        crate::validation::validate_boot_root(&self.tftp.root_dir)?;
+        if self.http.tls_enabled {
+            crate::validation::validate_tls_path(&self.http.tls_cert_path)?;
+            crate::validation::validate_tls_path(&self.http.tls_key_path)?;
+        }
+        Ok(())
+    }
+
     pub fn load(path: &Path) -> anyhow::Result<Self> {
         if path.exists() {
             let content = std::fs::read_to_string(path)?;
             let settings: Settings = toml::from_str(&content)?;
+            settings.validate()?;
             Ok(settings)
         } else {
             let settings = Self::default();
@@ -315,6 +332,7 @@ impl Settings {
     }
 
     pub fn save(&self, path: &Path) -> anyhow::Result<()> {
+        self.validate()?;
         let content = toml::to_string_pretty(self)?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -370,5 +388,12 @@ mod compatibility_tests {
         assert_eq!(settings.dhcp.start_ip, "10.20.0.100");
         assert_eq!(settings.dhcp.end_ip, "10.20.0.200");
         assert_eq!(settings.dhcp.boot_file_uefi64, "snponly.efi");
+    }
+
+    #[test]
+    fn settings_reject_unmanaged_boot_roots() {
+        let mut settings = Settings::default();
+        settings.http.root_dir = "/etc".to_string();
+        assert!(settings.validate().is_err());
     }
 }

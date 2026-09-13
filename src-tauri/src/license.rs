@@ -16,6 +16,7 @@ pub struct LicenseVerifyResponse {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LicenseInfo {
+    #[serde(skip_serializing)]
     pub license_key: Option<String>,
     pub license_status: Option<String>,
     pub license_expires: Option<String>,
@@ -107,6 +108,23 @@ pub async fn activate_license_http(state: AppState, key: &str) -> Result<String,
         .await
         .map_err(|error| format!("failed to save license: {error}"))?;
 
-    info!("{message}: {key}");
+    info!("{message}");
     Ok(message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LicenseInfo;
+
+    #[test]
+    fn license_api_response_does_not_include_the_key() {
+        let value = serde_json::to_value(LicenseInfo {
+            license_key: Some("secret-key".to_string()),
+            license_status: Some("valid".to_string()),
+            license_expires: None,
+        })
+        .unwrap();
+
+        assert!(value.get("license_key").is_none());
+    }
 }

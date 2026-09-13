@@ -153,6 +153,17 @@ fn is_public_endpoint(method: &Method, path: &str) -> bool {
     )
 }
 
+fn user_request_is_allowed(method: &Method, path: &str) -> bool {
+    if matches!(method, &Method::GET | &Method::OPTIONS) {
+        return true;
+    }
+
+    // Users may operate the system and manage resources, but cannot remove
+    // data or change the server's settings.
+    !matches!(method, &Method::DELETE)
+        && !(path == "/api/system/settings" && matches!(method, &Method::PUT | &Method::PATCH))
+}
+
 pub async fn require_auth(
     State(_state): State<AppState>,
     request: Request<axum::body::Body>,
@@ -202,15 +213,22 @@ pub async fn require_auth(
     )
     .map_err(|_| StatusCode::UNAUTHORIZED)?;
 
+    let claims = token_data.claims;
+    if claims.role != "admin" && !user_request_is_allowed(request.method(), path) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
     let mut request = request;
-    request.extensions_mut().insert(token_data.claims);
+    request.extensions_mut().insert(claims);
 
     Ok(next.run(request).await)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{client_ip, cors_origins, is_public_endpoint, websocket_token};
+    use super::{
+        client_ip, cors_origins, is_public_endpoint, user_request_is_allowed, websocket_token,
+    };
     use axum::{
         body::Body,
         extract::connect_info::ConnectInfo,
@@ -233,6 +251,19 @@ mod tests {
             &Method::PUT,
             "/api/auth/admin/password"
         ));
+    }
+
+    #[test]
+    fn users_can_manage_non_destructive_operations() {
+        assert!(user_request_is_allowed(&Method::GET, "/api/clients"));
+        assert!(user_request_is_allowed(&Method::OPTIONS, "/api/clients"));
+        assert!(user_request_is_allowed(&Method::POST, "/api/clients"));
+        assert!(user_request_is_allowed(&Method::PUT, "/api/clients/id"));
+        assert!(user_request_is_allowed(&Method::POST, "/api/services/http/start"));
+        assert!(user_request_is_allowed(&Method::POST, "/api/system/network/apply"));
+        assert!(!user_request_is_allowed(&Method::DELETE, "/api/clients/id"));
+        assert!(!user_request_is_allowed(&Method::PUT, "/api/system/settings"));
+        assert!(!user_request_is_allowed(&Method::PATCH, "/api/system/settings"));
     }
 
     #[test]
