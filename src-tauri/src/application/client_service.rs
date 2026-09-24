@@ -36,14 +36,13 @@ impl ClientService {
 
     pub async fn list(&self) -> Result<Vec<Client>> {
         let mut clients = self.repository.find_all().await?;
+        // One query for every selection: per-client lookups here were N+1.
+        let selections = self.repository.all_game_selections().await?;
         for client in &mut clients {
-            client.game_disks = self
-                .repository
-                .game_selection(&client.id)
-                .await
-                .with_context(|| {
-                    format!("failed to load game selection for client '{}'", client.id)
-                })?;
+            client.game_disks = selections
+                .get(client.id.as_str())
+                .cloned()
+                .unwrap_or_default();
         }
         Ok(clients)
     }
@@ -291,6 +290,40 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(remaining, 0);
+        pool.close().await;
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn list_attaches_each_client_game_selection() {
+        let path = std::env::temp_dir().join(format!("diskless-list-{}.db", uuid::Uuid::new_v4()));
+        let url = format!("sqlite:{}?mode=rwc", path.display());
+        let pool = sqlx::SqlitePool::connect(&url).await.unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        for (id, mac, ip) in [
+            ("client-a", "00:11:22:33:44:55", "192.168.1.101"),
+            ("client-b", "00:11:22:33:44:66", "192.168.1.102"),
+        ] {
+            sqlx::query("INSERT INTO clients(id, name, mac, ip, master, created_at, updated_at) VALUES (?, ?, ?, ?, 'pool/master', '2026-09-13T00:00:00+00:00', '2026-09-13T00:00:00+00:00')")
+                .bind(id)
+                .bind(id)
+                .bind(mac)
+                .bind(ip)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query("INSERT INTO client_game_disks(client_id, master_dataset) VALUES ('client-a', 'pool/game-a'), ('client-a', 'pool/game-b')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let service = ClientService::new(ClientRepository::new(pool.clone()));
+        let mut clients = service.list().await.unwrap();
+        clients.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
+        assert_eq!(clients.len(), 2);
+        assert_eq!(clients[0].game_disks.len(), 2);
+        assert!(clients[0].game_disks.contains(&"pool/game-a".to_string()));
+        assert!(clients[1].game_disks.is_empty());
         pool.close().await;
         let _ = std::fs::remove_file(path);
     }
