@@ -65,6 +65,12 @@ use tower::limit::ConcurrencyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 
+/// Paths served by the API/WS routers (with JSON 404s). Everything else
+/// falls through to the bundled frontend.
+fn is_api_or_ws_path(path: &str) -> bool {
+    path == "/api" || path.starts_with("/api/") || path == "/ws" || path.starts_with("/ws/")
+}
+
 pub fn create_app(state: crate::state::AppState) -> Router {
     let cors = cors_layer();
     let rate_limiter = AuthRateLimiter::new();
@@ -289,16 +295,55 @@ pub fn create_app(state: crate::state::AppState) -> Router {
             require_auth,
         ));
 
-    Router::new()
+    // Serve the bundled frontend; extensionless unknown paths fall through
+    // to index.html for client-side routing, while missing assets keep a
+    // real 404. FRONTEND_DIR defaults to the Vite output next to the
+    // source tree.
+    let frontend_dir =
+        std::env::var("FRONTEND_DIR").unwrap_or_else(|_| "../dist".to_string());
+    let static_files = tower_http::services::ServeDir::new(&frontend_dir);
+    let index_file =
+        tower_http::services::ServeFile::new(format!("{frontend_dir}/index.html"));
+
+    let api = Router::new()
         .merge(public_router)
         .merge(ws_router)
-        .merge(api_router)
-        .fallback(|| async {
-            (
-                StatusCode::NOT_FOUND,
-                axum::Json(json!({ "error": "route not found" })),
-            )
-        })
+        .merge(api_router);
+
+    Router::new().merge(api).fallback(
+        move |request: axum::extract::Request| async move {
+            use tower::ServiceExt;
+            if is_api_or_ws_path(request.uri().path()) {
+                return (
+                    StatusCode::NOT_FOUND,
+                    axum::Json(json!({ "error": "route not found" })),
+                )
+                    .into_response();
+            }
+            // tower-http keeps ServeDir's 404 status on the index fallback,
+            // so route directories to index.html explicitly for a clean 200.
+            let is_asset = request
+                .uri()
+                .path()
+                .rsplit('/')
+                .next()
+                .is_some_and(|segment| segment.contains('.'));
+            let response = if is_asset {
+                static_files
+                    .oneshot(request)
+                    .await
+                    .expect("static file service is infallible")
+                    .map(axum::body::Body::new)
+            } else {
+                index_file
+                    .oneshot(request)
+                    .await
+                    .expect("static file service is infallible")
+                    .map(axum::body::Body::new)
+            };
+            response
+        },
+    )
         .layer(cors)
         .layer(axum::middleware::from_fn_with_state(
             rate_limiter,
@@ -312,4 +357,19 @@ pub fn create_app(state: crate::state::AppState) -> Router {
             Duration::from_secs(300),
         ))
         .with_state(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_api_or_ws_path;
+
+    #[test]
+    fn spa_fallback_covers_only_non_api_paths() {
+        for path in ["/api", "/api/clients", "/ws", "/ws/metrics"] {
+            assert!(is_api_or_ws_path(path), "{path}");
+        }
+        for path in ["/", "/clients", "/images", "/login", "/api-docs"] {
+            assert!(!is_api_or_ws_path(path), "{path}");
+        }
+    }
 }
