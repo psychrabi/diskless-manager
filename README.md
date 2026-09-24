@@ -26,7 +26,7 @@ A web-based toolkit for managing diskless PXE/iSCSI boot environments using ZFS,
 
 - Linux with ZFS support
 - React 19.2 (for frontend)
-- Tauri v2 and Rust (for backend)
+- Rust (for backend, served over HTTP, no desktop shell)
 - ISC DHCP Server
 - TFTP Server
 - iSCSI Target Support
@@ -263,26 +263,53 @@ source ~/.bashrc
 
 ## 🚀 Usage
 
-1. **Start App**
+1. **Build the frontend and backend**
 
    ```bash
-   bun tauri dev
+   bun run build
+   cargo build --release --manifest-path src-tauri/Cargo.toml
    ```
 
-2. **Access Web Interface**
-   - Open browser to `http://localhost:5173`
+2. **Run the server** (serves API + UI on port 8080)
+
+   ```bash
+   FRONTEND_DIR=./dist ./src-tauri/target/release/diskless-manager
+   ```
+
+3. **Open the UI**
+   - Same machine: `http://localhost:8080`
+   - Network PC: `http://<server-ip>:8080` (see LAN access below)
+
+   Development: `bun dev` for the UI (proxied to the backend on
+   `127.0.0.1:8080`) plus `bun run dev:backend` for the API.
+
+### LAN access
+
+The API binds loopback by default. To manage over the network:
+
+```bash
+DISKLESS_API_ADDR=0.0.0.0:8080 FRONTEND_DIR=/opt/diskless-manager/dist diskless-manager
+```
+
+Open the firewall port (`firewall-cmd --add-port=8080/tcp --permanent`
+or `ufw allow 8080/tcp`). The PXE enrollment listener stays on its own
+LAN port by design.
+
+### Service install
+
+Copy `systemd/diskless-manager.service` to
+`/etc/systemd/system/`, adjust paths/secrets, then:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now diskless-manager
+```
 
 ### Packaging
 
-The default bundle target is a Debian package (`.deb`). On Fedora/RHEL build
-an RPM instead:
-
-```bash
-bun tauri build --bundles rpm
-```
-
-The RPM metadata (dependency names/paths) is defined in
-`src-tauri/tauri.conf.json` under `bundle.linux.rpm`.
+No desktop bundler remains. Ship the release binary, the `dist/`
+directory, and the systemd unit. System dependency names per distro
+live in the setup wizard's dependency checks.
 
 ## 📁 Project Structure
 
@@ -291,11 +318,8 @@ diskless-manager/
 
 │   ├── src-tauri/
 │   │   ├── src/
-│   │   ├── icons/
 │   │   ├── Cargo.toml
-│   │   ├── Cargo.lock
-│   │   ├── tauri.conf.json
-│   │   └── build.rs
+│   │   └── Cargo.lock
 │   ├── package.json
 │   ├── src/
 │   │   ├── components/
