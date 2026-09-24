@@ -30,7 +30,7 @@ describe("authentication API contracts", () => {
     await bootstrapAdmin("operator", "StrongPass1");
 
     expect(fetch).toHaveBeenCalledWith(
-      "http://127.0.0.1:8080/api/auth/bootstrap",
+      "/api/auth/bootstrap",
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ username: "operator", password: "StrongPass1" }),
@@ -48,7 +48,7 @@ describe("authentication API contracts", () => {
     });
 
     expect(fetch).toHaveBeenCalledWith(
-      "http://127.0.0.1:8080/api/auth/admin/password",
+      "/api/auth/admin/password",
       expect.objectContaining({
         method: "PUT",
         headers: expect.objectContaining({ Authorization: "Bearer signed-token" }),
