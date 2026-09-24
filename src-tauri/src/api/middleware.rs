@@ -98,14 +98,11 @@ pub async fn logger(
 }
 
 fn cors_origins(include_development_origins: bool) -> Vec<axum::http::HeaderValue> {
-    let mut origins = vec!["tauri://localhost", "http://tauri.localhost"];
+    // Production is same-origin (axum serves the UI), so no extra origins.
+    // Development serves the UI from Vite.
+    let mut origins = Vec::new();
     if include_development_origins {
-        origins.extend([
-            "http://localhost:5173",
-            "http://127.0.0.1:5173",
-            "http://localhost:1420",
-            "http://127.0.0.1:1420",
-        ]);
+        origins.extend(["http://localhost:5173", "http://127.0.0.1:5173"]);
     }
 
     origins
@@ -281,11 +278,12 @@ mod tests {
 
     #[test]
     fn production_cors_origins_exclude_development_servers() {
-        let origins: Vec<_> = cors_origins(false)
+        assert!(cors_origins(false).is_empty());
+        let origins: Vec<_> = cors_origins(true)
             .into_iter()
             .map(|origin| origin.to_str().unwrap().to_string())
             .collect();
-        assert_eq!(origins, ["tauri://localhost", "http://tauri.localhost"]);
+        assert_eq!(origins, ["http://localhost:5173", "http://127.0.0.1:5173"]);
     }
 
     #[test]
