@@ -26,8 +26,6 @@ pub mod api;
 
 use log::info;
 
-use tauri::Manager;
-
 use state::AppState;
 
 const DHCP_CONFIG_PATH: &str = "/etc/dhcp/dhcpd.conf";
@@ -43,8 +41,10 @@ pub fn log_file_path() -> std::path::PathBuf {
     dir.join("diskless-manager.log")
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub async fn run() -> anyhow::Result<()> {
+    // Only one server may own the API port and kernel state. The guard
+    // lives until shutdown; a second instance exits with a clear error.
+    let _instance_lock = lock_single_instance()?;
     // Initialize application state
     let state = AppState::new().await?;
 
@@ -71,113 +71,52 @@ pub async fn run() -> anyhow::Result<()> {
         .await?;
     let enroll_task = tokio::spawn(enroll_server.serve());
 
-    // Start Tauri application
-    let app = tauri::Builder::default()
-        .plugin({
-            let log_dir = log_file_path()
-                .parent()
-                .expect("log file must have a parent directory")
-                .to_path_buf();
-            tauri_plugin_log::Builder::default()
-                .targets([
-                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
-                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Folder {
-                        path: log_dir,
-                        file_name: Some("diskless-manager.log".into()),
-                    }),
-                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Webview),
-                ])
-                .level(log::LevelFilter::Info)
-                .build()
-        })
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                window.hide().expect("Failed to hide window");
-                api.prevent_close();
-            }
-        })
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            let _ = app
-                .get_webview_window("main")
-                .expect("no main window")
-                .set_focus();
-        }))
-        // All frontend communication now uses HTTP API instead of Tauri invoke calls
-        .invoke_handler(tauri::generate_handler![])
-        .setup(|app| {
-            info!("Application startup");
-            // config.json creation and migration is now handled inside AppState::new() during initialization.
-
-            app.manage(state);
-
-            // Setup system tray
-            #[cfg(desktop)]
-            {
-                use tauri::{
-                    menu::{Menu, MenuItem},
-                    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-                };
-
-                let show_i = MenuItem::with_id(app, "show", "Show Window", true, None::<&str>)?;
-                let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-
-                let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
-
-                let _tray = TrayIconBuilder::new()
-                    .icon(
-                        app.default_window_icon()
-                            .expect("Failed to get default window icon")
-                            .clone(),
-                    )
-                    .menu(&menu)
-                    .show_menu_on_left_click(false)
-                    .on_menu_event(move |app, event| match event.id.as_ref() {
-                        "show" => {
-                            if let Some(window) = app.get_webview_window("main") {
-                                let _ = window.show();
-                                let _ = window.set_focus();
-                            }
-                        }
-                        "quit" => {
-                            app.exit(0);
-                        }
-                        _ => {}
-                    })
-                    .on_tray_icon_event(|tray, event| {
-                        if let TrayIconEvent::Click {
-                            button: MouseButton::Left,
-                            button_state: MouseButtonState::Up,
-                            ..
-                        } = event
-                        {
-                            let app = tray.app_handle();
-                            if let Some(window) = app.get_webview_window("main") {
-                                let _ = window.show();
-                                let _ = window.set_focus();
-                            }
-                        }
-                    })
-                    .build(app)?;
-            }
-
-            info!("Tauri setup completed");
-            Ok(())
-        })
-        .build(tauri::generate_context!())?;
-
-    let mut api_shutdown_tx = Some(api_shutdown_tx);
-    app.run(move |_app_handle, event| {
-        if matches!(event, tauri::RunEvent::Exit) {
-            if let Some(sender) = api_shutdown_tx.take() {
-                let _ = sender.send(());
-            }
-        }
-    });
-
+    info!("Diskless manager running; press Ctrl-C to stop");
+    shutdown_signal().await;
+    info!("Shutdown signal received");
+    let _ = api_shutdown_tx.send(());
     lifecycle_task.abort();
     enroll_task.abort();
     api_task
         .await
         .map_err(|error| anyhow::anyhow!("API server task failed: {error}"))??;
     Ok(())
+}
+
+/// Exclusive instance lock, held until shutdown.
+fn lock_single_instance() -> anyhow::Result<std::fs::File> {
+    use fs2::FileExt;
+    // /run is root-only; fall back to the temp dir for unprivileged runs.
+    let path = std::path::PathBuf::from("/run/diskless-manager.lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .open(&path)
+        .or_else(|_| {
+            std::fs::OpenOptions::new().create(true).write(true).open(
+                std::env::temp_dir().join("diskless-manager.lock"),
+            )
+        })
+        .map_err(|error| anyhow::anyhow!("cannot create instance lock: {error}"))?;
+    file.try_lock_exclusive()
+        .map_err(|_| anyhow::anyhow!("another instance is already running"))?;
+    Ok(file)
+}
+
+/// Wait for Ctrl-C (plus SIGTERM on Unix) before graceful shutdown.
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("SIGTERM handler must install");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {},
+            _ = terminate.recv() => {},
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }
