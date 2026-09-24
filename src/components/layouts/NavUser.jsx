@@ -1,8 +1,6 @@
-import { ChevronsUpDown, KeyRound, LogOut, Power, Settings } from "lucide-react";
+import { ChevronsUpDown, KeyRound, LogOut, Settings } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { exit } from "@tauri-apps/plugin-process";
 import { useAuth } from "@/contexts/auth";
-import { useConfirm } from "@/contexts/confirmDialog";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem,
@@ -15,22 +13,9 @@ export default function NavUser() {
   const { user, logout } = useAuth();
   const { isMobile, setOpenMobile } = useSidebar();
   const navigate = useNavigate();
-  const confirm = useConfirm();
   const name = user?.username || "User";
   const role = user?.role || "Signed in";
   const goTo = (path) => { setOpenMobile(false); navigate(path); };
-
-  const handleExit = async () => {
-    const confirmed = await confirm({
-      title: "Exit Application",
-      description: "Are you sure you want to exit the Diskless Manager?",
-      confirmText: "Exit", confirmVariant: "destructive", cancelText: "Cancel",
-    });
-    if (confirmed) {
-      try { await exit(0); }
-      catch (error) { console.error("Failed to exit application:", error); }
-    }
-  };
 
   return (
     <SidebarMenu>
@@ -60,7 +45,6 @@ export default function NavUser() {
             )}
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={() => { logout(); goTo("/login"); }}><LogOut />Sign out</DropdownMenuItem>
-            <DropdownMenuItem variant="destructive" onClick={handleExit}><Power />Exit application</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </SidebarMenuItem>

@@ -120,25 +120,6 @@ async fn publish_boot_menu(
     }
 }
 
-async fn refresh_dhcp(state: &AppState, settings: &crate::core::config::Settings) {
-    if !settings.dhcp.enabled {
-        return;
-    }
-
-    let service = crate::services::DhcpService::new(settings.clone(), state.db_pool.clone());
-    if let Err(error) = service.generate_client_configs().await {
-        tracing::warn!(%error, "failed to regenerate DHCP client configuration after enabled-state update");
-        return;
-    }
-    if let Err(error) = service.validate_config().await {
-        tracing::warn!(%error, "DHCP validation failed after enabled-state update; service was not reloaded");
-        return;
-    }
-    if let Err(error) = service.reload().await {
-        tracing::warn!(%error, "failed to reload DHCP service after enabled-state update");
-    }
-}
-
 pub async fn update_client(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -263,7 +244,7 @@ pub async fn update_client(
     if let Err(error) = state.refresh_client_ips().await {
         tracing::warn!(%error, "failed to refresh client IP cache after enabled-state update");
     }
-    refresh_dhcp(&state, &settings).await;
+    super::clients::refresh_dhcp(&state, &settings, "enabled-state update").await;
 
     Ok(Json(domain_to_legacy(client)))
 }
@@ -301,16 +282,16 @@ mod tests {
 
     #[test]
     fn enabled_plus_other_changes_delegate() {
-        let mut request = request();
-        request.ip = Some("192.168.1.42".into());
-        assert!(!is_enabled_only_update(&request));
+        let mut ip_request = request();
+        ip_request.ip = Some("192.168.1.42".into());
+        assert!(!is_enabled_only_update(&ip_request));
 
-        let mut request = request();
-        request.chap_enabled = Some(true);
-        assert!(!is_enabled_only_update(&request));
+        let mut chap_request = request();
+        chap_request.chap_enabled = Some(true);
+        assert!(!is_enabled_only_update(&chap_request));
 
-        let mut request = request();
-        request.game_disks = Some(vec!["tank/game/a".into()]);
-        assert!(!is_enabled_only_update(&request));
+        let mut game_request = request();
+        game_request.game_disks = Some(vec!["tank/game/a".into()]);
+        assert!(!is_enabled_only_update(&game_request));
     }
 }

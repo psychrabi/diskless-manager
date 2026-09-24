@@ -3,24 +3,34 @@
 //! Provides comprehensive validation for all user inputs before they are used
 //! in system commands. This prevents command injection and ensures data integrity.
 
+use once_cell::sync::Lazy;
 use regex::Regex;
 use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use thiserror::Error;
 
-lazy_static::lazy_static! {
-    // Client ID: alphanumeric, dash, underscore (1-32 chars)
-    static ref CLIENT_ID_RE: Regex = Regex::new(r"^[a-zA-Z0-9_-]{1,32}$").expect("Failed to compile CLIENT_ID regex");
-    // MAC Address: standard format with colons or dashes
-    static ref MAC_RE: Regex = Regex::new(r"^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$").expect("Failed to compile MAC regex");
-    static ref DATASET_NAME_RE: Regex = Regex::new(r"^[a-zA-Z0-9/_-]+$").expect("Failed to compile DATASET_NAME regex");
-    static ref POOL_NAME_RE: Regex = Regex::new(r"^[a-zA-Z0-9_.-]+$").expect("Failed to compile POOL_NAME regex");
-    static ref IQN_RE: Regex = Regex::new(r"^iqn\.\d{4}-\d{2}\.[a-z0-9.-]+:[a-zA-Z0-9._-]+$").expect("Failed to compile IQN regex");
-    static ref SNAPSHOT_NAME_RE: Regex = Regex::new(r"^[a-zA-Z0-9._-]+$").expect("Failed to compile SNAPSHOT_NAME regex");
-    static ref ZFS_NAME_RE: Regex = Regex::new(r"^[a-zA-Z0-9_-]+$").expect("Failed to compile ZFS_NAME regex");
-    static ref SIZE_RE: Regex = Regex::new(r"^\d+[KMGTP]?$").expect("Failed to compile SIZE regex");
-}
+// Client ID: alphanumeric, dash, underscore (1-32 chars)
+static CLIENT_ID_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^[a-zA-Z0-9_-]{1,32}$").expect("Failed to compile CLIENT_ID regex"));
+// MAC Address: standard format with colons or dashes
+static MAC_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$").expect("Failed to compile MAC regex")
+});
+static DATASET_NAME_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^[a-zA-Z0-9/_-]+$").expect("Failed to compile DATASET_NAME regex"));
+static POOL_NAME_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^[a-zA-Z0-9_.-]+$").expect("Failed to compile POOL_NAME regex"));
+static IQN_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^iqn\.\d{4}-\d{2}\.[a-z0-9.-]+:[a-zA-Z0-9._-]+$")
+        .expect("Failed to compile IQN regex")
+});
+static SNAPSHOT_NAME_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^[a-zA-Z0-9._-]+$").expect("Failed to compile SNAPSHOT_NAME regex"));
+static ZFS_NAME_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^[a-zA-Z0-9_-]+$").expect("Failed to compile ZFS_NAME regex"));
+static SIZE_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^\d+[KMGTP]?$").expect("Failed to compile SIZE regex"));
 
 #[derive(Error, Debug)]
 pub enum ValidationError {
@@ -71,7 +81,11 @@ pub const MANAGED_BOOT_ROOT: &str = "/srv/tftp";
 
 pub fn validate_boot_root(path: &str) -> Result<(), ValidationError> {
     let path = Path::new(path);
-    if !path.is_absolute() || path.components().any(|component| component == std::path::Component::ParentDir) {
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|component| component == std::path::Component::ParentDir)
+    {
         return Err(ValidationError::InvalidBootRoot);
     }
 
@@ -104,8 +118,8 @@ fn canonicalize_with_missing_tail(path: &Path) -> Result<PathBuf, ValidationErro
         }
     }
 
-    let mut canonical = std::fs::canonicalize(existing)
-        .map_err(|_| ValidationError::InvalidBootRoot)?;
+    let mut canonical =
+        std::fs::canonicalize(existing).map_err(|_| ValidationError::InvalidBootRoot)?;
     for component in missing.iter().rev() {
         canonical.push(component);
     }
@@ -129,7 +143,10 @@ pub fn validate_managed_dataset(dataset: &str, pool: &str) -> Result<(), Validat
     validate_dataset_name(dataset).map_err(|_| ValidationError::InvalidManagedDataset)?;
     validate_pool_name(pool).map_err(|_| ValidationError::InvalidManagedDataset)?;
     let prefix = format!("{pool}/");
-    if dataset.strip_prefix(&prefix).is_some_and(|value| !value.is_empty()) {
+    if dataset
+        .strip_prefix(&prefix)
+        .is_some_and(|value| !value.is_empty())
+    {
         Ok(())
     } else {
         Err(ValidationError::InvalidManagedDataset)

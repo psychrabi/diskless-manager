@@ -11,7 +11,6 @@ mod dataset;
 mod snapshot;
 mod volume;
 
-#[path = "../../zfs.rs"]
 pub mod legacy;
 
 pub mod provider;

@@ -2,7 +2,6 @@ pub mod driver_injection;
 pub mod driver_manifest;
 pub mod driver_selection;
 pub mod driver_validation;
-#[path = "../../ipxe.rs"]
 mod ipxe;
 pub mod nvmeof;
 pub mod windows_driver_injection;

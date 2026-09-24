@@ -6,7 +6,7 @@ use axum::{
 
 use super::clients::ErrorResponse;
 use crate::{
-    application::storage_service::StorageService,
+    application::storage_service::{resolve_game_selection, StorageService},
     core::client::{Client, UpdateClientRequest},
     domain::{BootMode, ClientStatus, PxeMode, UpdateClient},
     state::AppState,
@@ -108,7 +108,7 @@ fn resolve_effective_game_selection(
         .map(|master| master.dataset)
         .collect::<Vec<_>>();
 
-    Ok(StorageService::resolve_game_selection(
+    Ok(resolve_game_selection(
         use_game_disk,
         stored_or_requested,
         &discovered,
@@ -116,7 +116,6 @@ fn resolve_effective_game_selection(
 }
 
 async fn publish_boot_menu(
-    state: &AppState,
     settings: &crate::core::config::Settings,
     client: &crate::domain::Client,
     chap: Option<&crate::infrastructure::iscsi::ChapCredentials>,
@@ -152,25 +151,6 @@ async fn publish_boot_menu(
 
     if let Err(error) = crate::infrastructure::dhcp::publish_client_ipxe(&reservation).await {
         tracing::warn!(client_id = %client.id, %error, "failed to regenerate boot menu during game-disk update");
-    }
-}
-
-async fn refresh_dhcp(state: &AppState, settings: &crate::core::config::Settings) {
-    if !settings.dhcp.enabled {
-        return;
-    }
-
-    let service = crate::services::DhcpService::new(settings.clone(), state.db_pool.clone());
-    if let Err(error) = service.generate_client_configs().await {
-        tracing::warn!(%error, "failed to regenerate DHCP client configuration after game-disk update");
-        return;
-    }
-    if let Err(error) = service.validate_config().await {
-        tracing::warn!(%error, "DHCP validation failed after game-disk update; service was not reloaded");
-        return;
-    }
-    if let Err(error) = service.reload().await {
-        tracing::warn!(%error, "failed to reload DHCP service after game-disk update");
     }
 }
 
@@ -279,7 +259,7 @@ pub async fn update_client(
         None
     };
 
-    publish_boot_menu(&state, &settings, &existing, chap.as_ref()).await;
+    publish_boot_menu(&settings, &existing, chap.as_ref()).await;
 
     let target_iqn = existing.target_iqn.clone().unwrap_or_else(|| {
         format!(
@@ -342,7 +322,7 @@ pub async fn update_client(
     if let Err(error) = state.refresh_client_ips().await {
         tracing::warn!(%error, "failed to refresh client IP cache after game-disk update");
     }
-    refresh_dhcp(&state, &settings).await;
+    super::clients::refresh_dhcp(&state, &settings, "game-disk update").await;
 
     Ok(Json(domain_to_legacy(client)))
 }

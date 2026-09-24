@@ -5,19 +5,6 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "process:default",
-    "dialog:default",
-    {
-      "identifier": "fs:scope",
-      "allow": ["$APPDATA/com.diskless.local/**"]
-    },
-    "fs:allow-read-file",
-    "fs:allow-read-text-file",
-    "fs:allow-write-text-file",
-    "fs:allow-mkdir",
-    "notification:default",
-    "os:default",
-    "shell:default",
     "log:default"
   ]
 }

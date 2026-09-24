@@ -201,6 +201,7 @@ impl Distro {
             "/usr/sbin/zfs",
             "/usr/sbin/zpool",
             "/usr/bin/targetcli",
+            "/usr/bin/diskless-manager internal-iscsi",
             "/usr/bin/tee",
             "/usr/bin/cat",
             "/usr/bin/mkdir",

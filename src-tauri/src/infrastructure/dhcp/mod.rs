@@ -1,6 +1,5 @@
 mod config_install;
 mod dynamic_pool;
-#[path = "../../dhcp.rs"]
 mod implementation;
 mod isc_dhcp;
 

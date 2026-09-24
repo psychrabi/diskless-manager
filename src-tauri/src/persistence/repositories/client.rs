@@ -382,6 +382,21 @@ impl ClientRepository {
     }
 
     pub async fn delete(&self, id: &ClientId) -> Result<bool> {
+        // Most child tables have no ON DELETE CASCADE; remove their rows
+        // before the parent row or the delete fails with a foreign key error.
+        for table in [
+            "boot_logs",
+            "control_operations",
+            "error_logs",
+            "scheduled_operations",
+            "os_type_cache",
+        ] {
+            sqlx::query(&format!("DELETE FROM {table} WHERE client_id = ?"))
+                .bind(id.as_str())
+                .execute(&self.pool)
+                .await
+                .with_context(|| format!("failed to delete {table} for client"))?;
+        }
         let result = sqlx::query(
             r#"
             DELETE FROM clients

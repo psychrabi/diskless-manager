@@ -1,7 +1,7 @@
 use crate::config;
 use crate::state::AppState;
 use log::info;
-use reqwest::blocking::Client;
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -22,7 +22,7 @@ pub struct LicenseInfo {
     pub license_expires: Option<String>,
 }
 
-fn verify_license_remote(key: &str) -> Result<LicenseVerifyResponse, String> {
+async fn verify_license_remote(key: &str) -> Result<LicenseVerifyResponse, String> {
     let client = Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
@@ -32,6 +32,7 @@ fn verify_license_remote(key: &str) -> Result<LicenseVerifyResponse, String> {
         .post(LICENSE_SERVER_URL)
         .json(&serde_json::json!({ "license_key": key }))
         .send()
+        .await
         .map_err(|error| format!("license server request failed: {error}"))?;
 
     if !response.status().is_success() {
@@ -43,6 +44,7 @@ fn verify_license_remote(key: &str) -> Result<LicenseVerifyResponse, String> {
 
     response
         .json::<LicenseVerifyResponse>()
+        .await
         .map_err(|error| format!("failed to parse license server response: {error}"))
 }
 
@@ -79,7 +81,7 @@ pub async fn activate_license_http(state: AppState, key: &str) -> Result<String,
             "Trial License activated".to_string(),
         )
     } else {
-        let response = verify_license_remote(key)?;
+        let response = verify_license_remote(key).await?;
         if !response.valid {
             return Err(response
                 .message

@@ -40,7 +40,7 @@ const Setup = () => {
   } = wizard;
 
   return (
-    <div className="w-full max-w-3xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 px-2 sm:px-0">
+    <div className="w-full max-w-4xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 px-2 sm:px-0">
       <div className="text-center space-y-2">
         <h1 className="text-3xl sm:text-4xl font-semibold tracking-tight text-foreground">
           System Setup

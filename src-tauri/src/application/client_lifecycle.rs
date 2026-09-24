@@ -4,7 +4,7 @@ use crate::infrastructure::iscsi::reconcile::confirmed_target_connected as sessi
 use crate::{
     domain::{
         storage::{ClientStorageSpec, StorageSource},
-        Client, ClientId,
+        Client,
     },
     persistence::ClientRepository,
     state::AppState,
@@ -371,6 +371,7 @@ async fn process(state: &AppState, client: &Client) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::ClientId;
 
     #[tokio::test]
     async fn pending_deadline_and_replacement_journal_survive_database_restart() {

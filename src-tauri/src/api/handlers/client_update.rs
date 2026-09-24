@@ -79,25 +79,6 @@ fn domain_to_legacy(client: crate::domain::Client) -> Client {
     }
 }
 
-async fn refresh_dhcp(state: &AppState, settings: &crate::core::config::Settings) {
-    if !settings.dhcp.enabled {
-        return;
-    }
-
-    let service = crate::services::DhcpService::new(settings.clone(), state.db_pool.clone());
-    if let Err(error) = service.generate_client_configs().await {
-        tracing::warn!(%error, "failed to regenerate DHCP client configuration after updating client");
-        return;
-    }
-    if let Err(error) = service.validate_config().await {
-        tracing::warn!(%error, "DHCP validation failed after updating client; service was not reloaded");
-        return;
-    }
-    if let Err(error) = service.reload().await {
-        tracing::warn!(%error, "failed to reload DHCP service after updating client");
-    }
-}
-
 /// Compatibility update entrypoint.
 ///
 /// Low-risk persistence-only updates are handled by the typed application
@@ -282,7 +263,7 @@ pub async fn update_client(
     if let Err(error) = state.refresh_client_ips().await {
         tracing::warn!(%error, "failed to refresh client IP cache after update");
     }
-    refresh_dhcp(&state, &settings).await;
+    super::clients::refresh_dhcp(&state, &settings, "updating client").await;
 
     Ok(Json(domain_to_legacy(client)))
 }

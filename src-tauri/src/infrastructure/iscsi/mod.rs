@@ -1,4 +1,5 @@
 pub mod model;
+pub mod configfs;
 pub mod reconcile;
 pub mod safe;
 pub mod targetcli;

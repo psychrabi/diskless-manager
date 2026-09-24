@@ -69,14 +69,13 @@ impl ServiceManager {
     // iSCSI SERVICE MANAGEMENT
     // ========================================================================
 
-    /// Generate/save the current LIO/targetcli configuration.
+    /// Persist the current LIO configuration for boot.
     ///
     /// iSCSI storage provisioning itself is handled by the application
-    /// StorageService. This method only persists the targetcli configuration.
+    /// StorageService. This method only persists the configuration.
     async fn generate_iscsi_config(&self) -> anyhow::Result<()> {
-        run_sudo_command(["targetcli", "saveconfig"])
-            .await
-            .map_err(|error| anyhow::anyhow!("failed to save iSCSI configuration: {}", error))
+        crate::infrastructure::iscsi::configfs::ConfigfsProvisioner::save_config()
+            .map_err(|error| anyhow::anyhow!("failed to save iSCSI configuration: {:#}", error))
     }
 
     /// Start the Linux LIO target service.
@@ -100,30 +99,25 @@ impl ServiceManager {
         self.generate_iscsi_config().await
     }
 
-    /// Return the current targetcli configuration.
+    /// Return the persisted LIO configuration, redacted.
+    ///
+    /// Reads the on-disk configuration rather than querying the live kernel
+    /// state: `targetcli ls` prints a tree, not JSON, so the redaction below
+    /// would only ever return a placeholder for it.
     async fn get_iscsi_config(&self) -> anyhow::Result<String> {
-        let output = Command::new("sudo")
-            .arg("-n")
-            .arg("targetcli")
-            .arg("ls")
-            .output()
-            .await?;
-
-        if output.status.success() {
-            return Ok(redact_iscsi_config(&String::from_utf8_lossy(&output.stdout)));
-        }
-
-        let config_path = std::path::Path::new("/etc/target/saveconfig.json");
-
-        if config_path.exists() {
-            return Ok(redact_iscsi_config(&std::fs::read_to_string(config_path)?));
-        }
-
-        Ok(r#"{
+        const EMPTY: &str = r#"{
     "storage_objects": {},
     "targets": {}
-}"#
-        .to_string())
+}"#;
+        let config_path = std::path::Path::new("/etc/target/saveconfig.json");
+        match crate::infrastructure::command::read_file_with_sudo(config_path) {
+            Ok(Some(content)) => Ok(redact_iscsi_config(&content)),
+            Ok(None) => Ok(EMPTY.to_string()),
+            Err(error) => Err(anyhow::anyhow!(
+                "failed to read iSCSI configuration: {}",
+                error
+            )),
+        }
     }
 
     /// Return the status of the Linux LIO target service.

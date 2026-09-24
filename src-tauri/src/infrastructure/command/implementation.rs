@@ -75,8 +75,8 @@ where
         .collect::<Vec<_>>()
         .join(" ");
 
-    // Use async-process for async command execution
-    let child = async_process::Command::new("sudo")
+    // tokio (already a dependency) covers async command execution.
+    let child = tokio::process::Command::new("sudo")
         .arg("-n")
         .args(&args_vec)
         .stdin(Stdio::null())
@@ -86,7 +86,7 @@ where
         .map_err(|e| AppError::Command(format!("Failed to spawn command: {}", e)))?;
 
     let output = child
-        .output()
+        .wait_with_output()
         .await
         .map_err(|e| AppError::Command(format!("Failed to wait for command: {}", e)))?;
 
@@ -174,6 +174,7 @@ where
     II::Item: AsRef<std::ffi::OsStr>,
 {
     let args_vec: Vec<_> = args.into_iter().collect();
+    #[cfg(debug_assertions)]
     let cmd_str = args_vec
         .iter()
         .map(|a| a.as_ref().to_string_lossy().into_owned())
@@ -193,6 +194,7 @@ where
     II::Item: AsRef<std::ffi::OsStr>,
 {
     let args_vec: Vec<_> = args.into_iter().collect();
+    #[cfg(debug_assertions)]
     let cmd_str = args_vec
         .iter()
         .map(|a| a.as_ref().to_string_lossy().into_owned())
@@ -266,6 +268,7 @@ where
     II::Item: AsRef<std::ffi::OsStr>,
 {
     let args_vec: Vec<_> = args.into_iter().collect();
+    #[cfg(debug_assertions)]
     let cmd_str = args_vec
         .iter()
         .map(|a| a.as_ref().to_string_lossy().into_owned())

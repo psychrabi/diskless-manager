@@ -108,7 +108,9 @@ impl ImageBackend for ZfsImageBackend {
         self.command.get_property("origin", name)
     }
     fn exists(&self, name: &str) -> Result<bool> {
-        Ok(self.datasets.exists(name)? || self.volumes.exists(name))
+        // `zfs list` matches any dataset type (filesystem, volume,
+        // snapshot), so one query covers both datasets and volumes.
+        self.datasets.exists(name)
     }
 
     fn create_volume(&self, name: &str, size_gb: u64) -> Result<()> {
@@ -227,13 +229,7 @@ impl ImageBackend for ZfsImageBackend {
     }
 
     fn verify(&self, name: &str) -> Result<bool> {
-        if !self.exists(name)? {
-            return Ok(false);
-        }
-
-        let info = self.volumes.info(name)?;
-
-        Ok(info.is_some())
+        Ok(self.volumes.info(name)?.is_some())
     }
 
     fn info(&self, name: &str) -> Result<ImageBackendInfo> {

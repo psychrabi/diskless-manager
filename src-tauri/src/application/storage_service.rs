@@ -458,18 +458,14 @@ impl StorageService {
         target_iqn: &str,
         desired_backstores: &[String],
     ) -> Result<()> {
-        if !self.iscsi.target_exists(target_iqn)? {
-            return Ok(());
-        }
         let stale: Vec<String> = self
             .iscsi
-            .list_target_luns(target_iqn)?
+            .list_target_backstores(target_iqn)?
             .into_iter()
-            .filter(|lun| {
-                lun.backstore.starts_with("game_")
-                    && !desired_backstores.contains(&lun.backstore)
+            .filter(|backstore| {
+                backstore.starts_with("game_")
+                    && !desired_backstores.contains(backstore)
             })
-            .map(|lun| lun.backstore)
             .collect();
         if stale.is_empty() {
             return Ok(());
@@ -684,6 +680,7 @@ impl StorageService {
         &self,
         spec: &ClientStorageSpec,
     ) -> Result<(ClientStorage, IscsiProvisionResult)> {
+        let started = std::time::Instant::now();
         self.validate_spec(spec)?;
 
         let block_device = spec.block_device();
@@ -913,6 +910,7 @@ impl StorageService {
             portal_created = iscsi_result.portal_created,
             luns_created = ?iscsi_result.luns_created,
             backstores_created = ?iscsi_result.backstores_created,
+            elapsed_ms = started.elapsed().as_millis() as u64,
             "client storage provisioned"
         );
 

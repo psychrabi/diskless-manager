@@ -5,28 +5,6 @@ use axum::{
 
 use crate::state::AppState;
 
-async fn refresh_dhcp(
-    state: &AppState,
-    settings: &crate::core::config::Settings,
-) {
-    if !settings.dhcp.enabled {
-        return;
-    }
-
-    let service = crate::services::DhcpService::new(settings.clone(), state.db_pool.clone());
-    if let Err(error) = service.generate_client_configs().await {
-        tracing::warn!(%error, "failed to regenerate DHCP client configuration after deleting client");
-        return;
-    }
-    if let Err(error) = service.validate_config().await {
-        tracing::warn!(%error, "DHCP validation failed after deleting client; service was not reloaded");
-        return;
-    }
-    if let Err(error) = service.reload().await {
-        tracing::warn!(%error, "failed to reload DHCP service after deleting client");
-    }
-}
-
 pub async fn delete_client(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -96,6 +74,6 @@ pub async fn delete_client(
         tracing::warn!(%error, "failed to refresh client IP cache after deletion");
     }
 
-    refresh_dhcp(&state, &settings).await;
+    super::clients::refresh_dhcp(&state, &settings, "deleting client").await;
     Ok(())
 }

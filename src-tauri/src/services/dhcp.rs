@@ -174,6 +174,29 @@ impl DhcpService {
         Ok(())
     }
 
+    /// Refresh reservations after a client edit. Installation validates both
+    /// files and rolls back on failure before the daemon can be restarted.
+    pub async fn reload_clients(&self) -> anyhow::Result<()> {
+        validate_dhcp_config(&self.settings.dhcp)?;
+        validate_server_consistency(&self.settings)?;
+        if self.settings.server.interface.is_empty() {
+            anyhow::bail!("At least one DHCP interface must be configured");
+        }
+        for interface in &self.settings.server.interface {
+            validate_interface_name(interface)?;
+        }
+        if !self.generate_client_configs().await? {
+            info!("DHCP reservations unchanged; service restart skipped");
+            return Ok(());
+        }
+        if matches!(crate::platform::detect(), crate::platform::Distro::RedHat) {
+            self.ensure_daemon_readable().await?;
+        }
+        let service = crate::platform::detect().dhcp_service();
+        run_sudo_command(["systemctl", "restart", service]).await?;
+        Ok(())
+    }
+
     /// Validate the complete ISC DHCP configuration, including clients.conf,
     /// before a caller reloads the service.
     pub async fn validate_config(&self) -> anyhow::Result<()> {
@@ -204,7 +227,28 @@ impl DhcpService {
         Ok(ServiceStatus { running, pid })
     }
 
-    pub async fn generate_client_configs(&self) -> anyhow::Result<()> {
+    /// Render, install, and validate client reservations. Returns whether the
+    /// installed file changed; callers skip the daemon restart when it did not.
+    pub async fn generate_client_configs(&self) -> anyhow::Result<bool> {
+        let rendered = self.render_client_configs().await?;
+        let installed = crate::infrastructure::command::read_file_with_sudo(std::path::Path::new(
+            crate::DHCP_CLIENTS_PATH,
+        ))
+        .map_err(|error| anyhow::anyhow!("cannot read DHCP reservations: {error}"))?;
+        if reservations_unchanged(&rendered, installed.as_deref()) {
+            info!("DHCP client reservations unchanged; skipping reinstall");
+            return Ok(false);
+        }
+
+        crate::infrastructure::dhcp::replace_dhcp_clients_config(&rendered)
+            .await
+            .map_err(anyhow::Error::msg)?;
+
+        info!("Static DHCP client configuration validated and written");
+        Ok(true)
+    }
+
+    async fn render_client_configs(&self) -> anyhow::Result<String> {
         let clients = self.load_clients_for_dhcp().await?;
         let server_ip = self.settings.dhcp.next_server_ip.trim();
         let server_ip = if server_ip.is_empty() {
@@ -243,13 +287,13 @@ impl DhcpService {
             .collect::<Vec<_>>()
             .join("\n\n");
 
-        crate::infrastructure::dhcp::replace_dhcp_clients_config(&format!("{client_config}\n"))
-            .await
-            .map_err(anyhow::Error::msg)?;
-
-        info!("Static DHCP client configuration validated and written");
-        Ok(())
+        Ok(format!("{client_config}\n"))
     }
+}
+
+/// Byte-identical reservations mean the daemon already serves them.
+fn reservations_unchanged(rendered: &str, installed: Option<&str>) -> bool {
+    installed == Some(rendered)
 }
 
 /// Render the complete manager-owned ISC DHCP configuration from one canonical
@@ -547,6 +591,15 @@ mod tests {
     fn production_server_and_dhcp_settings_are_consistent() {
         let settings = Settings::default();
         validate_server_consistency(&settings).expect("default settings must be consistent");
+    }
+
+    #[test]
+    fn unchanged_reservations_skip_reinstall_and_restart() {
+        let rendered = "host PC001 {\nhardware ethernet aa:bb:cc:dd:ee:ff;\n}\n";
+        assert!(reservations_unchanged(rendered, Some(rendered)));
+        assert!(!reservations_unchanged(rendered, Some("host PC002 {}")));
+        assert!(!reservations_unchanged(rendered, None));
+        assert!(!reservations_unchanged(rendered, Some(rendered.trim_end())));
     }
 
     #[test]

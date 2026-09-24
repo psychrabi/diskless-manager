@@ -11,9 +11,10 @@ use super::model::{
 };
 
 fn tree_has_node(output: &str, name: &str) -> bool {
-    output
-        .lines()
-        .any(|line| line.strip_prefix("  o- ").is_some_and(|line| line.split_whitespace().next() == Some(name)))
+    output.lines().any(|line| {
+        line.strip_prefix("  o- ")
+            .is_some_and(|line| line.split_whitespace().next() == Some(name))
+    })
 }
 
 fn parse_luns(output: &str) -> Vec<(u32, &str)> {
@@ -23,11 +24,7 @@ fn parse_luns(output: &str) -> Vec<(u32, &str)> {
             let mut tokens = line.split_whitespace();
             while tokens.next()? != "o-" {}
             let lun = tokens.next()?.strip_prefix("lun")?.parse().ok()?;
-            let backstore = tokens
-                .next()?
-                .strip_prefix('[')?
-                .rsplit('/')
-                .next()?;
+            let backstore = tokens.next()?.strip_prefix('[')?.rsplit('/').next()?;
             Some((lun, backstore))
         })
         .collect()
@@ -94,17 +91,23 @@ pub trait IscsiProvisioner: Send + Sync {
     ///
     /// Applies immediately to new logins; existing sessions are
     /// unaffected. Used by secret rotation to avoid a full rebuild.
-    fn set_chap_auth(
-        &self,
-        target_iqn: &str,
-        chap: Option<&ChapCredentials>,
-    ) -> Result<()>;
+    fn set_chap_auth(&self, target_iqn: &str, chap: Option<&ChapCredentials>) -> Result<()>;
 
     /// List every LUN currently attached to a target.
     ///
     /// Used to find stale attachments (e.g. deselected game disks) that
     /// are not part of any desired spec.
     fn list_target_luns(&self, target_iqn: &str) -> Result<Vec<IscsiLunState>>;
+
+    /// List attached backstore names without inspecting their devices.
+    /// A missing target has no attachments.
+    fn list_target_backstores(&self, target_iqn: &str) -> Result<Vec<String>> {
+        Ok(self
+            .list_target_luns(target_iqn)?
+            .into_iter()
+            .map(|lun| lun.backstore)
+            .collect())
+    }
 
     /// Inspect actual target state.
     fn inspect_target(&self, spec: &IscsiTargetSpec) -> Result<IscsiTargetState>;
@@ -269,22 +272,21 @@ impl TargetCliProvisioner {
             attributes.push("authentication=0");
         }
         self.execute(attributes)
-        .context("failed to configure iSCSI target attributes")?;
+            .context("failed to configure iSCSI target attributes")?;
 
         // One-way CHAP: the target authenticates the initiator. Secrets
         // are server-generated alphanumeric strings, safe to interpolate.
         if let Some(chap) = spec.chap.as_ref() {
             self.execute(["targetcli", &tpg, "set", "attribute", "authentication=1"])
                 .context("failed to enable iSCSI authentication")?;
-            self.save().context("failed to persist fail-closed authentication")?;
-            self.set_chap(&tpg, chap)
-            .with_context(|| {
+            self.save()
+                .context("failed to persist fail-closed authentication")?;
+            self.set_chap(&tpg, chap).with_context(|| {
                 format!(
                     "failed to set iSCSI CHAP credentials for user '{}'",
                     chap.username
                 )
             })?;
-
         }
 
         Ok(())
@@ -335,12 +337,15 @@ impl TargetCliProvisioner {
     fn backstore_matches(&self, lun: &IscsiLunSpec) -> Result<bool> {
         let backstore = &lun.backstore;
         let output = self.output(["targetcli", &Self::backstore_path(backstore), "ls"])?;
-        Ok(parse_backstore(&output, backstore) == lun.block_device.to_str().map(|p| (p, lun.readonly)))
+        Ok(parse_backstore(&output, backstore)
+            == lun.block_device.to_str().map(|p| (p, lun.readonly)))
     }
 
     fn lun_exists(&self, target_iqn: &str, lun_number: u32) -> Result<bool> {
         let output = self.output(["targetcli", &Self::lun_path(target_iqn), "ls"])?;
-        Ok(parse_luns(&output).iter().any(|(lun, _)| *lun == lun_number))
+        Ok(parse_luns(&output)
+            .iter()
+            .any(|(lun, _)| *lun == lun_number))
     }
 
     fn create_lun(&self, target_iqn: &str, lun: &IscsiLunSpec, exists: bool) -> Result<()> {
@@ -569,11 +574,15 @@ impl IscsiProvisioner for TargetCliProvisioner {
 
             self.configure_tpg(spec)?;
 
+            // Specs have unique backstores/LUNs and mutations are serialized, so
+            // each inventory is needed only once for this transaction.
+            let backstores = self.output(["targetcli", "/backstores/block", "ls"])?;
             for lun in &spec.luns {
-                let existed = self.backstore_exists(&lun.backstore)?;
+                let existed = tree_has_node(&backstores, &lun.backstore);
 
                 if existed
-                    && !self.backstore_matches(lun)?
+                    && parse_backstore(&backstores, &lun.backstore)
+                        != lun.block_device.to_str().map(|p| (p, lun.readonly))
                 {
                     bail!(
                         "existing iSCSI backstore '{}' has a different device or readonly state",
@@ -587,15 +596,12 @@ impl IscsiProvisioner for TargetCliProvisioner {
                 }
             }
 
+            let output = self.output(["targetcli", &Self::lun_path(&spec.target_iqn), "ls"])?;
+            let luns = parse_luns(&output);
             for lun in &spec.luns {
-                let output = self.output([
-                    "targetcli",
-                    &Self::lun_path(&spec.target_iqn),
-                    "ls",
-                ])?;
-                let existing_backstore = parse_luns(&output)
-                    .into_iter()
-                    .find_map(|(number, backstore)| (number == lun.lun).then_some(backstore));
+                let existing_backstore = luns
+                    .iter()
+                    .find_map(|(number, backstore)| (*number == lun.lun).then_some(*backstore));
 
                 if let Some(backstore) = existing_backstore {
                     if backstore != lun.backstore {
@@ -706,20 +712,16 @@ impl IscsiProvisioner for TargetCliProvisioner {
         Ok(())
     }
 
-    fn set_chap_auth(
-        &self,
-        target_iqn: &str,
-        chap: Option<&ChapCredentials>,
-    ) -> Result<()> {
+    fn set_chap_auth(&self, target_iqn: &str, chap: Option<&ChapCredentials>) -> Result<()> {
         let _guard = lock_mutations()?;
         let tpg = Self::tpg_path(target_iqn);
         match chap {
             Some(chap) => {
                 self.execute(["targetcli", &tpg, "set", "attribute", "authentication=1"])
                     .context("failed to enable iSCSI authentication")?;
-                self.save().context("failed to persist fail-closed authentication")?;
-                self.set_chap(&tpg, chap)
-                .with_context(|| {
+                self.save()
+                    .context("failed to persist fail-closed authentication")?;
+                self.set_chap(&tpg, chap).with_context(|| {
                     format!(
                         "failed to set iSCSI CHAP credentials for user '{}'",
                         chap.username
@@ -732,6 +734,17 @@ impl IscsiProvisioner for TargetCliProvisioner {
             }
         }
         self.save()
+    }
+
+    fn list_target_backstores(&self, target_iqn: &str) -> Result<Vec<String>> {
+        if !self.target_exists(target_iqn)? {
+            return Ok(Vec::new());
+        }
+        let output = self.output(["targetcli", &Self::lun_path(target_iqn), "ls"])?;
+        Ok(parse_luns(&output)
+            .into_iter()
+            .map(|(_, backstore)| backstore.to_string())
+            .collect())
     }
 
     fn list_target_luns(&self, target_iqn: &str) -> Result<Vec<IscsiLunState>> {
@@ -819,6 +832,143 @@ mod tests {
     use std::{fs, thread, time::Duration};
 
     #[test]
+    fn provisioning_reads_each_inventory_once() {
+        use crate::infrastructure::iscsi::{IscsiLunSpec, IscsiProvisioner};
+        use std::os::unix::fs::PermissionsExt;
+        const CHILD: &str = "DISKLESS_INVENTORY_TEST";
+        if let Ok(scenario) = std::env::var(CHILD) {
+            if scenario == "prune" || scenario == "missing" {
+                let backstores = TargetCliProvisioner::new()
+                    .list_target_backstores("iqn.2024-01.com.diskless:client.test")
+                    .unwrap();
+                assert_eq!(
+                    backstores,
+                    if scenario == "prune" {
+                        vec!["boot", "game"]
+                    } else {
+                        vec![]
+                    }
+                );
+                return;
+            }
+            let spec = IscsiTargetSpec::with_luns(
+                "iqn.2024-01.com.diskless:client.test",
+                vec![
+                    IscsiLunSpec::new(0, "boot", "/dev/null"),
+                    IscsiLunSpec::new(1, "game", "/dev/null"),
+                ],
+            )
+            .unwrap();
+            let result = TargetCliProvisioner::new().create_target_transaction(&spec);
+            if scenario == "mismatch" || scenario == "failure" {
+                let error = format!("{:#}", result.unwrap_err());
+                assert!(
+                    error.contains(if scenario == "mismatch" {
+                        "different device"
+                    } else {
+                        "failed to create iSCSI backstore"
+                    }),
+                    "{error}"
+                );
+            } else {
+                let created = result.unwrap();
+                if scenario == "existing" {
+                    assert!(created.luns_created.is_empty());
+                    assert!(created.backstores_created.is_empty());
+                } else {
+                    assert_eq!(created.luns_created, vec![0, 1]);
+                    assert_eq!(created.backstores_created, vec!["boot", "game"]);
+                }
+            }
+            return;
+        }
+        // Isolate PATH in a child test process: no real sudo/targetcli is invoked.
+        let dir = tempfile::tempdir().unwrap();
+        let sudo = dir.path().join("sudo");
+        fs::write(&sudo, r#"#!/bin/sh
+printf '%s\n' "$*" >> "$DISKLESS_COMMAND_LOG"
+case "$*" in
+  *'/iscsi ls') if test "$DISKLESS_INVENTORY_TEST" != missing; then printf '  o- iqn.2024-01.com.diskless:client.test [...]\n'; fi;;
+  *'/backstores/block ls')
+    case "$DISKLESS_INVENTORY_TEST" in
+      existing) printf '  o- boot [/dev/null (1GiB) write-thru activated]\n  o- game [/dev/null (1GiB) write-thru activated]\n';;
+      mismatch) printf '  o- boot [/dev/other (1GiB) write-thru activated]\n';;
+      failure) if test -f "$DISKLESS_COMMAND_LOG.created"; then printf '  o- boot [/dev/null (1GiB) write-thru activated]\n'; fi;;
+    esac;;
+  *'/tpg1/luns ls') case "$DISKLESS_INVENTORY_TEST" in existing|prune) printf '  o- lun0 [block/boot (/dev/null)]\n  o- lun1 [block/game (/dev/null)]\n';; esac;;
+  *'/backstores/block create boot '*) : > "$DISKLESS_COMMAND_LOG.created";;
+  *'/backstores/block create game '*) if test "$DISKLESS_INVENTORY_TEST" = failure; then exit 1; fi;;
+esac
+exit 0
+"#).unwrap();
+        fs::set_permissions(&sudo, fs::Permissions::from_mode(0o755)).unwrap();
+        let log = dir.path().join("commands");
+        for scenario in [
+            "fresh", "existing", "mismatch", "failure", "prune", "missing",
+        ] {
+            fs::write(&log, "").unwrap();
+            let _ = fs::remove_file(dir.path().join("commands.created"));
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "infrastructure::iscsi::targetcli::tests::provisioning_reads_each_inventory_once", "--nocapture"])
+            .env(CHILD, scenario).env("PATH", dir.path()).env("DISKLESS_COMMAND_LOG", &log)
+            .output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let commands = fs::read_to_string(&log).unwrap();
+            if scenario == "prune" || scenario == "missing" {
+                assert_eq!(
+                    commands
+                        .lines()
+                        .filter(|s| s.ends_with("/iscsi ls"))
+                        .count(),
+                    1,
+                    "{commands}"
+                );
+                assert_eq!(
+                    commands.lines().count(),
+                    if scenario == "prune" { 2 } else { 1 },
+                    "{commands}"
+                );
+            }
+            if scenario == "fresh" || scenario == "existing" {
+                assert_eq!(
+                    commands
+                        .lines()
+                        .filter(|s| s.ends_with("/backstores/block ls"))
+                        .count(),
+                    1,
+                    "{commands}"
+                );
+                assert_eq!(
+                    commands
+                        .lines()
+                        .filter(|s| s.ends_with("/tpg1/luns ls"))
+                        .count(),
+                    1,
+                    "{commands}"
+                );
+            }
+            if scenario == "mismatch" || scenario == "existing" {
+                assert!(!commands.contains(" delete "), "{commands}");
+            }
+            if scenario == "failure" {
+                assert!(
+                    commands.contains("/backstores/block delete boot"),
+                    "{commands}"
+                );
+                assert!(
+                    !commands.contains("/backstores/block delete game"),
+                    "{commands}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn validation_waits_for_a_delayed_zvol_device_node() {
         let path =
             std::env::temp_dir().join(format!("diskless-delayed-zvol-{}", uuid::Uuid::new_v4()));
@@ -859,7 +1009,8 @@ mod tests {
 
     #[test]
     fn backstore_device_parser_matches_complete_path() {
-        let output = "o- block_pc001 [/dev/zvol/diskless/PC001-disk (50.0GiB) write-thru activated]";
+        let output =
+            "o- block_pc001 [/dev/zvol/diskless/PC001-disk (50.0GiB) write-thru activated]";
 
         assert_eq!(
             parse_backstore(output, "block_pc001"),
@@ -867,6 +1018,9 @@ mod tests {
         );
 
         let readonly = "o- games [/dev/zvol/games (50.0GiB) ro write-thru activated]";
-        assert_eq!(parse_backstore(readonly, "games"), Some(("/dev/zvol/games", true)));
+        assert_eq!(
+            parse_backstore(readonly, "games"),
+            Some(("/dev/zvol/games", true))
+        );
     }
 }

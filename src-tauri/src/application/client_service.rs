@@ -248,11 +248,50 @@ impl ClientService {
          * DeprovisioningService in the next stage.
          */
         let deleted = self.repository.delete(id).await?;
+        // (child rows are removed inside the repository: most child tables
+        // have no ON DELETE CASCADE)
 
         if !deleted {
             bail!("client not found: {id}");
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn delete_removes_client_with_child_rows() {
+        let path =
+            std::env::temp_dir().join(format!("diskless-delete-{}.db", uuid::Uuid::new_v4()));
+        let url = format!("sqlite:{}?mode=rwc", path.display());
+        let pool = sqlx::SqlitePool::connect(&url).await.unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        sqlx::query("INSERT INTO clients(id, name, mac, ip, master, created_at, updated_at) VALUES ('client', 'PC001', '00:11:22:33:44:55', '192.168.1.101', 'pool/master', '2026-09-13T00:00:00+00:00', '2026-09-13T00:00:00+00:00')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        for table in [
+            "INSERT INTO boot_logs(id, client_id, boot_time, success) VALUES ('log', 'client', '2026-09-13T00:00:00+00:00', 1)",
+            "INSERT INTO control_operations(id, client_id, client_name, client_ip, os_type, operation_type, operation_mode, result, timestamp) VALUES ('op', 'client', 'PC001', '192.168.1.101', 'linux', 'reset', 'now', 'ok', '2026-09-13T00:00:00+00:00')",
+            "INSERT INTO error_logs(id, client_id, operation_type, error_type, error_message, timestamp) VALUES ('err', 'client', 'reset', 'io', 'boom', '2026-09-13T00:00:00+00:00')",
+            "INSERT INTO scheduled_operations(id, client_id, operation_type, operation_mode, scheduled_time, created_at) VALUES ('sched', 'client', 'reset', 'now', '2026-09-13T00:00:00+00:00', '2026-09-13T00:00:00+00:00')",
+            "INSERT INTO os_type_cache(client_id, os_type, detected_at) VALUES ('client', 'linux', '2026-09-13T00:00:00+00:00')",
+        ] {
+            sqlx::query(table).execute(&pool).await.unwrap();
+        }
+        let service = ClientService::new(ClientRepository::new(pool.clone()));
+        let id = ClientId::from_string("client".to_string()).unwrap();
+        service.delete(&id).await.unwrap();
+        let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM clients WHERE id = 'client'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(remaining, 0);
+        pool.close().await;
+        let _ = std::fs::remove_file(path);
     }
 }

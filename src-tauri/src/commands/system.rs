@@ -75,7 +75,9 @@ pub async fn get_system_info() -> Result<SystemInfo, String> {
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
-    let cpu_count = num_cpus::get();
+    let cpu_count = std::thread::available_parallelism()
+        .map(|cores| cores.get())
+        .unwrap_or(1);
 
     let meminfo = std::fs::read_to_string("/proc/meminfo").unwrap_or_default();
     let memory_total = parse_meminfo(&meminfo, "MemTotal:");

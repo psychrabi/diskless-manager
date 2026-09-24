@@ -10,7 +10,6 @@ const { logout, setTheme } = vi.hoisted(() => ({ logout: vi.fn(), setTheme: vi.f
 vi.mock("@/contexts/auth", () => ({ useAuth: () => ({ user: { username: "operator", role: "user" }, logout }) }));
 vi.mock("@/contexts/theme", () => ({ useTheme: () => ({ theme: "light", setTheme }) }));
 vi.mock("@/contexts/confirmDialog", () => ({ useConfirm: () => vi.fn() }));
-vi.mock("@tauri-apps/plugin-process", () => ({ exit: vi.fn() }));
 
 function Workspace({ path = "/clients" }) {
   return (

@@ -60,6 +60,26 @@ pub(crate) async fn publish_client_ipxe(reservation: &BootReservation) -> Result
     }
 
     let path = root.join(&relative);
+    let script = crate::infrastructure::pxe::render_client_script_with_scheme(
+        &reservation.client_name,
+        &reservation.target_iqn,
+        settings.http.port,
+        true,
+        settings.http.tls_enabled,
+        reservation.chap.as_ref(),
+    );
+    // Image/snapshot updates leave the menu byte-identical; skip the
+    // privileged rewrite when the installed file already matches.
+    let installed = crate::infrastructure::command::read_file_with_sudo(&path)
+        .map_err(|error| anyhow::anyhow!("cannot read installed iPXE menu: {error}"))?;
+    if installed.as_deref() == Some(script.as_str()) {
+        tracing::debug!(
+            client = %reservation.client_name,
+            path = %path.display(),
+            "per-client iPXE menu unchanged; skipping rewrite"
+        );
+        return Ok(path);
+    }
     let parent = path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("generated iPXE path has no parent"))?;
@@ -72,14 +92,6 @@ pub(crate) async fn publish_client_ipxe(reservation: &BootReservation) -> Result
 
     crate::services::run_sudo_command(["mkdir", "-p", parent]).await?;
 
-    let script = crate::infrastructure::pxe::render_client_script_with_scheme(
-        &reservation.client_name,
-        &reservation.target_iqn,
-        settings.http.port,
-        true,
-        settings.http.tls_enabled,
-        reservation.chap.as_ref(),
-    );
     crate::services::write_with_sudo_tee(path_str, &script).await?;
 
     tracing::info!(

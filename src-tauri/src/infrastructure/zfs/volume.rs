@@ -40,11 +40,16 @@ impl ZfsVolumeOperations {
             return Ok(None);
         }
 
-        let volsize = self.command.get_property("volsize", volume)?;
-
-        let volblocksize = self.command.get_property("volblocksize", volume)?;
-
-        let used = self.command.get_property("used", volume)?;
+        let output = self.command.execute_output([
+            "zfs",
+            "get",
+            "-H",
+            "-o",
+            "value",
+            "volsize,volblocksize,used",
+            volume,
+        ])?;
+        let (volsize, volblocksize, used) = parse_volume_properties(&output);
 
         Ok(Some(ZfsVolumeInfo {
             name: volume.to_string(),
@@ -71,5 +76,44 @@ impl ZfsVolumeOperations {
 
     pub fn set_property(&self, property: &str, value: &str, volume: &str) -> Result<()> {
         self.command.set_property(property, value, volume)
+    }
+}
+
+/// Parse one `zfs get -H -o value volsize,volblocksize,used` output.
+/// `-` (e.g. snapshots) and absent lines map to `None`, matching
+/// `ZfsCommand::get_property`.
+fn parse_volume_properties(output: &str) -> (Option<String>, Option<String>, Option<String>) {
+    let mut lines = output.lines().map(str::trim).map(|value| {
+        if value.is_empty() || value == "-" {
+            None
+        } else {
+            Some(value.to_string())
+        }
+    });
+    (
+        lines.next().flatten(),
+        lines.next().flatten(),
+        lines.next().flatten(),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_volume_properties;
+
+    #[test]
+    fn volume_properties_parse_combined_get_output() {
+        let (size, block, used) = parse_volume_properties("50G\n16K\n12.5G\n");
+        assert_eq!(size, Some("50G".to_string()));
+        assert_eq!(block, Some("16K".to_string()));
+        assert_eq!(used, Some("12.5G".to_string()));
+    }
+
+    #[test]
+    fn volume_properties_treat_dash_as_missing() {
+        let (size, block, used) = parse_volume_properties("-\n16K\n");
+        assert_eq!(size, None);
+        assert_eq!(block, Some("16K".to_string()));
+        assert_eq!(used, None);
     }
 }

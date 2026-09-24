@@ -7,6 +7,7 @@ use axum::{
     Extension,
 };
 use futures::{sink::SinkExt, stream::StreamExt};
+use once_cell::sync::Lazy;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -22,9 +23,8 @@ use crate::{
 };
 
 // Track when clients established their current iSCSI session.
-lazy_static::lazy_static! {
-    static ref CLIENT_SESSION_START_TIMES: Arc<Mutex<HashMap<String, i64>>> = Arc::new(Mutex::new(HashMap::new()));
-}
+static CLIENT_SESSION_START_TIMES: Lazy<Arc<Mutex<HashMap<String, i64>>>> =
+    Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
 
 fn session_uptime(
     session_starts: &mut HashMap<String, i64>,

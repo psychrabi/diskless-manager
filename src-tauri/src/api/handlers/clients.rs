@@ -1,17 +1,17 @@
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     Json,
 };
 use chrono::Utc;
 use log::{error, info};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::process::Command;
 
 use crate::{
     application::image_service::ImageService,
-    core::client::{BootLogEntry, Client, ClientManager, CreateClientRequest, UpdateClientRequest},
+    core::client::{Client, ClientManager, CreateClientRequest, UpdateClientRequest},
     domain::storage::{ClientStorage, ClientStorageSpec, StorageSource, StorageVolume},
     persistence::repositories::image::ImageRepository,
     state::AppState,
@@ -34,12 +34,6 @@ fn get_master_os(master_name: &str) -> Option<String> {
 
 fn image_service(state: &AppState) -> ImageService {
     ImageService::new(ImageRepository::new(state.db_pool.clone()))
-}
-
-#[derive(Deserialize)]
-pub struct Pagination {
-    pub limit: Option<i32>,
-    pub offset: Option<i32>,
 }
 
 #[derive(Debug)]
@@ -382,34 +376,18 @@ fn storage_from_client(
 }
 
 /// Regenerate DHCP configuration after a client change.
-async fn refresh_dhcp(state: &AppState, settings: &crate::core::config::Settings, operation: &str) {
+pub(super) async fn refresh_dhcp(
+    state: &AppState,
+    settings: &crate::core::config::Settings,
+    operation: &str,
+) {
     if !settings.dhcp.enabled {
         return;
     }
 
     let dhcp_service = crate::services::DhcpService::new(settings.clone(), state.db_pool.clone());
 
-    if let Err(e) = dhcp_service.generate_client_configs().await {
-        tracing::warn!(
-            "Failed to regenerate DHCP client configuration after {}: {}",
-            operation,
-            e
-        );
-        return;
-    } else {
-        info!("DHCP client configuration regenerated after {}", operation);
-    }
-
-    if let Err(e) = dhcp_service.validate_config().await {
-        tracing::warn!(
-            "DHCP configuration validation failed after {}; service was not reloaded: {}",
-            operation,
-            e
-        );
-        return;
-    }
-
-    if let Err(e) = dhcp_service.reload().await {
+    if let Err(e) = dhcp_service.reload_clients().await {
         tracing::warn!("Failed to reload DHCP service after {}: {}", operation, e);
     } else {
         info!("DHCP service reloaded successfully after {}", operation);
@@ -450,28 +428,6 @@ async fn persist_client_runtime_state(
 // ============================================================================
 // Client CRUD
 // ============================================================================
-
-pub async fn list_clients(State(state): State<AppState>) -> Result<Json<Vec<Client>>, StatusCode> {
-    let manager = ClientManager::new(state.db_pool.clone());
-
-    let clients = manager
-        .list()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    Ok(Json(clients))
-}
-
-pub async fn get_client(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> Result<Json<Client>, StatusCode> {
-    let manager = ClientManager::new(state.db_pool.clone());
-
-    let client = manager.get(&id).await.map_err(|_| StatusCode::NOT_FOUND)?;
-
-    Ok(Json(client))
-}
 
 pub async fn create_client(
     State(state): State<AppState>,
@@ -1979,133 +1935,6 @@ pub async fn rotate_client_chap(
     })))
 }
 
-pub async fn delete_client(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> Result<(), StatusCode> {    let _client_guard = state.client_mutations.lock().await;
-    let recovering: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM client_offline_resets WHERE client_id = ? AND operation IS NOT NULL",
-    )
-    .bind(&id)
-    .fetch_one(&state.db_pool)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    if recovering != 0 {
-        return Err(StatusCode::CONFLICT);
-    }
-    tracing::info!(
-        "DELETE CLIENT CALLED - Starting deletion for client: {}",
-        id
-    );
-
-    let manager = ClientManager::new(state.db_pool.clone());
-
-    let client = manager.get(&id).await.map_err(|_| StatusCode::NOT_FOUND)?;
-
-    let settings = state.settings.read().await;
-
-    // ------------------------------------------------------------------------
-    // Remove client storage through application service.
-    // ------------------------------------------------------------------------
-
-    match storage_from_client(&settings, &client) {
-        Ok(storage) => {
-            if let Err(error) = state.application.storage.destroy_client_storage(&storage) {
-                tracing::warn!(
-                    "Failed to completely remove storage for client '{}': {}",
-                    client.name,
-                    error
-                );
-            }
-        }
-
-        Err(error) => {
-            tracing::warn!(
-                "Could not reconstruct storage for client '{}': {}",
-                client.name,
-                error
-            );
-        }
-    }
-
-    // ------------------------------------------------------------------------
-    // Remove per-client game clones.
-    //
-    // Game LUNs are detached before their datasets are destroyed. Runs
-    // before the database delete; the selection rows disappear with it
-    // through `ON DELETE CASCADE`.
-    // ------------------------------------------------------------------------
-
-    if let Err(error) = state
-        .application
-        .storage
-        .destroy_client_game_clones(&id, client.target_iqn.as_deref())
-    {
-        tracing::warn!(
-            "Failed to completely remove game clones for client '{}': {}",
-            client.name,
-            error
-        );
-    }
-
-    // Remove the static boot menu: without it the dispatcher falls through
-    // to enrollment, which denies deleted (unknown) machines. Otherwise a
-    // deleted client keeps booting from its orphaned menu indefinitely.
-    if let Err(error) =
-        crate::infrastructure::dhcp::remove_client_ipxe_menu(&client.mac).await
-    {
-        tracing::warn!(
-            "Failed to remove boot menu for deleted client '{}': {}",
-            client.name,
-            error
-        );
-    }
-
-    // ------------------------------------------------------------------------
-    // Delete database record.
-    // ------------------------------------------------------------------------
-
-    tracing::info!("DELETE CLIENT - About to delete from database: {}", id);
-
-    manager.delete(&id).await.map_err(|e| {
-        tracing::error!("DELETE CLIENT - Database deletion failed: {}", e);
-
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    tracing::info!("DELETE CLIENT - Successfully deleted from database: {}", id);
-
-    // Refresh client IP cache.
-    if let Err(e) = state.refresh_client_ips().await {
-        tracing::warn!("Failed to refresh client IPs cache: {}", e);
-    }
-
-    // Regenerate DHCP configuration.
-    refresh_dhcp(&state, &settings, "deleting client").await;
-
-    Ok(())
-}
-
-// ============================================================================
-// Boot history
-// ============================================================================
-
-pub async fn get_client_boot_history(
-    State(state): State<AppState>,
-    Path(client_id): Path<String>,
-    Query(params): Query<Pagination>,
-) -> Result<Json<Vec<BootLogEntry>>, StatusCode> {
-    let limit = params.limit.unwrap_or(50);
-
-    let manager = ClientManager::new(state.db_pool.clone());
-
-    let history = manager
-        .get_boot_history(&client_id, limit)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    Ok(Json(history))
-}
 
 #[cfg(test)]
 mod error_contract_tests {
