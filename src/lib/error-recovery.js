@@ -9,8 +9,7 @@ export function reloadApplication() {
 
 export function returnToHome() {
   clearSavedRoute();
-  // Preserve the app's document URL, including in the Tauri webview.
-  window.location.hash = "/";
+  window.location.pathname = "/";
   reloadApplication();
 }
 

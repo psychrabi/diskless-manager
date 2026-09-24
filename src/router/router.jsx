@@ -3,7 +3,7 @@ import PublicRoute from "@/components/Authentication/PublicRoute";
 import PublicLayout from "@/components/layouts/PublicLayout";
 import RouteErrorBoundary from "@/components/RouteErrorBoundary";
 import { lazy } from "react";
-import { createHashRouter } from "react-router-dom";
+import { createBrowserRouter } from "react-router-dom";
 
 const Adminlayout = lazy(() => import("@/components/layouts/AdminLayout"));
 const ClientManagement = lazy(() => import("@/components/ClientManagement"));
@@ -27,7 +27,7 @@ const ProtectedRoute = lazy(() =>
   import("@/components/Authentication/ProtectedRoute")
 );
 
-export const router = createHashRouter([
+export const router = createBrowserRouter([
   {
     path: "/",
     element: <PublicLayout />,
