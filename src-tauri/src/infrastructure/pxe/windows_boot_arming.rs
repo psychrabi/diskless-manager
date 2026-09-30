@@ -134,6 +134,12 @@ impl WindowsBootArmer {
         system_hive: &Path,
         config: &WindowsBootArmConfig,
     ) -> Result<WindowsBootArmPlan> {
+        validate_system_hive(system_hive)?;
+        if hive_is_dirty(system_hive)? && !config.allow_dirty_hive {
+            bail!(
+                "SYSTEM hive is dirty (REGF primary/secondary sequence numbers differ); refusing to load it for planning without allow_dirty_hive"
+            );
+        }
         let inventory = self.inspect(system_hive)?;
         build_plan(&inventory, config)
     }
