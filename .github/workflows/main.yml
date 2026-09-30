@@ -109,3 +109,51 @@ jobs:
           name: diskless-manager-release-deb
           path: src-tauri/target/release/bundle/deb/*.deb
           if-no-files-found: error
+
+
+  windows-servicer:
+    name: Build Windows servicing helper
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Build Windows servicing helper
+        run: cargo build --release --manifest-path src-tauri/Cargo.toml --bin diskless-windows-servicer
+
+      - name: Upload Windows servicing helper artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: diskless-windows-servicer
+          path: src-tauri/target/release/diskless-windows-servicer.exe
+          if-no-files-found: error
+
+  publish-windows-servicer:
+    name: Publish Windows servicing helper
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - release
+      - windows-servicer
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Windows servicing helper
+        uses: actions/download-artifact@v4
+        with:
+          name: diskless-windows-servicer
+          path: windows-servicer
+
+      - name: Attach helper to GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.ref_name }}" windows-servicer/diskless-windows-servicer.exe --clobber
