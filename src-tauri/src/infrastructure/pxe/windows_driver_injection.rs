@@ -15,6 +15,7 @@ pub struct WindowsDriverInjectionRequest {
     pub image_path: PathBuf,
     pub driver_root: PathBuf,
     pub mount_root: Option<PathBuf>,
+    pub image_index: u32,
     pub recursive: bool,
     pub commit: bool,
 }
@@ -66,7 +67,7 @@ impl WindowsDriverInjector {
 
         fs::create_dir_all(&mount_path)?;
 
-        self.mount(&request.image_path, &mount_path)?;
+        self.mount_index(&request.image_path, &mount_path, request.image_index)?;
 
         let result = self.add_drivers(&mount_path, &request.driver_root, request.recursive);
 
@@ -94,13 +95,21 @@ impl WindowsDriverInjector {
     }
 
     pub fn mount(&self, image_path: &Path, mount_path: &Path) -> Result<()> {
+        self.mount_index(image_path, mount_path, 1)
+    }
+
+    pub fn mount_index(&self, image_path: &Path, mount_path: &Path, image_index: u32) -> Result<()> {
+        if image_index == 0 {
+            bail!("Windows image index must be greater than zero");
+        }
+
         run_dism(
             &self.dism,
             [
                 "/Mount-Image".to_string(),
                 format!("/ImageFile:{}", image_path.display()),
                 format!("/MountDir:{}", mount_path.display()),
-                "/Index:1".to_string(),
+                format!("/Index:{image_index}"),
             ],
         )
         .context("failed to mount Windows image")
@@ -162,6 +171,9 @@ impl WindowsDriverInjector {
 }
 
 fn validate_request(request: &WindowsDriverInjectionRequest) -> Result<()> {
+    if request.image_index == 0 {
+        bail!("Windows image index must be greater than zero");
+    }
     if !request.image_path.is_file() {
         bail!(
             "Windows image does not exist: {}",
