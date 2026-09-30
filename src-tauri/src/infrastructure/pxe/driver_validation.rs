@@ -1,25 +1,16 @@
 //! Validation and inspection helpers for imported Windows network drivers.
 //!
-//! This is intentionally independent of WinPE and offline Windows servicing.
-//! It validates the driver package before it is offered to either workflow.
+//! Validation is independent of WinPE and offline Windows servicing. INF parsing is
+//! centralized in windows_inf so the importer, selector and validation API all agree
+//! on package identity and supported hardware.
 
-use anyhow::{bail, Context, Result};
+use super::windows_inf::{inspect_inf_file, WindowsInfMetadata};
+use anyhow::{bail, Result};
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const NETWORK_CLASS_GUID: &str = "4d36e972-e325-11ce-bfc1-08002be10318";
-
-#[derive(Debug, Clone, Serialize)]
-pub struct DriverInfInspection {
-    pub path: String,
-    pub is_network_class: bool,
-    pub class: Option<String>,
-    pub class_guid: Option<String>,
-    pub provider: Option<String>,
-    pub version: Option<String>,
-    pub hardware_ids: Vec<String>,
-}
+pub type DriverInfInspection = WindowsInfMetadata;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DriverPackageValidation {
@@ -48,10 +39,22 @@ pub fn validate_package(root: &Path) -> Result<DriverPackageValidation> {
     let mut warnings = Vec::new();
 
     for path in inf_files {
-        let inspection = inspect_inf(&path)?;
+        let inspection = inspect_inf_file(&path)?;
         if !inspection.is_network_class {
             warnings.push(format!(
                 "{} is not identified as a network driver",
+                path.display()
+            ));
+        }
+        if inspection.is_network_class && inspection.hardware_ids.is_empty() {
+            warnings.push(format!(
+                "{} is a network INF but no hardware IDs could be resolved",
+                path.display()
+            ));
+        }
+        if inspection.is_network_class && inspection.service_names.is_empty() {
+            warnings.push(format!(
+                "{} is a network INF but no AddService declaration could be resolved",
                 path.display()
             ));
         }
@@ -64,66 +67,6 @@ pub fn validate_package(root: &Path) -> Result<DriverPackageValidation> {
         inf_files: inspections,
         warnings,
     })
-}
-
-fn inspect_inf(path: &Path) -> Result<DriverInfInspection> {
-    let content = fs::read_to_string(path)
-        .with_context(|| format!("failed to read INF {}", path.display()))?;
-
-    let class = find_inf_value(&content, "Class");
-    let class_guid = find_inf_value(&content, "ClassGuid");
-    let provider = find_inf_value(&content, "Provider");
-    let version = find_inf_value(&content, "DriverVer");
-    let hardware_ids = collect_hardware_ids(&content);
-
-    let is_network_class = class
-        .as_deref()
-        .is_some_and(|value| value.eq_ignore_ascii_case("Net"))
-        || class_guid
-            .as_deref()
-            .is_some_and(|value| value.to_ascii_lowercase().contains(NETWORK_CLASS_GUID));
-
-    Ok(DriverInfInspection {
-        path: path.display().to_string(),
-        is_network_class,
-        class,
-        class_guid,
-        provider,
-        version,
-        hardware_ids,
-    })
-}
-
-fn find_inf_value(content: &str, key: &str) -> Option<String> {
-    content.lines().find_map(|line| {
-        let trimmed = line.trim();
-        let (name, value) = trimmed.split_once('=')?;
-        if name.trim().eq_ignore_ascii_case(key) {
-            Some(value.trim().trim_matches('"').to_string())
-        } else {
-            None
-        }
-    })
-}
-
-fn collect_hardware_ids(content: &str) -> Vec<String> {
-    content
-        .lines()
-        .filter_map(|line| {
-            let trimmed = line.trim();
-            if trimmed.to_ascii_lowercase().contains("pci\\ven_")
-                || trimmed.to_ascii_lowercase().contains("usb\\")
-                || trimmed.to_ascii_lowercase().contains("vmbus\\")
-            {
-                trimmed
-                    .split_once('=')
-                    .map(|(_, value)| value.trim().trim_matches('"').to_string())
-            } else {
-                None
-            }
-        })
-        .filter(|value| !value.is_empty())
-        .collect()
 }
 
 fn collect_inf_files(root: &Path, output: &mut Vec<PathBuf>) -> Result<()> {
@@ -140,4 +83,42 @@ fn collect_inf_files(root: &Path, output: &mut Vec<PathBuf>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::tempdir;
+
+    #[test]
+    fn accepts_utf16_network_inf() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("net.inf");
+        let text = r#"[Version]
+Class=Net
+ClassGuid={4d36e972-e325-11ce-bfc1-08002be10318}
+
+[Manufacturer]
+M=Models,NTamd64
+
+[Models.NTamd64]
+D=Install,PCI\VEN_1234&DEV_5678
+
+[Install.NT.Services]
+AddService=sample,2,ServiceInstall
+"#;
+        let mut file = fs::File::create(path).unwrap();
+        file.write_all(&[0xFF, 0xFE]).unwrap();
+        for word in text.encode_utf16() {
+            file.write_all(&word.to_le_bytes()).unwrap();
+        }
+
+        let result = validate_package(dir.path()).unwrap();
+        assert!(result.valid);
+        assert_eq!(
+            result.inf_files[0].hardware_ids,
+            vec!["PCI\\VEN_1234&DEV_5678"]
+        );
+    }
 }
