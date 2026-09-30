@@ -1,3 +1,4 @@
+use super::driver_manifest::DriverManifest;
 use super::windows_inf::inspect_inf_file;
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
@@ -11,6 +12,7 @@ use uuid::Uuid;
 const MEDIA_DIR: &str = "pxe/network-drivers";
 const DRIVERS_DIR: &str = "drivers";
 const CATALOG_FILE: &str = "index.json";
+const MANIFEST_FILE: &str = "manifest.json";
 const ISO_FILE: &str = "network-drivers.iso";
 const STARTNET_FILE: &str = "startnet.cmd";
 const TAG_FILE: &str = "DRIVERS.TAG";
@@ -333,7 +335,7 @@ endlocal
         let path = self.catalog_path();
         if !path.is_file() {
             return Ok(DriverCatalog {
-                version: 1,
+                version: 2,
                 drivers: Vec::new(),
             });
         }
@@ -345,8 +347,13 @@ endlocal
 
     fn save_catalog(&self, catalog: &DriverCatalog) -> Result<()> {
         fs::create_dir_all(self.media_dir())?;
-        let content = serde_json::to_string_pretty(catalog)?;
+        let mut catalog = catalog.clone();
+        catalog.version = 2;
+        let content = serde_json::to_string_pretty(&catalog)?;
         fs::write(self.catalog_path(), format!("{content}\n"))?;
+
+        let manifest = DriverManifest::from_packages(&catalog.drivers);
+        manifest.write(&self.media_dir().join(MANIFEST_FILE))?;
         Ok(())
     }
 
