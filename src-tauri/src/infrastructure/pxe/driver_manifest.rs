@@ -4,7 +4,7 @@
 //! UI/client matching code. It contains package metadata and relative paths only;
 //! no host-specific registry exports are applied here.
 
-use super::NetworkDriverPackage;
+use super::driver_injection::NetworkDriverPackage;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
