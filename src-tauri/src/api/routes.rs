@@ -57,6 +57,10 @@ use crate::api::handlers::{
     },
     system_reconciliation::inspect_system_reconciliation_handler,
     users::{create_user, delete_user, get_user, list_users, update_user, update_user_password},
+    windows_servicing::{
+        capabilities as windows_servicing_capabilities,
+        prepare_image as prepare_windows_image,
+    },
     ws::ws_metrics_handler,
     zfs::{create_dataset, delete_dataset, get_zpool_stats, list_datasets, list_game_disks, list_zpools},
 };
@@ -282,6 +286,14 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route(
             "/api/pxe/network-drivers/{id}",
             delete(remove_network_driver),
+        )
+        .route(
+            "/api/pxe/windows/servicing",
+            get(windows_servicing_capabilities),
+        )
+        .route(
+            "/api/pxe/windows/prepare-image",
+            post(prepare_windows_image),
         )
         .with_state(state.clone())
         .layer(axum::middleware::from_fn_with_state(
