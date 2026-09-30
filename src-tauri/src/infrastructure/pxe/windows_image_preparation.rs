@@ -62,16 +62,6 @@ impl WindowsImagePreparer {
         })
     }
 
-    pub fn with_tools(
-        driver_injector: WindowsDriverInjector,
-        boot_armer: WindowsBootArmer,
-    ) -> Self {
-        Self {
-            driver_injector,
-            boot_armer,
-        }
-    }
-
     pub fn prepare(
         &self,
         request: WindowsImagePreparationRequest,
