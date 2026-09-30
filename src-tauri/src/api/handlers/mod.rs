@@ -26,5 +26,6 @@ pub mod ssh;
 pub mod system;
 pub mod system_reconciliation;
 pub mod users;
+pub mod windows_servicing;
 pub mod ws;
 pub mod zfs;
