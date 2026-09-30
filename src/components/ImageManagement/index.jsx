@@ -1,7 +1,8 @@
 import { buttonVariants } from "@/components/ui/button";
 import { Card as ShadcnCard, CardContent, CardDescription, CardTitle } from "@/components/ui/card";
-import { Download, File, PlusCircle } from "lucide-react";
+import { Download, File, PlusCircle, Wrench } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { useAuth } from "@/contexts/auth";
 import { Link } from "react-router-dom";
 import { useAppStore } from "../../store/useAppStore";
 import { Button, PageHeader } from "@/components/ui";
@@ -9,6 +10,7 @@ import { scanAndImportImages } from "@/api/modules/images";
 import { useToastStore } from "@/store/useToastStore";
 import CreateImageModal from "./CreateImageModal";
 import { ImagesList } from "./ImagesList";
+import WindowsServicingModal from "./WindowsServicingModal";
 
 const ImageManagement = () => {
   // Use a more specific selector to ensure re-renders
@@ -19,8 +21,10 @@ const ImageManagement = () => {
   const fetchDatasets = useAppStore((state) => state.fetchDatasets);
   const fetchImages = useAppStore((state) => state.fetchImages);
   const { error, success } = useToastStore();
+  const { user } = useAuth();
   const [openImageCreateModal, setOpenImageCreateModal] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [windowsServicingOpen, setWindowsServicingOpen] = useState(false);
 
   // Check if there are any image disks (datasets with org.diskless:type=image)
   const hasImageDisk = datasets.some(
@@ -71,6 +75,16 @@ const ImageManagement = () => {
         description="Manage diskless boot images and their snapshots"
         actions={
           <div className="flex items-center gap-2">
+            {user?.role === "admin" && (
+              <Button
+                variant="outline"
+                onClick={() => setWindowsServicingOpen(true)}
+                icon={Wrench}
+                title="Prepare a Windows WIM for diskless network boot"
+              >
+                Windows Servicing
+              </Button>
+            )}
             <Button
               variant="ghost"
               onClick={handleImportExisting}
@@ -134,6 +148,12 @@ const ImageManagement = () => {
         <CreateImageModal
           openImageCreateModal={openImageCreateModal}
           setOpenImageCreateModal={setOpenImageCreateModal}
+        />
+      )}
+      {windowsServicingOpen && (
+        <WindowsServicingModal
+          isOpen={windowsServicingOpen}
+          onClose={() => setWindowsServicingOpen(false)}
         />
       )}
     </div>
