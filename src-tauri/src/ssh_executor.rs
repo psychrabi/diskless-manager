@@ -1,6 +1,6 @@
 use crate::error::AppError;
 use ssh2::{CheckResult, KnownHostFileKind, Session};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
@@ -104,11 +104,35 @@ impl SshExecutor {
         Err(last_error.unwrap_or_else(|| AppError::SshConnection("Unknown SSH error".to_string())))
     }
 
-    /// Execute a command on a remote host
+    /// Execute a command on a remote host.
     pub async fn execute_command(
         &self,
         host: &str,
         command: &str,
+    ) -> Result<CommandResult, AppError> {
+        self.execute_command_payload(host, command, None).await
+    }
+
+    /// Execute a command on a remote host and stream a request body to stdin.
+    ///
+    /// This is used by structured helper protocols where putting JSON in the
+    /// shell command line would be fragile and could expose secrets in process
+    /// listings or command logs.
+    pub async fn execute_command_with_input(
+        &self,
+        host: &str,
+        command: &str,
+        input: &[u8],
+    ) -> Result<CommandResult, AppError> {
+        self.execute_command_payload(host, command, Some(input.to_vec()))
+            .await
+    }
+
+    async fn execute_command_payload(
+        &self,
+        host: &str,
+        command: &str,
+        input: Option<Vec<u8>>,
     ) -> Result<CommandResult, AppError> {
         let start_time = std::time::Instant::now();
 
@@ -137,7 +161,11 @@ impl SshExecutor {
                     timeout_secs,
                     disable_host_key_verification,
                 )?;
-                Self::execute_command_internal_blocking(&session, &command_owned)
+                Self::execute_command_internal_blocking(
+                    &session,
+                    &command_owned,
+                    input.as_deref(),
+                )
             }),
         )
         .await
@@ -331,6 +359,7 @@ impl SshExecutor {
     fn execute_command_internal_blocking(
         session: &Session,
         command: &str,
+        input: Option<&[u8]>,
     ) -> Result<CommandResult, AppError> {
         let mut channel = session.channel_session().map_err(|e| {
             error!("Failed to open SSH channel: {}", e);
@@ -340,6 +369,21 @@ impl SshExecutor {
         channel.exec(command).map_err(|e| {
             error!("Failed to execute SSH command: {}", e);
             AppError::SshCommand(format!("Failed to execute SSH command: {}", e))
+        })?;
+
+        if let Some(input) = input {
+            channel.write_all(input).map_err(|e| {
+                error!("Failed to write SSH stdin: {}", e);
+                AppError::SshCommand(format!("Failed to write SSH stdin: {}", e))
+            })?;
+            channel.flush().map_err(|e| {
+                error!("Failed to flush SSH stdin: {}", e);
+                AppError::SshCommand(format!("Failed to flush SSH stdin: {}", e))
+            })?;
+        }
+        channel.send_eof().map_err(|e| {
+            error!("Failed to close SSH stdin: {}", e);
+            AppError::SshCommand(format!("Failed to close SSH stdin: {}", e))
         })?;
 
         let mut stdout = String::new();
