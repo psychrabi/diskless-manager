@@ -100,7 +100,7 @@ fn run_prepare() -> anyhow::Result<WindowsImagePreparationResult> {
 fn write_json(value: &impl Serialize) -> std::io::Result<()> {
     let stdout = std::io::stdout();
     let mut output = stdout.lock();
-    serde_json::to_writer(&mut output, value)?;
+    serde_json::to_writer(&mut output, value).map_err(std::io::Error::other)?;
     output.write_all(b"\n")?;
     output.flush()
 }
