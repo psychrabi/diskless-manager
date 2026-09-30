@@ -26,13 +26,27 @@ pub struct DriverManifestEntry {
     pub pnp_device_id: Option<String>,
     pub guid: Option<String>,
     pub mac_address: Option<String>,
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub architectures: Vec<String>,
+    #[serde(default)]
+    pub hardware_ids: Vec<String>,
+    #[serde(default)]
+    pub compatible_ids: Vec<String>,
+    #[serde(default)]
+    pub service_names: Vec<String>,
+    #[serde(default)]
+    pub catalog_files: Vec<String>,
     pub inf_files: Vec<String>,
 }
 
 impl DriverManifest {
     pub fn new(entries: Vec<DriverManifestEntry>) -> Self {
         Self {
-            schema_version: 1,
+            schema_version: 2,
             generated_at: Utc::now(),
             drivers: entries,
         }
