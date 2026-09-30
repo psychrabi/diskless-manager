@@ -1,4 +1,7 @@
 //! Deterministic network-driver selection for PXE clients.
+//!
+//! Exact hardware-ID matches are preferred over compatible IDs. Architecture is
+//! a hard compatibility filter when both the client and package declare it.
 
 use super::NetworkDriverPackage;
 use serde::{Deserialize, Serialize};
@@ -8,6 +11,8 @@ use std::collections::HashSet;
 pub struct NetworkDriverSelectorInput {
     #[serde(default)]
     pub mac_address: Option<String>,
+    #[serde(default)]
+    pub architecture: Option<String>,
     #[serde(default)]
     pub pnp_device_ids: Vec<String>,
     #[serde(default)]
@@ -28,6 +33,11 @@ pub fn select_drivers(
     input: &NetworkDriverSelectorInput,
 ) -> Vec<SelectedNetworkDriver> {
     let mac = normalize_mac(input.mac_address.as_deref());
+    let architecture = input
+        .architecture
+        .as_deref()
+        .map(normalize_architecture)
+        .filter(|value| !value.is_empty());
     let pnp_ids = input
         .pnp_device_ids
         .iter()
@@ -47,32 +57,81 @@ pub fn select_drivers(
     let mut selected = packages
         .iter()
         .filter_map(|package| {
+            if let Some(requested_arch) = architecture.as_deref() {
+                if !package.architectures.is_empty()
+                    && !package
+                        .architectures
+                        .iter()
+                        .map(|value| normalize_architecture(value))
+                        .any(|value| value == requested_arch)
+                {
+                    return None;
+                }
+            }
+
             let mut score = 0;
             let mut reasons = Vec::new();
 
             if explicit.contains(package.id.as_str()) {
-                score += 1000;
+                score += 10_000;
                 reasons.push("explicit driver selection".to_string());
+            }
+
+            let exact_ids = package
+                .hardware_ids
+                .iter()
+                .map(|value| normalize_pnp(value))
+                .chain(package.pnp_device_id.iter().map(|value| normalize_pnp(value)))
+                .collect::<HashSet<_>>();
+            if !pnp_ids.is_empty() && exact_ids.iter().any(|id| pnp_ids.contains(id)) {
+                score += 9_000;
+                reasons.push("exact PNP hardware ID match".to_string());
+            }
+
+            let compatible_ids = package
+                .compatible_ids
+                .iter()
+                .map(|value| normalize_pnp(value))
+                .collect::<HashSet<_>>();
+            if !pnp_ids.is_empty()
+                && compatible_ids.iter().any(|id| pnp_ids.contains(id))
+            {
+                score += 6_000;
+                reasons.push("compatible PNP ID match".to_string());
             }
 
             if let Some(package_mac) = package.mac_address.as_deref() {
                 if !mac.is_empty() && normalize_mac(Some(package_mac)) == mac {
-                    score += 500;
+                    score += 2_000;
                     reasons.push("MAC address match".to_string());
                 }
             }
 
-            if let Some(package_pnp) = package.pnp_device_id.as_deref() {
-                if !pnp_ids.is_empty() && pnp_ids.contains(&normalize_pnp(package_pnp)) {
-                    score += 900;
-                    reasons.push("PNP device ID match".to_string());
-                }
+            let package_services = package
+                .service_names
+                .iter()
+                .map(|value| value.to_ascii_lowercase())
+                .chain(
+                    package
+                        .service_name
+                        .iter()
+                        .map(|value| value.to_ascii_lowercase()),
+                )
+                .collect::<HashSet<_>>();
+            if package_services.iter().any(|service| services.contains(service)) {
+                score += 1_000;
+                reasons.push("driver service match".to_string());
             }
 
-            if let Some(service) = package.service_name.as_deref() {
-                if services.contains(&service.to_ascii_lowercase()) {
-                    score += 400;
-                    reasons.push("driver service match".to_string());
+            if let Some(requested_arch) = architecture.as_deref() {
+                if package
+                    .architectures
+                    .iter()
+                    .map(|value| normalize_architecture(value))
+                    .any(|value| value == requested_arch)
+                {
+                    score += 100;
+                    reasons.push(format!("{} architecture match", requested_arch));
                 }
             }
 
@@ -101,18 +160,25 @@ fn normalize_mac(value: Option<&str>) -> String {
         .unwrap_or_default()
         .chars()
         .filter(|character| character.is_ascii_hexdigit())
-        .flat_map(|character| {
-            character
-                .to_ascii_lowercase()
-                .to_string()
-                .chars()
-                .collect::<Vec<_>>()
-        })
+        .map(|character| character.to_ascii_lowercase())
         .collect()
 }
 
 fn normalize_pnp(value: &str) -> String {
-    value.trim().to_ascii_lowercase().replace('/', "\\")
+    value
+        .trim()
+        .trim_matches('"')
+        .to_ascii_lowercase()
+        .replace('/', "\\")
+}
+
+fn normalize_architecture(value: &str) -> String {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "amd64" | "x86_64" | "x64" => "x64".to_string(),
+        "i386" | "i686" | "x86" => "x86".to_string(),
+        "aarch64" | "arm64" => "arm64".to_string(),
+        other => other.to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -125,6 +191,7 @@ mod tests {
         pnp: Option<&str>,
         mac: Option<&str>,
         service: Option<&str>,
+        architecture: Option<&str>,
     ) -> NetworkDriverPackage {
         NetworkDriverPackage {
             id: id.to_string(),
@@ -135,6 +202,13 @@ mod tests {
             guid: None,
             mac_address: mac.map(str::to_string),
             inf_files: vec!["driver.inf".to_string()],
+            provider: None,
+            version: None,
+            architectures: architecture.into_iter().map(str::to_string).collect(),
+            hardware_ids: pnp.into_iter().map(str::to_string).collect(),
+            compatible_ids: Vec::new(),
+            service_names: service.into_iter().map(str::to_string).collect(),
+            catalog_files: Vec::new(),
             imported_at: Utc::now(),
         }
     }
@@ -142,10 +216,17 @@ mod tests {
     #[test]
     fn pnp_match_wins_over_service_match() {
         let packages = vec![
-            package("generic", None, None, Some("e2fexpress")),
-            package("intel", Some("PCI\\VEN_8086&DEV_15F3"), None, None),
+            package("generic", None, None, Some("e2fexpress"), Some("x64")),
+            package(
+                "intel",
+                Some("PCI\\VEN_8086&DEV_15F3"),
+                None,
+                None,
+                Some("x64"),
+            ),
         ];
         let input = NetworkDriverSelectorInput {
+            architecture: Some("amd64".to_string()),
             pnp_device_ids: vec!["PCI\\VEN_8086&DEV_15F3".to_string()],
             service_names: vec!["e2fexpress".to_string()],
             ..Default::default()
@@ -158,8 +239,8 @@ mod tests {
     #[test]
     fn explicit_selection_is_supported() {
         let packages = vec![
-            package("one", None, None, None),
-            package("two", None, None, None),
+            package("one", None, None, None, None),
+            package("two", None, None, None, None),
         ];
         let input = NetworkDriverSelectorInput {
             driver_ids: vec!["two".to_string()],
@@ -167,6 +248,23 @@ mod tests {
         };
         let selected = select_drivers(&packages, &input);
         assert_eq!(selected[0].driver_id, "two");
-        assert_eq!(selected[0].score, 1000);
+        assert_eq!(selected[0].score, 10_000);
+    }
+
+    #[test]
+    fn mismatched_architecture_is_rejected() {
+        let packages = vec![package(
+            "x86-only",
+            Some("PCI\\VEN_1234&DEV_5678"),
+            None,
+            None,
+            Some("x86"),
+        )];
+        let input = NetworkDriverSelectorInput {
+            architecture: Some("x64".to_string()),
+            pnp_device_ids: vec!["PCI\\VEN_1234&DEV_5678".to_string()],
+            ..Default::default()
+        };
+        assert!(select_drivers(&packages, &input).is_empty());
     }
 }
