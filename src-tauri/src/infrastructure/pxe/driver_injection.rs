@@ -1,3 +1,4 @@
+use super::windows_inf::inspect_inf_file;
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -41,6 +42,20 @@ pub struct NetworkDriverPackage {
     pub guid: Option<String>,
     pub mac_address: Option<String>,
     pub inf_files: Vec<String>,
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub architectures: Vec<String>,
+    #[serde(default)]
+    pub hardware_ids: Vec<String>,
+    #[serde(default)]
+    pub compatible_ids: Vec<String>,
+    #[serde(default)]
+    pub service_names: Vec<String>,
+    #[serde(default)]
+    pub catalog_files: Vec<String>,
     pub imported_at: DateTime<Utc>,
 }
 
@@ -138,8 +153,16 @@ impl NetworkDriverInjectionPlugin {
                 bail!("archive contains no INF driver package");
             }
 
-            for inf in &inf_files {
-                validate_network_inf(inf)?;
+            let inspections = inf_files
+                .iter()
+                .map(|inf| inspect_inf_file(inf))
+                .collect::<Result<Vec<_>>>()?;
+            let network_infs = inspections
+                .iter()
+                .filter(|inspection| inspection.is_network_class)
+                .collect::<Vec<_>>();
+            if network_infs.is_empty() {
+                bail!("archive contains INF files but none identify as network adapter drivers");
             }
 
             fs::create_dir_all(&package_dir)?;
@@ -159,18 +182,63 @@ impl NetworkDriverInjectionPlugin {
                 })
                 .collect::<Vec<_>>();
 
+            let mut architectures = network_infs
+                .iter()
+                .flat_map(|inspection| inspection.architectures.iter().cloned())
+                .collect::<Vec<_>>();
+            let mut hardware_ids = network_infs
+                .iter()
+                .flat_map(|inspection| inspection.hardware_ids.iter().cloned())
+                .collect::<Vec<_>>();
+            let mut compatible_ids = network_infs
+                .iter()
+                .flat_map(|inspection| inspection.compatible_ids.iter().cloned())
+                .collect::<Vec<_>>();
+            let mut service_names = network_infs
+                .iter()
+                .flat_map(|inspection| inspection.service_names.iter().cloned())
+                .collect::<Vec<_>>();
+            let mut catalog_files = network_infs
+                .iter()
+                .flat_map(|inspection| inspection.catalog_files.iter().cloned())
+                .collect::<Vec<_>>();
+            for values in [
+                &mut architectures,
+                &mut hardware_ids,
+                &mut compatible_ids,
+                &mut service_names,
+                &mut catalog_files,
+            ] {
+                values.sort_by_key(|value| value.to_ascii_lowercase());
+                values.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+            }
+
+            let inferred_service = service_names.first().cloned();
+            let inferred_pnp = hardware_ids.first().cloned();
+            let inferred_provider = network_infs.iter().find_map(|item| item.provider.clone());
+            let inferred_version = network_infs.iter().find_map(|item| item.version.clone());
+
             let package = NetworkDriverPackage {
                 id,
                 name: metadata
                     .name
+                    .or(metadata.driver_name.clone())
                     .or(metadata.service_name.clone())
+                    .or(inferred_provider.clone())
                     .unwrap_or_else(|| "Network Driver".to_string()),
-                service_name: metadata.service_name,
+                service_name: metadata.service_name.or(inferred_service),
                 driver_name: metadata.driver_name,
-                pnp_device_id: metadata.pnp_device_id,
+                pnp_device_id: metadata.pnp_device_id.or(inferred_pnp),
                 guid: metadata.guid,
                 mac_address: metadata.mac_address,
                 inf_files: relative_inf_files,
+                provider: inferred_provider,
+                version: inferred_version,
+                architectures,
+                hardware_ids,
+                compatible_ids,
+                service_names,
+                catalog_files,
                 imported_at: Utc::now(),
             };
 
@@ -434,23 +502,6 @@ fn find_inf_files(root: &Path) -> Result<Vec<PathBuf>> {
     })?;
     files.sort();
     Ok(files)
-}
-
-fn validate_network_inf(path: &Path) -> Result<()> {
-    let content = fs::read_to_string(path)
-        .with_context(|| format!("failed to read INF {}", path.display()))?;
-    let lower = content.to_ascii_lowercase();
-
-    if !lower.contains("class=net")
-        && !lower.contains("classguid={4d36e972-e325-11ce-bfc1-08002be10318}")
-    {
-        bail!(
-            "INF does not identify as a network adapter driver: {}",
-            path.display()
-        );
-    }
-
-    Ok(())
 }
 
 fn copy_directory_contents(source: &Path, destination: &Path) -> Result<()> {
