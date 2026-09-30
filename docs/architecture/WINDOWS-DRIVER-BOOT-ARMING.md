@@ -94,3 +94,89 @@ Driver installation and SYSTEM hive mutation are currently Windows-servicing ope
 - `reg.exe` loads and updates the offline SYSTEM hive.
 
 The Linux server can own orchestration, package storage and client selection, while a Windows/WinPE servicing stage performs authoritative Windows image modification.
+
+
+## Remote Windows servicing worker
+
+The normal Diskless Manager server runs on Linux, so DISM and the Windows
+registry loader are not locally available. The implementation therefore also
+builds a dedicated console helper:
+
+`diskless-windows-servicer.exe`
+
+The helper has no HTTP server and opens no listening port. It is invoked locally
+or through Windows OpenSSH.
+
+Supported protocol commands:
+
+```text
+diskless-windows-servicer.exe capabilities
+diskless-windows-servicer.exe prepare
+```
+
+`prepare` reads a `WindowsImagePreparationRequest` JSON document from stdin
+and writes a versioned JSON response to stdout.
+
+The Linux server invokes the helper through the existing SSH transport. Request
+JSON is written to the SSH channel stdin rather than embedded in the command
+line. This avoids shell quoting problems and keeps servicing parameters out of
+remote process listings.
+
+The helper path defaults to:
+
+```text
+C:\Program Files\Diskless Manager\diskless-windows-servicer.exe
+```
+
+and can be overridden per request.
+
+SSH host-key verification remains enabled. The servicing host must therefore be
+present in the server account's OpenSSH `known_hosts` file before remote
+servicing is allowed.
+
+### Remote preparation sequence
+
+```text
+Linux Diskless Manager
+        |
+        | authenticated SSH + verified host key
+        v
+diskless-windows-servicer.exe
+        |
+        +-- DISM mount selected WIM index
+        |
+        +-- install complete INF driver package(s)
+        |
+        +-- locate Windows/System32/config/SYSTEM
+        |
+        +-- inspect active ControlSet and Windows NIC bindings
+        |
+        +-- produce conservative boot-arm plan
+        |
+        +-- apply plan only when commit=true
+        |
+        +-- DISM commit
+        |
+        '-- on any failure: DISM discard
+```
+
+With `commit=false`, the WIM is mounted, driver installation is exercised and
+the boot-arm plan is generated, but registry changes are not applied and the
+entire DISM mount is discarded. This is the recommended validation mode before
+modifying a master image.
+
+### Management API
+
+Admin-authenticated endpoints:
+
+```text
+GET  /api/pxe/windows/servicing
+POST /api/pxe/windows/prepare-image
+
+POST /api/pxe/windows/servicing/remote
+POST /api/pxe/windows/prepare-image/remote
+```
+
+The local endpoints are useful when Diskless Manager itself is running in a
+Windows servicing environment. The remote endpoints are the normal path for a
+Linux diskless server controlling a Windows servicing worker.
