@@ -7,6 +7,7 @@ pub mod nvmeof;
 pub mod windows_boot_arming;
 pub mod windows_driver_injection;
 pub mod windows_inf;
+pub mod windows_image_preparation;
 
 pub use driver_injection::{
     DriverInjectionStatus, NetworkDriverInjectionPlugin, NetworkDriverPackage,
@@ -25,3 +26,7 @@ pub use windows_driver_injection::{
     WindowsDriverInjectionRequest, WindowsDriverInjectionResult, WindowsDriverInjector,
 };
 pub use windows_inf::{inspect_inf_file, parse_inf, WindowsInfMetadata};
+pub use windows_image_preparation::{
+    servicing_available as windows_servicing_available, WindowsImagePreparationRequest,
+    WindowsImagePreparationResult, WindowsImagePreparer,
+};
