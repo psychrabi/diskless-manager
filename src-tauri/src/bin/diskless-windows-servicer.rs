@@ -9,9 +9,25 @@
 //! locally by an administrator or remotely through the server's authenticated SSH
 //! transport.
 
-use app_lib::infrastructure::pxe::{
-    windows_servicing_available, WindowsImagePreparationRequest, WindowsImagePreparationResult,
-    WindowsImagePreparer,
+// Keep this helper independent from the main application library. The main
+// library intentionally contains Linux-only ZFS/LIO/configfs code and cannot be
+// linked into a native Windows utility.
+#[path = "../infrastructure/pxe/windows_boot_arming.rs"]
+mod windows_boot_arming;
+#[path = "../infrastructure/pxe/windows_driver_injection.rs"]
+mod windows_driver_injection;
+
+pub use windows_boot_arming::{
+    WindowsBootArmConfig, WindowsBootArmResult, WindowsBootArmer,
+};
+pub use windows_driver_injection::WindowsDriverInjector;
+
+#[path = "../infrastructure/pxe/windows_image_preparation.rs"]
+mod windows_image_preparation;
+
+use windows_image_preparation::{
+    servicing_available as windows_servicing_available, WindowsImagePreparationRequest,
+    WindowsImagePreparationResult, WindowsImagePreparer,
 };
 use serde::Serialize;
 use std::io::{Read, Write};
