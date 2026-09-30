@@ -3,12 +3,11 @@
 //! This is intentionally independent of WinPE and offline Windows servicing.
 //! It validates the driver package before it is offered to either workflow.
 
-use anyhow::{bail, Context, Result};
+use super::windows_inf::parse_inf_file;
+use anyhow::{bail, Result};
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
-
-const NETWORK_CLASS_GUID: &str = "4d36e972-e325-11ce-bfc1-08002be10318";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DriverInfInspection {
@@ -17,8 +16,14 @@ pub struct DriverInfInspection {
     pub class: Option<String>,
     pub class_guid: Option<String>,
     pub provider: Option<String>,
+    pub driver_date: Option<String>,
     pub version: Option<String>,
+    pub catalog_files: Vec<String>,
+    pub architectures: Vec<String>,
     pub hardware_ids: Vec<String>,
+    pub compatible_ids: Vec<String>,
+    pub service_names: Vec<String>,
+    pub service_binaries: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -55,6 +60,12 @@ pub fn validate_package(root: &Path) -> Result<DriverPackageValidation> {
                 path.display()
             ));
         }
+        if inspection.hardware_ids.is_empty() {
+            warnings.push(format!(
+                "{} contains no discoverable PnP hardware IDs",
+                path.display()
+            ));
+        }
         inspections.push(inspection);
     }
 
@@ -66,64 +77,24 @@ pub fn validate_package(root: &Path) -> Result<DriverPackageValidation> {
     })
 }
 
-fn inspect_inf(path: &Path) -> Result<DriverInfInspection> {
-    let content = fs::read_to_string(path)
-        .with_context(|| format!("failed to read INF {}", path.display()))?;
-
-    let class = find_inf_value(&content, "Class");
-    let class_guid = find_inf_value(&content, "ClassGuid");
-    let provider = find_inf_value(&content, "Provider");
-    let version = find_inf_value(&content, "DriverVer");
-    let hardware_ids = collect_hardware_ids(&content);
-
-    let is_network_class = class
-        .as_deref()
-        .is_some_and(|value| value.eq_ignore_ascii_case("Net"))
-        || class_guid
-            .as_deref()
-            .is_some_and(|value| value.to_ascii_lowercase().contains(NETWORK_CLASS_GUID));
+pub fn inspect_inf(path: &Path) -> Result<DriverInfInspection> {
+    let metadata = parse_inf_file(path)?;
 
     Ok(DriverInfInspection {
         path: path.display().to_string(),
-        is_network_class,
-        class,
-        class_guid,
-        provider,
-        version,
-        hardware_ids,
+        is_network_class: metadata.is_network_class,
+        class: metadata.class,
+        class_guid: metadata.class_guid,
+        provider: metadata.provider,
+        driver_date: metadata.driver_date,
+        version: metadata.driver_version,
+        catalog_files: metadata.catalog_files,
+        architectures: metadata.architectures,
+        hardware_ids: metadata.hardware_ids,
+        compatible_ids: metadata.compatible_ids,
+        service_names: metadata.service_names,
+        service_binaries: metadata.service_binaries,
     })
-}
-
-fn find_inf_value(content: &str, key: &str) -> Option<String> {
-    content.lines().find_map(|line| {
-        let trimmed = line.trim();
-        let (name, value) = trimmed.split_once('=')?;
-        if name.trim().eq_ignore_ascii_case(key) {
-            Some(value.trim().trim_matches('"').to_string())
-        } else {
-            None
-        }
-    })
-}
-
-fn collect_hardware_ids(content: &str) -> Vec<String> {
-    content
-        .lines()
-        .filter_map(|line| {
-            let trimmed = line.trim();
-            if trimmed.to_ascii_lowercase().contains("pci\\ven_")
-                || trimmed.to_ascii_lowercase().contains("usb\\")
-                || trimmed.to_ascii_lowercase().contains("vmbus\\")
-            {
-                trimmed
-                    .split_once('=')
-                    .map(|(_, value)| value.trim().trim_matches('"').to_string())
-            } else {
-                None
-            }
-        })
-        .filter(|value| !value.is_empty())
-        .collect()
 }
 
 fn collect_inf_files(root: &Path, output: &mut Vec<PathBuf>) -> Result<()> {
