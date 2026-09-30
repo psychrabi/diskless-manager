@@ -60,6 +60,8 @@ use crate::api::handlers::{
     windows_servicing::{
         capabilities as windows_servicing_capabilities,
         prepare_image as prepare_windows_image,
+        prepare_image_remote as prepare_windows_image_remote,
+        remote_capabilities as windows_servicing_remote_capabilities,
     },
     ws::ws_metrics_handler,
     zfs::{create_dataset, delete_dataset, get_zpool_stats, list_datasets, list_game_disks, list_zpools},
@@ -294,6 +296,14 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route(
             "/api/pxe/windows/prepare-image",
             post(prepare_windows_image),
+        )
+        .route(
+            "/api/pxe/windows/servicing/remote",
+            post(windows_servicing_remote_capabilities),
+        )
+        .route(
+            "/api/pxe/windows/prepare-image/remote",
+            post(prepare_windows_image_remote),
         )
         .with_state(state.clone())
         .layer(axum::middleware::from_fn_with_state(
