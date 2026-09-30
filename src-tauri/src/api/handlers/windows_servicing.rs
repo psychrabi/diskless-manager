@@ -6,8 +6,9 @@
 
 use crate::{
     infrastructure::pxe::{
-        windows_servicing_available, WindowsImagePreparationRequest, WindowsImagePreparationResult,
-        WindowsImagePreparer,
+        windows_servicing_available, RemoteWindowsCapabilitiesRequest, RemoteWindowsServicer,
+        RemoteWindowsServicingCapabilities, RemoteWindowsServicingRequest,
+        WindowsImagePreparationRequest, WindowsImagePreparationResult, WindowsImagePreparer,
     },
     types::Claims,
 };
@@ -89,4 +90,31 @@ fn internal_message(message: String) -> (StatusCode, Json<WindowsServicingError>
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(WindowsServicingError { error: message }),
     )
+}
+
+
+pub async fn remote_capabilities(
+    Extension(claims): Extension<Claims>,
+    Json(request): Json<RemoteWindowsCapabilitiesRequest>,
+) -> Result<Json<RemoteWindowsServicingCapabilities>, (StatusCode, Json<WindowsServicingError>)> {
+    require_admin(&claims)?;
+
+    RemoteWindowsServicer::new()
+        .capabilities(request)
+        .await
+        .map(Json)
+        .map_err(operation_error)
+}
+
+pub async fn prepare_image_remote(
+    Extension(claims): Extension<Claims>,
+    Json(request): Json<RemoteWindowsServicingRequest>,
+) -> Result<Json<WindowsImagePreparationResult>, (StatusCode, Json<WindowsServicingError>)> {
+    require_admin(&claims)?;
+
+    RemoteWindowsServicer::new()
+        .prepare(request)
+        .await
+        .map(Json)
+        .map_err(operation_error)
 }
