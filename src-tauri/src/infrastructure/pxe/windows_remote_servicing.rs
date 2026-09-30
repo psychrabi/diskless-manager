@@ -208,7 +208,7 @@ fn validate_helper_path(value: &str) -> Result<String> {
 }
 
 fn powershell_helper_command(executable: &str, subcommand: &str) -> String {
-    let escaped = executable.replace(''', "''");
+    let escaped = executable.replace('\'', "''");
     format!(
         "powershell.exe -NoProfile -NonInteractive -Command \"& '{}' {}\"",
         escaped, subcommand
