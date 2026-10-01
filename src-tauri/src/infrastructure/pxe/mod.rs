@@ -33,6 +33,7 @@ pub use windows_image_preparation::{
 };
 
 pub use windows_remote_servicing::{
-    RemoteWindowsCapabilitiesRequest, RemoteWindowsServicer, RemoteWindowsServicingCapabilities,
-    RemoteWindowsServicingRequest,
+    RemoteWindowsCapabilitiesRequest, RemoteWindowsCatalogPreparationResult,
+    RemoteWindowsServicer, RemoteWindowsServicingCapabilities,
+    RemoteWindowsServicingRequest, StagedDriverPackage,
 };
