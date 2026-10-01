@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use uuid::Uuid;
 
-const PROTOCOL_VERSION: u32 = 1;
+const PROTOCOL_VERSION: u32 = 2;
 const DEFAULT_HELPER: &str =
     r"C:\Program Files\Diskless Manager\diskless-windows-servicer.exe";
 
@@ -41,6 +41,8 @@ pub struct RemoteWindowsServicingCapabilities {
     pub protocol_version: u32,
     pub platform: String,
     pub available: bool,
+    #[serde(default)]
+    pub elevated: bool,
 }
 
 #[derive(Debug, Clone)]
