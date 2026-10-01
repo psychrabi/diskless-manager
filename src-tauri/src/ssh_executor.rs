@@ -404,18 +404,15 @@ impl SshExecutor {
             Self::verify_host_key(&session, host)?;
         }
 
-        // Authenticate. Prefer the password when provided; fall back to the
-        // SSH agent (public key) so existing key-based setups keep working.
-        let auth_result = match password {
+        // Authenticate. Prefer an explicitly supplied password. For unattended
+        // service deployments, no password means: try the SSH agent first and
+        // then the server account's standard private-key files.
+        match password {
             Some(password) => session
                 .userauth_password(username, password)
-                .map_err(|e| AppError::SshAuth(format!("SSH password authentication failed: {e}"))),
-            None => session
-                .userauth_agent(username)
-                .map_err(|e| AppError::SshAuth(format!("SSH agent authentication failed: {e}"))),
-        };
-
-        auth_result?;
+                .map_err(|e| AppError::SshAuth(format!("SSH password authentication failed: {e}")))?,
+            None => Self::authenticate_with_agent_or_default_keys(&session, username)?,
+        }
 
         if !session.authenticated() {
             error!(
@@ -430,6 +427,71 @@ impl SshExecutor {
         info!("SSH connection established to {}", host);
 
         Ok(session)
+    }
+
+    fn authenticate_with_agent_or_default_keys(
+        session: &Session,
+        username: &str,
+    ) -> Result<(), AppError> {
+        let agent_error = match session.userauth_agent(username) {
+            Ok(()) if session.authenticated() => return Ok(()),
+            Ok(()) => None,
+            Err(error) => Some(error.to_string()),
+        };
+
+        let key_paths = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|home| {
+                let ssh = home.join(".ssh");
+                ["id_ed25519", "id_ecdsa", "id_rsa"]
+                    .into_iter()
+                    .map(|name| ssh.join(name))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        let mut attempted_keys = 0usize;
+        let mut last_key_error = None;
+        for private_key in key_paths.into_iter().filter(|path| path.is_file()) {
+            attempted_keys += 1;
+            match session.userauth_pubkey_file(username, None, &private_key, None) {
+                Ok(()) if session.authenticated() => {
+                    debug!(
+                        "SSH authentication succeeded with private key {}",
+                        private_key.display()
+                    );
+                    return Ok(());
+                }
+                Ok(()) => {}
+                Err(error) => {
+                    debug!(
+                        "SSH private-key authentication failed with {}: {}",
+                        private_key.display(),
+                        error
+                    );
+                    last_key_error = Some(error.to_string());
+                }
+            }
+        }
+
+        let mut details = Vec::new();
+        if let Some(error) = agent_error {
+            details.push(format!("agent: {error}"));
+        } else {
+            details.push("agent did not authenticate".to_string());
+        }
+        if attempted_keys == 0 {
+            details.push("no default private keys found under ~/.ssh".to_string());
+        } else if let Some(error) = last_key_error {
+            details.push(format!("private key: {error}"));
+        } else {
+            details.push("default private keys did not authenticate".to_string());
+        }
+
+        Err(AppError::SshAuth(format!(
+            "SSH key authentication failed ({})",
+            details.join("; ")
+        )))
     }
 
     fn verify_host_key(session: &Session, host: &str) -> Result<(), AppError> {
