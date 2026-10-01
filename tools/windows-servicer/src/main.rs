@@ -27,7 +27,7 @@ use windows_image_preparation::{
     WindowsImagePreparationResult, WindowsImagePreparer,
 };
 
-const PROTOCOL_VERSION: u32 = 1;
+const PROTOCOL_VERSION: u32 = 2;
 const MAX_REQUEST_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Serialize)]
@@ -35,6 +35,7 @@ struct WindowsServicerCapabilities {
     protocol_version: u32,
     platform: &'static str,
     available: bool,
+    elevated: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -53,6 +54,7 @@ fn main() {
             protocol_version: PROTOCOL_VERSION,
             platform: std::env::consts::OS,
             available: windows_servicing_available(),
+            elevated: is_elevated(),
         })
         .map(|_| 0)
         .unwrap_or_else(report_output_error),
@@ -119,4 +121,27 @@ fn write_json(value: &impl Serialize) -> std::io::Result<()> {
 fn report_output_error(error: std::io::Error) -> i32 {
     eprintln!("failed to write response: {error}");
     1
+}
+
+
+fn is_elevated() -> bool {
+    #[cfg(windows)]
+    {
+        let output = match std::process::Command::new("whoami.exe")
+            .args(["/groups", "/fo", "csv", "/nh"])
+            .output()
+        {
+            Ok(output) if output.status.success() => output,
+            _ => return false,
+        };
+
+        let groups = String::from_utf8_lossy(&output.stdout).to_ascii_uppercase();
+        // High Mandatory Level and System Mandatory Level respectively.
+        groups.contains("S-1-16-12288") || groups.contains("S-1-16-16384")
+    }
+
+    #[cfg(not(windows))]
+    {
+        false
+    }
 }
