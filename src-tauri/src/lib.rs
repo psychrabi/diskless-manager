@@ -14,6 +14,7 @@ pub mod persistence;
 
 pub mod audit_logger;
 mod commands;
+pub use commands::system::authorize_from_terminal;
 pub mod core;
 pub mod platform;
 mod services;

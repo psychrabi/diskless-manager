@@ -236,6 +236,21 @@ sudo smbpasswd -a diskless
    file automatically with the correct commands for the detected
    distribution.
 
+   The approval prompt appears on the **server computer**, including when
+   the browser runs on another computer. For servers without a desktop
+   Polkit authentication agent, run the following as the same Linux account
+   that runs the backend, in a terminal on the server:
+
+   ```bash
+   diskless-manager authorize
+   # When running from a development checkout:
+   ./src-tauri/target/debug/diskless-manager authorize
+   ```
+
+   Sudo prompts for your password in that terminal. Both setup paths validate
+   the new sudoers rule before replacing the existing rule. Retry authorization
+   in the browser afterwards; an existing grant returns **Already Authorized**.
+
 ### 4. Configure Environment Variables
 
 **IMPORTANT - Security Configuration:**
@@ -282,6 +297,33 @@ source ~/.bashrc
 
    Development: `bun dev` for the UI (proxied to the backend on
    `127.0.0.1:8080`) plus `bun run dev:backend` for the API.
+
+### First-run setup
+
+Create the first administrator, sign in, and complete the server setup wizard.
+Management pages stay blocked until the required services, applied configurations,
+configured ZFS pool, and boot files are ready. Save the server network settings
+before DHCP, using matching addresses, masks, and gateways. Install the bootloader
+binaries shown in the Boot step into the configured TFTP root, then refresh
+readiness and confirm setup. Existing installations also require this readiness
+check and confirmation.
+
+### Application backup and restore
+
+Administrators can download a JSON backup from **Application Settings** or
+restore one from the setup recovery section. Backups include the application
+database, local configuration, and signing secret. They contain authentication
+secrets; store them securely. ZFS datasets, image disk contents, and operating
+system service files are not restored.
+
+Choose a backup (maximum 64 MiB), confirm **Stage restore**, then restart the
+backend. A private safety backup is saved under the server account's
+`~/.config/com.diskless.local/backups/` before staging and again before applying.
+Restore revokes existing sessions; sign in with an administrator from the backup
+and review server setup. A configured `JWT_SECRET` must match the backup's secret.
+If applying fails, the original installation is recovered and the rejected
+bundle is retained as `failed-restore-<id>.json` in the configuration directory;
+check the backend log. Recovery errors stop startup to protect the original data.
 
 ### LAN access
 

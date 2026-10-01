@@ -1,4 +1,3 @@
-import { ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useNavigate } from "react-router-dom";
 import { useSetupWizard } from "@/hooks/useSetupWizard";
@@ -11,11 +10,14 @@ import HTTPStep from "./HTTPStep";
 import SambaStep from "./SambaStep";
 import StorageStep from "./StorageStep";
 import TFTPStep from "./TFTPStep";
+import BackupManagement from "@/components/ApplicationManagement/BackupManagement";
+import NetworkConfig from "@/components/SettingsManagement/NetworkConfig";
 
 const Setup = () => {
   const navigate = useNavigate();
   const wizard = useSetupWizard();
   const {
+    setupStatus, setupError, completing, finishSetup,
     activeStep,
     setActiveStep,
     checking,
@@ -50,6 +52,11 @@ const Setup = () => {
         </p>
       </div>
 
+      <details>
+        <summary className="cursor-pointer">Restore an existing application backup</summary>
+        <div className="mt-4"><BackupManagement /></div>
+      </details>
+      {setupError && <div role="alert"><p>{setupError}</p><Button onClick={checkAll}>Retry</Button></div>}
       <nav aria-label="Setup steps" className="flex justify-between items-center gap-2 p-4 relative overflow-x-auto">
         {steps.map((step) => (
           <Button
@@ -57,6 +64,7 @@ const Setup = () => {
             variant="ghost"
             aria-current={activeStep === step.id ? "step" : undefined}
             className="relative z-10 h-auto flex-col gap-2 group shrink-0 px-3 py-2"
+            disabled={checking || !setupStatus || (step.id === 9 ? !setupStatus.ready : steps.slice(0, step.id - 1).some(previous => previous.status !== "complete"))}
             onClick={() => setActiveStep(step.id)}
           >
             <div
@@ -114,10 +122,14 @@ const Setup = () => {
         )}
 
         {activeStep === 4 && (
+          <div className="flex flex-col gap-4">
+          <NetworkConfig applyOnSave={false} onSaved={checkAll} />
+          <p className="text-sm text-muted-foreground">Use the same server address, subnet mask, and gateway in the DHCP configuration below.</p>
           <DHCPStep
             onSubmit={handleDhcpSubmit}
             initialConfig={appConfig?.settings?.dhcp}
           />
+          </div>
         )}
 
         {activeStep === 5 && (
@@ -137,50 +149,30 @@ const Setup = () => {
         {activeStep === 7 && (
           <SambaStep
             onSubmit={handleSambaSubmit}
-            initialConfig={appConfig?.settings?.samba?.[0]}
+            initialConfig={appConfig?.settings?.samba}
           />
         )}
 
         {activeStep === 8 && (
-          <BootScriptStep onSubmit={handleBootScriptSubmit} />
+          <div className="flex flex-col gap-4">
+            <BootScriptStep onSubmit={handleBootScriptSubmit} />
+            {setupStatus?.missing_files?.length > 0 && <div role="alert"><p>Missing or empty boot files:</p><ul className="list-disc pl-6">{setupStatus.missing_files.map(path => <li key={path}><code>{path}</code></li>)}</ul></div>}
+            <p className="text-sm text-muted-foreground">Place the configured PXE bootloader binaries ({[appConfig?.settings?.dhcp?.boot_file_legacy, appConfig?.settings?.dhcp?.boot_file_uefi32, appConfig?.settings?.dhcp?.boot_file_uefi64].filter(Boolean).join(", ") || "undionly.kpxe, ipxe.efi, snponly.efi"}) in {appConfig?.settings?.tftp?.root_dir || "/srv/tftp"}. Saving the boot script does not install these binaries.</p>
+            <Button onClick={checkAll} disabled={checking}>Refresh server readiness</Button>
+          </div>
         )}
 
-        {activeStep === 9 && (
+        {activeStep === 9 && setupStatus?.ready && (
           <FinishedStep
-            onNavigateHome={() => {
-              setActiveStep(9);
-              navigate("/");
+            completing={completing}
+            onNavigateHome={async () => {
+              if (await finishSetup()) navigate("/", { replace: true });
             }}
           />
         )}
       </div>
 
-      {activeStep < 9 ? (
-        <div className="flex justify-between items-center text-xs text-muted-foreground">
-          <span>
-            Status:{" "}
-            {checking ? "Refreshing\u2026" : "Configuration in progress"}
-          </span>
-          <Button
-            variant="link"
-            size="sm"
-            onClick={() => navigate("/")}
-          >
-            Skip for now <ChevronRight size={14} />
-          </Button>
-        </div>
-      ) : (
-        <div className="flex justify-between items-center text-xs text-muted-foreground">
-          <span>Status: Setup completed</span>
-          <Button
-            variant="link"
-            size="sm"
-            onClick={() => navigate("/")}
-          >
-            Go to Dashboard <ChevronRight size={14} />
-          </Button>
-        </div>
-      )}
+      <p className="text-xs text-muted-foreground">{checking ? "Checking server readiness…" : setupStatus?.ready ? "Review your existing configuration and confirm setup to open the dashboard." : "Complete the required server configuration to continue."}</p>
     </div>
   );
 };

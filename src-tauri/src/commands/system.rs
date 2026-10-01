@@ -194,67 +194,134 @@ pub async fn check_dependencies() -> Result<Vec<DependencyStatus>, String> {
     Ok(statuses)
 }
 
-pub async fn setup_privileged_access() -> Result<String, String> {
-    let user = std::env::var("USER").unwrap_or_else(|_| {
-        Command::new("id")
-            .args(["-un"])
-            .output()
-            .ok()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .unwrap_or_else(|| "root".to_string())
-    });
+// Both desktop and terminal setup install the same validated rule. Positional
+// arguments keep account names and command lists out of shell source code.
+const AUTHORIZATION_SCRIPT: &str = r#"set -eu
+umask 077
+mkdir -p /etc/sudoers.d
+rule=$(mktemp /etc/sudoers.d/.diskless-manager.XXXXXX)
+trap 'rm -f "$rule"' EXIT
+printf '%s ALL=(ALL) NOPASSWD: %s\n' "$1" "$2" > "$rule"
+visudo -cf "$rule"
+chmod 0440 "$rule"
+mv -f "$rule" /etc/sudoers.d/diskless-manager
+"#;
 
-    // We list the exactly required commands with their paths found in the system
-    let commands = crate::platform::detect().privileged_commands();
-
-    let commands_str = commands.join(", ");
-    let sudoers_content = format!("{} ALL=(ALL) NOPASSWD: {}\n", user, commands_str);
-
-    // Use pkexec to create the sudoers file
-    let script = format!(
-        "echo '{}' > /etc/sudoers.d/diskless-manager && chmod 0440 /etc/sudoers.d/diskless-manager",
-        sudoers_content
-    );
-
-    let output = Command::new("pkexec")
-        .args(["sh", "-c", &script])
+fn authorization_arguments() -> Result<(String, String), String> {
+    let output = Command::new("/usr/bin/id")
+        .arg("-un")
         .output()
-        .map_err(|e| format!("Failed to spawn pkexec: {}", e))?;
-
-    if output.status.success() {
-        Ok("Privileged access configured successfully. Administrative tasks will no longer require password prompts.".to_string())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!(
-            "Authorization failed or error occurred: {}",
-            stderr
-        ))
+        .map_err(|error| format!("Could not determine the server account: {error}"))?;
+    if !output.status.success() {
+        return Err("Could not determine the server account".to_string());
     }
+    let user = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !valid_authorization_user(&user) {
+        return Err("The server account name is not safe for a sudoers rule".to_string());
+    }
+    Ok((
+        user,
+        crate::platform::detect().privileged_commands().join(", "),
+    ))
+}
+
+fn valid_authorization_user(user: &str) -> bool {
+    let name = user.strip_suffix('$').unwrap_or(user);
+    name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+}
+
+/// Command to run in a terminal on the server when a desktop prompt is unavailable.
+pub fn terminal_authorization_command() -> String {
+    let executable = std::env::current_exe()
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| "diskless-manager".to_string());
+    format!("'{}' authorize", executable.replace('\'', "'\\''"))
+}
+
+fn authorization_failure(reason: &str) -> String {
+    format!(
+        "Application authorization failed: {}. Approval must happen on the server computer. Run {} in a terminal on that server, enter your sudo password there, then retry authorization.",
+        reason.trim().trim_end_matches('.'), terminal_authorization_command()
+    )
+}
+
+pub async fn setup_privileged_access() -> Result<String, String> {
+    let configured = tokio::task::spawn_blocking(is_privileged_access_configured)
+        .await
+        .map_err(|error| authorization_failure(&error.to_string()))?;
+    if configured {
+        return Ok("Privileged access is already configured".to_string());
+    }
+    let (user, commands) =
+        authorization_arguments().map_err(|error| authorization_failure(&error))?;
+    let mut command = tokio::process::Command::new("pkexec");
+    command
+        // Without a desktop agent, fail with recovery instructions rather than
+        // attempting to read a password from the web server's stdin.
+        .args([
+            "--disable-internal-agent",
+            "sh",
+            "-c",
+            AUTHORIZATION_SCRIPT,
+            "diskless-authorize",
+            &user,
+            &commands,
+        ])
+        .kill_on_drop(true);
+    let output = tokio::time::timeout(std::time::Duration::from_secs(90), command.output())
+        .await
+        .map_err(|_| authorization_failure("The server's authorization prompt timed out"))?
+        .map_err(|error| authorization_failure(&format!("Could not start Polkit: {error}")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let reason = if stderr.trim().is_empty() {
+            format!("Polkit exited with {}", output.status)
+        } else {
+            stderr.trim().to_string()
+        };
+        return Err(authorization_failure(&reason));
+    }
+    if !is_privileged_access_configured() {
+        return Err(authorization_failure(
+            "The installed rule did not grant the required access",
+        ));
+    }
+    Ok("Privileged access configured successfully".to_string())
+}
+
+/// Authorize from a server terminal; sudo reads its password directly from the TTY.
+pub fn authorize_from_terminal() -> Result<(), String> {
+    let (user, commands) = authorization_arguments()?;
+    println!("Granting {user} passwordless access to the application's administrative commands.");
+    let status = Command::new("sudo")
+        .args([
+            "sh",
+            "-c",
+            AUTHORIZATION_SCRIPT,
+            "diskless-authorize",
+            &user,
+            &commands,
+        ])
+        .status()
+        .map_err(|error| format!("Could not start sudo: {error}"))?;
+    if !status.success() {
+        return Err(format!("Authorization failed ({status}); the existing rule was not replaced unless validation succeeded"));
+    }
+    println!("Privileged access configured. Retry authorization in your browser.");
+    Ok(())
 }
 
 /// Whether privileged access has already been granted. The sudoers rule lives
 /// in a root-only mode-0440 file that the app process (a regular user) cannot
 /// read, so probe the grant indirectly: `sudo -n` with one of the exact
 /// passwordless-command paths only succeeds when the diskless-manager rule
-/// exists. `-n` guarantees the probe never prompts.
+/// exists. `-n` prevents prompts; `-k` excludes cached password credentials.
 pub fn is_privileged_access_configured() -> bool {
-    // Best-effort direct read, which only works when the process can read the
-    // file (e.g. it is running as root).
-    if let Ok(content) = std::fs::read_to_string("/etc/sudoers.d/diskless-manager") {
-        if let Ok(user) = std::env::var("USER") {
-            if content
-                .lines()
-                .any(|line| line.starts_with(&format!("{} ALL=", user)))
-            {
-                return true;
-            }
-        } else if !content.trim().is_empty() {
-            return true;
-        }
-    }
-
     let Ok(output) = std::process::Command::new("sudo")
-        .args(["-n", "/usr/bin/systemctl", "--version"])
+        .args(["-n", "-k", "/usr/bin/systemctl", "--version"])
         .output()
     else {
         return false;
@@ -523,4 +590,27 @@ pub struct SshTestResult {
 
 pub async fn install_package(service: String) -> Result<String, String> {
     crate::platform::install_package(&service).await
+}
+
+#[cfg(test)]
+mod authorization_tests {
+    use super::valid_authorization_user;
+
+    #[test]
+    fn sudoers_account_names_reject_shell_and_rule_injection() {
+        for name in ["rabistha", "diskless-manager", "_service", "machine$"] {
+            assert!(valid_authorization_user(name), "{name}");
+        }
+        for name in [
+            "",
+            "-root",
+            "root ALL=(ALL)",
+            "root\nALL",
+            "x'; id",
+            "a$b",
+            "$(id)",
+        ] {
+            assert!(!valid_authorization_user(name), "{name}");
+        }
+    }
 }

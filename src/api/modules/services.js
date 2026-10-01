@@ -53,13 +53,6 @@ export async function installService(service) {
   });
 }
 
-export async function configureSambaServer(shares) {
-  return apiRequest("/api/services/samba/configure", {
-    method: "POST",
-    body: JSON.stringify({ shares }),
-  });
-}
-
 export async function getServiceConfig(serviceName) {
   return apiRequest(`/api/services/${encodeURIComponent(serviceName)}/config`);
 }

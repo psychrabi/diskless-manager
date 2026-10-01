@@ -494,10 +494,17 @@ pub async fn get_firewall_status(
     })))
 }
 
-pub async fn setup_privileged_access() -> Result<Json<serde_json::Value>, StatusCode> {
+pub async fn setup_privileged_access(
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     match crate::commands::system::setup_privileged_access().await {
         Ok(msg) => Ok(Json(serde_json::json!({ "message": msg }))),
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+        Err(message) => {
+            log::warn!("{message}");
+            Err((
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({ "message": message })),
+            ))
+        }
     }
 }
 

@@ -45,7 +45,7 @@ const toServerPayload = (data) => ({
     .filter(Boolean),
 });
 
-export default function NetworkConfig() {
+export default function NetworkConfig({ applyOnSave = true, onSaved }) {
   const { fetchInterfaces, detectNetwork, applyNetworkSettings, updateServer } =
     useSettings();
   const { appConfig, fetchServerInfo } = useAppStore();
@@ -122,7 +122,8 @@ export default function NetworkConfig() {
     const success = await updateServer(payload);
     if (success) {
       // Apply the network settings and regenerate service configs immediately after saving
-      await applyNetworkSettings();
+      if (applyOnSave) await applyNetworkSettings();
+      await onSaved?.();
     }
   };
 

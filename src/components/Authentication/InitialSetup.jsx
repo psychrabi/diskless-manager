@@ -1,8 +1,7 @@
 import { SignupForm } from "@/components/signup-form";
-import { useAuth } from "@/contexts/auth";
 import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { bootstrapAdmin, login } from "@/api/modules/auth";
+import { bootstrapAdmin } from "@/api/modules/auth";
 import { useForm } from "react-hook-form";
 import { useNavigate } from "react-router-dom";
 import { z } from "zod";
@@ -34,7 +33,6 @@ const initialSetupSchema = z
 
 const InitialSetup = () => {
   const navigate = useNavigate();
-  const { login: setAuth } = useAuth();
   const { error, success } = useToastStore();
 
   const {
@@ -55,16 +53,8 @@ const InitialSetup = () => {
     try {
       await bootstrapAdmin(data.username, data.password);
 
-      // Now attempt to log in with the password
-      const loginResponse = await login(data.username, data.password);
-
-      // Set auth context immediately so ProtectedRoute sees it
-      setAuth(loginResponse.user, loginResponse.token);
-      success(
-        "Setup Complete",
-        "Successfully logged in to Diskless Manager"
-      );
-      navigate("/");
+      success("Administrator created", "Sign in to complete server setup");
+      navigate("/login", { replace: true });
     } catch (e) {
       console.error("Setup error:", e);
       const errorMessage = e instanceof Error ? e.message : "An unknown error occurred";

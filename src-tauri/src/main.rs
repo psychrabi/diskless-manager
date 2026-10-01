@@ -24,6 +24,17 @@ fn init_logging() {
 #[tokio::main]
 async fn main() {
     match std::env::args().nth(1).as_deref() {
+        Some("authorize") => {
+            if std::env::args().len() != 2 {
+                eprintln!("Usage: diskless-manager authorize (run as the server account)");
+                std::process::exit(2);
+            }
+            if let Err(error) = app_lib::authorize_from_terminal() {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+            return;
+        }
         // Privileged LIO transaction protocol (JSON on stdin/stdout).
         // Invoked by the running application through sudo, never by users.
         Some("internal-iscsi") => {

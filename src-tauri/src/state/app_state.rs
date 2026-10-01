@@ -35,6 +35,7 @@ impl AppState {
             &config_dir,
             std::os::unix::fs::PermissionsExt::from_mode(0o700),
         )?;
+        crate::api::handlers::backup::apply_pending_restore(&config_dir).await?;
         crate::auth::initialize_jwt_secret(&config_dir)?;
 
         let config_path = config_dir.join("config.json");

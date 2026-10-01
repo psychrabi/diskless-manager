@@ -1,3 +1,4 @@
+import SetupGate from "@/components/Authentication/SetupGate";
 import UserManagement from "@/components/UserManagement";
 import PublicRoute from "@/components/Authentication/PublicRoute";
 import PublicLayout from "@/components/layouts/PublicLayout";
@@ -51,7 +52,7 @@ export const router = createBrowserRouter([
       },
       {
         path: "/setup",
-        element: <Setup />,
+        element: <ProtectedRoute><SetupGate setup><Setup /></SetupGate></ProtectedRoute>,
       },
     ].map((route) => ({ ...route, errorElement: <RouteErrorBoundary fullPage={false} /> })),
   },
@@ -60,7 +61,7 @@ export const router = createBrowserRouter([
     errorElement: <RouteErrorBoundary />,
     element: (
       <ProtectedRoute>
-        <Adminlayout />
+        <SetupGate><Adminlayout /></SetupGate>
       </ProtectedRoute>
     ),
     children: [

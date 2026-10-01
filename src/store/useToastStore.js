@@ -1,5 +1,7 @@
 import { create } from "zustand";
 
+let nextToastId = 0;
+
 export const useToastStore = create((set, get) => ({
   toasts: [],
   show: (type, title, description, duration = 5000) => {
@@ -23,7 +25,7 @@ export const useToastStore = create((set, get) => ({
       actualDuration = 5000;
     }
 
-    const id = crypto.randomUUID();
+    const id = String(++nextToastId);
     const toast = {
       id,
       type,

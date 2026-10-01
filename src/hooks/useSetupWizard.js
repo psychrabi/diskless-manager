@@ -14,9 +14,9 @@ import { useServiceManager } from "@/hooks/useServiceManager";
 import { useSettings } from "@/hooks/useSettings";
 import { useToastStore } from "@/store/useToastStore";
 import { useAppStore } from "@/store/useAppStore";
-import { listDisks, checkZfsPoolExists, createZfsPool } from "@/api/modules/disks";
-import { installService, configureSambaServer } from "@/api/modules/services";
-import { checkPrivilegedAccess } from "@/api/modules/system";
+import { listDisks, createZfsPool } from "@/api/modules/disks";
+import { installService } from "@/api/modules/services";
+import { getSetupStatus, completeSetup } from "@/api/modules/system";
 
 const getInitialStep = ({
   privilegedAccessGranted,
@@ -69,27 +69,29 @@ const getInitialStep = ({
 };
 
 export const useSetupWizard = () => {
+  const [setupStatus, setSetupStatus] = useState(null);
+  const [setupError, setSetupError] = useState("");
+  const [completing, setCompleting] = useState(false);
   const [disks, setDisks] = useState([]);
   const [poolExists, setPoolExists] = useState(null);
   const [installing, setInstalling] = useState("");
   const [activeStep, setActiveStep] = useState(1);
   const [checking, setChecking] = useState(false);
-  const [bootScriptContent, setBootScriptContent] = useState(null);
   const [privilegedAccessGranted, setPrivilegedAccessGranted] = useState(false);
-  const [authChecking, setAuthChecking] = useState(false);
 
   const { appConfig, fetchConfig } = useAppStore();
   const { error, success, info } = useToastStore();
-  const { updateDhcp, updateTftp, updateHttp } = useSettings();
-  const { handleConfigSave, fetchServiceConfig } = useServiceManager();
+  const { updateDhcp, updateTftp, updateHttp, updateSamba } = useSettings();
+  const { handleConfigSave } = useServiceManager();
 
   const settings = appConfig?.settings ?? {};
-  const poolName = settings.zpool_name || settings.zfsPool || "zroot";
-  const hasDhcp = Boolean(settings.dhcp);
-  const hasTftp = Boolean(settings.tftp);
-  const hasHttp = Boolean(settings.http);
-  const hasSamba = Boolean(settings.samba);
-  const hasBootScript = Boolean(bootScriptContent);
+  const poolName = settings.zpool_name || settings.zfsPool || "diskless";
+  const has = (key) => Boolean(setupStatus && !setupStatus.missing.includes(key));
+  const hasDhcp = has("dhcp") && has("settings");
+  const hasTftp = has("tftp");
+  const hasHttp = has("http");
+  const hasSamba = has("samba");
+  const hasBootScript = has("boot");
 
   const { dependencies, fetchDependencies } = useAppStore(
     useShallow((state) => ({
@@ -101,30 +103,23 @@ export const useSetupWizard = () => {
   const checkAll = useCallback(async () => {
     setChecking(true);
     try {
-      const [detectedDisks, exists] = await Promise.all([
-        listDisks(),
-        checkZfsPoolExists(),
-      ]);
-      console.log("Detected disks:", detectedDisks);
+      setSetupError("");
+      const status = await getSetupStatus();
+      setSetupStatus(status);
+      setPrivilegedAccessGranted(!status.missing.includes("authorization"));
+      const detectedDisks = status.missing.includes("authorization") ? [] : await listDisks();
       setDisks(detectedDisks);
-      setPoolExists(exists);
+      setPoolExists(!status.missing.includes("storage"));
 
       await Promise.all([fetchDependencies(), fetchConfig()]);
 
-      try {
-        const bootConfig = await fetchServiceConfig("tftp-autoexec");
-        if (bootConfig?.text) {
-          setBootScriptContent(bootConfig.text);
-        }
-      } catch (e) {
-        console.warn("Failed to fetch boot script:", e);
-      }
     } catch (e) {
-      console.warn("Initial check failed:", e);
+      setSetupStatus(null);
+      setSetupError(e.message || "Unable to check server setup");
     } finally {
       setChecking(false);
     }
-  }, [fetchDependencies, fetchConfig, fetchServiceConfig]);
+  }, [fetchDependencies, fetchConfig]);
 
   useEffect(() => {
     // Defer so setState inside checkAll() is not synchronous within
@@ -133,33 +128,7 @@ export const useSetupWizard = () => {
     return () => clearTimeout(timer);
   }, [checkAll]);
 
-  // Probe the backend once on mount to see whether privileged access has
-  // already been granted so the Authorize step can be skipped.
-  useEffect(() => {
-    let cancelled = false;
-    const timer = setTimeout(() => {
-      (async () => {
-        setAuthChecking(true);
-        try {
-          const result = await checkPrivilegedAccess();
-          if (!cancelled && result?.authorized) {
-            setPrivilegedAccessGranted(true);
-          }
-        } catch {
-          // Non-fatal: the user can still click Authorize manually.
-        } finally {
-          if (!cancelled) setAuthChecking(false);
-        }
-      })();
-    }, 0);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, []);
-
-  const allServicesInstalled =
-    dependencies.length > 0 && !dependencies.some((svc) => !svc.installed);
+  const allServicesInstalled = has("dependencies");
 
   useEffect(() => {
     // Defer so setActiveStep is not synchronous within the effect
@@ -192,13 +161,13 @@ export const useSetupWizard = () => {
 
   const handleCreatePool = async (data) => {
     try {
-      await createZfsPool({
+      const result = await createZfsPool({
         name: data.name,
         disk: data.disk,
       });
+      if (!result.success) throw new Error(result.message || "Pool creation failed");
       success("ZFS Setup", `ZFS pool ${data.name} created successfully.`);
-      const exists = await checkZfsPoolExists();
-      setPoolExists(exists);
+      await checkAll();
     } catch (e) {
       error("Setup Wizard", `Failed to create ZFS pool: ${e}`);
     }
@@ -209,7 +178,7 @@ export const useSetupWizard = () => {
     try {
       await installService(service);
       success("Services", `Package ${service} installed successfully.`);
-      await fetchDependencies();
+      await checkAll();
     } catch (e) {
       error("Setup Wizard", `Failed to install package: ${e}`);
     } finally {
@@ -218,13 +187,13 @@ export const useSetupWizard = () => {
   };
 
   const handleSubmitAndAdvance = useCallback(
-    async (submit, data, nextStep, title, message) => {
+    async (submit, data, title, message) => {
       const ok = await submit(data);
       if (!ok) return;
-      setActiveStep(nextStep);
+      await checkAll();
       success(title, message);
     },
-    [success]
+    [success, checkAll]
   );
 
   const handleDhcpSubmit = useCallback(
@@ -232,7 +201,6 @@ export const useSetupWizard = () => {
       handleSubmitAndAdvance(
         updateDhcp,
         data,
-        5,
         "Setup - DHCP",
         "DHCP configuration saved successfully"
       ),
@@ -244,7 +212,6 @@ export const useSetupWizard = () => {
       handleSubmitAndAdvance(
         updateTftp,
         data,
-        6,
         "Setup - TFTP",
         "TFTP configuration saved successfully"
       ),
@@ -256,39 +223,31 @@ export const useSetupWizard = () => {
       handleSubmitAndAdvance(
         updateHttp,
         data,
-        7,
         "Setup - HTTP",
         "HTTP configuration saved successfully"
       ),
     [handleSubmitAndAdvance, updateHttp]
   );
 
-  const handleSambaSubmit = useCallback(async (shares) => {
-    try {
-      await configureSambaServer(shares);
-      success("Setup - Samba", "Samba configuration saved successfully");
-      setActiveStep(8);
-    } catch (e) {
-      error("Setup Wizard", `Failed to configure Samba: ${e}`);
-    }
-  }, [success, error]);
+  const handleSambaSubmit = useCallback(
+    (data) => handleSubmitAndAdvance(updateSamba, data, "Setup - Samba", "Samba configuration saved successfully"),
+    [handleSubmitAndAdvance, updateSamba]
+  );
 
   const handleAuthorized = useCallback(() => {
-    setPrivilegedAccessGranted(true);
-    setActiveStep(2);
-  }, []);
+    checkAll();
+  }, [checkAll]);
 
   const handleBootScriptSubmit = useCallback(async (content) => {
     info(`Updating Boot Script`);
     try {
-      await handleConfigSave("tftp-autoexec", content);
-      setBootScriptContent(content);
-      setActiveStep(9);
+      if (!await handleConfigSave("tftp-autoexec", content)) return;
+      await checkAll();
       success("Setup - Boot Script", "Boot Script saved successfully");
     } catch (e) {
       error("Setup Wizard", `Failed to update boot script: ${e}`);
     }
-  }, [info, handleConfigSave, success, error]);
+  }, [info, handleConfigSave, success, error, checkAll]);
 
   const steps = useMemo(
     () => [
@@ -347,7 +306,7 @@ export const useSetupWizard = () => {
         title: "Boot",
         icon: Code,
         status:
-          activeStep > 8
+          hasBootScript
             ? "complete"
             : activeStep === 8
             ? "current"
@@ -369,10 +328,26 @@ export const useSetupWizard = () => {
       hasTftp,
       hasHttp,
       hasSamba,
+      hasBootScript,
     ]
   );
 
+  const finishSetup = async () => {
+    setCompleting(true);
+    setSetupError("");
+    try {
+      const status = await completeSetup();
+      if (!status.completed || !status.ready) throw new Error("Server setup is not ready");
+      return true;
+    } catch (e) {
+      await checkAll();
+      setSetupError(e.message || "Unable to complete setup");
+      return false;
+    } finally { setCompleting(false); }
+  };
+
   return {
+    setupStatus, setupError, completing, finishSetup,
     activeStep,
     setActiveStep,
     checking,
@@ -393,6 +368,6 @@ export const useSetupWizard = () => {
     handleAuthorized,
     handleBootScriptSubmit,
     privilegedAccessGranted,
-    authChecking,
+    authChecking: checking,
   };
 };

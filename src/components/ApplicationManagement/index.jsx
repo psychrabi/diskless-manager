@@ -1,6 +1,7 @@
 import { PageHeader } from "@/components/ui";
 import AdminPasswordForm from "./AdminPasswordForm";
 import PrivilegeManagementForm from "./PrivilegeManagementForm";
+import BackupManagement from "./BackupManagement";
 
 const ApplicationSettings = () => {
   return (
@@ -13,6 +14,7 @@ const ApplicationSettings = () => {
         <AdminPasswordForm />
         <PrivilegeManagementForm />
       </div>
+      <BackupManagement />
     </div>
   );
 };

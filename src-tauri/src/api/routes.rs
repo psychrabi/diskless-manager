@@ -14,6 +14,7 @@ use crate::api::handlers::{
         bootstrap_first_admin, check_admin_exists, login, update_admin_password,
         validate_auth_token,
     },
+    backup::{create_backup, restore_backup},
     client_chap::rotate_client_chap,
     client_delete::delete_client,
     client_update::update_client,
@@ -48,17 +49,22 @@ use crate::api::handlers::{
         get_service_status, install_service, list_services, restart_all_services, restart_service,
         start_all_services, start_service, stop_all_services, stop_service,
     },
+    setup::{complete_setup, get_setup_status},
     ssh::{execute_ssh_command, get_windows_system_info, test_ssh_connection},
     system::{
         apply_network_settings, check_dependencies, check_privileged_access, clear_cache,
         close_enrollment, detect_server_network, get_firewall_status, get_interface_ip,
         get_network_interfaces, get_ram_usage, get_server_status, get_settings, get_system_info,
-        get_zfs_arcstat, initialize_server, open_enrollment, save_settings, setup_privileged_access,
+        get_zfs_arcstat, initialize_server, open_enrollment, save_settings,
+        setup_privileged_access,
     },
     system_reconciliation::inspect_system_reconciliation_handler,
     users::{create_user, delete_user, get_user, list_users, update_user, update_user_password},
     ws::ws_metrics_handler,
-    zfs::{create_dataset, delete_dataset, get_zpool_stats, list_datasets, list_game_disks, list_zpools},
+    zfs::{
+        create_dataset, delete_dataset, get_zpool_stats, list_datasets, list_game_disks,
+        list_zpools,
+    },
 };
 use crate::api::middleware::{cors_layer, rate_limit_auth, require_auth, AuthRateLimiter};
 use tower::limit::ConcurrencyLimitLayer;
@@ -192,8 +198,14 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route("/api/services/{name}/start", post(start_service))
         .route("/api/services/{name}/stop", post(stop_service))
         .route("/api/services/{name}/restart", post(restart_service))
-        .route("/api/services/{name}/boot/enable", post(enable_service_boot))
-        .route("/api/services/{name}/boot/disable", post(disable_service_boot))
+        .route(
+            "/api/services/{name}/boot/enable",
+            post(enable_service_boot),
+        )
+        .route(
+            "/api/services/{name}/boot/disable",
+            post(disable_service_boot),
+        )
         .route("/api/services/all/start", post(start_all_services))
         .route("/api/services/all/stop", post(stop_all_services))
         .route("/api/services/all/restart", post(restart_all_services))
@@ -202,6 +214,13 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route("/api/services/install", post(install_service))
         .route("/api/system/info", get(get_system_info))
         .route("/api/system/status", get(get_server_status))
+        .route("/api/system/setup", get(get_setup_status))
+        .route("/api/system/setup/complete", post(complete_setup))
+        .route("/api/system/backup", get(create_backup))
+        .route(
+            "/api/system/restore",
+            post(restore_backup).layer(DefaultBodyLimit::max(64 * 1024 * 1024)),
+        )
         .route("/api/system/initialize", post(initialize_server))
         .route("/api/system/cache/clear", post(clear_cache))
         .route(
@@ -299,19 +318,18 @@ pub fn create_app(state: crate::state::AppState) -> Router {
     // to index.html for client-side routing, while missing assets keep a
     // real 404. FRONTEND_DIR defaults to the Vite output next to the
     // source tree.
-    let frontend_dir =
-        std::env::var("FRONTEND_DIR").unwrap_or_else(|_| "../dist".to_string());
+    let frontend_dir = std::env::var("FRONTEND_DIR").unwrap_or_else(|_| "../dist".to_string());
     let static_files = tower_http::services::ServeDir::new(&frontend_dir);
-    let index_file =
-        tower_http::services::ServeFile::new(format!("{frontend_dir}/index.html"));
+    let index_file = tower_http::services::ServeFile::new(format!("{frontend_dir}/index.html"));
 
     let api = Router::new()
         .merge(public_router)
         .merge(ws_router)
         .merge(api_router);
 
-    Router::new().merge(api).fallback(
-        move |request: axum::extract::Request| async move {
+    Router::new()
+        .merge(api)
+        .fallback(move |request: axum::extract::Request| async move {
             use tower::ServiceExt;
             if is_api_or_ws_path(request.uri().path()) {
                 return (
@@ -342,8 +360,7 @@ pub fn create_app(state: crate::state::AppState) -> Router {
                     .map(axum::body::Body::new)
             };
             response
-        },
-    )
+        })
         .layer(cors)
         .layer(axum::middleware::from_fn_with_state(
             rate_limiter,

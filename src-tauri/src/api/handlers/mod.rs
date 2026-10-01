@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod backup;
 pub mod client_chap;
 pub mod client_delete;
 #[path = "client_update_entry.rs"]
@@ -22,6 +23,7 @@ pub mod nvmeof;
 pub mod pxe;
 pub mod reconciliation;
 pub mod services;
+pub mod setup;
 pub mod ssh;
 pub mod system;
 pub mod system_reconciliation;
