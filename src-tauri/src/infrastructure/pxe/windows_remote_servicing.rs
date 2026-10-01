@@ -327,10 +327,10 @@ fn powershell_literal(value: &str) -> String {
 }
 
 fn powershell_statement(statement: &str) -> String {
-    let escaped = statement.replace('"', "\\"");
+    debug_assert!(!statement.contains(['\r', '\n', '\0', '"']));
     format!(
         "powershell.exe -NoProfile -NonInteractive -Command \"{}\"",
-        escaped
+        statement
     )
 }
 
