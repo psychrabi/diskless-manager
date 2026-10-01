@@ -61,6 +61,7 @@ use crate::api::handlers::{
         capabilities as windows_servicing_capabilities,
         prepare_image as prepare_windows_image,
         prepare_image_remote as prepare_windows_image_remote,
+        prepare_image_remote_catalog as prepare_windows_image_remote_catalog,
         remote_capabilities as windows_servicing_remote_capabilities,
     },
     ws::ws_metrics_handler,
@@ -304,6 +305,10 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route(
             "/api/pxe/windows/prepare-image/remote",
             post(prepare_windows_image_remote),
+        )
+        .route(
+            "/api/pxe/windows/prepare-image/remote/catalog",
+            post(prepare_windows_image_remote_catalog),
         )
         .with_state(state.clone())
         .layer(axum::middleware::from_fn_with_state(
