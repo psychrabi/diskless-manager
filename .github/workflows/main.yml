@@ -125,16 +125,16 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: "./src-tauri -> target"
+          workspaces: "./tools/windows-servicer -> target"
 
       - name: Build Windows servicing helper
-        run: cargo build --release --manifest-path src-tauri/Cargo.toml --bin diskless-windows-servicer
+        run: cargo build --release --manifest-path tools/windows-servicer/Cargo.toml
 
       - name: Upload Windows servicing helper artifact
         uses: actions/upload-artifact@v4
         with:
           name: diskless-windows-servicer
-          path: src-tauri/target/release/diskless-windows-servicer.exe
+          path: tools/windows-servicer/target/release/diskless-windows-servicer.exe
           if-no-files-found: error
 
   publish-windows-servicer:
