@@ -126,6 +126,7 @@ export default function WindowsServicingModal({ isOpen, onClose }) {
 
     return Boolean(
       worker?.available &&
+        worker?.elevated &&
         form.host.trim() &&
         form.username.trim() &&
         form.imagePath.trim() &&
@@ -188,19 +189,24 @@ export default function WindowsServicingModal({ isOpen, onClose }) {
         remoteIdentity()
       );
       setWorker(capabilities);
-      if (capabilities.available) {
+      if (!capabilities.available) {
+        error(
+          "Windows Servicing",
+          "Worker responded, but DISM/reg.exe servicing dependencies are unavailable."
+        );
+      } else if (!capabilities.elevated) {
+        error(
+          "Windows Servicing",
+          "Worker tools are available, but the SSH session is not elevated. Use an administrator account/token."
+        );
+      } else {
         success(
           "Windows Servicing",
           "Worker ready (" +
             capabilities.platform +
             ", protocol " +
             capabilities.protocol_version +
-            ")."
-        );
-      } else {
-        error(
-          "Windows Servicing",
-          "Worker responded, but DISM/reg.exe servicing dependencies are unavailable."
+            ", elevated)."
         );
       }
     } catch (err) {
@@ -370,12 +376,15 @@ export default function WindowsServicingModal({ isOpen, onClose }) {
                     : "text-sm text-destructive"
                 }
               >
-                {worker.available
+                {worker.available && worker.elevated
                   ? "Ready · " +
                     worker.platform +
                     " · protocol " +
-                    worker.protocol_version
-                  : "Worker dependencies unavailable"}
+                    worker.protocol_version +
+                    " · elevated"
+                  : !worker.available
+                    ? "Worker dependencies unavailable"
+                    : "SSH session is not elevated"}
               </span>
             )}
           </div>
