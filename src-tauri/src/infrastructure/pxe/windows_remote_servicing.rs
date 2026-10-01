@@ -327,7 +327,7 @@ fn powershell_literal(value: &str) -> String {
 }
 
 fn powershell_statement(statement: &str) -> String {
-    debug_assert!(!statement.contains(['\r', '\n', '\0', '"']));
+    debug_assert!(!statement.chars().any(|ch| matches!(ch, '\r' | '\n' | '\0' | '"')));
     format!(
         "powershell.exe -NoProfile -NonInteractive -Command \"{}\"",
         statement
