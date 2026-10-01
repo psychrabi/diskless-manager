@@ -238,3 +238,49 @@ tools/windows-servicer/target/release/diskless-windows-servicer.exe
 Tagged releases build this helper on a native Windows GitHub Actions runner and
 attach `diskless-windows-servicer.exe` to the same GitHub release as the Linux
 Diskless Manager package.
+
+
+## Installing a Windows servicing worker
+
+Tagged releases include both:
+
+```text
+diskless-windows-servicer.exe
+install.ps1
+```
+
+Place both files in the same directory on the Windows servicing computer and run
+an elevated PowerShell session:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\install.ps1
+```
+
+This installs the helper to:
+
+```text
+C:\Program Files\Diskless Manager\diskless-windows-servicer.exe
+```
+
+and creates the managed staging root under:
+
+```text
+C:\ProgramData\Diskless Manager\staging
+```
+
+If Windows OpenSSH Server is not installed/configured yet, the installer can do
+that explicitly:
+
+```powershell
+.\install.ps1 -ConfigureOpenSsh
+```
+
+That switch installs the Windows OpenSSH Server optional capability when needed,
+sets `sshd` to start automatically, starts it, and enables the standard inbound
+TCP/22 firewall rule. Without the switch, SSH configuration is left untouched.
+
+The installer must be run as an administrator and finishes by executing the
+helper's `capabilities` command. Key-based SSH access from the Linux Diskless
+Manager host is preferred for routine servicing; avoid passing an administrator
+password through a plain-HTTP management session.
