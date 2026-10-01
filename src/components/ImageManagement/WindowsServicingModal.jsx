@@ -86,7 +86,7 @@ export default function WindowsServicingModal({ isOpen, onClose }) {
   const [preparing, setPreparing] = useState(false);
   const [driverSource, setDriverSource] = useState("catalog");
   const [drivers, setDrivers] = useState([]);
-  const [driversLoading, setDriversLoading] = useState(false);
+  const [driversLoading, setDriversLoading] = useState(true);
   const [selectedDriverIds, setSelectedDriverIds] = useState([]);
   const { success, error } = useToastStore();
   const confirm = useConfirm();
@@ -95,7 +95,6 @@ export default function WindowsServicingModal({ isOpen, onClose }) {
     if (!isOpen) return undefined;
 
     let active = true;
-    setDriversLoading(true);
     listNetworkDrivers()
       .then((items) => {
         if (active) setDrivers(Array.isArray(items) ? items : []);
