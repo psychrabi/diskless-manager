@@ -24,3 +24,11 @@ export async function prepareWindowsImageRemote(request) {
     body: JSON.stringify(request),
   });
 }
+
+
+export async function prepareWindowsImageRemoteCatalog(request) {
+  return apiRequest("/api/pxe/windows/prepare-image/remote/catalog", {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+}
