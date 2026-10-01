@@ -115,7 +115,10 @@ diskless-windows-servicer.exe prepare
 ```
 
 `prepare` reads a `WindowsImagePreparationRequest` JSON document from stdin
-and writes a versioned JSON response to stdout.
+and writes a versioned JSON response to stdout. Protocol version 2 also reports
+whether the SSH-launched worker process has an elevated administrator token.
+The UI will not enable image preparation unless the worker tools are available
+and the remote session is elevated.
 
 The Linux server invokes the helper through the existing SSH transport. Request
 JSON is written to the SSH channel stdin rather than embedded in the command
