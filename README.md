@@ -1,379 +1,296 @@
 # Diskless Manager
 
-A web-based toolkit for managing diskless PXE/iSCSI boot environments using ZFS, iSCSI, DHCP, and TFTP.
+Diskless Manager is a Linux server with a browser UI for managing PXE/iPXE boot,
+ZFS-backed client disks, and iSCSI targets. The React frontend and Rust/Axum
+backend run without a desktop shell. The backend serves both the API and the
+built frontend; `src-tauri/` retains its historical directory name.
 
-## 🚀 Features
+## Features
 
-- **ZFS Management**
-  - Create and manage master images
-  - Snapshot management for quick rollback
-  - Automated clone management for clients
+- **Storage and images:** ZFS pool creation, master images, snapshots, client
+  clones, and game disk assignment.
+- **Clients:** image and snapshot selection, persistent or resettable writeback,
+  BIOS/UEFI PXE configuration, per-client CHAP credentials, Wake-on-LAN, and
+  remote power actions.
+- **Enrollment:** a time-limited registration window for unknown PXE clients.
+  Newly enrolled clients remain disabled until configured and enabled.
+- **Monitoring:** live client and server metrics, service status, ZFS statistics,
+  and application logs.
+- **Server setup:** privileged access, dependency installation, storage, network,
+  DHCP, TFTP, HTTP, Samba, and boot script configuration with readiness checks.
+- **Administration:** first-administrator setup, role-based access, user and
+  license management, SSH testing, and application backup/restore.
+- **Experimental NVMe/TCP:** expose an existing client ZVOL through Linux
+  NVMe/TCP. iSCSI is the default boot path; firmware tooling is provided in
+  `scripts/build-nvmeof-ipxe.sh`.
 
-- **Network Boot Configuration**
-  - iSCSI target setup and management
-  - DHCP/PXE boot configuration
-  - TFTP file management
+## Requirements
 
-- **Client Management**
-  - Add/Edit/Remove diskless clients
-  - Real-time status monitoring
-  - Wake-on-LAN support
-  - Client power management
+The backend integrates with systemd and Linux storage/network tools. Distribution
+handling covers Debian/Ubuntu, Fedora/RHEL derivatives, and Arch Linux.
 
-## 📋 Requirements
+For a source build, install Bun, a current stable Rust toolchain, and native build
+tools including `pkg-config` and OpenSSL development headers. React 19 and Vite 8
+are installed through `bun install`; they are not separate server prerequisites.
 
-### System Requirements
+The setup wizard checks distribution-specific packages and can install them
+through the authorized backend account. Core tools include OpenZFS, `targetcli`,
+`qemu-img`, ISC DHCP, TFTP, Apache, and Samba. NFS tools are required when NFS is
+enabled. Wake-on-LAN, FreeRDP, and `iftop` are optional for setup readiness.
 
-- Linux with ZFS support
-- React 19.2 (for frontend)
-- Rust (for backend, served over HTTP, no desktop shell)
-- ISC DHCP Server
-- TFTP Server
-- iSCSI Target Support
-- Samba (for Windows client management)
-- OpenSSH Server (for remote management)
+| Service/tool | Debian/Ubuntu package | Fedora/RHEL package | Arch package |
+| --- | --- | --- | --- |
+| ZFS | `zfsutils-linux` | `zfs` | `zfs-utils` |
+| iSCSI targets | `targetcli-fb` | `targetcli` | `targetcli-fb` |
+| Image conversion | `qemu-utils` | `qemu-img` | `qemu` |
+| DHCP | `isc-dhcp-server` | `dhcp-server` | `dhcp` |
+| TFTP | `tftpd-hpa` | `tftp-server` | `tftp-hpa` |
+| HTTP boot files | `apache2` | `httpd` | `apache` |
+| Samba | `samba` | `samba` | `samba` |
+| NFS | `nfs-kernel-server` | `nfs-utils` | `nfs-utils` |
 
-### System Packages
+ZFS also needs a working kernel module for the running kernel. The Fedora/RHEL
+installation path attempts to enable the OpenZFS repository and install matching
+kernel development packages. On Arch, provision a compatible ZFS module and any
+packages unavailable through your configured repositories before retrying setup.
 
-The toolkit runs on Debian/Ubuntu (apt), Fedora/RHEL-based (dnf) and Arch Linux
-(pacman) systems.
+Remote client actions need SSH access and credentials for the client computer.
+Bootloader binaries and bootable OS images must be supplied separately.
 
-#### Arch Linux
-
-```bash
-sudo pacman -S \
-    zfs \
-    targetcli-fb \
-    dhcp \
-    tftp-hpa \
-    apache \
-    wakeonlan \
-    samba \
-    openssh \
-    net-tools \
-    NetworkManager
-
-# QEMU tooling for image conversion
-sudo pacman -S qemu
-
-# FreeRDP client (provides xfreerdp)
-sudo pacman -S freerdp
-```
-
-> `zfs` and `targetcli-fb` are only available from the AUR and must be built
-> with an AUR helper (e.g. `paru` or `yay`).
-
-#### Debian / Ubuntu
+## Build and run
 
 ```bash
-sudo apt update
-sudo apt install \
-    zfsutils-linux \
-    targetcli-fb \
-    isc-dhcp-server \
-    tftpd-hpa \
-    apache2 \
-    wakeonlan \
-    samba \
-    samba-common-bin \
-    openssh-server \
-    net-tools
+git clone https://github.com/psychrabi/diskless-manager.git
+cd diskless-manager
+bun install --frozen-lockfile
+bun run build
+cargo build --release --locked --manifest-path src-tauri/Cargo.toml
+FRONTEND_DIR="$PWD/dist" ./src-tauri/target/release/diskless-manager
 ```
 
-#### Fedora / RHEL / CentOS
+Open `http://localhost:8080`. Run the backend as the account that will own its
+configuration and application database.
+
+For development, use two terminals from the repository root:
 
 ```bash
-sudo dnf install \
-    targetcli \
-    dhcp-server \
-    tftp-server \
-    httpd \
-    wol \
-    samba \
-    openssh-server \
-    net-tools \
-    NetworkManager
+# Terminal 1: backend
+bun run dev:backend
 
-# Fedora uses a different package for the FreeRDP client
-sudo dnf install freerdp
-
-# QEMU tooling for image conversion
-sudo dnf install qemu-img
+# Terminal 2: frontend
+bun dev
 ```
 
-> `wakeonlan` was renamed to `wol` on Fedora/RHEL systems; the app detects
-> this automatically. OpenZFS is not packaged by the default Fedora/RHEL
-> repositories — the setup wizard enables the official zfsonlinux repository
-> and installs `zfs` (plus a matching `kernel-devel`) automatically.
+Open the Vite URL, normally `http://localhost:5173`. Vite proxies `/api` and `/ws`
+to the backend at `127.0.0.1:8080`.
 
-> Service names also differ: `dhcpd` (not `isc-dhcp-server`), `tftpd` (not
-> `tftpd-hpa`), `httpd` (not `apache2`), `nfs-server` (not
-> `nfs-kernel-server`) and `smb`/`nmb` (not `smbd`/`nmbd`). The app detects
-> the distribution automatically and uses the correct names and
-> configuration paths (`/etc/sysconfig/dhcpd`, `/etc/sysconfig/tftpd`,
-> `/etc/httpd/conf.d/`).
->
-> On Arch Linux the service is called `dhcpd4`, the DHCP/TFTP settings live in
-> `/etc/systemd/system/dhcpd4.service.d/diskless-manager.conf` and
-> `/etc/conf.d/tftpd`, and the Apache configuration goes into
-> `/etc/httpd/conf/conf.d/`.
+## First-run setup
 
-### Required Services
+1. Create the first administrator and sign in. No default administrator password
+   is shipped.
+2. Complete **Authorize** to grant the backend account the required privileged
+   commands.
+3. Install missing dependencies and create or select the configured ZFS pool.
+4. Save the server network settings, then configure DHCP with matching server
+   address, subnet mask, and gateway. Saving network settings in the wizard does
+   not apply them to the host interface.
+5. Apply TFTP, HTTP, and Samba configuration.
+6. Review and save the iPXE boot script. Place the configured bootloader binaries
+   in the TFTP root (default `/srv/tftp`). The defaults are `undionly.kpxe`,
+   `ipxe.efi`, and `snponly.efi`; saving the script does not install these files.
+7. Refresh server readiness and confirm setup to open the dashboard.
+
+Management pages remain blocked until setup is confirmed and the readiness checks
+pass. Checks cover authorization, required dependencies, saved network settings,
+the selected pool, applied service configurations, and nonempty boot files.
+Existing installations also need this review and confirmation. Changed settings
+or service files can invalidate readiness and require setup again.
+
+### Privileged access on a headless server
+
+The browser authorization button requests approval through Polkit on the **server
+computer**, even when the browser runs on another computer. Without a desktop
+Polkit authentication agent, run this in a terminal as the backend account:
 
 ```bash
-# Debian / Ubuntu
-sudo systemctl status \
-    target \
-    tftpd-hpa \
-    isc-dhcp-server \
-    smbd \
-    apache2 \
-    ssh
-
-# Fedora / RHEL
-sudo systemctl status \
-    target \
-    tftpd \
-    dhcpd \
-    smb \
-    httpd \
-    ssh
-
-# Arch Linux
-sudo systemctl status \
-    target \
-    tftpd \
-    dhcpd4 \
-    smb \
-    httpd \
-    sshd
-
-# Enable services to start on boot (substitute names as above)
-sudo systemctl enable \
-    target \
-    tftpd-hpa \
-    isc-dhcp-server \
-    smbd \
-    apache2 \
-    ssh
-
-# Start services
-sudo systemctl start \
-    target \
-    tftpd-hpa \
-    isc-dhcp-server \
-    smbd \
-    apache2 \
-    ssh
+diskless-manager authorize
+# From a development checkout after building:
+./src-tauri/target/debug/diskless-manager authorize
 ```
 
-### Samba Configuration
+Sudo prompts in that terminal. The command generates a distribution-specific
+sudoers rule and validates it before replacing the existing rule. Retry
+**Authorize** in the browser afterwards; an existing grant returns
+**Already Authorized**.
 
-```bash
-# Create diskless user for Samba
-sudo smbpasswd -a diskless
+## Configuration and application data
 
-# Add to /etc/samba/smb.conf
-[global]
-   workgroup = WORKGROUP
-   security = user
-   map to guest = never
+On Linux, application data lives in the backend account's
+`$XDG_CONFIG_HOME/com.diskless.local/`, normally
+`~/.config/com.diskless.local/`. Startup creates the directory, default settings,
+and SQLite database automatically. Configure the server through the wizard and
+**System Settings**; no manual copy of a sample configuration is required.
 
-[diskless]
-   path = /srv/tftp
-   browseable = yes
-   read only = no
-   guest ok = no
-   valid users = diskless
-```
+| File/directory | Purpose |
+| --- | --- |
+| `diskless.db` | Users, clients, image metadata, settings, and other application records |
+| `config.toml` | Local server settings; saved database settings are merged at startup |
+| `config.json` | Compatibility configuration file, included in backups when present |
+| `jwt-secret` | Automatically generated signing secret when `JWT_SECRET` is unset |
+| `diskless-manager.log` | Backend log |
+| `backups/` | Safety backups created during restore |
 
-## 🛠️ Installation
+The default network settings target server `192.168.1.250/24`, gateway
+`192.168.1.254`, and DHCP range `192.168.1.100–192.168.1.200`. Review them for your
+LAN before applying service configuration. HTTP boot files and TFTP default to
+`/srv/tftp`; the Samba share defaults to `/srv/shared`.
 
-1. **Clone the Repository**
-   ```bash
-   git clone https://github.com/yourusername/diskless-manager.git
-   cd diskless-manager
-   ```
-2. **Setup the App**
+### Environment variables
 
-   ```bash
-   bun install
-   ```
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `FRONTEND_DIR` | `../dist` relative to the backend working directory | Built frontend directory; set an absolute path for deployment |
+| `DISKLESS_API_ADDR` | `127.0.0.1:8080` | Management API, WebSocket metrics, and browser UI listener |
+| `DISKLESS_ENROLL_ADDR` | `0.0.0.0:4237` | Dedicated PXE enrollment listener |
+| `JWT_SECRET` | Generated and persisted locally | Optional signing secret override, at least 32 bytes |
 
-3. **Configure Services**
-   ```bash
-   sudo mkdir -p /srv/tftp
-   sudo mkdir -p /srv/shared
-   sudo mkdir -p /srv/iscsi
-   sudo mkdir -p ~/.config/com.diskless.local
-   sudo cp config/config.json ~/.config/com.diskless.local
-   ```
+An explicit signing secret can be generated with `openssl rand -base64 32` and
+set in the backend environment. Keep it stable across restarts and out of version
+control. A shell export does not configure a systemd service.
 
-## ⚙️ Configuration
-
-1. **Backend Settings** (`~/.config/com.diskless.local/config.json`):
-
-   ```json
-   {
-     "zfs_pool": "diskless",
-     "master_dataset": "diskless/Windows11-master",
-     "clients_dataset": "diskless",
-     "iscsi_target_prefix": "iqn.2025-05.local.diskless",
-     "tftp_dir": "/srv/tftp",
-     "network_subnet": "192.168.1.0/24"
-   }
-   ```
-
-2. **Configure Sudo Access**
-   ```bash
-   # Add to /etc/sudoers.d/diskless-manager
-   # Debian/Ubuntu: include apt-get, a2ensite, a2enmod, netplan
-   # Fedora/RHEL: include dnf, nmcli
-   # Arch Linux: include pacman, nmcli
-   %USER% ALL=(ALL) NOPASSWD: /usr/sbin/zfs,/usr/bin/targetcli,/bin/systemctl,/usr/sbin/dhcpd,/usr/bin/wakeonlan
-   ```
-   The **Privileged access** button in the app's setup wizard generates this
-   file automatically with the correct commands for the detected
-   distribution.
-
-   The approval prompt appears on the **server computer**, including when
-   the browser runs on another computer. For servers without a desktop
-   Polkit authentication agent, run the following as the same Linux account
-   that runs the backend, in a terminal on the server:
-
-   ```bash
-   diskless-manager authorize
-   # When running from a development checkout:
-   ./src-tauri/target/debug/diskless-manager authorize
-   ```
-
-   Sudo prompts for your password in that terminal. Both setup paths validate
-   the new sudoers rule before replacing the existing rule. Retry authorization
-   in the browser afterwards; an existing grant returns **Already Authorized**.
-
-### 4. Configure Environment Variables
-
-**IMPORTANT - Security Configuration:**
-
-The application requires a JWT secret for authentication. Generate a secure random secret:
-
-```bash
-# Generate a secure random secret
-openssl rand -base64 32
-
-# Set the JWT_SECRET environment variable
-export JWT_SECRET="your-generated-secret-here"
-
-# Or add to your shell profile (~/.bashrc, ~/.zshrc, etc.)
-echo 'export JWT_SECRET="your-generated-secret-here"' >> ~/.bashrc
-source ~/.bashrc
-```
-
-⚠️ **Security Notes:**
-
-- Never commit the actual JWT_SECRET to version control
-- Use a different secret for development and production
-- Keep your secret secure and rotate it periodically
-- See `src-tauri/.env.example` for reference
-
-## 🚀 Usage
-
-1. **Build the frontend and backend**
-
-   ```bash
-   bun run build
-   cargo build --release --manifest-path src-tauri/Cargo.toml
-   ```
-
-2. **Run the server** (serves API + UI on port 8080)
-
-   ```bash
-   FRONTEND_DIR=./dist ./src-tauri/target/release/diskless-manager
-   ```
-
-3. **Open the UI**
-   - Same machine: `http://localhost:8080`
-   - Network PC: `http://<server-ip>:8080` (see LAN access below)
-
-   Development: `bun dev` for the UI (proxied to the backend on
-   `127.0.0.1:8080`) plus `bun run dev:backend` for the API.
-
-### First-run setup
-
-Create the first administrator, sign in, and complete the server setup wizard.
-Management pages stay blocked until the required services, applied configurations,
-configured ZFS pool, and boot files are ready. Save the server network settings
-before DHCP, using matching addresses, masks, and gateways. Install the bootloader
-binaries shown in the Boot step into the configured TFTP root, then refresh
-readiness and confirm setup. Existing installations also require this readiness
-check and confirmation.
-
-### Application backup and restore
-
-Administrators can download a JSON backup from **Application Settings** or
-restore one from the setup recovery section. Backups include the application
-database, local configuration, and signing secret. They contain authentication
-secrets; store them securely. ZFS datasets, image disk contents, and operating
-system service files are not restored.
-
-Choose a backup (maximum 64 MiB), confirm **Stage restore**, then restart the
-backend. A private safety backup is saved under the server account's
-`~/.config/com.diskless.local/backups/` before staging and again before applying.
-Restore revokes existing sessions; sign in with an administrator from the backup
-and review server setup. A configured `JWT_SECRET` must match the backup's secret.
-If applying fails, the original installation is recovered and the rejected
-bundle is retained as `failed-restore-<id>.json` in the configuration directory;
-check the backend log. Recovery errors stop startup to protect the original data.
+## Deployment
 
 ### LAN access
 
-The API binds loopback by default. To manage over the network:
+To serve the management UI to other computers:
 
 ```bash
-DISKLESS_API_ADDR=0.0.0.0:8080 FRONTEND_DIR=/opt/diskless-manager/dist diskless-manager
+DISKLESS_API_ADDR=0.0.0.0:8080 \
+  FRONTEND_DIR="$PWD/dist" \
+  ./src-tauri/target/release/diskless-manager
 ```
 
-Open the firewall port (`firewall-cmd --add-port=8080/tcp --permanent`
-or `ufw allow 8080/tcp`). The PXE enrollment listener stays on its own
-LAN port by design.
+Open `http://<server-ip>:8080` and allow the configured management port through
+your server firewall. PXE clients use the separate enrollment listener on TCP
+4237 by default, alongside DHCP, TFTP, HTTP boot files, and iSCSI services.
+Enrollment of unknown clients is closed until an administrator opens its
+registration window.
 
-### Service install
+### Systemd
 
-Copy `systemd/diskless-manager.service` to
-`/etc/systemd/system/`, adjust paths/secrets, then:
+Deploy the binary to `/usr/bin/diskless-manager`, the built `dist/` directory to
+`/opt/diskless-manager/dist`, and the supplied unit to
+`/etc/systemd/system/diskless-manager.service`. The supplied unit runs as `root`
+with `HOME=/root`; its application data therefore defaults to
+`/root/.config/com.diskless.local/`. If changing the service account, update
+`User` and `HOME` together and authorize that account.
 
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable --now diskless-manager
 ```
 
+For LAN access, add an override with `sudo systemctl edit diskless-manager`:
+
+```ini
+[Service]
+Environment=DISKLESS_API_ADDR=0.0.0.0:8080
+```
+
+Restart the service after changing its environment:
+
+```bash
+sudo systemctl restart diskless-manager
+```
+
+The service manager uses distribution-specific units:
+
+| Service | Debian/Ubuntu | Fedora/RHEL | Arch |
+| --- | --- | --- | --- |
+| DHCP | `isc-dhcp-server` | `dhcpd` | `dhcpd4` |
+| TFTP | `tftpd-hpa` | `tftp` (`tftp.socket` for boot activation) | `tftpd` |
+| iSCSI | `rtslib-fb-targetctl` | `target` | `target` |
+| HTTP | `apache2` | `httpd` | `httpd` |
+| Samba | `smbd`, `nmbd` | `smb`, `nmb` | `smb`, `nmb` |
+| NFS | `nfs-kernel-server` | `nfs-server` | `nfs-server` |
+
 ### Packaging
 
-No desktop bundler remains. Ship the release binary, the `dist/`
-directory, and the systemd unit. System dependency names per distro
-live in the setup wizard's dependency checks.
+A deployment bundle contains the release binary, `dist/`,
+`systemd/diskless-manager.service`, and `packaging/install.sh` copied as
+`install.sh`. Run `sudo ./install.sh` from the bundle directory. The installer
+copies files and reloads systemd; enable the application service afterwards.
+Use `sudo SKIP_DEPS=1 ./install.sh` when dependencies are already provisioned.
+The installer assumes its package names are available in configured repositories;
+it does not perform the wizard's OpenZFS repository setup.
 
-## 📁 Project Structure
+`packaging/diskless-manager.spec` provides RPM packaging for a prebuilt x86_64
+binary and frontend. There is no desktop bundler.
 
+## Application backup and restore
+
+Administrators can download or restore a JSON backup in **Application Settings**
+or the setup wizard's recovery section. Backups include the application database,
+local configuration files, and signing secret. This covers users, clients, image
+metadata, settings, and licenses. Store backups securely: they contain
+authentication secrets.
+
+ZFS datasets, OS image contents, and operating system service files are excluded.
+An application backup alone cannot recreate the client disks on another server.
+
+1. Choose an application backup JSON file (maximum 64 MiB).
+2. Confirm **Stage restore**. Live application data remains in place until restart.
+3. Restart the backend, then sign in with an administrator from the backup and
+   review server setup.
+
+Private safety backups are saved before staging and again before applying.
+Restore revokes existing sessions and clears setup completion. If `JWT_SECRET`
+is configured, it must match the backup's signing secret. Failed application
+recovers the original installation and retains the rejected bundle as
+`failed-restore-<id>.json`; check the backend log. Recovery errors stop startup
+to protect the original data.
+
+## Development checks
+
+```bash
+bun run test --run
+bunx eslint src
+bun run build
+cargo test --locked --manifest-path src-tauri/Cargo.toml
 ```
-diskless-manager/
 
-│   ├── src-tauri/
-│   │   ├── src/
-│   │   ├── Cargo.toml
-│   │   └── Cargo.lock
-│   ├── package.json
+Rust WebSocket tests bind local sockets. The DHCP syntax integration test is
+ignored by default and requires the ISC `dhcpd` binary.
+
+`bun run lint` scans the whole checkout; untracked release bundles or local skill
+scripts can introduce unrelated errors. The source-scoped command above checks
+the frontend code.
+
+`scripts/verify-production-diskless.sh` checks an installed server against the
+repository's default network and boot layout. Review its fixed IP addresses and
+interface expectations before using it on a customized installation.
+
+## Project structure
+
+```text
+diskless-manager/
+├── src/                     # React UI, API client, hooks, stores, and tests
+├── src-tauri/
 │   ├── src/
-│   │   ├── components/
-│   │   ├── assets/
-│   │   ├── contexts/
-│   │   ├── hooks/
-│   │   ├── lib/
-│   │   ├── router/
-│   │   ├── store/
-│   │   ├── utils/
-│   │   ├── index.css
-│   │   └── main.jsx
-│   └── package.json
-└── README.md
+│   │   ├── api/             # Axum routes, handlers, authentication middleware
+│   │   ├── application/     # Client and storage workflows
+│   │   ├── domain/          # Domain types
+│   │   ├── infrastructure/  # ZFS, iSCSI, DHCP, and PXE integrations
+│   │   ├── persistence/     # SQLite repositories
+│   │   └── services/        # System service configuration and control
+│   ├── migrations/          # Database migrations
+│   ├── script/              # iPXE scripts
+│   ├── tests/               # Backend integration tests
+│   └── Cargo.toml
+├── scripts/                 # Deployment verification and PXE tooling
+├── systemd/                 # Application service unit
+├── packaging/               # Bundle installer and RPM spec
+├── screenshots/
+├── package.json
+└── vite.config.js
 ```
