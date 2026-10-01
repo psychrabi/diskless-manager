@@ -134,7 +134,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: diskless-windows-servicer
-          path: tools/windows-servicer/target/release/diskless-windows-servicer.exe
+          path: |
+            tools/windows-servicer/target/release/diskless-windows-servicer.exe
+            tools/windows-servicer/install.ps1
           if-no-files-found: error
 
   publish-windows-servicer:
@@ -156,4 +158,6 @@ jobs:
       - name: Attach helper to GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ github.ref_name }}" windows-servicer/diskless-windows-servicer.exe --clobber
+        run: |
+          gh release upload "${{ github.ref_name }}" windows-servicer/diskless-windows-servicer.exe --clobber
+          gh release upload "${{ github.ref_name }}" windows-servicer/install.ps1 --clobber
