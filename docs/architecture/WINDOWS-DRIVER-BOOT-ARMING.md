@@ -284,3 +284,24 @@ The installer must be run as an administrator and finishes by executing the
 helper's `capabilities` command. Key-based SSH access from the Linux Diskless
 Manager host is preferred for routine servicing; avoid passing an administrator
 password through a plain-HTTP management session.
+
+
+### SSH authentication from a headless server
+
+When the servicing request does not include a password, the backend now tries
+authentication in this order:
+
+1. the process SSH agent;
+2. `~/.ssh/id_ed25519`;
+3. `~/.ssh/id_ecdsa`;
+4. `~/.ssh/id_rsa`.
+
+This is designed for the headless/systemd deployment where an interactive SSH
+agent is often unavailable. The private key must be readable by the Linux
+account running Diskless Manager, and the corresponding public key must be
+authorized for the Windows servicing account.
+
+Host-key verification is still mandatory. Add the Windows worker's host key to
+the service account's `~/.ssh/known_hosts` before using the UI. Password
+authentication remains supported, but key-based authentication is preferred,
+especially when the browser management interface is served over plain HTTP.
