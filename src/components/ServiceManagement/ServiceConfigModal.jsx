@@ -47,7 +47,7 @@ function ServiceConfigModal({
   const handleSave = async () => {
     setSaving(true);
     try {
-      await handleConfigSave(serviceKey, config);
+      if (!await handleConfigSave(serviceKey, config)) return;
       setEditable(false);
       onClose();
     } catch (error) {

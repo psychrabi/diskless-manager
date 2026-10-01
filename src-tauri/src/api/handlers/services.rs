@@ -8,12 +8,30 @@ use serde_json::Value;
 use crate::services::{write_with_sudo_tee, ServiceManager};
 use crate::state::AppState;
 
+fn boot_script_path(
+    settings: &crate::core::config::Settings,
+) -> Result<std::path::PathBuf, StatusCode> {
+    crate::validation::validate_boot_root(&settings.tftp.root_dir)
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let filename = std::path::Path::new(&settings.dhcp.boot_script);
+    if settings.dhcp.boot_script.is_empty()
+        || filename
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let path = std::path::Path::new(&settings.tftp.root_dir).join(filename);
+    crate::validation::validate_boot_root(path.to_str().ok_or(StatusCode::BAD_REQUEST)?)
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    Ok(path)
+}
+
 fn service_config_files() -> Vec<(&'static str, String)> {
     let distro = crate::platform::detect();
     vec![
         ("dhcp", "/etc/dhcp/dhcpd.conf".to_string()),
         ("dhcp-clients", "/etc/dhcp/clients.conf".to_string()),
-        ("tftp-autoexec", "/srv/tftp/autoexec.ipxe".to_string()),
         ("tftp", distro.tftp_defaults_path().to_string()),
         ("http", distro.http_config_path().to_string()),
         ("samba", "/etc/samba/smb.conf".to_string()),
@@ -246,18 +264,16 @@ pub async fn get_service_config(
 
     // Special handling for TFTP autoexec file
     if name == "tftp-autoexec" {
-        match fs::read_to_string("/srv/tftp/autoexec.ipxe") {
+        let path = boot_script_path(&settings)?;
+        match fs::read_to_string(&path) {
             Ok(content) => {
-                return Ok(Json(
-                    json!({ "text": content, "path": "/srv/tftp/autoexec.ipxe" }),
-                ));
+                return Ok(Json(json!({ "text": content, "path": path })));
             }
-            Err(_) => {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 // File doesn't exist yet, return empty content
-                return Ok(Json(
-                    json!({ "text": "", "path": "/srv/tftp/autoexec.ipxe" }),
-                ));
+                return Ok(Json(json!({ "text": "", "path": path })));
             }
+            Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
         }
     }
 
@@ -280,6 +296,7 @@ pub async fn configure_service(
     if claims.role != "admin" {
         return Err(StatusCode::FORBIDDEN);
     }
+    let _guard = state.client_mutations.lock().await;
     // If the body contains JSON with a "content" field, write raw content.
     // Otherwise, regenerate the config from the current settings.
     let raw_content = serde_json::from_str::<Value>(&body)
@@ -287,7 +304,14 @@ pub async fn configure_service(
         .and_then(|v| v.get("content").and_then(|c| c.as_str()).map(String::from));
 
     if let Some(content) = raw_content {
-        let config_files = service_config_files();
+        let mut config_files = service_config_files();
+        if name == "tftp-autoexec" {
+            let path = boot_script_path(&*state.settings.read().await)?;
+            config_files.push((
+                "tftp-autoexec",
+                path.to_str().ok_or(StatusCode::BAD_REQUEST)?.to_string(),
+            ));
+        }
         let config_path = config_files
             .iter()
             .find_map(|(k, p)| {
@@ -359,8 +383,18 @@ pub async fn configure_service(
             log::error!("Failed to reload validated DHCP configuration: {}", e);
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
-    } else {
-        let _ = service_manager.reload(&name).await;
+    } else if name != "tftp-autoexec" {
+        service_manager.reload(&name).await.map_err(|error| {
+            log::error!("Failed to reload configuration for {name}: {error}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    }
+
+    if matches!(name.as_str(), "dhcp" | "tftp" | "http" | "samba") {
+        let config = super::setup::service_config_snapshot(&name)?;
+        let receipt = serde_json::json!({"settings": super::setup::service_settings(&settings, &name), "config": config});
+        sqlx::query("INSERT INTO app_config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+            .bind(format!("setup-service-{name}")).bind(receipt.to_string()).execute(&state.db_pool).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     }
 
     Ok(Json(format!("Service {} configured successfully", name)))
@@ -396,6 +430,24 @@ pub async fn install_service(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn boot_script_follows_settings_and_rejects_paths_outside_tftp_root() {
+        let mut settings = crate::core::config::Settings::default();
+        settings.tftp.root_dir = "/srv/tftp/custom".into();
+        settings.dhcp.boot_script = "boot.ipxe".into();
+        assert_eq!(
+            boot_script_path(&settings).unwrap(),
+            std::path::PathBuf::from("/srv/tftp/custom/boot.ipxe")
+        );
+        for name in ["", "../../etc/sudoers", "/etc/passwd", "a/../boot.ipxe"] {
+            settings.dhcp.boot_script = name.into();
+            assert_eq!(
+                boot_script_path(&settings).unwrap_err(),
+                StatusCode::BAD_REQUEST
+            );
+        }
+    }
 
     #[test]
     fn dhcp_configuration_changes_require_validation_before_reload() {

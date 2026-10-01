@@ -25,16 +25,11 @@ const SambaStep = ({ onSubmit, isSubmitting, initialConfig }) => {
     defaultValues: initialConfig || sambaInitial,
   });
 
-  const handleFormSubmit = (data) => {
-    // Backend expects Vec<SambaShare>
-    onSubmit([data]);
-  };
-
   return (
     <Card title="Samba Server" subtitle="Configure a default Samba share for your network clients to access
             shared files and games." icon={Share2} className="border-t-4 border-primary overflow-hidden"
     >
-      <form onSubmit={handleSubmit(handleFormSubmit)} className="space-y-4">
+      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         <SambaForm
           control={control}
           register={register}

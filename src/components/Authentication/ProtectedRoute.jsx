@@ -4,11 +4,12 @@ import { useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
 const ProtectedRoute = ({ children }) => {
-  const { user, token } = useAuth();
+  const { user, token, loading } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
   useEffect(() => {
+    if (loading) return;
     if (user && token && user.role !== "admin" && ["/users", "/license"].includes(location.pathname)) {
       navigate("/", { replace: true });
       return;
@@ -39,9 +40,10 @@ const ProtectedRoute = ({ children }) => {
     return () => {
       cancelled = true;
     };
-  }, [user, token, navigate, location.pathname]);
+  }, [user, token, loading, navigate, location.pathname]);
 
-  if (user && token) {
+  if (!loading && user && token) {
+    if (user.role !== "admin" && ["/users", "/license"].includes(location.pathname)) return null;
     return children;
   }
 

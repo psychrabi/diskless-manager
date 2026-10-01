@@ -4,7 +4,6 @@ import { Error } from "@/components/ui/Error";
 import { Loading } from "@/components/ui/Loading";
 import { ToastContainer } from "@/components/ui/ToastContainer";
 import { useAppStore } from "@/store/useAppStore";
-import { runPreflightCheck } from "@/api/modules/system";
 import { useEffect, useRef } from "react";
 import {
   Outlet,
@@ -36,23 +35,6 @@ const AdminLayout = () => {
       pathRestored.current = true;
       navigate(lastPath, { replace: true });
     }
-  }, [location.pathname, navigate]);
-
-  // Preflight check for setup
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const { allServicesInstalled, poolExists } = await runPreflightCheck();
-
-        if (!cancelled && (!allServicesInstalled || !poolExists)) {
-          navigate("/setup");
-        }
-      } catch (e) {
-        console.warn("Preflight check failed in AdminLayout:", e);
-      }
-    })();
-    return () => { cancelled = true; };
   }, [location.pathname, navigate]);
 
   // Save current path after the initial restoration.

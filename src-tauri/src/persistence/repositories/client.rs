@@ -271,6 +271,25 @@ impl ClientRepository {
         .await?)
     }
 
+    /// Every stored game selection in one query, keyed by client id.
+    pub async fn all_game_selections(
+        &self,
+    ) -> Result<std::collections::HashMap<String, Vec<String>>> {
+        let rows = sqlx::query_as::<_, (String, String)>(
+            "SELECT client_id, master_dataset FROM client_game_disks",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let mut selections = std::collections::HashMap::new();
+        for (client_id, master) in rows {
+            selections
+                .entry(client_id)
+                .or_insert_with(Vec::new)
+                .push(master);
+        }
+        Ok(selections)
+    }
+
     /// Stored CHAP username/secret, if any.
     pub async fn chap_credentials(
         &self,

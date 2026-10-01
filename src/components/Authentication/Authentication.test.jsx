@@ -44,7 +44,7 @@ describe("authentication blocks", () => {
     expect(screen.getByRole("heading", { name: "Set up your workspace" })).toBeInTheDocument();
   });
 
-  it("validates password confirmation before creating and signing in the administrator", async () => {
+  it("validates password confirmation and sends the new administrator to sign in", async () => {
     const user = userEvent.setup();
     renderAuth("/initial-setup");
     await user.type(screen.getByLabelText("Password", { exact: true }), "Testpass123");
@@ -56,6 +56,7 @@ describe("authentication blocks", () => {
     await user.type(screen.getByLabelText("Confirm password"), "Testpass123");
     await user.click(screen.getByRole("button", { name: "Create admin account" }));
     await waitFor(() => expect(mocks.bootstrapAdmin).toHaveBeenCalledWith("admin", "Testpass123"));
-    expect(await screen.findByRole("heading", { name: "Dashboard" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Welcome back" })).toBeInTheDocument();
+    expect(mocks.setAuth).not.toHaveBeenCalled();
   });
 });

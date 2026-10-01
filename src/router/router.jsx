@@ -1,9 +1,10 @@
+import SetupGate from "@/components/Authentication/SetupGate";
 import UserManagement from "@/components/UserManagement";
 import PublicRoute from "@/components/Authentication/PublicRoute";
 import PublicLayout from "@/components/layouts/PublicLayout";
 import RouteErrorBoundary from "@/components/RouteErrorBoundary";
 import { lazy } from "react";
-import { createHashRouter } from "react-router-dom";
+import { createBrowserRouter } from "react-router-dom";
 
 const Adminlayout = lazy(() => import("@/components/layouts/AdminLayout"));
 const ClientManagement = lazy(() => import("@/components/ClientManagement"));
@@ -27,7 +28,7 @@ const ProtectedRoute = lazy(() =>
   import("@/components/Authentication/ProtectedRoute")
 );
 
-export const router = createHashRouter([
+export const router = createBrowserRouter([
   {
     path: "/",
     element: <PublicLayout />,
@@ -51,7 +52,7 @@ export const router = createHashRouter([
       },
       {
         path: "/setup",
-        element: <Setup />,
+        element: <ProtectedRoute><SetupGate setup><Setup /></SetupGate></ProtectedRoute>,
       },
     ].map((route) => ({ ...route, errorElement: <RouteErrorBoundary fullPage={false} /> })),
   },
@@ -60,7 +61,7 @@ export const router = createHashRouter([
     errorElement: <RouteErrorBoundary />,
     element: (
       <ProtectedRoute>
-        <Adminlayout />
+        <SetupGate><Adminlayout /></SetupGate>
       </ProtectedRoute>
     ),
     children: [

@@ -9,6 +9,7 @@ import { Button, Card } from "@/components/ui";
 const AuthorizeStep = ({ onAuthorized, authorized = false, checking = false }) => {
   const { success, error } = useToastStore();
   const [loading, setLoading] = useState(false);
+  const [setupError, setSetupError] = useState("");
 
   // When the backend probe confirms the user is already authorized the wizard
   // will auto-advance to the next step; show the disabled state while we wait.
@@ -26,12 +27,14 @@ const AuthorizeStep = ({ onAuthorized, authorized = false, checking = false }) =
   const handleAuthorize = async () => {
     if (authorized) return;
     setLoading(true);
+    setSetupError("");
     try {
       const response = await setupPrivilegedAccess({});
       success("Authorization", response.message);
       onAuthorized();
     } catch (e) {
-      error(e.toString());
+      setSetupError(e.message);
+      error("Authorization failed", e.message);
     } finally {
       setLoading(false);
     }
@@ -60,10 +63,18 @@ const AuthorizeStep = ({ onAuthorized, authorized = false, checking = false }) =
         <Alert variant="default" className="border-amber-600/20 bg-amber-600/10 text-amber-600">
           <ShieldAlert />
           <AlertDescription className="text-amber-600">
-            A one-time password prompt (Polkit) will appear to authorize this
-            operation. This creates a specific sudoers rule for the current user.
+            This creates a sudoers rule for the server account. The password
+            prompt (Polkit) opens on the server computer. If no desktop
+            authentication agent is available, use the terminal command shown
+            below after a failed attempt, then retry authorization.
           </AlertDescription>
         </Alert>
+
+        {setupError && (
+          <Alert variant="destructive">
+            <AlertDescription className="break-words whitespace-pre-wrap">{setupError}</AlertDescription>
+          </Alert>
+        )}
 
         <Button
           variant="primary"

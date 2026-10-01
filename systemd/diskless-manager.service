@@ -1,0 +1,18 @@
+[Unit]
+Description=Diskless Manager boot server
+After=network-online.target zfs-import-cache.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Environment=HOME=/root
+Environment=FRONTEND_DIR=/opt/diskless-manager/dist
+# Environment=DISKLESS_API_ADDR=0.0.0.0:8080
+# Environment=JWT_SECRET=replace-with-openssl-rand-base64-32
+ExecStart=/usr/bin/diskless-manager
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

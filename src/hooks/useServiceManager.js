@@ -23,8 +23,10 @@ export const useServiceManager = () => {
       await saveServiceConfig(serviceKey, { content });
       success("Configuration saved successfully");
       fetchServices();
+      return true;
     } catch (err) {
       error(`Failed to save config: ${err.message || err} `);
+      return false;
     }
   }, [success, error, fetchServices]);
 
