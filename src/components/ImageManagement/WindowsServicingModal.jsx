@@ -336,7 +336,7 @@ export default function WindowsServicingModal({ isOpen, onClose }) {
                 type="password"
                 value={form.password}
                 onChange={(event) => update("password", event.target.value)}
-                placeholder="Leave blank for SSH agent authentication"
+                placeholder="Leave blank for SSH agent or server ~/.ssh key"
                 autoComplete="new-password"
               />
             </div>
