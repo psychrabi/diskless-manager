@@ -1,7 +1,8 @@
 use crate::error::AppError;
-use ssh2::{CheckResult, KnownHostFileKind, Session};
+use ssh2::{CheckResult, KnownHostFileKind, Session, Sftp};
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
 
@@ -192,6 +193,119 @@ impl SshExecutor {
             stderr: result.stderr,
             duration_ms,
         })
+    }
+
+    /// Upload a local directory tree to an existing remote directory via SFTP.
+    ///
+    /// The remote root must already exist. Symbolic links are rejected so a
+    /// catalog package cannot escape its imported package directory.
+    pub async fn upload_directory(
+        &self,
+        host: &str,
+        local_root: &Path,
+        remote_root: &str,
+    ) -> Result<u64, AppError> {
+        if !local_root.is_dir() {
+            return Err(AppError::SshCommand(format!(
+                "local upload root is not a directory: {}",
+                local_root.display()
+            )));
+        }
+
+        let host_owned = host.to_string();
+        let worker_host = host_owned.clone();
+        let local_root = local_root.to_path_buf();
+        let remote_root = PathBuf::from(remote_root);
+        let username = self.config.username.clone();
+        let password = self.config.password.clone();
+        let connection_timeout = self.config.connection_timeout;
+        let timeout_secs = self.config.command_timeout;
+        let disable_host_key_verification = self.config.disable_host_key_verification;
+
+        tokio::time::timeout(
+            Duration::from_secs(timeout_secs),
+            tokio::task::spawn_blocking(move || {
+                let session = Self::create_connection_blocking(
+                    &worker_host,
+                    &username,
+                    password.as_deref(),
+                    connection_timeout,
+                    timeout_secs,
+                    disable_host_key_verification,
+                )?;
+                let sftp = session.sftp().map_err(|error| {
+                    AppError::SshCommand(format!("failed to initialize SFTP: {error}"))
+                })?;
+                sftp.stat(&remote_root).map_err(|error| {
+                    AppError::SshCommand(format!(
+                        "remote upload root does not exist ({}): {error}",
+                        remote_root.display()
+                    ))
+                })?;
+                Self::upload_directory_blocking(&sftp, &local_root, &remote_root)
+            }),
+        )
+        .await
+        .map_err(|_| {
+            error!("SFTP upload timeout on {}", host_owned);
+            AppError::SshTimeout
+        })?
+        .map_err(|error| {
+            AppError::SshCommand(format!("SFTP worker task failed: {error}"))
+        })?
+    }
+
+    fn upload_directory_blocking(
+        sftp: &Sftp,
+        local_root: &Path,
+        remote_root: &Path,
+    ) -> Result<u64, AppError> {
+        let mut uploaded = 0u64;
+
+        for entry in std::fs::read_dir(local_root)? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            if file_type.is_symlink() {
+                return Err(AppError::SshCommand(format!(
+                    "refusing to upload symbolic link: {}",
+                    entry.path().display()
+                )));
+            }
+
+            let remote_path = remote_root.join(entry.file_name());
+            if file_type.is_dir() {
+                if sftp.stat(&remote_path).is_err() {
+                    sftp.mkdir(&remote_path, 0o755).map_err(|error| {
+                        AppError::SshCommand(format!(
+                            "failed to create remote directory {}: {error}",
+                            remote_path.display()
+                        ))
+                    })?;
+                }
+                uploaded +=
+                    Self::upload_directory_blocking(sftp, &entry.path(), &remote_path)?;
+                continue;
+            }
+
+            if !file_type.is_file() {
+                return Err(AppError::SshCommand(format!(
+                    "refusing to upload non-regular file: {}",
+                    entry.path().display()
+                )));
+            }
+
+            let mut source = std::fs::File::open(entry.path())?;
+            let mut destination = sftp.create(&remote_path).map_err(|error| {
+                AppError::SshCommand(format!(
+                    "failed to create remote file {}: {error}",
+                    remote_path.display()
+                ))
+            })?;
+            uploaded += std::io::copy(&mut source, &mut destination)?;
+            destination.flush()?;
+        }
+
+        Ok(uploaded)
     }
 
     /// Check SSH connectivity to a host
