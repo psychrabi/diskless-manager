@@ -197,8 +197,9 @@ impl SshExecutor {
 
     /// Upload a local directory tree to an existing remote directory via SFTP.
     ///
-    /// The remote root must already exist. Symbolic links are rejected so a
-    /// catalog package cannot escape its imported package directory.
+    /// The parent of the remote root must already exist. The final root is
+    /// created when needed. Symbolic links are rejected so a catalog package
+    /// cannot escape its imported package directory.
     pub async fn upload_directory(
         &self,
         host: &str,
@@ -236,12 +237,14 @@ impl SshExecutor {
                 let sftp = session.sftp().map_err(|error| {
                     AppError::SshCommand(format!("failed to initialize SFTP: {error}"))
                 })?;
-                sftp.stat(&remote_root).map_err(|error| {
-                    AppError::SshCommand(format!(
-                        "remote upload root does not exist ({}): {error}",
-                        remote_root.display()
-                    ))
-                })?;
+                if sftp.stat(&remote_root).is_err() {
+                    sftp.mkdir(&remote_root, 0o755).map_err(|error| {
+                        AppError::SshCommand(format!(
+                            "failed to create remote upload root {}: {error}",
+                            remote_root.display()
+                        ))
+                    })?;
+                }
                 Self::upload_directory_blocking(&sftp, &local_root, &remote_root)
             }),
         )
