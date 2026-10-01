@@ -108,6 +108,17 @@ impl NetworkDriverInjectionPlugin {
         self.media_dir().join(STARTNET_FILE)
     }
 
+    pub fn package_directory(&self, id: &str) -> Result<PathBuf> {
+        let parsed = Uuid::parse_str(id)
+            .with_context(|| format!("invalid network driver package id '{id}'"))?;
+        let canonical_id = parsed.to_string();
+        let package_dir = self.drivers_dir().join(&canonical_id);
+        if !package_dir.is_dir() {
+            bail!("network driver package '{}' was not found", canonical_id);
+        }
+        Ok(package_dir)
+    }
+
     pub fn status(&self) -> Result<DriverInjectionStatus> {
         let catalog = self.load_catalog()?;
         let inf_count = catalog
