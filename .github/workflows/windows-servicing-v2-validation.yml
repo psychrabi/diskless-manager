@@ -1,0 +1,56 @@
+name: "Windows Servicing Protocol V2 Validation"
+
+on:
+  push:
+    branches:
+      - "feature/windows-driver-harvest-boot-arm"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-servicing-v2-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+      - run: cargo check --manifest-path src-tauri/Cargo.toml --all-targets
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --all-targets
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+      - run: bun run test --run
+      - run: bun run build
+
+  windows-worker:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./tools/windows-servicer -> target"
+      - run: cargo build --release --manifest-path tools/windows-servicer/Cargo.toml
+      - name: Parse installer
+        shell: powershell
+        run: |
+          $source = Get-Content -LiteralPath tools/windows-servicer/install.ps1 -Raw
+          $null = [ScriptBlock]::Create($source)
