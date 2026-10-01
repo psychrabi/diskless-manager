@@ -8,6 +8,8 @@ use super::{WindowsImagePreparationRequest, WindowsImagePreparationResult};
 use crate::ssh_executor::{SshConfig, SshExecutor};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use uuid::Uuid;
 
 const PROTOCOL_VERSION: u32 = 1;
 const DEFAULT_HELPER: &str =
@@ -39,6 +41,20 @@ pub struct RemoteWindowsServicingCapabilities {
     pub protocol_version: u32,
     pub platform: String,
     pub available: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct StagedDriverPackage {
+    pub id: String,
+    pub source_dir: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteWindowsCatalogPreparationResult {
+    pub preparation: WindowsImagePreparationResult,
+    pub staged_package_count: usize,
+    pub uploaded_bytes: u64,
+    pub staging_cleanup_succeeded: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -157,6 +173,97 @@ impl RemoteWindowsServicer {
             .ok_or_else(|| anyhow::anyhow!("remote helper reported success without a result"))
     }
 
+    pub async fn prepare_with_driver_packages(
+        &self,
+        host: String,
+        username: String,
+        password: Option<String>,
+        executable_path: Option<String>,
+        mut preparation: WindowsImagePreparationRequest,
+        packages: Vec<StagedDriverPackage>,
+    ) -> Result<RemoteWindowsCatalogPreparationResult> {
+        validate_remote_identity(&host, &username)?;
+        if packages.is_empty() {
+            bail!("at least one imported network driver package is required");
+        }
+
+        let staging_id = Uuid::new_v4().to_string();
+        let remote_base =
+            format!(r"C:\ProgramData\Diskless Manager\staging\{staging_id}");
+        let remote_driver_root = format!(r"{remote_base}\drivers");
+        let remote_driver_root_sftp = remote_driver_root.replace('\\', "/");
+
+        let executor = self.executor(username.clone(), password.clone());
+        let create_command = powershell_statement(&format!(
+            "[void](New-Item -ItemType Directory -Force -LiteralPath {})",
+            powershell_literal(&remote_driver_root)
+        ));
+        let created = executor
+            .execute_command(&host, &create_command)
+            .await
+            .map_err(|error| anyhow::anyhow!("failed to create remote driver staging directory: {error}"))?;
+        if created.exit_code != 0 {
+            bail!(
+                "failed to create remote driver staging directory: {}",
+                created.stderr.trim()
+            );
+        }
+
+        let staging_result = async {
+            let mut uploaded_bytes = 0u64;
+            for package in &packages {
+                let remote_package_root =
+                    format!("{}/{}", remote_driver_root_sftp.trim_end_matches('/'), package.id);
+                uploaded_bytes += executor
+                    .upload_directory(&host, &package.source_dir, &remote_package_root)
+                    .await
+                    .map_err(|error| {
+                        anyhow::anyhow!(
+                            "failed to stage network driver package '{}': {error}",
+                            package.id
+                        )
+                    })?;
+            }
+
+            preparation.driver_root = PathBuf::from(&remote_driver_root);
+            let preparation = self
+                .prepare(RemoteWindowsServicingRequest {
+                    host: host.clone(),
+                    username: username.clone(),
+                    password: password.clone(),
+                    executable_path: executable_path.clone(),
+                    preparation,
+                })
+                .await?;
+
+            Ok::<_, anyhow::Error>((preparation, uploaded_bytes))
+        }
+        .await;
+
+        let cleanup_command = powershell_statement(&format!(
+            "Remove-Item -LiteralPath {} -Recurse -Force -ErrorAction SilentlyContinue",
+            powershell_literal(&remote_base)
+        ));
+        let cleanup_succeeded = executor
+            .execute_command(&host, &cleanup_command)
+            .await
+            .map(|result| result.exit_code == 0)
+            .unwrap_or(false);
+
+        match staging_result {
+            Ok((preparation, uploaded_bytes)) => Ok(RemoteWindowsCatalogPreparationResult {
+                preparation,
+                staged_package_count: packages.len(),
+                uploaded_bytes,
+                staging_cleanup_succeeded: cleanup_succeeded,
+            }),
+            Err(error) if cleanup_succeeded => Err(error),
+            Err(error) => Err(error.context(
+                "remote driver staging cleanup also failed; inspect the Windows worker staging directory",
+            )),
+        }
+    }
+
     fn executor(&self, username: String, password: Option<String>) -> SshExecutor {
         SshExecutor::with_config(SshConfig {
             connection_timeout: self.connection_timeout,
@@ -212,6 +319,18 @@ fn powershell_helper_command(executable: &str, subcommand: &str) -> String {
     format!(
         "powershell.exe -NoProfile -NonInteractive -Command \"& '{}' {}\"",
         escaped, subcommand
+    )
+}
+
+fn powershell_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+fn powershell_statement(statement: &str) -> String {
+    let escaped = statement.replace('"', "\\"");
+    format!(
+        "powershell.exe -NoProfile -NonInteractive -Command \"{}\"",
+        escaped
     )
 }
 
