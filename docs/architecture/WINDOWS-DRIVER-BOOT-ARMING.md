@@ -180,3 +180,61 @@ POST /api/pxe/windows/prepare-image/remote
 The local endpoints are useful when Diskless Manager itself is running in a
 Windows servicing environment. The remote endpoints are the normal path for a
 Linux diskless server controlling a Windows servicing worker.
+
+
+## Managed driver catalog staging
+
+The preferred remote workflow does not require manually copying a driver folder
+to the Windows worker.
+
+The Image Management UI can select one or more packages already imported into
+the Diskless Manager network-driver catalog. The server resolves those package
+IDs to managed directories under `pxe/network-drivers/drivers`; arbitrary
+local filesystem paths are not accepted by this endpoint.
+
+For each operation the server:
+
+1. creates a unique staging root under
+   `C:\ProgramData\Diskless Manager\staging\<uuid>\drivers`;
+2. uploads only the selected imported package directories through SFTP;
+3. rejects symbolic links and non-regular files while staging;
+4. runs the normal transactional Windows preparation flow using the staged
+   directory as the DISM driver root;
+5. removes the unique staging root after success or failure.
+
+The API response reports the number of staged packages, uploaded bytes and
+whether staging cleanup completed.
+
+Admin endpoint:
+
+```text
+POST /api/pxe/windows/prepare-image/remote/catalog
+```
+
+The older `/remote` endpoint remains available for advanced cases where the
+driver package directory already exists on the Windows worker.
+
+## Standalone Windows helper build
+
+The Windows utility is intentionally a separate Rust crate so it does not link
+the Linux-only ZFS/LIO/configfs portions of the main application:
+
+```text
+tools/windows-servicer/
+```
+
+Build it on Windows with:
+
+```powershell
+cargo build --release --manifest-path tools/windows-servicer/Cargo.toml
+```
+
+Output:
+
+```text
+tools/windows-servicer/target/release/diskless-windows-servicer.exe
+```
+
+Tagged releases build this helper on a native Windows GitHub Actions runner and
+attach `diskless-windows-servicer.exe` to the same GitHub release as the Linux
+Diskless Manager package.
