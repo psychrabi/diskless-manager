@@ -71,9 +71,11 @@ pub fn select_drivers(
 
             let mut score = 0;
             let mut reasons = Vec::new();
+            let mut identity_match = false;
 
             if explicit.contains(package.id.as_str()) {
                 score += 10_000;
+                identity_match = true;
                 reasons.push("explicit driver selection".to_string());
             }
 
@@ -85,6 +87,7 @@ pub fn select_drivers(
                 .collect::<HashSet<_>>();
             if !pnp_ids.is_empty() && exact_ids.iter().any(|id| pnp_ids.contains(id)) {
                 score += 9_000;
+                identity_match = true;
                 reasons.push("exact PNP hardware ID match".to_string());
             }
 
@@ -97,12 +100,14 @@ pub fn select_drivers(
                 && compatible_ids.iter().any(|id| pnp_ids.contains(id))
             {
                 score += 6_000;
+                identity_match = true;
                 reasons.push("compatible PNP ID match".to_string());
             }
 
             if let Some(package_mac) = package.mac_address.as_deref() {
                 if !mac.is_empty() && normalize_mac(Some(package_mac)) == mac {
                     score += 2_000;
+                    identity_match = true;
                     reasons.push("MAC address match".to_string());
                 }
             }
@@ -120,6 +125,7 @@ pub fn select_drivers(
                 .collect::<HashSet<_>>();
             if package_services.iter().any(|service| services.contains(service)) {
                 score += 1_000;
+                identity_match = true;
                 reasons.push("driver service match".to_string());
             }
 
@@ -135,7 +141,7 @@ pub fn select_drivers(
                 }
             }
 
-            if score > 0 {
+            if identity_match {
                 Some(SelectedNetworkDriver {
                     driver_id: package.id.clone(),
                     score,
@@ -265,6 +271,24 @@ mod tests {
             pnp_device_ids: vec!["PCI\\VEN_1234&DEV_5678".to_string()],
             ..Default::default()
         };
+        assert!(select_drivers(&packages, &input).is_empty());
+    }
+
+    #[test]
+    fn architecture_match_does_not_select_an_unrelated_package() {
+        let packages = vec![package(
+            "unrelated-x64",
+            Some("PCI\\VEN_1234&DEV_5678"),
+            None,
+            None,
+            Some("x64"),
+        )];
+        let input = NetworkDriverSelectorInput {
+            architecture: Some("x64".to_string()),
+            pnp_device_ids: vec!["PCI\\VEN_ABCD&DEV_EF01".to_string()],
+            ..Default::default()
+        };
+
         assert!(select_drivers(&packages, &input).is_empty());
     }
 }

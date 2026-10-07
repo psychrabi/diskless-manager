@@ -1,7 +1,9 @@
 use axum::{
+    body::Body,
     extract::DefaultBodyLimit,
-    http::StatusCode,
-    response::IntoResponse,
+    http::{Request, StatusCode},
+    middleware::Next,
+    response::{IntoResponse, Response},
     routing::{delete, get, post, put},
     Router,
 };
@@ -75,13 +77,29 @@ use crate::api::handlers::{
 };
 use crate::api::middleware::{cors_layer, rate_limit_auth, require_auth, AuthRateLimiter};
 use tower::limit::ConcurrencyLimitLayer;
-use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 
 /// Paths served by the API/WS routers (with JSON 404s). Everything else
 /// falls through to the bundled frontend.
 fn is_api_or_ws_path(path: &str) -> bool {
     path == "/api" || path.starts_with("/api/") || path == "/ws" || path.starts_with("/ws/")
+}
+
+fn request_timeout_for(path: &str) -> Duration {
+    match path {
+        "/api/pxe/windows/prepare-image"
+        | "/api/pxe/windows/prepare-image/remote"
+        | "/api/pxe/windows/prepare-image/remote/catalog" => Duration::from_secs(3900),
+        _ => Duration::from_secs(300),
+    }
+}
+
+async fn apply_request_timeout(request: Request<Body>, next: Next) -> Response {
+    let timeout = request_timeout_for(request.uri().path());
+    match tokio::time::timeout(timeout, next.run(request)).await {
+        Ok(response) => response,
+        Err(_) => StatusCode::REQUEST_TIMEOUT.into_response(),
+    }
 }
 
 pub fn create_app(state: crate::state::AppState) -> Router {
@@ -124,10 +142,6 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route("/api/auth/bootstrap", post(bootstrap_first_admin))
         .route("/api/auth/admin/exists", get(check_admin_exists))
         .layer(DefaultBodyLimit::max(16 * 1024 * 1024))
-        .layer(TimeoutLayer::with_status_code(
-            axum::http::StatusCode::REQUEST_TIMEOUT,
-            Duration::from_secs(300),
-        ))
         .with_state(state.clone());
 
     let ws_router = Router::new()
@@ -396,16 +410,14 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .layer(TraceLayer::new_for_http())
         .layer(ConcurrencyLimitLayer::new(100))
         .layer(DefaultBodyLimit::max(16 * 1024 * 1024))
-        .layer(TimeoutLayer::with_status_code(
-            axum::http::StatusCode::REQUEST_TIMEOUT,
-            Duration::from_secs(300),
-        ))
+        .layer(axum::middleware::from_fn(apply_request_timeout))
         .with_state(state)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::is_api_or_ws_path;
+    use super::{is_api_or_ws_path, request_timeout_for};
+    use std::time::Duration;
 
     #[test]
     fn spa_fallback_covers_only_non_api_paths() {
@@ -415,5 +427,17 @@ mod tests {
         for path in ["/", "/clients", "/images", "/login", "/api-docs"] {
             assert!(!is_api_or_ws_path(path), "{path}");
         }
+    }
+
+    #[test]
+    fn windows_image_preparation_gets_time_for_dism_servicing() {
+        assert_eq!(
+            request_timeout_for("/api/pxe/windows/prepare-image/remote/catalog"),
+            Duration::from_secs(3900)
+        );
+        assert_eq!(
+            request_timeout_for("/api/clients"),
+            Duration::from_secs(300)
+        );
     }
 }
