@@ -17,7 +17,6 @@ use tokio::time::interval;
 
 use crate::{
     metrics::{StorageTrafficMetrics, Throughput},
-    persistence::ClientRepository,
     state::AppState,
     types::Claims,
 };
@@ -142,24 +141,31 @@ async fn handle_metrics_socket(socket: WebSocket, state: AppState, claims: Claim
 }
 
 pub(crate) async fn fetch_metrics(state: &AppState) -> Result<MetricsUpdate, String> {
-    let client_ips = state.client_ips.read().await.clone();
     let settings = state.settings.read().await.clone();
     let iscsi_port = settings.iscsi.portal_port;
-    let registered_clients = ClientRepository::new(state.db_pool.clone())
-        .find_all()
-        .await
-        .map_err(|error| format!("failed to load clients for metrics: {error}"))?;
+    let registered_clients = sqlx::query_as::<_, (String, String, Option<String>)>(
+        r#"
+        SELECT CAST(name AS TEXT), CAST(ip AS TEXT),
+            CASE WHEN typeof(target_iqn) = 'text' THEN target_iqn END
+        FROM clients
+        WHERE CAST(enabled AS INTEGER) = 1
+        "#,
+    )
+    .fetch_all(&state.db_pool)
+    .await
+    .map_err(|error| format!("failed to load clients for metrics: {error}"))?;
     let mut target_by_ip = HashMap::new();
     let mut lio_sources = Vec::new();
-    for client in registered_clients {
-        let normalized_name = client.name.trim().to_lowercase();
-        let target_iqn = client.target_iqn.unwrap_or_else(|| {
+    let mut client_ips = Vec::with_capacity(registered_clients.len());
+    for (name, ip, target_iqn) in registered_clients {
+        let normalized_name = name.trim().to_lowercase();
+        let target_iqn = target_iqn.unwrap_or_else(|| {
             format!(
                 "{}:client.{}",
                 settings.iscsi.target_prefix, normalized_name
             )
         });
-        let ip = client.ip.to_string();
+        client_ips.push(ip.clone());
         lio_sources.push((ip.clone(), format!("block_{normalized_name}")));
         target_by_ip.insert(ip, target_iqn);
     }
@@ -221,6 +227,22 @@ pub(crate) async fn fetch_metrics(state: &AppState) -> Result<MetricsUpdate, Str
 mod tests {
     use super::session_uptime;
     use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn metrics_stream_survives_unrelated_legacy_client_field_types() {
+        let (state, _, _, _) = crate::api::security_tests::setup().await;
+        sqlx::query("INSERT INTO clients (id, name, mac, ip, master, created_at, updated_at, chap_secret) VALUES ('client', 'PC001', '00:11:22:33:44:55', '192.168.1.101', 'diskless/windows', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', ?)")
+            .bind(vec![65_u8, 66])
+            .execute(&state.db_pool)
+            .await
+            .expect("legacy client fixture should be inserted");
+        let metrics = super::fetch_metrics(&state)
+            .await
+            .expect("metrics should not require decoding unrelated client fields");
+
+        assert_eq!(metrics.clients.len(), 1);
+        assert_eq!(metrics.clients[0].ip, "192.168.1.101");
+    }
 
     #[tokio::test]
     async fn stalled_metrics_reader_cannot_keep_a_revoked_socket_alive() {

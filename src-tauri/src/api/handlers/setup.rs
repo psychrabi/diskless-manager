@@ -218,7 +218,7 @@ async fn read_setup_status(state: &AppState) -> Result<SetupStatus, StatusCode> 
         .all(|required| rows.iter().any(|(key, _)| key == required))
         && settings.validate().is_ok()
         && authorization
-        && manager.dhcp.validate_config().await.is_ok();
+        && manager.dhcp.validate_settings().is_ok();
     let mut checks = vec![
         ("authorization", authorization),
         (

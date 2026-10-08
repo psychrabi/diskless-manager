@@ -598,12 +598,13 @@ pub async fn update_client(
 
     let manager = ClientManager::new(state.db_pool.clone());
 
-    let existing_client = manager.get(&id).await.map_err(|_| {
+    let existing_client = manager.get(&id).await.map_err(|error| {
+        tracing::error!(client_id = %id, %error, "failed to load client for update");
         (
-            StatusCode::NOT_FOUND,
+            StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
-                status: StatusCode::NOT_FOUND.as_u16(),
-                error: "Client not found".to_string(),
+                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                error: "Failed to load client".to_string(),
             }),
         )
     })?;
@@ -1887,12 +1888,13 @@ pub async fn rotate_client_chap(
     };
 
     let manager = ClientManager::new(state.db_pool.clone());
-    let existing = manager.get(&id).await.map_err(|_| {
+    let existing = manager.get(&id).await.map_err(|error| {
+        tracing::error!(client_id = %id, %error, "failed to load client for CHAP rotation");
         (
-            StatusCode::NOT_FOUND,
+            StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
-                status: 404,
-                error: format!("Client not found: {}", id),
+                status: 500,
+                error: "Failed to load client".to_string(),
             }),
         )
     })?;

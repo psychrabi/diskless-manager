@@ -42,11 +42,11 @@ impl NvmeOfBootService {
     pub async fn prepare(&self, id: &ClientId, server_ip: &str) -> Result<NvmeOfBootPreparation> {
         let client = self
             .clients
-            .find_by_id(id)
+            .find_nvmeof_client(id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("client not found: {id}"))?;
 
-        if !client.enabled {
+        if client.enabled == 0 {
             bail!("client is disabled: {}", client.name);
         }
 
@@ -75,7 +75,7 @@ impl NvmeOfBootService {
             mac: client.mac.to_string(),
             ip: client.ip.to_string(),
             target_iqn: target_iqn.to_string(),
-            boot_image: client.boot_image,
+            boot_image: client.boot_image.parse().unwrap_or_default(),
             server_ip: server_ip.to_string(),
             // NVMe path keeps the legacy open menu; CHAP is an iSCSI-plane concern.
             chap: None,
@@ -106,7 +106,7 @@ impl NvmeOfBootService {
     pub async fn inspect(&self, id: &ClientId) -> Result<NvmeOfExportStatus> {
         let client = self
             .clients
-            .find_by_id(id)
+            .find_nvmeof_client(id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("client not found: {id}"))?;
 
@@ -118,7 +118,7 @@ impl NvmeOfBootService {
     pub async fn remove(&self, id: &ClientId) -> Result<()> {
         let client = self
             .clients
-            .find_by_id(id)
+            .find_nvmeof_client(id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("client not found: {id}"))?;
 
