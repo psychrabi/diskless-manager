@@ -11,7 +11,6 @@ pub struct BootReservation {
     pub mac: String,
     pub ip: String,
     pub target_iqn: String,
-    pub boot_image: crate::domain::ClientBootImage,
     pub server_ip: String,
     /// One-way iSCSI CHAP credentials embedded in the menu. `None`
     /// preserves the legacy open attach.
@@ -68,7 +67,6 @@ pub(crate) async fn publish_client_ipxe(reservation: &BootReservation) -> Result
         true,
         settings.http.tls_enabled,
         reservation.chap.as_ref(),
-        reservation.boot_image,
     );
     // Image/snapshot updates leave the menu byte-identical; skip the
     // privileged rewrite when the installed file already matches.

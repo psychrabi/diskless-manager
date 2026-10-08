@@ -382,8 +382,8 @@ pub async fn open_enrollment(
 
     let current_config = crate::config::get_config();
     let mut new_config = current_config;
-    new_config.settings =
-        serde_json::to_value(&settings).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    new_config.settings = serde_json::to_value(&settings)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     persist_settings_snapshot(&state, &new_config, &settings).await?;
     *state.settings.write().await = settings.clone();
 
@@ -416,8 +416,8 @@ pub async fn close_enrollment(
 
     let current_config = crate::config::get_config();
     let mut new_config = current_config;
-    new_config.settings =
-        serde_json::to_value(&settings).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    new_config.settings = serde_json::to_value(&settings)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     persist_settings_snapshot(&state, &new_config, &settings).await?;
     *state.settings.write().await = settings.clone();
 
@@ -449,7 +449,8 @@ pub async fn get_firewall_status(
         .await;
     let running = running_output
         .map(|output| {
-            output.status.success() && String::from_utf8_lossy(&output.stdout).trim() == "running"
+            output.status.success()
+                && String::from_utf8_lossy(&output.stdout).trim() == "running"
         })
         .unwrap_or(false);
 

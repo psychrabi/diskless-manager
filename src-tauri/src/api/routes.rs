@@ -63,7 +63,8 @@ use crate::api::handlers::{
     system_reconciliation::inspect_system_reconciliation_handler,
     users::{create_user, delete_user, get_user, list_users, update_user, update_user_password},
     windows_servicing::{
-        capabilities as windows_servicing_capabilities, prepare_image as prepare_windows_image,
+        capabilities as windows_servicing_capabilities,
+        prepare_image as prepare_windows_image,
         prepare_image_remote as prepare_windows_image_remote,
         prepare_image_remote_catalog as prepare_windows_image_remote_catalog,
         remote_capabilities as windows_servicing_remote_capabilities,

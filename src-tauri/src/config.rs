@@ -52,15 +52,8 @@ fn parse_legacy_datetime(value: &str) -> anyhow::Result<chrono::DateTime<chrono:
     anyhow::bail!("invalid legacy datetime: {value}")
 }
 
-fn legacy_client_to_domain(
-    client: &crate::core::client::Client,
-) -> anyhow::Result<crate::domain::Client> {
-    let status = match client
-        .status
-        .as_deref()
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
+fn legacy_client_to_domain(client: &crate::core::client::Client) -> anyhow::Result<crate::domain::Client> {
+    let status = match client.status.as_deref().map(str::to_ascii_lowercase).as_deref() {
         None | Some("provisioning") => ClientStatus::Provisioning,
         Some("ready") => ClientStatus::Ready,
         Some("online") => ClientStatus::Online,
@@ -70,12 +63,7 @@ fn legacy_client_to_domain(
         Some(value) => anyhow::bail!("unsupported legacy client status: {value}"),
     };
 
-    let mode = match client
-        .mode
-        .as_deref()
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
+    let mode = match client.mode.as_deref().map(str::to_ascii_lowercase).as_deref() {
         None | Some("normal") => BootMode::Normal,
         Some("super") => BootMode::Super,
         Some(value) => anyhow::bail!("unsupported legacy client mode: {value}"),
@@ -117,11 +105,6 @@ fn legacy_client_to_domain(
         status,
         mode,
         pxe_mode,
-        boot_image: match client.boot_image.as_deref().unwrap_or("windows") {
-            "winpe" => crate::domain::ClientBootImage::Winpe,
-            "linux" => crate::domain::ClientBootImage::Linux,
-            _ => crate::domain::ClientBootImage::Windows,
-        },
         keep_writeback: client.keep_writeback.unwrap_or(true),
         use_game_disk: client.use_game_disk.unwrap_or(false),
         game_disks: Vec::new(),
@@ -248,7 +231,6 @@ pub async fn read_config_db(pool: &sqlx::SqlitePool) -> anyhow::Result<AppConfig
         chap_user: Option<String>,
         chap_secret: Option<String>,
         chap_enabled: Option<bool>,
-        boot_image: Option<String>,
         created_at: Option<String>,
         last_modified: Option<String>,
     }
@@ -259,7 +241,7 @@ pub async fn read_config_db(pool: &sqlx::SqlitePool) -> anyhow::Result<AppConfig
     let clients = sqlx::query_as::<_, ClientRow>(
         r#"
         SELECT id, name, mac, ip, master, enabled, snapshot, block_store, target_iqn,
-               writeback, block_device, status, mode, pxe_mode, boot_image, keep_writeback,
+               writeback, block_device, status, mode, pxe_mode, keep_writeback,
                use_game_disk, chap_user, chap_secret, chap_enabled,
                created_at, last_modified
         FROM clients
@@ -296,7 +278,6 @@ pub async fn read_config_db(pool: &sqlx::SqlitePool) -> anyhow::Result<AppConfig
             status: c.status,
             mode: c.mode,
             pxe_mode: Some(c.pxe_mode),
-            boot_image: c.boot_image,
             keep_writeback: Some(c.keep_writeback),
             use_game_disk: Some(c.use_game_disk),
             chap_user: c.chap_user,

@@ -76,7 +76,6 @@ impl ProvisioningService {
             mac: client.mac.to_string(),
             ip: client.ip.to_string(),
             target_iqn: storage.target_iqn().to_string(),
-            boot_image: client.boot_image,
             server_ip: server_ip.to_string(),
             // The provisioned menu must carry the same credentials the
             // target enforces, or the first boot cannot log in.
@@ -142,9 +141,7 @@ mod tests {
         infrastructure::{
             dhcp::{BootReservation, BootReservationPublisher},
             image::{ImageBackend, ImageBackendInfo},
-            iscsi::{
-                ChapCredentials, IscsiLunState, IscsiProvisioner, IscsiTargetSpec, IscsiTargetState,
-            },
+            iscsi::{ChapCredentials, IscsiLunState, IscsiProvisioner, IscsiTargetSpec, IscsiTargetState},
         },
     };
     use std::path::Path;
@@ -356,7 +353,6 @@ mod tests {
                 block_device: None,
                 target_iqn: None,
                 pxe_mode: PxeMode::Uefi,
-                boot_image: crate::domain::ClientBootImage::Windows,
                 keep_writeback: true,
                 use_game_disk: false,
                 game_disks: Vec::new(),
@@ -410,7 +406,6 @@ mod tests {
             block_device: None,
             target_iqn: None,
             pxe_mode: PxeMode::Uefi,
-            boot_image: crate::domain::ClientBootImage::Windows,
             keep_writeback: true,
             use_game_disk: false,
             game_disks: Vec::new(),

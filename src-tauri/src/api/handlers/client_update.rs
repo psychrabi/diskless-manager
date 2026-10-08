@@ -1,4 +1,3 @@
-use super::client_compat::domain_to_legacy;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -8,7 +7,7 @@ use axum::{
 use super::clients::ErrorResponse;
 use crate::{
     core::client::{Client, UpdateClientRequest},
-    domain::UpdateClient,
+    domain::{BootMode, ClientStatus, PxeMode, UpdateClient},
     state::AppState,
     validation::{validate_ip_address, validate_mac_address},
 };
@@ -27,6 +26,57 @@ fn can_use_typed_update(request: &UpdateClientRequest) -> bool {
         && request.block_device.is_none()
         && request.target_iqn.is_none()
         && request.writeback.is_none()
+}
+
+fn domain_to_legacy(client: crate::domain::Client) -> Client {
+    Client {
+        id: client.id.to_string(),
+        name: client.name,
+        mac: client.mac.to_string(),
+        ip: client.ip.to_string(),
+        master: client.master,
+        enabled: client.enabled,
+        created_at: client.created_at,
+        updated_at: client.updated_at,
+        snapshot: client.snapshot,
+        block_store: client.block_store,
+        target_iqn: client.target_iqn,
+        writeback: client.writeback,
+        last_modified: client
+            .last_modified
+            .map(|value| value.format("%Y-%m-%d %H:%M:%S").to_string()),
+        block_device: client.block_device,
+        status: Some(
+            match client.status {
+                ClientStatus::Provisioning => "Provisioning",
+                ClientStatus::Ready => "Ready",
+                ClientStatus::Online => "Online",
+                ClientStatus::Offline => "Offline",
+                ClientStatus::Error => "Error",
+                ClientStatus::Disabled => "Disabled",
+            }
+            .to_string(),
+        ),
+        mode: Some(
+            match client.mode {
+                BootMode::Normal => "normal",
+                BootMode::Super => "super",
+            }
+            .to_string(),
+        ),
+        pxe_mode: Some(
+            match client.pxe_mode {
+                PxeMode::Uefi => "uefi",
+                PxeMode::Bios => "bios",
+            }
+            .to_string(),
+        ),
+        keep_writeback: Some(client.keep_writeback),
+        use_game_disk: Some(client.use_game_disk),
+        chap_user: client.chap_user,
+        chap_secret: client.chap_secret,
+        chap_enabled: Some(client.chap_enabled),
+    }
 }
 
 /// Compatibility update entrypoint.
@@ -67,20 +117,7 @@ pub async fn update_client(
             ));
         }
     }
-    if let Some(boot_image) = &request.boot_image {
-        if boot_image
-            .parse::<crate::domain::ClientBootImage>()
-            .is_err()
-        {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    status: 400,
-                    error: format!("Invalid client boot image: {boot_image}"),
-                }),
-            ));
-        }
-    }
+
     let existing = state
         .application
         .clients
@@ -132,55 +169,19 @@ pub async fn update_client(
 
     let settings = state.settings.read().await.clone();
 
-    let update = UpdateClient {
-        mac: request.mac,
-        ip: request.ip,
-        boot_image: request
-            .boot_image
-            .as_deref()
-            .map(str::parse::<crate::domain::ClientBootImage>)
-            .transpose()
-            .map_err(|error| {
-                (
-                    StatusCode::BAD_REQUEST,
-                    Json(ErrorResponse {
-                        status: 400,
-                        error: error.to_string(),
-                    }),
-                )
-            })?,
-        keep_writeback: request.keep_writeback,
-        ..UpdateClient::default()
-    };
-
-    let client = state
-        .application
-        .clients
-        .update_by_string(&id, update)
-        .await
-        .map_err(|error| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    status: 500,
-                    error: error.to_string(),
-                }),
-            )
-        })?;
-
-    // Publish after persistence so the menu reflects the saved boot image and identity.
-    if client.enabled {
-        if let Some(target_iqn) = client
+    // Preserve the existing menu refresh behavior for persistence-only saves.
+    if existing.enabled {
+        if let Some(target_iqn) = existing
             .target_iqn
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
         {
-            let chap = if client.chap_enabled {
+            let chap = if existing.chap_enabled {
                 crate::core::reconciliation::ensure_chap_credentials(
                     &state.db_pool,
                     &id,
-                    &client.name,
+                    &existing.name,
                     true,
                 )
                 .await
@@ -204,20 +205,42 @@ pub async fn update_client(
                 next
             };
             let reservation = crate::infrastructure::dhcp::BootReservation {
-                client_name: client.name.clone(),
-                mac: client.mac.to_string(),
-                ip: client.ip.to_string(),
+                client_name: existing.name.clone(),
+                mac: existing.mac.to_string(),
+                ip: existing.ip.to_string(),
                 target_iqn: target_iqn.to_string(),
                 server_ip: server_ip.to_string(),
                 chap,
-                boot_image: client.boot_image,
             };
-            if let Err(error) = crate::infrastructure::dhcp::publish_client_ipxe(&reservation).await
+            if let Err(error) =
+                crate::infrastructure::dhcp::publish_client_ipxe(&reservation).await
             {
                 tracing::warn!(client_id = %id, %error, "failed to regenerate boot menu while updating client");
             }
         }
     }
+
+    let update = UpdateClient {
+        mac: request.mac,
+        ip: request.ip,
+        keep_writeback: request.keep_writeback,
+        ..UpdateClient::default()
+    };
+
+    let client = state
+        .application
+        .clients
+        .update_by_string(&id, update)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    status: 500,
+                    error: error.to_string(),
+                }),
+            )
+        })?;
 
     sqlx::query(
         "DELETE FROM client_offline_resets WHERE client_id = ? AND operation IS NULL AND ? <> ?",
@@ -267,7 +290,6 @@ mod tests {
             writeback: None,
             action: None,
             make_super: None,
-            boot_image: None,
         }
     }
 

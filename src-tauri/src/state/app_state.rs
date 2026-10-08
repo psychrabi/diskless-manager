@@ -121,7 +121,6 @@ impl AppState {
             ("status", "TEXT DEFAULT 'Offline'"),
             ("mode", "TEXT DEFAULT 'read-only'"),
             ("pxe_mode", "TEXT DEFAULT 'uefi'"),
-            ("boot_image", "TEXT NOT NULL DEFAULT 'windows'"),
             ("keep_writeback", "INTEGER NOT NULL DEFAULT 1"),
             ("use_game_disk", "INTEGER NOT NULL DEFAULT 0"),
             ("chap_user", "TEXT"),

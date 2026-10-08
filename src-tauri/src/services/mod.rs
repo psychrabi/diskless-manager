@@ -388,10 +388,7 @@ fn redact_iscsi_config(config: &str) -> String {
         match value {
             serde_json::Value::Object(object) => {
                 object.retain(|key, _| {
-                    !matches!(
-                        key.to_ascii_lowercase().as_str(),
-                        "password" | "chap_secret"
-                    )
+                    !matches!(key.to_ascii_lowercase().as_str(), "password" | "chap_secret")
                 });
                 for value in object.values_mut() {
                     redact(value);
@@ -436,7 +433,9 @@ pub async fn set_boot_units_enabled(units: &[&str], enabled: bool) -> anyhow::Re
     let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
     run_sudo_command(arg_refs)
         .await
-        .map_err(|error| anyhow::anyhow!("failed to {} boot units {:?}: {}", action, units, error))
+        .map_err(|error| {
+            anyhow::anyhow!("failed to {} boot units {:?}: {}", action, units, error)
+        })
 }
 
 /// Check whether a systemd service is running.
@@ -538,8 +537,9 @@ mod config_tests {
 
     #[test]
     fn iscsi_config_redaction_removes_password_fields() {
-        let redacted =
-            redact_iscsi_config(r#"{"targets":{"target":{"password":"secret","name":"client"}}}"#);
+        let redacted = redact_iscsi_config(
+            r#"{"targets":{"target":{"password":"secret","name":"client"}}}"#,
+        );
         assert!(!redacted.contains("secret"));
         assert!(redacted.contains("client"));
     }

@@ -293,10 +293,7 @@ impl WindowsBootArmer {
                 continue;
             };
             let value = value.trim();
-            if let Some(hex) = value
-                .strip_prefix("0x")
-                .or_else(|| value.strip_prefix("0X"))
-            {
+            if let Some(hex) = value.strip_prefix("0x").or_else(|| value.strip_prefix("0X")) {
                 if let Ok(parsed) = u32::from_str_radix(hex, 16) {
                     return Ok(Some(parsed));
                 }
@@ -316,10 +313,7 @@ impl WindowsBootArmer {
             .output()
             .with_context(|| format!("failed to execute {}", self.reg.display()))?;
         if !output.status.success() {
-            bail!(
-                "failed to load offline SYSTEM hive: {}",
-                command_error(&output)
-            );
+            bail!("failed to load offline SYSTEM hive: {}", command_error(&output));
         }
         Ok(())
     }
@@ -327,10 +321,7 @@ impl WindowsBootArmer {
     fn unload_hive(&self, mount: &str) -> Result<()> {
         let output = self.query(&["unload", mount])?;
         if !output.status.success() {
-            bail!(
-                "failed to unload offline SYSTEM hive: {}",
-                command_error(&output)
-            );
+            bail!("failed to unload offline SYSTEM hive: {}", command_error(&output));
         }
         Ok(())
     }
@@ -452,10 +443,7 @@ pub fn build_plan(
     if config.disable_task_offload && existing.contains("tcpip") {
         push_dword(
             &mut changes,
-            format!(
-                "{}\\Services\\Tcpip\\Parameters",
-                inventory.active_control_set
-            ),
+            format!("{}\\Services\\Tcpip\\Parameters", inventory.active_control_set),
             "DisableTaskOffload",
             1,
             "optional compatibility profile: disable TCP task offload",
@@ -531,8 +519,8 @@ fn validate_system_hive(path: &Path) -> Result<()> {
     if !path.is_file() {
         bail!("SYSTEM hive does not exist: {}", path.display());
     }
-    let bytes =
-        fs::read(path).with_context(|| format!("failed to read SYSTEM hive {}", path.display()))?;
+    let bytes = fs::read(path)
+        .with_context(|| format!("failed to read SYSTEM hive {}", path.display()))?;
     if bytes.len() < 0x200 || &bytes[..4] != b"regf" {
         bail!("file is not a valid REGF hive: {}", path.display());
     }
@@ -540,8 +528,8 @@ fn validate_system_hive(path: &Path) -> Result<()> {
 }
 
 pub fn hive_is_dirty(path: &Path) -> Result<bool> {
-    let bytes =
-        fs::read(path).with_context(|| format!("failed to read SYSTEM hive {}", path.display()))?;
+    let bytes = fs::read(path)
+        .with_context(|| format!("failed to read SYSTEM hive {}", path.display()))?;
     if bytes.len() < 12 || &bytes[..4] != b"regf" {
         bail!("file is not a valid REGF hive: {}", path.display());
     }
@@ -605,10 +593,9 @@ mod tests {
             .changes
             .iter()
             .any(|change| change.key.contains("CriticalDeviceDatabase")));
-        assert!(!plan
-            .changes
-            .iter()
-            .any(|change| { change.key.ends_with("Services\\MSiSCSI") && change.name == "Start" }));
+        assert!(!plan.changes.iter().any(|change| {
+            change.key.ends_with("Services\\MSiSCSI") && change.name == "Start"
+        }));
     }
 
     #[test]

@@ -27,10 +27,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Install Linux build dependencies
+      - name: Install Tauri Linux dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
             libssl-dev \
             pkg-config
 
@@ -80,8 +83,8 @@ jobs:
       - name: Production build
         run: bun run build
 
-  package-build:
-    name: Server package build
+  tauri-build:
+    name: Tauri package build
     needs:
       - rust
       - frontend
@@ -90,12 +93,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Install Linux build dependencies
+      - name: Install Tauri Linux dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libssl-dev \
-            pkg-config
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
@@ -113,15 +118,16 @@ jobs:
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
 
-      - name: Build server and browser UI
-        run: |
-          bun run build
-          cargo build --locked --release --manifest-path src-tauri/Cargo.toml
-          sh packaging/bundle.sh
+      - name: Build Tauri package
+        uses: tauri-apps/tauri-action@v0
+        env:
+          CI: true
+        with:
+          args: ""
 
-      - name: Upload Linux package
+      - name: Upload Debian package
         uses: actions/upload-artifact@v4
         with:
-          name: diskless-manager-linux-x86_64
-          path: dist/diskless-manager-linux-x86_64.tar.gz
+          name: diskless-manager-deb
+          path: src-tauri/target/release/bundle/deb/*.deb
           if-no-files-found: error

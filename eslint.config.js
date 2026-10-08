@@ -4,7 +4,7 @@ import reactHooks from "eslint-plugin-react-hooks";
 import reactRefresh from "eslint-plugin-react-refresh";
 
 export default [
-  { ignores: ["dist", "node_modules", "src-tauri/target", ".agents/**", ".codex/**"] },
+  { ignores: ["dist", "node_modules", "src-tauri/target"] },
   {
     files: ["**/*.{js,jsx}"],
     languageOptions: {

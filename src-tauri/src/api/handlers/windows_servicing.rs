@@ -15,7 +15,11 @@ use crate::{
     state::AppState,
     types::Claims,
 };
-use axum::{extract::State, http::StatusCode, Extension, Json};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    Extension, Json,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -53,7 +57,9 @@ pub struct CatalogWindowsPreparationRequest {
     pub driver_ids: Vec<String>,
 }
 
-fn require_admin(claims: &Claims) -> Result<(), (StatusCode, Json<WindowsServicingError>)> {
+fn require_admin(
+    claims: &Claims,
+) -> Result<(), (StatusCode, Json<WindowsServicingError>)> {
     if claims.role != "admin" {
         return Err((
             StatusCode::FORBIDDEN,
@@ -114,6 +120,7 @@ fn internal_message(message: String) -> (StatusCode, Json<WindowsServicingError>
     )
 }
 
+
 pub async fn remote_capabilities(
     Extension(claims): Extension<Claims>,
     Json(request): Json<RemoteWindowsCapabilitiesRequest>,
@@ -140,12 +147,12 @@ pub async fn prepare_image_remote(
         .map_err(operation_error)
 }
 
+
 pub async fn prepare_image_remote_catalog(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Json(request): Json<CatalogWindowsPreparationRequest>,
-) -> Result<Json<RemoteWindowsCatalogPreparationResult>, (StatusCode, Json<WindowsServicingError>)>
-{
+) -> Result<Json<RemoteWindowsCatalogPreparationResult>, (StatusCode, Json<WindowsServicingError>)> {
     require_admin(&claims)?;
 
     if request.driver_ids.is_empty() {
@@ -167,20 +174,19 @@ pub async fn prepare_image_remote_catalog(
         .collect::<Vec<_>>();
 
     let root = state.settings.read().await.http.root_dir.clone();
-    let packages =
-        tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<StagedDriverPackage>> {
-            let plugin = NetworkDriverInjectionPlugin::new(PathBuf::from(root));
-            unique_ids
-                .into_iter()
-                .map(|id| {
-                    let source_dir = plugin.package_directory(&id)?;
-                    Ok(StagedDriverPackage { id, source_dir })
-                })
-                .collect()
-        })
-        .await
-        .map_err(|error| internal_message(error.to_string()))?
-        .map_err(operation_error)?;
+    let packages = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<StagedDriverPackage>> {
+        let plugin = NetworkDriverInjectionPlugin::new(PathBuf::from(root));
+        unique_ids
+            .into_iter()
+            .map(|id| {
+                let source_dir = plugin.package_directory(&id)?;
+                Ok(StagedDriverPackage { id, source_dir })
+            })
+            .collect()
+    })
+    .await
+    .map_err(|error| internal_message(error.to_string()))?
+    .map_err(operation_error)?;
 
     let preparation = WindowsImagePreparationRequest {
         image_path: request.image_path,

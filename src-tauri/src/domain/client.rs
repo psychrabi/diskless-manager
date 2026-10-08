@@ -143,40 +143,6 @@ impl PxeMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-/// Boot menu entry selected by default for a client.
-pub enum ClientBootImage {
-    #[default]
-    Windows,
-    Winpe,
-    Linux,
-}
-
-impl ClientBootImage {
-    /// Return the stable lowercase value used in API payloads and storage.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Windows => "windows",
-            Self::Winpe => "winpe",
-            Self::Linux => "linux",
-        }
-    }
-}
-
-impl std::str::FromStr for ClientBootImage {
-    type Err = DomainError;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value.to_ascii_lowercase().as_str() {
-            "windows" => Ok(Self::Windows),
-            "winpe" => Ok(Self::Winpe),
-            "linux" => Ok(Self::Linux),
-            _ => Err(DomainError::InvalidBootImage(value.to_string())),
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum BootMode {
@@ -216,8 +182,6 @@ pub struct Client {
     pub status: ClientStatus,
     pub mode: BootMode,
     pub pxe_mode: PxeMode,
-    #[serde(default)]
-    pub boot_image: ClientBootImage,
 
     pub keep_writeback: bool,
     pub use_game_disk: bool,
@@ -278,7 +242,6 @@ impl Client {
             status: ClientStatus::Provisioning,
             mode: BootMode::Normal,
             pxe_mode: request.pxe_mode,
-            boot_image: request.boot_image,
 
             keep_writeback: request.keep_writeback,
             use_game_disk: request.use_game_disk,
@@ -359,9 +322,6 @@ pub struct CreateClient {
     #[serde(default)]
     pub pxe_mode: PxeMode,
 
-    #[serde(default)]
-    pub boot_image: ClientBootImage,
-
     #[serde(default = "default_true")]
     pub keep_writeback: bool,
 
@@ -399,6 +359,5 @@ pub struct UpdateClient {
     pub target_iqn: Option<String>,
 
     pub pxe_mode: Option<PxeMode>,
-    pub boot_image: Option<ClientBootImage>,
     pub mode: Option<BootMode>,
 }

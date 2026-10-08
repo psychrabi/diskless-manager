@@ -83,7 +83,6 @@ export const clientSchema = z.object({
   mac: macSchema,
   ip: ipSchema,
   master: z.string().min(1, "Image selection is required"),
-  boot_image: z.enum(["windows", "winpe", "linux"]).default("windows"),
   snapshot: z.string().optional().nullable(),
   keep_writeback: z.boolean().default(false),
   use_game_disk: z.boolean().default(false),

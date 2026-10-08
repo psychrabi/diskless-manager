@@ -6,8 +6,7 @@ pub mod storage;
 
 pub use boot_log::BootLogEntry;
 pub use client::{
-    BootMode, Client, ClientBootImage, ClientId, ClientStatus, CreateClient, MacAddress, PxeMode,
-    UpdateClient,
+    BootMode, Client, ClientId, ClientStatus, CreateClient, MacAddress, PxeMode, UpdateClient,
 };
 
 pub use errors::DomainError;

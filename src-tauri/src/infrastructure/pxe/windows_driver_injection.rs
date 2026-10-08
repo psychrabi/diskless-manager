@@ -98,12 +98,7 @@ impl WindowsDriverInjector {
         self.mount_index(image_path, mount_path, 1)
     }
 
-    pub fn mount_index(
-        &self,
-        image_path: &Path,
-        mount_path: &Path,
-        image_index: u32,
-    ) -> Result<()> {
+    pub fn mount_index(&self, image_path: &Path, mount_path: &Path, image_index: u32) -> Result<()> {
         if image_index == 0 {
             bail!("Windows image index must be greater than zero");
         }

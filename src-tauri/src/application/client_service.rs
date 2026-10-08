@@ -178,10 +178,6 @@ impl ClientService {
             client.pxe_mode = pxe_mode;
         }
 
-        if let Some(boot_image) = request.boot_image {
-            client.boot_image = boot_image;
-        }
-
         if let Some(mode) = request.mode {
             client.mode = mode;
         }

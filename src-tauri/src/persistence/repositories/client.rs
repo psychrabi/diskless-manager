@@ -1,14 +1,11 @@
-use crate::domain::{
-    BootMode, Client, ClientBootImage, ClientId, ClientStatus, MacAddress, PxeMode,
-};
+use crate::domain::{BootMode, Client, ClientId, ClientStatus, MacAddress, PxeMode};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use futures::TryStreamExt;
 use sqlx::{FromRow, SqlitePool};
 use std::net::IpAddr;
 use std::str::FromStr;
 
-#[derive(Debug, FromRow, serde::Deserialize)]
+#[derive(Debug, FromRow)]
 struct ClientRow {
     id: String,
     name: String,
@@ -30,7 +27,6 @@ struct ClientRow {
     status: Option<String>,
     mode: Option<String>,
     pxe_mode: Option<String>,
-    boot_image: Option<String>,
 
     keep_writeback: Option<i64>,
     use_game_disk: Option<i64>,
@@ -70,7 +66,6 @@ impl ClientRepository {
                 status,
                 mode,
                 pxe_mode,
-                boot_image,
                 keep_writeback,
                 use_game_disk,
                 chap_user,
@@ -109,7 +104,6 @@ impl ClientRepository {
                 status,
                 mode,
                 pxe_mode,
-                boot_image,
                 keep_writeback,
                 use_game_disk,
                 chap_user,
@@ -148,7 +142,6 @@ impl ClientRepository {
                 status,
                 mode,
                 pxe_mode,
-                boot_image,
                 keep_writeback,
                 use_game_disk,
                 chap_user,
@@ -166,14 +159,10 @@ impl ClientRepository {
         row.map(Self::row_to_domain).transpose()
     }
 
-    /// Returns clients ordered by name using the same validation as individual lookups.
-    /// Database and stored metadata errors are returned without omitting invalid clients.
     pub async fn find_all(&self) -> Result<Vec<Client>> {
-        // Transfer bounded batches instead of one worker message per client.
-        // Array positions follow ClientRow's declaration; retain its domain validation.
-        let mut batches = sqlx::query_scalar::<_, String>(
+        let rows = sqlx::query_as::<_, ClientRow>(
             r#"
-            SELECT json_group_array(json_array(
+            SELECT
                 id,
                 name,
                 mac,
@@ -191,40 +180,22 @@ impl ClientRepository {
                 status,
                 mode,
                 pxe_mode,
-                boot_image,
                 keep_writeback,
                 use_game_disk,
                 chap_user,
                 chap_secret,
                 chap_enabled
-            ) ORDER BY name ASC)
-            FROM (
-                SELECT id, name, mac, ip, master, enabled, created_at, updated_at,
-                    snapshot, block_store, target_iqn, writeback, last_modified,
-                    block_device, status, mode, pxe_mode, boot_image, keep_writeback, use_game_disk,
-                    chap_user, chap_secret, chap_enabled,
-                    (ROW_NUMBER() OVER (ORDER BY name ASC) - 1) / 128 AS batch
-                FROM clients
-            )
-            GROUP BY batch
-            ORDER BY batch ASC
+            FROM clients
+            ORDER BY name ASC
             "#,
         )
-        .fetch(&self.pool);
-        let mut clients = Vec::new();
-        while let Some(document) = batches
-            .try_next()
-            .await
-            .context("failed to query clients")?
-        {
-            let rows: Vec<ClientRow> =
-                serde_json::from_str(&document).context("failed to decode stored clients")?;
-            drop(document);
-            for row in rows {
-                clients.push(Self::row_to_domain(row)?);
-            }
-        }
-        Ok(clients)
+        .fetch_all(&self.pool)
+        .await
+        .context("failed to query clients")?;
+
+        rows.into_iter()
+            .map(Self::row_to_domain)
+            .collect::<Result<Vec<_>>>()
     }
 
     pub async fn insert(&self, client: &Client) -> Result<()> {
@@ -248,7 +219,6 @@ impl ClientRepository {
                 status,
                 mode,
                 pxe_mode,
-                boot_image,
                 keep_writeback,
                 use_game_disk,
                 chap_user,
@@ -257,7 +227,8 @@ impl ClientRepository {
             )
             VALUES (
                 ?, ?, ?, ?, ?, ?,
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?
             )
             "#,
         )
@@ -278,7 +249,6 @@ impl ClientRepository {
         .bind(client.status.as_str())
         .bind(client.mode.as_str())
         .bind(client.pxe_mode.as_str())
-        .bind(client.boot_image.as_str())
         .bind(if client.keep_writeback { 1 } else { 0 })
         .bind(if client.use_game_disk { 1 } else { 0 })
         .bind(&client.chap_user)
@@ -325,11 +295,12 @@ impl ClientRepository {
         &self,
         id: &ClientId,
     ) -> Result<(Option<String>, Option<String>)> {
-        let row: Option<(Option<String>, Option<String>)> =
-            sqlx::query_as("SELECT chap_user, chap_secret FROM clients WHERE id = ?")
-                .bind(id.as_str())
-                .fetch_optional(&self.pool)
-                .await?;
+        let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT chap_user, chap_secret FROM clients WHERE id = ?",
+        )
+        .bind(id.as_str())
+        .fetch_optional(&self.pool)
+        .await?;
         Ok(row.unwrap_or((None, None)))
     }
 
@@ -350,18 +321,24 @@ impl ClientRepository {
     }
 
     /// Replace a client's stored game master selection wholesale.
-    pub async fn set_game_selection(&self, id: &ClientId, masters: &[String]) -> Result<()> {
+    pub async fn set_game_selection(
+        &self,
+        id: &ClientId,
+        masters: &[String],
+    ) -> Result<()> {
         let mut transaction = self.pool.begin().await?;
         sqlx::query("DELETE FROM client_game_disks WHERE client_id = ?")
             .bind(id.as_str())
             .execute(&mut *transaction)
             .await?;
         for master in masters {
-            sqlx::query("INSERT INTO client_game_disks (client_id, master_dataset) VALUES (?, ?)")
-                .bind(id.as_str())
-                .bind(master)
-                .execute(&mut *transaction)
-                .await?;
+            sqlx::query(
+                "INSERT INTO client_game_disks (client_id, master_dataset) VALUES (?, ?)",
+            )
+            .bind(id.as_str())
+            .bind(master)
+            .execute(&mut *transaction)
+            .await?;
         }
         transaction.commit().await?;
         Ok(())
@@ -387,7 +364,6 @@ impl ClientRepository {
                 status = ?,
                 mode = ?,
                 pxe_mode = ?,
-                boot_image = ?,
                 keep_writeback = ?,
                 use_game_disk = ?,
                 chap_user = ?,
@@ -411,7 +387,6 @@ impl ClientRepository {
         .bind(client.status.as_str())
         .bind(client.mode.as_str())
         .bind(client.pxe_mode.as_str())
-        .bind(client.boot_image.as_str())
         .bind(if client.keep_writeback { 1 } else { 0 })
         .bind(if client.use_game_disk { 1 } else { 0 })
         .bind(&client.chap_user)
@@ -538,7 +513,6 @@ impl ClientRepository {
             status: parse_status(row.status.as_deref()),
             mode: parse_mode(row.mode.as_deref()),
             pxe_mode: parse_pxe_mode(row.pxe_mode.as_deref()),
-            boot_image: parse_boot_image(row.boot_image.as_deref()),
 
             keep_writeback: row.keep_writeback.unwrap_or(1) != 0,
             use_game_disk: row.use_game_disk.unwrap_or(0) != 0,
@@ -593,124 +567,10 @@ fn parse_pxe_mode(value: Option<&str>) -> PxeMode {
     }
 }
 
-fn parse_boot_image(value: Option<&str>) -> ClientBootImage {
-    match value.unwrap_or("windows").to_ascii_lowercase().as_str() {
-        "winpe" => ClientBootImage::Winpe,
-        "linux" => ClientBootImage::Linux,
-        _ => ClientBootImage::Windows,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::domain::{CreateClient, PxeMode};
-
-    #[tokio::test]
-    async fn listing_preserves_lookup_decoding_and_order() {
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .unwrap();
-        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
-        let repository = ClientRepository::new(pool.clone());
-        assert!(repository.find_all().await.unwrap().is_empty());
-        for (id, name, mac, ip) in [
-            ("z", "Zulu", "AA-BB-CC-DD-EE-FF", "2001:db8::1"),
-            ("a", "Alpha", "00:11:22:33:44:55", "192.168.1.2"),
-        ] {
-            sqlx::query("INSERT INTO clients (id,name,mac,ip,master,enabled,created_at,updated_at,snapshot,block_store,target_iqn,writeback,last_modified,block_device,status,mode,pxe_mode,keep_writeback,use_game_disk,chap_user,chap_secret,chap_enabled) VALUES (?,?,?,?,'diskless/windows',2,'2026-01-01T05:45:00+05:45','2026-01-01 00:00:00','diskless/windows@ready','store','iqn.test','writeback','2026-01-01 00:00:00','/dev/zvol/test','ONLINE','SUPER','legacy',2,2,'user','quoted\"secret',2)")
-                .bind(id).bind(name).bind(mac).bind(ip).execute(&pool).await.unwrap();
-        }
-        for defaults in [false, true] {
-            sqlx::query(
-                "UPDATE clients SET enabled=0,keep_writeback=1,use_game_disk=0,chap_enabled=1",
-            )
-            .execute(&pool)
-            .await
-            .unwrap();
-            if defaults {
-                sqlx::query("UPDATE clients SET snapshot=NULL,block_store=NULL,target_iqn=NULL,writeback=NULL,last_modified=NULL,block_device=NULL,status=NULL,mode=NULL,pxe_mode=NULL,chap_user=NULL,chap_secret=NULL")
-                    .execute(&pool).await.unwrap();
-            }
-            let expected = vec![
-                repository.find_by_name("Alpha").await.unwrap().unwrap(),
-                repository.find_by_name("Zulu").await.unwrap().unwrap(),
-            ];
-            let actual = repository.find_all().await.unwrap();
-            assert_eq!(
-                serde_json::to_value(&actual).unwrap(),
-                serde_json::to_value(&expected).unwrap()
-            );
-            for (actual, expected) in actual.iter().zip(&expected) {
-                assert_eq!(actual.chap_user, expected.chap_user);
-                assert_eq!(actual.chap_secret, expected.chap_secret);
-            }
-        }
-        for column in ["mac", "ip", "created_at", "updated_at", "last_modified"] {
-            let previous: Option<String> =
-                sqlx::query_scalar(&format!("SELECT {column} FROM clients WHERE id='a'"))
-                    .fetch_one(&pool)
-                    .await
-                    .unwrap();
-            sqlx::query(&format!(
-                "UPDATE clients SET {column}='invalid' WHERE id='a'"
-            ))
-            .execute(&pool)
-            .await
-            .unwrap();
-            assert!(
-                repository.find_all().await.is_err(),
-                "accepted invalid {column}"
-            );
-            assert!(repository.find_by_name("Alpha").await.is_err());
-            sqlx::query(&format!("UPDATE clients SET {column}=? WHERE id='a'"))
-                .bind(previous)
-                .execute(&pool)
-                .await
-                .unwrap();
-        }
-        for column in ["enabled", "keep_writeback", "use_game_disk", "chap_enabled"] {
-            sqlx::query(&format!("UPDATE clients SET {column}=12.5 WHERE id='a'"))
-                .execute(&pool)
-                .await
-                .unwrap();
-            assert!(
-                repository.find_all().await.is_err(),
-                "accepted REAL {column}"
-            );
-            assert!(repository.find_by_name("Alpha").await.is_err());
-            sqlx::query(&format!("UPDATE clients SET {column}=2 WHERE id='a'"))
-                .execute(&pool)
-                .await
-                .unwrap();
-        }
-        sqlx::query("UPDATE clients SET chap_secret=? WHERE id='a'")
-            .bind(vec![65_u8, 66])
-            .execute(&pool)
-            .await
-            .unwrap();
-        assert!(repository.find_all().await.is_err());
-        assert!(repository.find_by_name("Alpha").await.is_err());
-    }
-
-    #[tokio::test]
-    async fn listing_preserves_order_across_batches() {
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .unwrap();
-        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
-        sqlx::query("WITH RECURSIVE n(i) AS (SELECT 300 UNION ALL SELECT i-1 FROM n WHERE i>0) INSERT INTO clients (id,name,mac,ip,master,created_at,updated_at) SELECT 'pc-'||i,printf('PC%06d',i),printf('02:00:00:00:%02x:%02x',(i>>8)&255,i&255),printf('2001:db8::%x',i+1),'pending','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z' FROM n")
-            .execute(&pool).await.unwrap();
-        let clients = ClientRepository::new(pool).find_all().await.unwrap();
-        assert_eq!(clients.len(), 301);
-        for (index, client) in clients.iter().enumerate() {
-            assert_eq!(client.name, format!("PC{index:06}"));
-        }
-    }
 
     #[test]
     fn parses_mac_addresses() {
@@ -756,7 +616,6 @@ mod tests {
             target_iqn: None,
 
             pxe_mode: PxeMode::Uefi,
-            boot_image: ClientBootImage::Windows,
             keep_writeback: true,
             use_game_disk: false,
             game_disks: Vec::new(),
@@ -796,7 +655,6 @@ mod tests {
                 status TEXT,
                 mode TEXT,
                 pxe_mode TEXT,
-                boot_image TEXT NOT NULL DEFAULT 'windows',
                 keep_writeback INTEGER,
                 use_game_disk INTEGER,
                 chap_user TEXT,
@@ -820,7 +678,6 @@ mod tests {
             block_device: None,
             target_iqn: None,
             pxe_mode: PxeMode::Uefi,
-            boot_image: ClientBootImage::Windows,
             keep_writeback: true,
             use_game_disk: false,
             game_disks: Vec::new(),

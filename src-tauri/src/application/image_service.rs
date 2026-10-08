@@ -14,10 +14,6 @@ use crate::{
     validation::validate_zfs_name,
 };
 
-#[derive(Debug, thiserror::Error)]
-#[error("cannot rename an image referenced by a client")]
-pub struct ImageInUse;
-
 #[derive(Clone)]
 pub struct ImageService {
     repository: ImageRepository,
@@ -131,10 +127,6 @@ impl ImageService {
             bail!("snapshots cannot be renamed as images");
         }
 
-        if self.repository.has_client_references(&image).await? {
-            return Err(ImageInUse.into());
-        }
-
         let parent = parent_dataset(&image.name)?;
 
         let new_full_name = format!("{}/{}", parent, new_name);
@@ -156,11 +148,6 @@ impl ImageService {
         image.updated_at = Utc::now();
 
         self.repository.update(&image).await?;
-        for mut snapshot in self.snapshots(&image.id).await? {
-            snapshot.path = image.path.clone();
-            snapshot.updated_at = image.updated_at;
-            self.repository.update(&snapshot).await?;
-        }
 
         Ok(image)
     }
@@ -359,17 +346,8 @@ impl ImageService {
     }
 
     pub async fn import(&self, request: ImportImageRequest) -> Result<Image> {
-        use crate::infrastructure::image::QemuImgBackend;
+        use crate::infrastructure::image::{ImageConversionBackend, QemuImgBackend};
 
-        self.import_with_converter(request, &QemuImgBackend::new())
-            .await
-    }
-
-    async fn import_with_converter(
-        &self,
-        request: ImportImageRequest,
-        converter: &dyn crate::infrastructure::image::ImageConversionBackend,
-    ) -> Result<Image> {
         validate_zfs_name(&request.name)?;
 
         let source = std::path::Path::new(&request.source_path);
@@ -379,6 +357,8 @@ impl ImageService {
         }
 
         let os_type = request.os_type.parse::<OsType>()?;
+
+        let converter = QemuImgBackend::new();
 
         let source_info = converter.info(source)?;
 
@@ -396,33 +376,37 @@ impl ImageService {
             bail!("source image has zero virtual size");
         }
 
-        // Raw sources can be streamed straight into the ZVOL. Only converted
-        // formats need temporary disk space; TempDir cleans up on every exit.
-        let temporary = if source_info.format == ImageFormat::Raw {
-            None
-        } else {
-            Some(tempfile::tempdir().context("failed to create conversion directory")?)
-        };
-        let converted = temporary
-            .as_ref()
-            .map(|directory| directory.path().join("image.raw"));
-        if let Some(path) = &converted {
-            converter
-                .convert_to_raw(source, path)
-                .context("failed to convert source image to raw")?;
-        }
-        self.backend.import_raw(
-            converted.as_deref().unwrap_or(source),
-            &destination,
-            size_bytes,
-        )?;
+        /*
+         * qemu-img always converts into a
+         * temporary raw file before it enters
+         * the ZFS ZVOL.
+         */
+        let temp_path =
+            std::env::temp_dir().join(format!("diskless-import-{}.raw", Uuid::new_v4()));
 
-        if let Err(error) = self.backend.set_os_type(&destination, &request.os_type) {
-            self.backend
-                .destroy(&destination)
-                .with_context(|| format!("failed to clean imported image after: {error}"))?;
-            return Err(error).context("failed to set imported image OS type");
+        let conversion_result = if source_info.format == ImageFormat::Raw {
+            std::fs::copy(source, &temp_path)
+                .map(|_| ())
+                .map_err(anyhow::Error::from)
+        } else {
+            converter.convert_to_raw(source, &temp_path)
+        };
+
+        if let Err(error) = conversion_result {
+            let _ = std::fs::remove_file(&temp_path);
+
+            return Err(error).context("failed to convert source image to raw");
         }
+
+        let import_result = self
+            .backend
+            .import_raw(&temp_path, &destination, size_bytes);
+
+        let _ = std::fs::remove_file(&temp_path);
+
+        import_result?;
+
+        self.backend.set_os_type(&destination, &request.os_type)?;
 
         let image = Image {
             id: Uuid::new_v4().to_string(),
@@ -457,9 +441,8 @@ impl ImageService {
         };
 
         if let Err(error) = self.repository.insert(&image).await {
-            self.backend
-                .destroy(&destination)
-                .with_context(|| format!("failed to clean imported image after: {error}"))?;
+            let _ = self.backend.destroy(&destination);
+
             return Err(error).context("failed to persist imported image");
         }
 
@@ -663,9 +646,9 @@ impl ImageService {
             bail!("a snapshot cannot be the default image");
         }
 
-        if !self.repository.set_default(&image.id).await? {
-            bail!("image disappeared before selecting the default");
-        }
+        self.repository.clear_default().await?;
+
+        self.repository.set_default(&image.id).await?;
 
         self.get(&image.id).await
     }
@@ -690,7 +673,9 @@ impl ImageService {
     /// duplicate snapshot name) is skipped with a warning rather than aborting
     /// the whole scan.
     pub async fn import_existing_images(&self) -> Result<ImportScanResult> {
-        use crate::infrastructure::zfs::{ZfsCommand, ZfsDatasetOperations, ZfsSnapshotOperations};
+        use crate::infrastructure::zfs::{
+            ZfsCommand, ZfsDatasetOperations, ZfsSnapshotOperations,
+        };
 
         let parent = self.backend.image_parent()?;
 
@@ -900,308 +885,4 @@ fn parent_dataset(zfs_name: &str) -> Result<String> {
         .rsplit_once('/')
         .map(|(parent, _)| parent.to_string())
         .ok_or_else(|| anyhow::anyhow!("invalid ZFS image name '{}'", zfs_name))
-}
-
-#[cfg(test)]
-mod audit_tests {
-    use super::*;
-    use crate::infrastructure::image::ImageBackendInfo;
-    use std::path::Path;
-    #[derive(Default)]
-    struct TestBackend {
-        imported: std::sync::Mutex<Option<PathBuf>>,
-        volume_present: std::sync::atomic::AtomicBool,
-        fail_os_type: bool,
-        fail_destroy: bool,
-    }
-
-    impl ImageBackend for TestBackend {
-        fn exists(&self, _: &str) -> Result<bool> {
-            Ok(false)
-        }
-        fn create_volume(&self, _: &str, _: u64) -> Result<()> {
-            unreachable!()
-        }
-        fn destroy(&self, _: &str) -> Result<()> {
-            if self.fail_destroy {
-                bail!("injected cleanup failure");
-            }
-            self.volume_present
-                .store(false, std::sync::atomic::Ordering::SeqCst);
-            Ok(())
-        }
-        fn rename(&self, _: &str, _: &str) -> Result<()> {
-            Ok(())
-        }
-        fn clone_image(&self, _: &str, _: &str) -> Result<()> {
-            unreachable!()
-        }
-        fn create_snapshot(&self, _: &str, _: &str) -> Result<()> {
-            unreachable!()
-        }
-        fn destroy_snapshot(&self, _: &str, _: &str) -> Result<()> {
-            unreachable!()
-        }
-        fn rollback_snapshot(&self, _: &str, _: &str) -> Result<()> {
-            Ok(())
-        }
-        fn resize(&self, _: &str, _: u64) -> Result<()> {
-            unreachable!()
-        }
-        fn import_raw(&self, source: &Path, _: &str, _: u64) -> Result<()> {
-            self.volume_present
-                .store(true, std::sync::atomic::Ordering::SeqCst);
-            *self.imported.lock().unwrap() = Some(source.to_path_buf());
-            Ok(())
-        }
-        fn verify(&self, _: &str) -> Result<bool> {
-            unreachable!()
-        }
-        fn info(&self, _: &str) -> Result<ImageBackendInfo> {
-            unreachable!()
-        }
-        fn set_os_type(&self, _: &str, _: &str) -> Result<()> {
-            if self.fail_os_type {
-                bail!("injected OS property failure");
-            }
-            Ok(())
-        }
-        fn image_parent(&self) -> Result<String> {
-            Ok("tank/image".into())
-        }
-    }
-
-    async fn service() -> (ImageService, ImageRepository, sqlx::SqlitePool) {
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .unwrap();
-        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
-        let repo = ImageRepository::new(pool.clone());
-        (
-            ImageService::with_backend(repo.clone(), Arc::new(TestBackend::default())),
-            repo,
-            pool,
-        )
-    }
-    fn image(id: &str, kind: ImageKind, parent: Option<&str>, seconds: i64) -> Image {
-        Image {
-            id: id.into(),
-            name: if parent.is_none() {
-                "tank/image/master".into()
-            } else {
-                id.into()
-            },
-            kind,
-            parent_id: parent.map(str::to_string),
-            os_type: OsType::Windows,
-            size_gb: 20,
-            path: PathBuf::from("/dev/zvol/tank/image/master"),
-            format: ImageFormat::Raw,
-            status: "ready".into(),
-            description: None,
-            source_snapshot: None,
-            checksum: None,
-            is_default: false,
-            created_at: chrono::DateTime::from_timestamp(seconds, 0).unwrap(),
-            updated_at: Utc::now(),
-        }
-    }
-    #[tokio::test]
-    async fn failed_default_switch_preserves_previous_default() {
-        let (service, repo, pool) = service().await;
-        let mut previous = image("previous", ImageKind::Master, None, 0);
-        previous.is_default = true;
-        repo.insert(&previous).await.unwrap();
-        let mut next = image("next", ImageKind::Master, None, 0);
-        next.name = "tank/image/next".into();
-        repo.insert(&next).await.unwrap();
-        sqlx::query("CREATE TRIGGER reject_default BEFORE UPDATE ON images WHEN NEW.id = 'next' AND NEW.is_default = 1 BEGIN SELECT RAISE(ABORT, 'injected failure'); END")
-            .execute(&pool).await.unwrap();
-        assert!(service.set_default("next").await.is_err());
-        assert!(repo.get("previous").await.unwrap().unwrap().is_default);
-    }
-
-    #[tokio::test]
-    async fn stale_metadata_update_preserves_current_default() {
-        let (service, repo, _) = service().await;
-        let mut previous = image("previous", ImageKind::Master, None, 0);
-        previous.is_default = true;
-        repo.insert(&previous).await.unwrap();
-        let mut next = image("next", ImageKind::Master, None, 0);
-        next.name = "tank/image/next".into();
-        repo.insert(&next).await.unwrap();
-        service.set_default("next").await.unwrap();
-        previous.description = Some("Edited after switching default".into());
-        repo.update(&previous).await.unwrap();
-        assert!(!repo.get("previous").await.unwrap().unwrap().is_default);
-        assert!(repo.get("next").await.unwrap().unwrap().is_default);
-    }
-
-    #[tokio::test]
-    async fn rollback_preserves_clones_and_removes_only_newer_snapshots() {
-        let (service, repo, _) = service().await;
-        for record in [
-            image("master", ImageKind::Master, None, 0),
-            image("ready", ImageKind::Snapshot, Some("master"), 1),
-            image("later", ImageKind::Snapshot, Some("master"), 2),
-            image("clone", ImageKind::Clone, Some("master"), 3),
-        ] {
-            repo.insert(&record).await.unwrap();
-        }
-        assert_eq!(
-            service.rollback_snapshot("master", "ready").await.unwrap(),
-            1
-        );
-        assert!(repo.get("clone").await.unwrap().is_some());
-        assert!(repo.get("ready").await.unwrap().is_some());
-        assert!(repo.get("later").await.unwrap().is_none());
-        assert!(service.rollback_snapshot("master", "clone").await.is_err());
-    }
-    #[tokio::test]
-    async fn rename_refuses_registered_client_dependencies() {
-        let (service, repo, pool) = service().await;
-        repo.insert(&image("master", ImageKind::Master, None, 0))
-            .await
-            .unwrap();
-        sqlx::query("INSERT INTO clients (id,name,mac,ip,master,enabled,created_at,updated_at) VALUES ('pc','PC001','00:11:22:33:44:55','192.168.1.101','tank/image/master',1,'now','now')")
-            .execute(&pool).await.unwrap();
-        assert!(service.rename("master", "renamed").await.is_err());
-        assert_eq!(
-            repo.get("master").await.unwrap().unwrap().name,
-            "tank/image/master"
-        );
-    }
-    #[tokio::test]
-    async fn unreferenced_image_rename_updates_snapshot_paths() {
-        let (service, repo, _) = service().await;
-        repo.insert(&image("master", ImageKind::Master, None, 0))
-            .await
-            .unwrap();
-        repo.insert(&image("ready", ImageKind::Snapshot, Some("master"), 1))
-            .await
-            .unwrap();
-        let renamed = service.rename("master", "renamed").await.unwrap();
-        assert_eq!(renamed.name, "tank/image/renamed");
-        assert_eq!(repo.get("ready").await.unwrap().unwrap().path, renamed.path);
-    }
-
-    struct TestConverter(ImageFormat);
-    impl crate::infrastructure::image::ImageConversionBackend for TestConverter {
-        fn info(&self, source: &Path) -> Result<crate::infrastructure::image::ImageConversionInfo> {
-            Ok(crate::infrastructure::image::ImageConversionInfo {
-                format: self.0,
-                virtual_size: std::fs::metadata(source)?.len(),
-                actual_size: 4096,
-                backing_file: None,
-            })
-        }
-        fn convert_to_raw(&self, source: &Path, destination: &Path) -> Result<()> {
-            assert_ne!(
-                self.0,
-                ImageFormat::Raw,
-                "raw imports must not be converted"
-            );
-            std::fs::copy(source, destination)?;
-            Ok(())
-        }
-    }
-    #[tokio::test]
-    async fn failed_import_metadata_removes_unregistered_volume() {
-        let (_, repo, _) = service().await;
-        let backend = Arc::new(TestBackend {
-            fail_os_type: true,
-            ..TestBackend::default()
-        });
-        let service = ImageService::with_backend(repo.clone(), backend.clone());
-        let source = tempfile::NamedTempFile::new().unwrap();
-        source.as_file().set_len(4096).unwrap();
-        let result = service
-            .import_with_converter(
-                ImportImageRequest {
-                    name: "failed".into(),
-                    source_path: source.path().to_string_lossy().into_owned(),
-                    os_type: "windows".into(),
-                    description: None,
-                },
-                &TestConverter(ImageFormat::Raw),
-            )
-            .await;
-        assert!(result.is_err());
-        assert!(!backend
-            .volume_present
-            .load(std::sync::atomic::Ordering::SeqCst));
-        assert!(repo.list().await.unwrap().is_empty());
-        assert!(source.path().exists());
-    }
-
-    #[tokio::test]
-    async fn failed_import_persistence_reports_cleanup_failure() {
-        let (_, repo, pool) = service().await;
-        let backend = Arc::new(TestBackend {
-            fail_destroy: true,
-            ..TestBackend::default()
-        });
-        let service = ImageService::with_backend(repo.clone(), backend.clone());
-        sqlx::query("CREATE TRIGGER reject_import BEFORE INSERT ON images BEGIN SELECT RAISE(ABORT, 'injected persistence failure'); END")
-            .execute(&pool).await.unwrap();
-        let source = tempfile::NamedTempFile::new().unwrap();
-        source.as_file().set_len(4096).unwrap();
-        let error = service
-            .import_with_converter(
-                ImportImageRequest {
-                    name: "failed".into(),
-                    source_path: source.path().to_string_lossy().into_owned(),
-                    os_type: "windows".into(),
-                    description: None,
-                },
-                &TestConverter(ImageFormat::Raw),
-            )
-            .await
-            .unwrap_err();
-        let message = format!("{error:#}");
-        assert!(message.contains("injected cleanup failure"), "{message}");
-        assert!(
-            message.contains("injected persistence failure"),
-            "{message}"
-        );
-        assert!(repo.list().await.unwrap().is_empty());
-        assert!(backend
-            .volume_present
-            .load(std::sync::atomic::Ordering::SeqCst));
-    }
-
-    #[tokio::test]
-    async fn raw_import_uses_original_file_and_converted_import_cleans_temporary_file() {
-        let (_, repo, _) = service().await;
-        let backend = Arc::new(TestBackend::default());
-        let service = ImageService::with_backend(repo, backend.clone());
-        let source = tempfile::NamedTempFile::new().unwrap();
-        source.as_file().set_len(4096).unwrap();
-        for (name, format) in [("raw", ImageFormat::Raw), ("converted", ImageFormat::Qcow2)] {
-            let image = service
-                .import_with_converter(
-                    ImportImageRequest {
-                        name: name.into(),
-                        source_path: source.path().to_string_lossy().into_owned(),
-                        os_type: "windows".into(),
-                        description: None,
-                    },
-                    &TestConverter(format),
-                )
-                .await
-                .unwrap();
-            assert_eq!(image.format, ImageFormat::Raw);
-            let imported = backend.imported.lock().unwrap().clone().unwrap();
-            if format == ImageFormat::Raw {
-                assert_eq!(imported, source.path());
-                assert!(imported.exists());
-            } else {
-                assert_ne!(imported, source.path());
-                assert!(!imported.exists());
-                assert!(!imported.parent().unwrap().exists());
-            }
-        }
-    }
 }

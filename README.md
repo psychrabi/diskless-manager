@@ -160,27 +160,6 @@ control. A shell export does not configure a systemd service.
 
 ## Deployment
 
-### Linux release bundle
-
-CI and tagged releases build the Rust server and React browser UI into
-`diskless-manager-linux-x86_64.tar.gz`. To create the same bundle locally:
-
-```bash
-bun run build
-cargo build --locked --release --manifest-path src-tauri/Cargo.toml
-sh packaging/bundle.sh
-```
-
-Extract the archive, enter its `diskless-manager` directory, and run
-`sudo ./install.sh`. It contains the server binary, `dist/`, the systemd unit,
-and installer. ZFS packages may require your distribution's ZFS repository.
-The supplied unit listens on localhost; use the LAN override below when needed.
-
-Image renaming is refused while registered clients reference the image. Client
-deletion retains the record if boot storage or game clone cleanup fails, allowing
-an administrator to resolve the failure and retry. Snapshot rollback removes
-only newer snapshot records, preserving clone records.
-
 ### LAN access
 
 To serve the management UI to other computers:
@@ -280,39 +259,10 @@ bun run build
 cargo test --locked --manifest-path src-tauri/Cargo.toml
 ```
 
-The image-listing benchmark measures the master-list handler, including SQLite reads
-and JSON serialization, at 250, 2,500, and 25,000 records. Each sample uses a fresh
-in-memory database; fixture construction is excluded from timing. Run it alone,
-without concurrent tests or benchmarks:
-
-```bash
-cargo bench --locked --manifest-path src-tauri/Cargo.toml --bench image_listing
-```
-
-The client-reference benchmark measures matching and absent image references at
-100, 10,000, and 100,000 clients. Matching fixtures reference the image from every
-client, measuring early-match behavior; absent fixtures require a full scan.
-Each sample creates a fresh database outside the timed query:
-
-```bash
-cargo bench --locked --manifest-path src-tauri/Cargo.toml --bench image_references
-```
-
-The client-listing benchmark measures repository decoding and domain validation
-for 100, 1,000, and 10,000 clients, using a fresh database for each sample:
-
-```bash
-cargo bench --locked --manifest-path src-tauri/Cargo.toml --bench client_listing
-```
-
-It reports median/minimum/maximum milliseconds across eleven independent samples.
-This measures metadata listing, not ZFS or iSCSI throughput. The repository has no
-Python bindings or prediction-error metrics.
-
 Rust WebSocket tests bind local sockets. The DHCP syntax integration test is
 ignored by default and requires the ISC `dhcpd` binary.
 
-`bun run lint` excludes build outputs and local agent configuration. Other untracked
+`bun run lint` scans the whole checkout; untracked release bundles or local skill
 scripts can introduce unrelated errors. The source-scoped command above checks
 the frontend code.
 

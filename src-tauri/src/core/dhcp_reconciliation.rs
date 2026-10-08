@@ -94,9 +94,7 @@ fn dhcp_host_exists(content: &str, client_name: &str) -> bool {
 }
 
 pub async fn inspect_dhcp(state: &AppState) -> anyhow::Result<DhcpReconciliationSummary> {
-    let clients = ClientRepository::new(state.db_pool.clone())
-        .find_all()
-        .await?;
+    let clients = ClientRepository::new(state.db_pool.clone()).find_all().await?;
     let content = tokio::fs::read_to_string(DHCP_CLIENTS_PATH)
         .await
         .unwrap_or_default();

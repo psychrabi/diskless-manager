@@ -145,15 +145,15 @@ fn build_storage_spec(
                 .map_err(|error| format!("Invalid master dataset: {error}"))?;
 
             Ok(ClientStorageSpec {
-                client_id: client_id.to_string(),
-                source: StorageSource::ExistingVolume(master.to_string()),
-                dataset: master.to_string(),
-                backstore,
-                target_iqn,
-                lun: 0,
-                use_game_disk,
-                game_disks: Vec::new(),
-                chap: None,
+            client_id: client_id.to_string(),
+            source: StorageSource::ExistingVolume(master.to_string()),
+            dataset: master.to_string(),
+            backstore,
+            target_iqn,
+            lun: 0,
+            use_game_disk,
+            game_disks: Vec::new(),
+            chap: None,
             })
         }
     }
@@ -232,15 +232,18 @@ fn resolve_effective_game_selection(
     use_game_disk: bool,
     stored_or_requested: &[String],
 ) -> anyhow::Result<Vec<String>> {
-    let discovered = crate::application::storage_service::StorageService::discover_game_masters()?
-        .into_iter()
-        .map(|master| master.dataset)
-        .collect::<Vec<_>>();
-    Ok(crate::application::storage_service::resolve_game_selection(
-        use_game_disk,
-        stored_or_requested,
-        &discovered,
-    ))
+    let discovered =
+        crate::application::storage_service::StorageService::discover_game_masters()?
+            .into_iter()
+            .map(|master| master.dataset)
+            .collect::<Vec<_>>();
+    Ok(
+        crate::application::storage_service::resolve_game_selection(
+            use_game_disk,
+            stored_or_requested,
+            &discovered,
+        ),
+    )
 }
 
 /// (Re)publish a provisioned client's static boot menu, embedding CHAP
@@ -248,7 +251,9 @@ fn resolve_effective_game_selection(
 /// boot through the enrollment redirect path.
 async fn publish_boot_menu(
     settings: &crate::core::config::Settings,
-    client: &Client,
+    client_name: &str,
+    mac: &str,
+    ip: &str,
     target_iqn: &str,
     chap: Option<&crate::infrastructure::iscsi::ChapCredentials>,
 ) {
@@ -261,31 +266,26 @@ async fn publish_boot_menu(
         }
     };
     let reservation = crate::infrastructure::dhcp::BootReservation {
-        client_name: client.name.to_string(),
-        mac: client.mac.to_string(),
-        ip: client.ip.to_string(),
+        client_name: client_name.to_string(),
+        mac: mac.to_string(),
+        ip: ip.to_string(),
         target_iqn: target_iqn.to_string(),
-        boot_image: client
-            .boot_image
-            .as_deref()
-            .unwrap_or("windows")
-            .parse()
-            .unwrap_or_default(),
         server_ip,
         chap: chap.cloned(),
     };
-    if let Err(error) = crate::infrastructure::dhcp::publish_client_ipxe(&reservation).await {
+    if let Err(error) =
+        crate::infrastructure::dhcp::publish_client_ipxe(&reservation).await
+    {
         tracing::warn!(
             "Failed to regenerate boot menu for client '{}': {}",
-            client.name,
+            client_name,
             error
         );
     }
 }
 
 /// Replace a client's stored game master selection wholesale.
-async fn persist_game_selection(
-    pool: &sqlx::SqlitePool,
+async fn persist_game_selection(    pool: &sqlx::SqlitePool,
     client_id: &str,
     selection: &[String],
 ) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
@@ -312,20 +312,22 @@ async fn persist_game_selection(
             )
         })?;
     for master in selection {
-        sqlx::query("INSERT INTO client_game_disks (client_id, master_dataset) VALUES (?, ?)")
-            .bind(client_id)
-            .bind(master)
-            .execute(&mut *transaction)
-            .await
-            .map_err(|error| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        status: 500,
-                        error: error.to_string(),
-                    }),
-                )
-            })?;
+        sqlx::query(
+            "INSERT INTO client_game_disks (client_id, master_dataset) VALUES (?, ?)",
+        )
+        .bind(client_id)
+        .bind(master)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    status: 500,
+                    error: error.to_string(),
+                }),
+            )
+        })?;
     }
     transaction.commit().await.map_err(|error| {
         (
@@ -483,16 +485,15 @@ pub async fn create_client(
     let chap_enabled = request.chap_enabled.unwrap_or(true);
     storage_spec.chap = if chap_enabled {
         Some(
-            crate::infrastructure::iscsi::ChapCredentials::generate(&request.name).map_err(
-                |error| {
+            crate::infrastructure::iscsi::ChapCredentials::generate(&request.name)
+                .map_err(|error| {
                     error!(
                         "Failed to generate CHAP credentials for client '{}': {}",
                         request.name, error
                     );
 
                     StatusCode::INTERNAL_SERVER_ERROR
-                },
-            )?,
+                })?,
         )
     } else {
         None
@@ -513,15 +514,6 @@ pub async fn create_client(
         block_device: None,
         target_iqn: None,
         pxe_mode: crate::domain::PxeMode::Uefi,
-        boot_image: request
-            .boot_image
-            .as_deref()
-            .unwrap_or("windows")
-            .parse()
-            .map_err(|error| {
-                error!("Invalid client boot image: {}", error);
-                StatusCode::BAD_REQUEST
-            })?,
         keep_writeback: request.keep_writeback.unwrap_or(true),
         use_game_disk: request.use_game_disk.unwrap_or(false),
         game_disks: request.game_disks.clone().unwrap_or_default(),
@@ -580,17 +572,6 @@ pub async fn update_client(
                 Json(ErrorResponse {
                     status: StatusCode::BAD_REQUEST.as_u16(),
                     error: "Invalid MAC address".to_string(),
-                }),
-            ));
-        }
-    }
-    if let Some(boot_image) = &request.boot_image {
-        if !matches!(boot_image.as_str(), "windows" | "winpe" | "linux") {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    status: 400,
-                    error: format!("Invalid client boot image: {boot_image}"),
                 }),
             ));
         }
@@ -999,14 +980,14 @@ pub async fn update_client(
                         .storage
                         .validate_existing_dataset(&master)
                         .map_err(|error| {
-                            (
-                                StatusCode::BAD_REQUEST,
-                                Json(ErrorResponse {
-                                    status: StatusCode::BAD_REQUEST.as_u16(),
-                                    error: error.to_string(),
-                                }),
-                            )
-                        })?;
+                        (
+                            StatusCode::BAD_REQUEST,
+                            Json(ErrorResponse {
+                                status: StatusCode::BAD_REQUEST.as_u16(),
+                                error: error.to_string(),
+                            }),
+                        )
+                    })?;
 
                     let current_storage = storage_from_client(&settings, &existing_client)
                         .map_err(|error| {
@@ -1058,7 +1039,10 @@ pub async fn update_client(
                                 StatusCode::INTERNAL_SERVER_ERROR,
                                 Json(ErrorResponse {
                                     status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                                    error: format!("Failed to resolve CHAP credentials: {}", error),
+                                    error: format!(
+                                        "Failed to resolve CHAP credentials: {}",
+                                        error
+                                    ),
                                 }),
                             )
                         })?,
@@ -1212,7 +1196,10 @@ pub async fn update_client(
                             StatusCode::INTERNAL_SERVER_ERROR,
                             Json(ErrorResponse {
                                 status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                                error: format!("Failed to resolve CHAP credentials: {}", error),
+                                error: format!(
+                                    "Failed to resolve CHAP credentials: {}",
+                                    error
+                                ),
                             }),
                         )
                     })?;
@@ -1443,42 +1430,47 @@ pub async fn update_client(
     if request.master.is_none() && request.snapshot.is_none() {
         request.snapshot = existing_client.snapshot.clone();
     }
-    let stored_game_disks = crate::core::reconciliation::stored_game_selection(&state.db_pool, &id)
-        .await
-        .map_err(|error| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    status: 500,
-                    error: error.to_string(),
-                }),
-            )
-        })?;
-    let existing_game_flag = existing_client.use_game_disk.unwrap_or(false);
-    let boot_changed = storage_configuration_changed(&existing_client, &request);
-    let game_changed = game_configuration_changed(existing_game_flag, &stored_game_disks, &request);
-
-    // CHAP: resolve once for every path below. Generation is idempotent
-    // (read-first), so resolving on every update is cheap and keeps all
-    // provisioning paths converged without per-branch duplication.
-    let existing_chap = existing_client.chap_enabled.unwrap_or(false);
-    let chap_enabled = request.chap_enabled.unwrap_or(existing_chap);
-    let chap_changed = request
-        .chap_enabled
-        .is_some_and(|value| value != existing_chap);
-    let chap_name = request.name.as_deref().unwrap_or(&existing_client.name);
-    let chap_creds = if chap_enabled {
-        crate::core::reconciliation::ensure_chap_credentials(&state.db_pool, &id, chap_name, true)
+    let stored_game_disks =
+        crate::core::reconciliation::stored_game_selection(&state.db_pool, &id)
             .await
             .map_err(|error| {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(ErrorResponse {
                         status: 500,
-                        error: format!("Failed to ensure CHAP credentials: {}", error),
+                        error: error.to_string(),
                     }),
                 )
-            })?
+            })?;
+    let existing_game_flag = existing_client.use_game_disk.unwrap_or(false);
+    let boot_changed = storage_configuration_changed(&existing_client, &request);
+    let game_changed =
+        game_configuration_changed(existing_game_flag, &stored_game_disks, &request);
+
+    // CHAP: resolve once for every path below. Generation is idempotent
+    // (read-first), so resolving on every update is cheap and keeps all
+    // provisioning paths converged without per-branch duplication.
+    let existing_chap = existing_client.chap_enabled.unwrap_or(false);
+    let chap_enabled = request.chap_enabled.unwrap_or(existing_chap);
+    let chap_changed = request.chap_enabled.is_some_and(|value| value != existing_chap);
+    let chap_name = request.name.as_deref().unwrap_or(&existing_client.name);
+    let chap_creds = if chap_enabled {
+        crate::core::reconciliation::ensure_chap_credentials(
+            &state.db_pool,
+            &id,
+            chap_name,
+            true,
+        )
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    status: 500,
+                    error: format!("Failed to ensure CHAP credentials: {}", error),
+                }),
+            )
+        })?
     } else {
         None
     };
@@ -1520,7 +1512,15 @@ pub async fn update_client(
             .map(str::trim)
             .filter(|value| !value.is_empty())
         {
-            publish_boot_menu(&settings, &existing_client, target_iqn, chap_creds.as_ref()).await;
+            publish_boot_menu(
+                &settings,
+                &existing_client.name,
+                &existing_client.mac,
+                &existing_client.ip,
+                target_iqn,
+                chap_creds.as_ref(),
+            )
+            .await;
         }
     }
 
@@ -1563,10 +1563,6 @@ pub async fn update_client(
             )
             .await?;
         }
-        let boot_image_changed = request
-            .boot_image
-            .as_deref()
-            .is_some_and(|value| Some(value) != existing_client.boot_image.as_deref());
         let client = manager.update(&id, request).await.map_err(|error| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1576,37 +1572,6 @@ pub async fn update_client(
                 }),
             )
         })?;
-        if boot_image_changed && client.enabled {
-            if let (Some(target_iqn), Some(boot_image)) =
-                (client.target_iqn.as_deref(), client.boot_image.as_deref())
-            {
-                let server_ip = settings.dhcp.next_server_ip.trim().to_string();
-                let reservation = crate::infrastructure::dhcp::BootReservation {
-                    client_name: client.name.clone(),
-                    mac: client.mac.clone(),
-                    ip: client.ip.clone(),
-                    target_iqn: target_iqn.to_string(),
-                    boot_image: boot_image.parse().map_err(|error| {
-                        tracing::error!(client_id = %id, %error, "stored client boot image is invalid");
-                        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse {
-                            status: 500,
-                            error: "Stored client boot image is invalid".to_string(),
-                        }))
-                    })?,
-                    server_ip: if server_ip.is_empty() {
-                        settings.server.ip_address.trim().to_string()
-                    } else {
-                        server_ip
-                    },
-                    chap: chap_creds.clone(),
-                };
-                if let Err(error) =
-                    crate::infrastructure::dhcp::publish_client_ipxe(&reservation).await
-                {
-                    tracing::warn!(client_id = %id, %error, "failed to update boot menu selection");
-                }
-            }
-        }
         sqlx::query("DELETE FROM client_offline_resets WHERE client_id = ? AND operation IS NULL AND ? <> ?")
             .bind(&id).bind(client.keep_writeback).bind(existing_client.keep_writeback).execute(&state.db_pool).await
             .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { status: 500, error: error.to_string() })))?;
@@ -1623,16 +1588,21 @@ pub async fn update_client(
             .game_disks
             .clone()
             .unwrap_or_else(|| stored_game_disks.clone());
-        let resolved = resolve_effective_game_selection(effective_flag, &effective_stored)
-            .map_err(|error| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        status: 500,
-                        error: format!("Failed to resolve game selection: {}", error),
-                    }),
-                )
-            })?;
+        let resolved =
+            resolve_effective_game_selection(effective_flag, &effective_stored).map_err(
+                |error| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ErrorResponse {
+                            status: 500,
+                            error: format!(
+                                "Failed to resolve game selection: {}",
+                                error
+                            ),
+                        }),
+                    )
+                },
+            )?;
         let target_iqn = existing_client.target_iqn.clone().unwrap_or_else(|| {
             format!(
                 "{}:client.{}",
@@ -1704,16 +1674,21 @@ pub async fn update_client(
     // repair guard: tearing down LUNs under a booted client corrupts it.
     {
         let sessions =
-            crate::infrastructure::iscsi::target_has_active_sessions(current_storage.target_iqn())
-                .map_err(|error| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(ErrorResponse {
-                            status: 500,
-                            error: format!("Failed to check iSCSI sessions: {}", error),
-                        }),
-                    )
-                })?;
+            crate::infrastructure::iscsi::target_has_active_sessions(
+                current_storage.target_iqn(),
+            )
+            .map_err(|error| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        status: 500,
+                        error: format!(
+                            "Failed to check iSCSI sessions: {}",
+                            error
+                        ),
+                    }),
+                )
+            })?;
         crate::core::reconciliation::ensure_storage_repair_safe(
             current_storage.target_iqn(),
             sessions,
@@ -1777,8 +1752,8 @@ pub async fn update_client(
         .clone()
         .unwrap_or_else(|| stored_game_disks.clone());
     storage_spec.game_disks =
-        resolve_effective_game_selection(effective_game_flag, &effective_game_stored).map_err(
-            |error| {
+        resolve_effective_game_selection(effective_game_flag, &effective_game_stored)
+            .map_err(|error| {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(ErrorResponse {
@@ -1786,8 +1761,7 @@ pub async fn update_client(
                         error: format!("Failed to resolve game selection: {}", error),
                     }),
                 )
-            },
-        )?;
+            })?;
 
     // Enforcement travels into the rebuilt target; absence preserves the
     // legacy open portal.
@@ -1882,7 +1856,10 @@ pub async fn rotate_client_chap(
     let err = |error: String| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse { status: 500, error }),
+            Json(ErrorResponse {
+                status: 500,
+                error,
+            }),
         )
     };
 
@@ -1902,19 +1879,24 @@ pub async fn rotate_client_chap(
         .clone()
         .filter(|name| !name.trim().is_empty())
         .unwrap_or_else(|| {
-            crate::infrastructure::iscsi::ChapCredentials::username_for_client(&existing.name)
+            crate::infrastructure::iscsi::ChapCredentials::username_for_client(
+                &existing.name,
+            )
         });
-    let mut creds = crate::infrastructure::iscsi::ChapCredentials::generate(&existing.name)
-        .map_err(|error| err(format!("Failed to generate CHAP secret: {}", error)))?;
+    let mut creds =
+        crate::infrastructure::iscsi::ChapCredentials::generate(&existing.name)
+            .map_err(|error| err(format!("Failed to generate CHAP secret: {}", error)))?;
     creds.username = username.clone();
 
-    sqlx::query("UPDATE clients SET chap_user = ?, chap_secret = ?, chap_enabled = 1 WHERE id = ?")
-        .bind(&creds.username)
-        .bind(&creds.password)
-        .bind(&id)
-        .execute(&state.db_pool)
-        .await
-        .map_err(|error| err(format!("Failed to persist CHAP secret: {}", error)))?;
+    sqlx::query(
+        "UPDATE clients SET chap_user = ?, chap_secret = ?, chap_enabled = 1 WHERE id = ?",
+    )
+    .bind(&creds.username)
+    .bind(&creds.password)
+    .bind(&id)
+    .execute(&state.db_pool)
+    .await
+    .map_err(|error| err(format!("Failed to persist CHAP secret: {}", error)))?;
 
     if let Some(target_iqn) = existing
         .target_iqn
@@ -1929,7 +1911,15 @@ pub async fn rotate_client_chap(
             .map_err(|error| err(format!("Failed to apply CHAP secret: {}", error)))?;
 
         let settings = state.settings.read().await;
-        publish_boot_menu(&settings, &existing, target_iqn, Some(&creds)).await;
+        publish_boot_menu(
+            &settings,
+            &existing.name,
+            &existing.mac,
+            &existing.ip,
+            target_iqn,
+            Some(&creds),
+        )
+        .await;
     }
 
     tracing::info!(
@@ -1944,6 +1934,7 @@ pub async fn rotate_client_chap(
         "chap_enabled": true,
     })))
 }
+
 
 #[cfg(test)]
 mod error_contract_tests {

@@ -126,12 +126,10 @@ async fn tick(state: &AppState) -> Result<()> {
         // Shares a lock with edits/deletion/NVMe export creation. Re-read after
         // acquiring it so an old snapshot of configuration cannot trigger a reset.
         let _guard = state.client_mutations.lock().await;
-        let current = repository.find_by_id(&client.id).await?.with_context(|| {
-            format!(
-                "client '{}' disappeared during lifecycle processing",
-                client.id
-            )
-        })?;
+        let current = repository
+            .find_by_id(&client.id)
+            .await?
+            .with_context(|| format!("client '{}' disappeared during lifecycle processing", client.id))?;
         if let Err(error) = process(state, &current).await {
             tracing::warn!(client_id = %client.id, %error, "automatic client reset deferred");
             let failures: Option<i64> = sqlx::query_scalar(
@@ -156,8 +154,8 @@ async fn tick(state: &AppState) -> Result<()> {
 async fn process(state: &AppState, client: &Client) -> Result<()> {
     let settings = state.settings.read().await.clone();
     let now = chrono::Utc::now().timestamp();
-    let eligible =
-        !client.keep_writeback && client.snapshot.as_deref().is_some_and(|s| !s.is_empty());
+    let eligible = !client.keep_writeback
+        && client.snapshot.as_deref().is_some_and(|s| !s.is_empty());
     let fingerprint = serde_json::to_string(&(
         client.snapshot.as_ref(),
         client.block_device.as_ref(),
@@ -271,7 +269,9 @@ async fn process(state: &AppState, client: &Client) -> Result<()> {
                 client.chap_enabled,
             )
             .await
-            .map_err(|error| anyhow::anyhow!("failed to resolve CHAP credentials: {error:#}"))?;
+            .map_err(|error| {
+                anyhow::anyhow!("failed to resolve CHAP credentials: {error:#}")
+            })?;
             // Shared datasets are never eligible even if a legacy record claims ownership.
             let other: i64 = sqlx::query_scalar(
                 "SELECT COUNT(*) FROM clients WHERE id <> ? AND (block_device = ? OR block_store = ? OR master = ?)",
