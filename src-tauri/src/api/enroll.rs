@@ -42,6 +42,7 @@ fn client_name_from_mac(mac: &MacAddress) -> String {
 pub fn enroll_router(state: AppState) -> Router {
     Router::new()
         .route("/enroll/{mac}", get(enroll_client))
+        .route("/boot/net-config/{mac}", get(client_network_config))
         .with_state(state)
 }
 
@@ -261,6 +262,42 @@ async fn register_pending_client(
     let _ = state.refresh_client_ips().await;
 
     Ok(name)
+}
+
+/// Read-only boot-network profile for a registered, enabled diskless client.
+/// Only the client's own reserved source IP can retrieve it. Exposed on the
+/// isolated PXE enrollment listener, never on the management API.
+async fn client_network_config(
+    State(state): State<AppState>,
+    ConnectInfo(remote): ConnectInfo<SocketAddr>,
+    Path(mac): Path<String>,
+) -> Response {
+    use axum::{http::StatusCode, Json};
+    use serde_json::json;
+    let Ok(mac) = MacAddress::parse(&mac) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let repository = ClientRepository::new(state.db_pool.clone());
+    let Ok(Some(client)) = repository.find_by_mac(&mac).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if !client.enabled || client.ip != remote.ip() || client.target_iqn.is_none() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let settings = state.settings.read().await;
+    // Configuration comes from the same saved DHCP settings used for PXE.
+    // Client-side logic checks the MAC *and* its existing IPv4 before touching
+    // gateway or DNS, so a network transition will not reset the SAN NIC.
+    let dns = [&settings.dhcp.dns_server1, &settings.dhcp.dns_server2]
+        .into_iter()
+        .filter(|value| value.parse::<std::net::Ipv4Addr>().is_ok())
+        .collect::<Vec<_>>();
+    Json(json!({
+        "mac": client.mac.as_str().replace(':', ""),
+        "ip": client.ip.to_string(),
+        "gateway": settings.dhcp.gateway_ip,
+        "dns": dns,
+    })).into_response()
 }
 
 async fn enroll_client(
