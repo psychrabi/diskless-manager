@@ -507,9 +507,9 @@ Class=Net
 [Manufacturer]
 Vendor=NetModels,NTamd64,NTarm64
 [NetModels.NTamd64]
-A=Install,PCI\\VEN_8086&DEV_15F3,PCI\\VEN_8086&CC_0200
+A=Install,PCI\VEN_8086&DEV_15F3,PCI\VEN_8086&CC_0200
 [NetModels.NTarm64]
-B=Install,PCI\\VEN_10EC&DEV_8168
+B=Install,PCI\VEN_10EC&DEV_8168
 [Install.NT.Services]
 AddService=e2fexpress,2,ServiceInstall
 "#;
@@ -521,8 +521,16 @@ AddService=e2fexpress,2,ServiceInstall
 
     #[test]
     fn no_vendor_service_is_synthesized_from_device_id() {
-        let metadata = parse_inf("[Version]\\nClass=Net\\n[Manufacturer]\\nM=Models,NTamd64\\n[Models.NTamd64]\\nM=Install,PCI\\\\VEN_10EC&DEV_8168\\n");
+        let inf = r#"[Version]
+Class=Net
+[Manufacturer]
+M=Models,NTamd64
+[Models.NTamd64]
+M=Install,PCI\VEN_10EC&DEV_8168
+"#;
+        let metadata = parse_inf(inf);
         assert!(metadata.is_network_class);
+        assert_eq!(metadata.hardware_ids, vec!["PCI\\VEN_10EC&DEV_8168"]);
         assert!(metadata.service_names.is_empty());
     }
 
