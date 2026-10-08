@@ -19,7 +19,7 @@ fn setup_status(checks: &[(&'static str, bool)], completed: bool) -> SetupStatus
         .collect();
     let ready = missing.is_empty();
     SetupStatus {
-        completed: completed && ready,
+        completed,
         ready,
         missing,
         missing_files: Vec::new(),
@@ -383,14 +383,14 @@ mod tests {
     }
 
     #[test]
-    fn completion_requires_every_readiness_check_even_with_existing_marker() {
+    fn completed_marker_is_not_invalidated_by_later_readiness_changes() {
         let status = setup_status(
             &[("authorization", true), ("storage", false), ("boot", false)],
             true,
         );
         assert_eq!(status.missing, ["storage", "boot"]);
         assert!(!status.ready);
-        assert!(!status.completed);
+        assert!(status.completed);
         let ready = setup_status(&[("storage", true), ("boot", true)], false);
         assert!(ready.ready);
         assert!(!ready.completed);

@@ -84,8 +84,8 @@ pub fn parse_inf(content: &str) -> WindowsInfMetadata {
     let sections = parse_sections(content);
     let strings = collect_strings(&sections);
 
-    let class = section_value(&sections, "version", "class")
-        .map(|value| expand_tokens(&value, &strings));
+    let class =
+        section_value(&sections, "version", "class").map(|value| expand_tokens(&value, &strings));
     let class_guid = section_value(&sections, "version", "classguid")
         .map(|value| expand_tokens(&value, &strings));
     let provider = section_value(&sections, "version", "provider")
@@ -244,10 +244,7 @@ fn parse_sections(content: &str) -> BTreeMap<String, InfSection> {
             continue;
         }
 
-        if let Some(section) = current
-            .as_ref()
-            .and_then(|name| sections.get_mut(name))
-        {
+        if let Some(section) = current.as_ref().and_then(|name| sections.get_mut(name)) {
             section.lines.push(trimmed.to_string());
         }
     }
@@ -358,9 +355,7 @@ fn discover_model_sections(
         let prefix = format!("{}.", base).to_ascii_lowercase();
         for name in sections.keys() {
             if name.starts_with(&prefix)
-                && (name.contains("ntamd64")
-                    || name.contains("ntx86")
-                    || name.contains("ntarm64"))
+                && (name.contains("ntamd64") || name.contains("ntx86") || name.contains("ntarm64"))
             {
                 models.insert(name.clone());
             }
@@ -457,7 +452,9 @@ fn looks_like_device_id(value: &str) -> bool {
 }
 
 fn normalize_device_id(value: &str) -> String {
-    trim_inf_value(value).replace('/', "\\").to_ascii_uppercase()
+    trim_inf_value(value)
+        .replace('/', "\\")
+        .to_ascii_uppercase()
 }
 
 #[cfg(test)]

@@ -3,7 +3,6 @@ pub mod config;
 pub mod dhcp_reconciliation;
 pub mod image;
 pub mod provisioning;
-pub mod provisioning_transaction;
 pub mod reconciliation;
 pub mod service;
 pub mod system_reconciliation;

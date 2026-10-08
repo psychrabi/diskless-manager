@@ -305,8 +305,7 @@ pub async fn delete_dataset(
     // clients) first.
     {
         let mut dependents: Vec<String> = Vec::new();
-        if let Ok(clones) =
-            crate::application::storage_service::StorageService::list_game_clones()
+        if let Ok(clones) = crate::application::storage_service::StorageService::list_game_clones()
         {
             dependents.extend(
                 clones
@@ -404,16 +403,15 @@ pub async fn list_game_disks(
         tracing::error!("Failed to list game clones: {}", error);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
-    let selections: Vec<(String, String)> =
-        sqlx::query_as::<_, (String, String)>(
-            "SELECT client_id, master_dataset FROM client_game_disks",
-        )
-        .fetch_all(&state.db_pool)
-        .await
-        .map_err(|error| {
-            tracing::error!("Failed to list game selections: {}", error);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    let selections: Vec<(String, String)> = sqlx::query_as::<_, (String, String)>(
+        "SELECT client_id, master_dataset FROM client_game_disks",
+    )
+    .fetch_all(&state.db_pool)
+    .await
+    .map_err(|error| {
+        tracing::error!("Failed to list game selections: {}", error);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     let disks: Vec<serde_json::Value> = masters
         .into_iter()

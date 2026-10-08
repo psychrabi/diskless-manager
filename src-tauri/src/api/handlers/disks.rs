@@ -51,55 +51,6 @@ async fn persist_pool_name(pool: &sqlx::SqlitePool, name: &str) -> Result<(), St
     Ok(())
 }
 
-#[cfg(test)]
-mod setup_tests {
-    use super::*;
-
-    #[test]
-    fn pool_creation_rejects_options_and_path_traversal() {
-        for (name, disk) in [
-            ("-f", "sda"),
-            ("tank", "../sda"),
-            ("tank", "-f"),
-            ("", "sda"),
-            ("tank", ""),
-        ] {
-            assert_eq!(
-                validate_pool_request(&CreatePoolRequest {
-                    name: name.into(),
-                    disk: disk.into()
-                }),
-                Err(StatusCode::BAD_REQUEST)
-            );
-        }
-        assert!(validate_pool_request(&CreatePoolRequest {
-            name: "tank".into(),
-            disk: "nvme0n1".into()
-        })
-        .is_ok());
-    }
-
-    #[tokio::test]
-    async fn created_pool_selection_is_persisted_for_setup_and_storage() {
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .unwrap();
-        sqlx::query("CREATE TABLE app_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
-            .execute(&pool)
-            .await
-            .unwrap();
-        persist_pool_name(&pool, "tank").await.unwrap();
-        let value: String =
-            sqlx::query_scalar("SELECT value FROM app_config WHERE key = 'zpool_name'")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        assert_eq!(value, "\"tank\"");
-    }
-}
-
 pub async fn list_disks(State(_state): State<AppState>) -> Result<Json<Vec<String>>, StatusCode> {
     match crate::disks::list_block_devices() {
         Ok(devices) => Ok(Json(devices)),
@@ -181,5 +132,54 @@ pub async fn pool_exists(State(_state): State<AppState>) -> Result<Json<bool>, S
             }
         }
         Err(_) => Ok(Json(false)),
+    }
+}
+
+#[cfg(test)]
+mod setup_tests {
+    use super::*;
+
+    #[test]
+    fn pool_creation_rejects_options_and_path_traversal() {
+        for (name, disk) in [
+            ("-f", "sda"),
+            ("tank", "../sda"),
+            ("tank", "-f"),
+            ("", "sda"),
+            ("tank", ""),
+        ] {
+            assert_eq!(
+                validate_pool_request(&CreatePoolRequest {
+                    name: name.into(),
+                    disk: disk.into()
+                }),
+                Err(StatusCode::BAD_REQUEST)
+            );
+        }
+        assert!(validate_pool_request(&CreatePoolRequest {
+            name: "tank".into(),
+            disk: "nvme0n1".into()
+        })
+        .is_ok());
+    }
+
+    #[tokio::test]
+    async fn created_pool_selection_is_persisted_for_setup_and_storage() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE app_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        persist_pool_name(&pool, "tank").await.unwrap();
+        let value: String =
+            sqlx::query_scalar("SELECT value FROM app_config WHERE key = 'zpool_name'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(value, "\"tank\"");
     }
 }

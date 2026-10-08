@@ -24,6 +24,8 @@ pub struct Client {
     pub status: Option<String>,
     pub mode: Option<String>,
     pub pxe_mode: Option<String>,
+    #[serde(default)]
+    pub boot_image: Option<String>,
     pub keep_writeback: Option<bool>,
     pub use_game_disk: Option<bool>,
     #[serde(skip_serializing)]
@@ -49,6 +51,8 @@ pub struct CreateClientRequest {
     pub block_store: Option<String>,
     pub block_device: Option<String>,
     pub target_iqn: Option<String>,
+    #[serde(default)]
+    pub boot_image: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,6 +70,7 @@ pub struct UpdateClientRequest {
     /// Toggle one-way iSCSI CHAP enforcement. Secrets are server-managed;
     /// this only flips enforcement (credentials are ensured separately).
     pub chap_enabled: Option<bool>,
+    pub boot_image: Option<String>,
     pub enabled: Option<bool>,
     pub block_store: Option<String>,
     pub block_device: Option<String>,
@@ -109,6 +114,7 @@ impl Client {
             status: None,
             mode: None,
             pxe_mode: Some("uefi".to_string()),
+            boot_image: req.boot_image,
             keep_writeback: req.keep_writeback,
             use_game_disk: req.use_game_disk,
             chap_user: None,
@@ -193,6 +199,8 @@ struct ClientRow {
     block_device: Option<String>,
     status: Option<String>,
     mode: Option<String>,
+    pxe_mode: Option<String>,
+    boot_image: Option<String>,
     keep_writeback: Option<bool>,
     use_game_disk: Option<bool>,
     chap_user: Option<String>,
@@ -213,15 +221,16 @@ impl ClientManager {
             INSERT INTO clients (
                 id, name, mac, ip, master, snapshot, block_store, target_iqn,
                 writeback, block_device, status, mode, pxe_mode, keep_writeback,
-                use_game_disk, chap_user, chap_secret, chap_enabled,
+                boot_image, use_game_disk, chap_user, chap_secret, chap_enabled,
                 created_at, last_modified, enabled, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name, mac = excluded.mac, ip = excluded.ip,
                 master = excluded.master, snapshot = excluded.snapshot,
                 block_store = excluded.block_store, target_iqn = excluded.target_iqn,
                 writeback = excluded.writeback, block_device = excluded.block_device,
                 status = excluded.status, mode = excluded.mode, pxe_mode = excluded.pxe_mode,
+                boot_image = excluded.boot_image,
                 keep_writeback = excluded.keep_writeback, use_game_disk = excluded.use_game_disk,
                 chap_user = excluded.chap_user, chap_secret = excluded.chap_secret,
                 chap_enabled = excluded.chap_enabled,
@@ -242,6 +251,7 @@ impl ClientManager {
         .bind(&client.status)
         .bind(&client.mode)
         .bind(client.pxe_mode.as_ref().unwrap_or(&"uefi".to_string()))
+        .bind(client.boot_image.as_deref().unwrap_or("windows"))
         .bind(client.keep_writeback.unwrap_or(true))
         .bind(client.use_game_disk.unwrap_or(false))
         .bind(&client.chap_user)
@@ -262,7 +272,7 @@ impl ClientManager {
             r#"
             SELECT id, name, mac, ip, master, enabled, created_at, updated_at,
                    snapshot, block_store, target_iqn, writeback, last_modified,
-                   block_device, status, mode, keep_writeback, use_game_disk,
+                   block_device, status, mode, pxe_mode, boot_image, keep_writeback, use_game_disk,
                    chap_user, chap_secret, chap_enabled
             FROM clients
             ORDER BY name
@@ -300,7 +310,8 @@ impl ClientManager {
                 block_device: row.block_device,
                 status: row.status,
                 mode: row.mode,
-                pxe_mode: Some("uefi".to_string()), // Default to UEFI
+                pxe_mode: row.pxe_mode,
+                boot_image: row.boot_image,
                 keep_writeback: row.keep_writeback,
                 use_game_disk: row.use_game_disk,
                 chap_user: row.chap_user,
@@ -317,7 +328,7 @@ impl ClientManager {
             r#"
             SELECT id, name, mac, ip, master, enabled, created_at, updated_at,
                    snapshot, block_store, target_iqn, writeback, last_modified,
-                   block_device, status, mode, keep_writeback, use_game_disk,
+                   block_device, status, mode, pxe_mode, boot_image, keep_writeback, use_game_disk,
                    chap_user, chap_secret, chap_enabled
             FROM clients
             WHERE id = ? OR name = ? OR mac = ?
@@ -358,7 +369,8 @@ impl ClientManager {
             block_device: row.block_device,
             status: row.status,
             mode: row.mode,
-            pxe_mode: Some("uefi".to_string()), // Default to UEFI
+            pxe_mode: row.pxe_mode,
+            boot_image: row.boot_image,
             keep_writeback: row.keep_writeback,
             use_game_disk: row.use_game_disk,
             chap_user: row.chap_user,
@@ -420,6 +432,12 @@ impl ClientManager {
         }
         if let Some(enabled) = req.enabled {
             client.enabled = enabled;
+        }
+        if let Some(boot_image) = req.boot_image {
+            if !matches!(boot_image.as_str(), "windows" | "winpe" | "linux") {
+                anyhow::bail!("invalid client boot image: {boot_image}");
+            }
+            client.boot_image = Some(boot_image);
         }
         client.updated_at = Utc::now();
         client.last_modified = Some(client.updated_at.format("%Y-%m-%d %H:%M:%S").to_string());
@@ -554,6 +572,7 @@ mod response_tests {
             status: None,
             mode: None,
             pxe_mode: None,
+            boot_image: None,
             keep_writeback: None,
             use_game_disk: None,
             chap_user: Some("chap-pc001".to_string()),

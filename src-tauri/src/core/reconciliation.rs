@@ -72,7 +72,9 @@ impl ReconciliationSummary {
 ///
 /// Inspection never changes infrastructure. Repair is a separate operation.
 pub async fn inspect_storage(state: &AppState) -> anyhow::Result<ReconciliationSummary> {
-    let clients = ClientRepository::new(state.db_pool.clone()).find_all().await?;
+    let clients = ClientRepository::new(state.db_pool.clone())
+        .find_all()
+        .await?;
 
     let mut summary = ReconciliationSummary::new();
 
@@ -144,12 +146,14 @@ pub async fn repair_client_storage(
         .find_by_id(&id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("client '{}' not found", client_id))?;
-    let spec = storage_spec_for_client(&state.db_pool, &client).await?.ok_or_else(|| {
-        anyhow::anyhow!(
-            "client '{}' has no storage configuration to reconcile",
-            client_id
-        )
-    })?;
+    let spec = storage_spec_for_client(&state.db_pool, &client)
+        .await?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "client '{}' has no storage configuration to reconcile",
+                client_id
+            )
+        })?;
 
     ensure_storage_repair_safe(
         &spec.target_iqn,
@@ -197,11 +201,7 @@ pub(crate) async fn resolved_game_selection(
         .into_iter()
         .map(|master| master.dataset)
         .collect::<Vec<_>>();
-    Ok(resolve_game_selection(
-        use_game_disk,
-        &stored,
-        &discovered,
-    ))
+    Ok(resolve_game_selection(use_game_disk, &stored, &discovered))
 }
 
 /// Stored CHAP state: (enabled, username, secret).
@@ -209,12 +209,11 @@ pub(crate) async fn stored_chap_state(
     pool: &sqlx::SqlitePool,
     client_id: &str,
 ) -> anyhow::Result<(bool, Option<String>, Option<String>)> {
-    let row: Option<(Option<i64>, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT chap_enabled, chap_user, chap_secret FROM clients WHERE id = ?",
-    )
-    .bind(client_id)
-    .fetch_optional(pool)
-    .await?;
+    let row: Option<(Option<i64>, Option<String>, Option<String>)> =
+        sqlx::query_as("SELECT chap_enabled, chap_user, chap_secret FROM clients WHERE id = ?")
+            .bind(client_id)
+            .fetch_optional(pool)
+            .await?;
     Ok(match row {
         Some((enabled, user, secret)) => (enabled.unwrap_or(0) != 0, user, secret),
         None => (false, None, None),
@@ -230,9 +229,7 @@ pub(crate) async fn read_chap_credentials(
 ) -> anyhow::Result<Option<crate::infrastructure::iscsi::ChapCredentials>> {
     let (_, user, secret) = stored_chap_state(pool, client_id).await?;
     Ok(match (user, secret) {
-        (Some(username), Some(password))
-            if !username.trim().is_empty() && !password.is_empty() =>
-        {
+        (Some(username), Some(password)) if !username.trim().is_empty() && !password.is_empty() => {
             Some(crate::infrastructure::iscsi::ChapCredentials { username, password })
         }
         _ => None,
@@ -293,13 +290,8 @@ async fn storage_spec_for_client(
     // enabled-but-credless client (e.g. pre-CHAP record) heals instead of
     // provisioning open. Inspect gains an idempotent one-time write; the
     // alternative is silently skipping enforcement.
-    let chap = ensure_chap_credentials(
-        pool,
-        client.id.as_str(),
-        &client.name,
-        client.chap_enabled,
-    )
-    .await?;
+    let chap = ensure_chap_credentials(pool, client.id.as_str(), &client.name, client.chap_enabled)
+        .await?;
 
     let source = match client.snapshot.as_deref().map(str::trim) {
         Some(snapshot) if !snapshot.is_empty() => {
@@ -413,10 +405,7 @@ mod tests {
 
     #[tokio::test]
     async fn chap_credentials_generate_once_and_read_back() {
-        let path = std::env::temp_dir().join(format!(
-            "diskless-chap-{}.db",
-            uuid::Uuid::new_v4()
-        ));
+        let path = std::env::temp_dir().join(format!("diskless-chap-{}.db", uuid::Uuid::new_v4()));
         let url = format!("sqlite:{}?mode=rwc", path.display());
         let pool = sqlx::SqlitePool::connect(&url).await.unwrap();
         sqlx::migrate!("./migrations").run(&pool).await.unwrap();
@@ -430,7 +419,10 @@ mod tests {
             .await
             .unwrap()
             .is_none());
-        assert!(read_chap_credentials(&pool, "client").await.unwrap().is_none());
+        assert!(read_chap_credentials(&pool, "client")
+            .await
+            .unwrap()
+            .is_none());
 
         // Enabled: generated once, then stable.
         let first = ensure_chap_credentials(&pool, "client", "PC001", true)
@@ -449,10 +441,7 @@ mod tests {
 
     #[tokio::test]
     async fn missing_master_skips_storage_reconciliation() {
-        let path = std::env::temp_dir().join(format!(
-            "diskless-recon-{}.db",
-            uuid::Uuid::new_v4()
-        ));
+        let path = std::env::temp_dir().join(format!("diskless-recon-{}.db", uuid::Uuid::new_v4()));
         let url = format!("sqlite:{}?mode=rwc", path.display());
         let pool = sqlx::SqlitePool::connect(&url).await.unwrap();
         sqlx::migrate!("./migrations").run(&pool).await.unwrap();
@@ -474,6 +463,7 @@ mod tests {
             status: ClientStatus::Offline,
             mode: BootMode::Normal,
             pxe_mode: PxeMode::Uefi,
+            boot_image: crate::domain::ClientBootImage::Windows,
             keep_writeback: true,
             use_game_disk: false,
             game_disks: Vec::new(),

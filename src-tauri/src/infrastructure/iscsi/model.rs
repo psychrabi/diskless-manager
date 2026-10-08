@@ -174,8 +174,7 @@ impl ChapCredentials {
 fn generate_chap_secret() -> anyhow::Result<String> {
     use std::io::Read;
 
-    const ALPHABET: &[u8] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     let mut bytes = [0u8; 12];
     std::fs::File::open("/dev/urandom")
         .and_then(|mut file| file.read_exact(&mut bytes))
@@ -518,10 +517,7 @@ mod chap_tests {
         let creds = ChapCredentials::generate("PC001").expect("generation must succeed");
         assert_eq!(creds.username, "chap-pc001");
         assert_eq!(creds.password.len(), 12);
-        assert!(creds
-            .password
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric()));
+        assert!(creds.password.chars().all(|c| c.is_ascii_alphanumeric()));
     }
 
     #[test]

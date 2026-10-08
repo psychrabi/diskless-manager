@@ -1,3 +1,4 @@
+use super::client_compat::domain_to_legacy;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -8,7 +9,7 @@ use super::clients::ErrorResponse;
 use crate::{
     application::storage_service::{resolve_game_selection, StorageService},
     core::client::{Client, UpdateClientRequest},
-    domain::{BootMode, ClientStatus, PxeMode, UpdateClient},
+    domain::UpdateClient,
     state::AppState,
 };
 
@@ -46,57 +47,6 @@ fn is_actual_game_only_update(
             .game_disks
             .as_ref()
             .is_some_and(|selection| selection.as_slice() != existing.game_disks.as_slice())
-}
-
-fn domain_to_legacy(client: crate::domain::Client) -> Client {
-    Client {
-        id: client.id.to_string(),
-        name: client.name,
-        mac: client.mac.to_string(),
-        ip: client.ip.to_string(),
-        master: client.master,
-        enabled: client.enabled,
-        created_at: client.created_at,
-        updated_at: client.updated_at,
-        snapshot: client.snapshot,
-        block_store: client.block_store,
-        target_iqn: client.target_iqn,
-        writeback: client.writeback,
-        last_modified: client
-            .last_modified
-            .map(|value| value.format("%Y-%m-%d %H:%M:%S").to_string()),
-        block_device: client.block_device,
-        status: Some(
-            match client.status {
-                ClientStatus::Provisioning => "Provisioning",
-                ClientStatus::Ready => "Ready",
-                ClientStatus::Online => "Online",
-                ClientStatus::Offline => "Offline",
-                ClientStatus::Error => "Error",
-                ClientStatus::Disabled => "Disabled",
-            }
-            .to_string(),
-        ),
-        mode: Some(
-            match client.mode {
-                BootMode::Normal => "normal",
-                BootMode::Super => "super",
-            }
-            .to_string(),
-        ),
-        pxe_mode: Some(
-            match client.pxe_mode {
-                PxeMode::Uefi => "uefi",
-                PxeMode::Bios => "bios",
-            }
-            .to_string(),
-        ),
-        keep_writeback: Some(client.keep_writeback),
-        use_game_disk: Some(client.use_game_disk),
-        chap_user: client.chap_user,
-        chap_secret: client.chap_secret,
-        chap_enabled: Some(client.chap_enabled),
-    }
 }
 
 fn resolve_effective_game_selection(
@@ -145,6 +95,7 @@ async fn publish_boot_menu(
         mac: client.mac.to_string(),
         ip: client.ip.to_string(),
         target_iqn: target_iqn.to_string(),
+        boot_image: client.boot_image,
         server_ip: server_ip.to_string(),
         chap: chap.cloned(),
     };
@@ -353,6 +304,7 @@ mod tests {
             writeback: None,
             action: None,
             make_super: None,
+            boot_image: None,
         }
     }
 
@@ -367,6 +319,7 @@ mod tests {
             block_device: None,
             target_iqn: None,
             pxe_mode: PxeMode::Uefi,
+            boot_image: crate::domain::ClientBootImage::Windows,
             keep_writeback: true,
             use_game_disk: false,
             game_disks: Vec::new(),

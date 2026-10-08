@@ -1,5 +1,5 @@
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { render, screen, fireEvent } from '@testing-library/react';
+import { Link, MemoryRouter, Outlet, Route, Routes } from 'react-router-dom';
 import { vi, test, expect, beforeEach } from 'vitest';
 import { AuthContext } from '@/contexts/auth';
 import { getSetupStatus } from '@/api/modules/system';
@@ -15,7 +15,23 @@ test('does not render dashboard while readiness is pending', () => { getSetupSta
 test('incomplete server sends administrator to setup', async () => {getSetupStatus.mockResolvedValue({completed:false,ready:true,missing:[]});mount(); expect(await screen.findByText('Setup wizard')).toBeInTheDocument();expect(screen.queryByText('Dashboard contents')).toBeNull();});
 test('status error blocks dashboard and retry checks again',async()=>{getSetupStatus.mockRejectedValueOnce(new Error('offline')).mockResolvedValue({completed:true,ready:true,missing:[]});mount();fireEvent.click(await screen.findByRole('button',{name:'Retry'}));expect(await screen.findByText('Dashboard contents')).toBeInTheDocument();});
 test('non-admin cannot open incomplete setup wizard',async()=>{getSetupStatus.mockResolvedValue({completed:false,ready:false,missing:['storage']});mount('user',true);expect(await screen.findByText(/ask an administrator/i)).toBeInTheDocument();expect(screen.queryByText('Setup wizard')).toBeNull();});
-test('marker with failed readiness still blocks dashboard', async()=>{getSetupStatus.mockResolvedValue({completed:true,ready:false,missing:['boot']});mount();await waitFor(()=>expect(screen.getByText('Setup wizard')).toBeInTheDocument());});
+test('completed setup does not reopen wizard when a readiness check fails', async()=>{getSetupStatus.mockResolvedValue({completed:true,ready:false,missing:['tftp']});mount();expect(await screen.findByText('Dashboard contents')).toBeInTheDocument();});
+
+test('setup status is checked once while navigating between management pages', async () => {
+  getSetupStatus.mockResolvedValue({completed:true,ready:true,missing:[]});
+  render(<AuthContext.Provider value={{user:{role:'admin'},token:'valid',loading:false}}>
+    <MemoryRouter initialEntries={['/']}>
+      <Routes><Route element={<SetupGate><Outlet /></SetupGate>}>
+        <Route path="/" element={<><div>Dashboard contents</div><Link to="/clients">Clients</Link></>} />
+        <Route path="/clients" element={<div>Client page</div>} />
+      </Route></Routes>
+    </MemoryRouter>
+  </AuthContext.Provider>);
+  expect(await screen.findByText('Dashboard contents')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('link', {name:'Clients'}));
+  expect(await screen.findByText('Client page')).toBeInTheDocument();
+  expect(getSetupStatus).toHaveBeenCalledTimes(1);
+});
 
 test('a session revoked by restore returns to login and clears saved credentials', async () => {
   localStorage.setItem('authToken', 'revoked-token');

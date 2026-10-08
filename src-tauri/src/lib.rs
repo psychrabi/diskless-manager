@@ -1,5 +1,4 @@
 mod auth;
-pub mod client;
 mod config;
 mod disks;
 mod error;
@@ -91,12 +90,15 @@ fn lock_single_instance() -> anyhow::Result<std::fs::File> {
     let path = std::path::PathBuf::from("/run/diskless-manager.lock");
     let file = std::fs::OpenOptions::new()
         .create(true)
+        .truncate(false)
         .write(true)
         .open(&path)
         .or_else(|_| {
-            std::fs::OpenOptions::new().create(true).write(true).open(
-                std::env::temp_dir().join("diskless-manager.lock"),
-            )
+            std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .open(std::env::temp_dir().join("diskless-manager.lock"))
         })
         .map_err(|error| anyhow::anyhow!("cannot create instance lock: {error}"))?;
     file.try_lock_exclusive()

@@ -14,30 +14,31 @@ pub async fn rotate_client_chap(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     let _client_guard = state.client_mutations.lock().await;
 
-    let (client, credentials) = state
-        .application
-        .clients
-        .rotate_chap(&id)
-        .await
-        .map_err(|error| {
-            let not_found = error.to_string().contains("client not found");
-            let status = if not_found {
-                StatusCode::NOT_FOUND
-            } else {
-                StatusCode::INTERNAL_SERVER_ERROR
-            };
-            (
-                status,
-                Json(ErrorResponse {
-                    status: status.as_u16(),
-                    error: if not_found {
-                        format!("Client not found: {id}")
-                    } else {
-                        format!("Failed to rotate CHAP credentials: {error}")
-                    },
-                }),
-            )
-        })?;
+    let (client, credentials) =
+        state
+            .application
+            .clients
+            .rotate_chap(&id)
+            .await
+            .map_err(|error| {
+                let not_found = error.to_string().contains("client not found");
+                let status = if not_found {
+                    StatusCode::NOT_FOUND
+                } else {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                };
+                (
+                    status,
+                    Json(ErrorResponse {
+                        status: status.as_u16(),
+                        error: if not_found {
+                            format!("Client not found: {id}")
+                        } else {
+                            format!("Failed to rotate CHAP credentials: {error}")
+                        },
+                    }),
+                )
+            })?;
 
     if let Some(target_iqn) = client
         .target_iqn
@@ -71,6 +72,7 @@ pub async fn rotate_client_chap(
             mac: client.mac.to_string(),
             ip: client.ip.to_string(),
             target_iqn: target_iqn.to_string(),
+            boot_image: client.boot_image,
             server_ip: server_ip.to_string(),
             chap: Some(credentials.clone()),
         };

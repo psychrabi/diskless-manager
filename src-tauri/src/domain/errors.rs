@@ -19,4 +19,7 @@ pub enum DomainError {
 
     #[error("client master image cannot be empty")]
     EmptyMasterImage,
+
+    #[error("invalid client boot image: {0}")]
+    InvalidBootImage(String),
 }

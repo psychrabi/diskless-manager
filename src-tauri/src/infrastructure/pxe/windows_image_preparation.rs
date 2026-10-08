@@ -3,9 +3,7 @@
 //! One mount operation owns both driver installation and SYSTEM-hive boot arming.
 //! Any failure discards the DISM mount so partial changes are not committed.
 
-use super::{
-    WindowsBootArmConfig, WindowsBootArmResult, WindowsBootArmer, WindowsDriverInjector,
-};
+use super::{WindowsBootArmConfig, WindowsBootArmResult, WindowsBootArmer, WindowsDriverInjector};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;

@@ -150,6 +150,13 @@ fn is_public_endpoint(method: &Method, path: &str) -> bool {
 }
 
 fn user_request_is_allowed(method: &Method, path: &str) -> bool {
+    if matches!(
+        (method, path),
+        (&Method::POST, "/api/services/install") | (&Method::POST, "/api/ssh/execute-command")
+    ) {
+        return false;
+    }
+
     if matches!(method, &Method::GET | &Method::OPTIONS) {
         return true;
     }
@@ -245,6 +252,18 @@ mod tests {
         assert!(user_request_is_allowed(
             &Method::POST,
             "/api/system/network/apply"
+        ));
+        assert!(!user_request_is_allowed(
+            &Method::POST,
+            "/api/services/install"
+        ));
+        assert!(!user_request_is_allowed(
+            &Method::POST,
+            "/api/ssh/execute-command"
+        ));
+        assert!(user_request_is_allowed(
+            &Method::POST,
+            "/api/ssh/test-connection"
         ));
         assert!(!user_request_is_allowed(&Method::DELETE, "/api/clients/id"));
         assert!(!user_request_is_allowed(

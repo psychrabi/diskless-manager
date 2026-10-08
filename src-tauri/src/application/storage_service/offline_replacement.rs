@@ -118,8 +118,8 @@ impl StorageService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::infrastructure::{image::ImageBackendInfo, iscsi::IscsiTargetState};
     use crate::infrastructure::iscsi::{ChapCredentials, IscsiLunState};
+    use crate::infrastructure::{image::ImageBackendInfo, iscsi::IscsiTargetState};
     use std::{collections::HashMap, path::Path, sync::Mutex};
 
     #[derive(Default)]

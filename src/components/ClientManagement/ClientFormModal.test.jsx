@@ -28,6 +28,18 @@ it("ignores an earlier client's status response after switching clients", async 
   expect(screen.getByText("second-client")).toBeInTheDocument();
   expect(screen.queryByText("first-client")).not.toBeInTheDocument();
   expect(screen.getByDisplayValue("PC002")).toBeInTheDocument();
+  expect(screen.getByLabelText("Default Boot Image")).toHaveValue("windows");
+});
+
+it("shows the saved boot image for an existing client", async () => {
+  getClientNvmeOfStatus.mockResolvedValue(null);
+  const client = { id: "five", name: "PC005", mac: "00:11:22:33:44:68", ip: "192.168.1.105", master: "ubuntu", boot_image: "linux" };
+  render(
+    <MemoryRouter>
+      <ClientFormModal client={client} masters={[]} isOpen onClose={() => {}} refresh={() => {}} />
+    </MemoryRouter>,
+  );
+  expect(await screen.findByLabelText("Default Boot Image")).toHaveValue("linux");
 });
 
 it("shows a link to Disks when the game switch is on but no game disks exist", async () => {

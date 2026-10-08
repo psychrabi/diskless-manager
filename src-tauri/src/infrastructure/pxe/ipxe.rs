@@ -154,7 +154,15 @@ pub fn render_client_script_with_mode(
     ready: bool,
     chap: Option<&crate::infrastructure::iscsi::ChapCredentials>,
 ) -> String {
-    render_client_script_with_scheme(client_name, target_iqn, http_port, ready, false, chap)
+    render_client_script_with_scheme(
+        client_name,
+        target_iqn,
+        http_port,
+        ready,
+        false,
+        chap,
+        crate::domain::ClientBootImage::Windows,
+    )
 }
 
 #[must_use]
@@ -165,6 +173,7 @@ pub fn render_client_script_with_scheme(
     ready: bool,
     https: bool,
     chap: Option<&crate::infrastructure::iscsi::ChapCredentials>,
+    boot_image: crate::domain::ClientBootImage,
 ) -> String {
     let slug = client_script_slug(client_name);
     let scheme = if https { "https" } else { "http" };
@@ -225,6 +234,12 @@ shell
         );
     }
 
+    let default_boot = match boot_image {
+        crate::domain::ClientBootImage::Windows => "boot_windows",
+        crate::domain::ClientBootImage::Winpe => "boot_pe",
+        crate::domain::ClientBootImage::Linux => "boot_ubuntu",
+    };
+
     let root = format!("/dev/disk/by-path/ip-${{next-server}}:3260-iscsi-{target_iqn}-lun-0-part2");
     let initiator_iqn = format!("iqn.2026-01.client:client.{slug}");
     let nvme_nqn = format!("nqn.2026-09.local.diskless:client.{slug}");
@@ -251,7 +266,7 @@ item --key i boot_pe       Boot from WinPE (WIM)
 item --gap --             ------------------------- Advanced options ------------------------------
 item shell               Drop to iPXE shell
 item reboot              Reboot computer
-choose --timeout 5000 --default boot_windows selected || goto cancel
+choose --timeout 5000 --default {default_boot} selected || goto cancel
 goto ${{selected}}
 
 :cancel
@@ -331,6 +346,7 @@ kernel ${{boot-url}}/anduinos/vmlinuz ip=dhcp iscsi_initiator=${{initiator-iqn}}
 initrd ${{boot-url}}/anduinos/initrd.img
 boot || goto failed
 "##,
+        default_boot = default_boot,
         nvme_flag = NVMEOF_CAPABILITY_FLAG,
         nvme_firmware = NVMEOF_FIRMWARE,
     )
@@ -402,7 +418,10 @@ mod tests {
     fn deny_scripts_reboot_loop_without_booting() {
         for script in [render_enrollment_disabled(), render_enrollment_closed()] {
             assert!(script.starts_with("#!ipxe"), "must be an iPXE script");
-            assert!(script.contains("reboot"), "deny scripts must loop, never boot");
+            assert!(
+                script.contains("reboot"),
+                "deny scripts must loop, never boot"
+            );
             assert!(!script.contains("sanboot"), "deny scripts must not boot");
             assert!(!script.contains("chain "), "deny scripts must not chain");
         }
@@ -497,7 +516,8 @@ mod tests {
     }
 
     #[test]
-    fn port_80_is_not_rendered_explicitly() {        let script = render_client_script("PC001", "iqn.example:pc001", 80);
+    fn port_80_is_not_rendered_explicitly() {
+        let script = render_client_script("PC001", "iqn.example:pc001", 80);
         assert!(script.contains("set boot-url http://${next-server}"));
         assert!(!script.contains("${next-server}:80"));
     }
@@ -511,8 +531,29 @@ mod tests {
             true,
             true,
             None,
+            crate::domain::ClientBootImage::Windows,
         );
         assert!(script.contains("set boot-url https://${next-server}"));
+    }
+
+    #[test]
+    fn selected_boot_image_is_the_default_menu_entry() {
+        for (image, expected) in [
+            (crate::domain::ClientBootImage::Windows, "boot_windows"),
+            (crate::domain::ClientBootImage::Winpe, "boot_pe"),
+            (crate::domain::ClientBootImage::Linux, "boot_ubuntu"),
+        ] {
+            let script = render_client_script_with_scheme(
+                "PC001",
+                "iqn.example:pc001",
+                80,
+                true,
+                false,
+                None,
+                image,
+            );
+            assert!(script.contains(&format!("--default {expected}")));
+        }
     }
 
     #[test]

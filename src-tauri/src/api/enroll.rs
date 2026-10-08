@@ -149,12 +149,10 @@ async fn ensure_client_menu(
         (true, Some(username), Some(password))
             if !username.trim().is_empty() && !password.is_empty() =>
         {
-            Some(
-                crate::infrastructure::iscsi::ChapCredentials {
-                    username: username.to_string(),
-                    password: password.to_string(),
-                },
-            )
+            Some(crate::infrastructure::iscsi::ChapCredentials {
+                username: username.to_string(),
+                password: password.to_string(),
+            })
         }
         _ => None,
     };
@@ -163,6 +161,7 @@ async fn ensure_client_menu(
         mac: client.mac.to_string(),
         ip: client.ip.to_string(),
         target_iqn: target_iqn.to_string(),
+        boot_image: client.boot_image,
         server_ip: boot_server_ip(settings),
         chap,
     };
@@ -215,6 +214,7 @@ async fn register_pending_client(
         block_device: None,
         target_iqn: None,
         pxe_mode: PxeMode::Uefi,
+        boot_image: crate::domain::ClientBootImage::Windows,
         keep_writeback: true,
         use_game_disk: false,
         game_disks: Vec::new(),

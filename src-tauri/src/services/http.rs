@@ -166,6 +166,11 @@ impl HttpService {
                 mac: client.mac.clone(),
                 ip: client.ip.clone(),
                 target_iqn: target_iqn.to_string(),
+                boot_image: client
+                    .boot_image
+                    .as_deref()
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or_default(),
                 server_ip: server_ip.to_string(),
                 chap,
             };

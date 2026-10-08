@@ -12,8 +12,7 @@ use std::path::PathBuf;
 use uuid::Uuid;
 
 const PROTOCOL_VERSION: u32 = 2;
-const DEFAULT_HELPER: &str =
-    r"C:\Program Files\Diskless Manager\diskless-windows-servicer.exe";
+const DEFAULT_HELPER: &str = r"C:\Program Files\Diskless Manager\diskless-windows-servicer.exe";
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RemoteWindowsServicingRequest {
@@ -101,19 +100,17 @@ impl RemoteWindowsServicer {
         request: RemoteWindowsCapabilitiesRequest,
     ) -> Result<RemoteWindowsServicingCapabilities> {
         validate_remote_identity(&request.host, &request.username)?;
-        let executable = validate_helper_path(
-            request
-                .executable_path
-                .as_deref()
-                .unwrap_or(DEFAULT_HELPER),
-        )?;
+        let executable =
+            validate_helper_path(request.executable_path.as_deref().unwrap_or(DEFAULT_HELPER))?;
         let executor = self.executor(request.username, request.password);
         let command = powershell_helper_command(&executable, "capabilities");
 
         let output = executor
             .execute_command(&request.host, &command)
             .await
-            .map_err(|error| anyhow::anyhow!("remote Windows servicing capability check failed: {error}"))?;
+            .map_err(|error| {
+                anyhow::anyhow!("remote Windows servicing capability check failed: {error}")
+            })?;
 
         if output.exit_code != 0 {
             bail!(
@@ -135,12 +132,8 @@ impl RemoteWindowsServicer {
         request: RemoteWindowsServicingRequest,
     ) -> Result<WindowsImagePreparationResult> {
         validate_remote_identity(&request.host, &request.username)?;
-        let executable = validate_helper_path(
-            request
-                .executable_path
-                .as_deref()
-                .unwrap_or(DEFAULT_HELPER),
-        )?;
+        let executable =
+            validate_helper_path(request.executable_path.as_deref().unwrap_or(DEFAULT_HELPER))?;
         let payload = serde_json::to_vec(&request.preparation)
             .context("failed to serialize Windows servicing request")?;
 
@@ -190,8 +183,7 @@ impl RemoteWindowsServicer {
         }
 
         let staging_id = Uuid::new_v4().to_string();
-        let remote_base =
-            format!(r"C:\ProgramData\Diskless Manager\staging\{staging_id}");
+        let remote_base = format!(r"C:\ProgramData\Diskless Manager\staging\{staging_id}");
         let remote_driver_root = format!(r"{remote_base}\drivers");
         let remote_driver_root_sftp = remote_driver_root.replace('\\', "/");
 
@@ -203,7 +195,9 @@ impl RemoteWindowsServicer {
         let created = executor
             .execute_command(&host, &create_command)
             .await
-            .map_err(|error| anyhow::anyhow!("failed to create remote driver staging directory: {error}"))?;
+            .map_err(|error| {
+                anyhow::anyhow!("failed to create remote driver staging directory: {error}")
+            })?;
         if created.exit_code != 0 {
             bail!(
                 "failed to create remote driver staging directory: {}",
@@ -214,8 +208,11 @@ impl RemoteWindowsServicer {
         let staging_result = async {
             let mut uploaded_bytes = 0u64;
             for package in &packages {
-                let remote_package_root =
-                    format!("{}/{}", remote_driver_root_sftp.trim_end_matches('/'), package.id);
+                let remote_package_root = format!(
+                    "{}/{}",
+                    remote_driver_root_sftp.trim_end_matches('/'),
+                    package.id
+                );
                 uploaded_bytes += executor
                     .upload_directory(&host, &package.source_dir, &remote_package_root)
                     .await
@@ -329,7 +326,9 @@ fn powershell_literal(value: &str) -> String {
 }
 
 fn powershell_statement(statement: &str) -> String {
-    debug_assert!(!statement.chars().any(|ch| matches!(ch, '\r' | '\n' | '\0' | '"')));
+    debug_assert!(!statement
+        .chars()
+        .any(|ch| matches!(ch, '\r' | '\n' | '\0' | '"')));
     format!(
         "powershell.exe -NoProfile -NonInteractive -Command \"{}\"",
         statement

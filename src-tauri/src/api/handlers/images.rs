@@ -14,22 +14,6 @@ fn image_service(state: &AppState) -> ImageService {
     ImageService::new(ImageRepository::new(state.db_pool.clone()))
 }
 
-fn images_to_snapshots(images: &[Image], parent_id: &str) -> Vec<crate::types::image::Snapshot> {
-    images
-        .iter()
-        .filter(|img| {
-            img.kind == crate::core::image::ImageKind::Snapshot
-                && img.parent_id.as_deref() == Some(parent_id)
-        })
-        .map(|snap| crate::types::image::Snapshot {
-            name: snap.name.clone(),
-            created: snap.created_at.to_rfc3339(),
-            used: format!("{}GB", snap.size_gb),
-            size: Some(format!("{}GB", snap.size_gb)),
-        })
-        .collect()
-}
-
 pub async fn list_images(State(state): State<AppState>) -> Result<Json<Vec<Image>>, StatusCode> {
     let service = image_service(&state);
 
@@ -40,6 +24,7 @@ pub async fn list_images(State(state): State<AppState>) -> Result<Json<Vec<Image
     })
 }
 
+/// A root image and its child snapshot summaries, preserving repository order.
 #[derive(Serialize)]
 pub struct MasterWithSnapshots {
     #[serde(flatten)]
@@ -48,6 +33,10 @@ pub struct MasterWithSnapshots {
     pub snapshots: Vec<crate::types::image::Snapshot>,
 }
 
+/// Lists root images and snapshot summaries using the state's database.
+///
+/// Returns a name-ordered JSON response, or an internal-server error on database
+/// or metadata decoding failure.
 pub async fn list_masters(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<MasterWithSnapshots>>, StatusCode> {
@@ -62,23 +51,36 @@ pub async fn list_masters(
     log::info!("list_masters: Found {} total images", images.len());
 
     let mut masters_with_snapshots = Vec::new();
+    let mut snapshots_by_parent: std::collections::HashMap<
+        String,
+        Vec<crate::types::image::Snapshot>,
+    > = std::collections::HashMap::new();
 
-    for image in &images {
+    // Consume records to retain repository ordering without cloning master metadata.
+    for image in images {
         if image.parent_id.is_none() {
-            let snapshots = images_to_snapshots(&images, &image.id);
-
-            log::info!(
-                "Master '{}' (id={}) has {} snapshots",
-                image.name,
-                image.id,
-                snapshots.len()
-            );
-
             masters_with_snapshots.push(MasterWithSnapshots {
-                image: image.clone(),
-                snapshots,
+                image,
+                snapshots: Vec::new(),
             });
+        } else if image.kind == crate::core::image::ImageKind::Snapshot {
+            if let Some(parent_id) = image.parent_id {
+                let size = format!("{}GB", image.size_gb);
+                snapshots_by_parent.entry(parent_id).or_default().push(
+                    crate::types::image::Snapshot {
+                        name: image.name,
+                        created: image.created_at.to_rfc3339(),
+                        used: size.clone(),
+                        size: Some(size),
+                    },
+                );
+            }
         }
+    }
+    for master in &mut masters_with_snapshots {
+        master.snapshots = snapshots_by_parent
+            .remove(&master.image.id)
+            .unwrap_or_default();
     }
 
     Ok(Json(masters_with_snapshots))
@@ -134,12 +136,12 @@ pub async fn update_image(
         request
     );
 
+    let _client_guard = state.client_mutations.lock().await;
     let service = image_service(&state);
 
     let image = service.update(&id, request).await.map_err(|error| {
         log::error!("Failed to update image '{}': {}", id, error);
-
-        StatusCode::INTERNAL_SERVER_ERROR
+        image_error_status(&error)
     })?;
 
     log::info!("Successfully updated image '{}'", image.name);
@@ -157,6 +159,7 @@ pub async fn rename_image(
     Path(id): Path<String>,
     Json(request): Json<RenameImageRequest>,
 ) -> Result<Json<Image>, StatusCode> {
+    let _client_guard = state.client_mutations.lock().await;
     let service = image_service(&state);
 
     service
@@ -165,8 +168,7 @@ pub async fn rename_image(
         .map(Json)
         .map_err(|error| {
             log::error!("Failed to rename image '{}': {}", id, error);
-
-            StatusCode::INTERNAL_SERVER_ERROR
+            image_error_status(&error)
         })
 }
 
@@ -402,90 +404,116 @@ pub async fn rollback_snapshot(
     if claims.role != "admin" {
         return Err(StatusCode::FORBIDDEN);
     }
-    /*
-     * Rollback is intentionally left as a legacy operation
-     * for this stage.
-     *
-     * Stage 3D should move this into ImageService/ImageBackend
-     * so the HTTP handler contains no direct ZFS or SQL logic.
-     */
-
-    log::info!(
-        "Received rollback request: master='{}', snapshot='{}'",
-        master_name,
-        snapshot_name
-    );
-
     let service = image_service(&state);
-
-    let images = service.list().await.map_err(|error| {
-        log::error!("Failed to list images: {}", error);
-
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    let master = images
+    // Resolve these separately to preserve the API's not-found response.
+    let master = service
+        .get(&master_name)
+        .await
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+    if !service
+        .snapshots(&master.id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .iter()
-        .find(|image| image.id == master_name || image.name == master_name)
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    let target_snapshot = images
-        .iter()
-        .find(|image| image.name == snapshot_name && image.parent_id.as_deref() == Some(&master.id))
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    let newer_snapshots: Vec<String> = images
-        .iter()
-        .filter(|image| {
-            image.parent_id.as_deref() == Some(&master.id)
-                && image.created_at > target_snapshot.created_at
-        })
-        .map(|image| image.id.clone())
-        .collect();
-
-    let snapshot_full_path = format!("{}@{}", master.name, snapshot_name);
-
-    crate::infrastructure::command::run_command(&["zfs", "rollback", "-r", &snapshot_full_path])
+        .any(|snapshot| snapshot.name == snapshot_name)
+    {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let removed = service
+        .rollback_snapshot(&master.id, &snapshot_name)
+        .await
         .map_err(|error| {
             log::error!(
-                "Failed to rollback snapshot '{}': {}",
-                snapshot_full_path,
+                "Failed to rollback '{}@{}': {}",
+                master.name,
+                snapshot_name,
                 error
             );
-
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
-
-    if !newer_snapshots.is_empty() {
-        let placeholders = newer_snapshots
-            .iter()
-            .map(|_| "?")
-            .collect::<Vec<_>>()
-            .join(",");
-
-        let query = format!("DELETE FROM images WHERE id IN ({})", placeholders);
-
-        let mut query_builder = sqlx::query(&query);
-
-        for id in &newer_snapshots {
-            query_builder = query_builder.bind(id);
-        }
-
-        query_builder
-            .execute(&state.db_pool)
-            .await
-            .map_err(|error| {
-                log::error!("Failed to delete newer snapshots from database: {}", error);
-
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?;
-    }
 
     Ok(Json(serde_json::json!({
         "message": format!(
             "Successfully rolled back to snapshot '{}' and removed {} newer snapshots",
             snapshot_name,
-            newer_snapshots.len()
+            removed
         )
     })))
+}
+
+fn image_error_status(error: &anyhow::Error) -> StatusCode {
+    if error
+        .downcast_ref::<crate::application::image_service::ImageInUse>()
+        .is_some()
+    {
+        StatusCode::CONFLICT
+    } else {
+        StatusCode::INTERNAL_SERVER_ERROR
+    }
+}
+
+#[cfg(test)]
+mod listing_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn image(id: &str, kind: &str, parent: Option<&str>) -> Image {
+        serde_json::from_value(json!({
+            "id": id, "name": id, "kind": kind, "os_type": "windows",
+            "size_gb": 20, "path": "/dev/zvol/diskless/image", "format": "raw",
+            "status": "ready", "description": "preserved metadata",
+            "parent_id": parent, "source_snapshot": null, "checksum": "checksum",
+            "is_default": id == "master-a",
+            "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-02T00:00:00Z"
+        }))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn listing_preserves_metadata_order_and_excludes_clones_and_orphans() {
+        let (state, _, _, _) = crate::api::security_tests::setup().await;
+        let repository = ImageRepository::new(state.db_pool.clone());
+        let master_a = image("master-a", "master", None);
+        let master_b = image("master-b", "master", None);
+        for record in [
+            master_b.clone(),
+            image("z-snapshot", "snapshot", Some("master-a")),
+            image("clone", "clone", Some("master-a")),
+            master_a.clone(),
+            image("a-snapshot", "snapshot", Some("master-a")),
+            image("orphan", "snapshot", Some("missing")),
+            image("b-snapshot", "snapshot", Some("master-b")),
+        ] {
+            repository.insert(&record).await.unwrap();
+        }
+        let result = list_masters(State(state)).await.unwrap();
+        let snapshot = |name| {
+            json!({"name": name, "created": "2026-01-01T00:00:00+00:00",
+            "used": "20GB", "size": "20GB"})
+        };
+        let expected = vec![
+            MasterWithSnapshots {
+                image: master_a,
+                snapshots: serde_json::from_value(json!([
+                    snapshot("a-snapshot"),
+                    snapshot("z-snapshot")
+                ]))
+                .unwrap(),
+            },
+            MasterWithSnapshots {
+                image: master_b,
+                snapshots: serde_json::from_value(json!([snapshot("b-snapshot")])).unwrap(),
+            },
+        ];
+        assert_eq!(
+            serde_json::to_vec(&result.0).unwrap(),
+            serde_json::to_vec(&expected).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn listing_empty_inventory_returns_empty_response() {
+        let (state, _, _, _) = crate::api::security_tests::setup().await;
+        assert!(list_masters(State(state)).await.unwrap().0.is_empty());
+    }
 }

@@ -45,7 +45,7 @@ const ClientFormModal = (props) => (
 
 // Explicit form defaults: a new client starts enabled with CHAP on, the
 // game switch off and an empty selection, instead of `undefined` values.
-const formDefaults = { enabled: true, chap_enabled: true, use_game_disk: false, game_disks: [] };
+const formDefaults = { enabled: true, chap_enabled: true, use_game_disk: false, game_disks: [], boot_image: "windows" };
 
 const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) => {
   const { success, error } = useToastStore();
@@ -198,6 +198,7 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
           mac: data.mac,
           ip: data.ip,
           master: data.master,
+          boot_image: data.boot_image,
           snapshot: data.snapshot || null,
           keep_writeback: data.keep_writeback,
           use_game_disk: data.use_game_disk,
@@ -212,6 +213,7 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
           mac: data.mac,
           ip: data.ip,
           master: data.master,
+          boot_image: data.boot_image,
           snapshot: data.snapshot || null,
           keep_writeback: data.keep_writeback,
           use_game_disk: data.use_game_disk,
@@ -414,6 +416,18 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
                 ))}
               </NativeSelect>
               <FieldError>{errors.master?.message}</FieldError>
+            </FieldContent>
+          </Field>
+
+          <Field>
+            <FieldLabel htmlFor="boot_image">Default Boot Image</FieldLabel>
+            <FieldContent>
+              <NativeSelect id="boot_image" {...register("boot_image")}>
+                <NativeSelectOption value="windows">Windows (iSCSI)</NativeSelectOption>
+                <NativeSelectOption value="winpe">WinPE</NativeSelectOption>
+                <NativeSelectOption value="linux">Linux (Ubuntu)</NativeSelectOption>
+              </NativeSelect>
+              <FieldDescription>Selected by default at startup; other boot choices remain in the iPXE menu.</FieldDescription>
             </FieldContent>
           </Field>
 
