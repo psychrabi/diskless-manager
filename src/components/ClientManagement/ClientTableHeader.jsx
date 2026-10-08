@@ -13,12 +13,18 @@ const ClientTableHeader = ({ fixed = false }) => {
         fixed && "z-10 bg-card shadow-sm"
       )}
     >
-      <TableHead className={headerCellClass("text-center", fixed)}>Client</TableHead>
+      <TableHead className={headerCellClass("", fixed)}>Name</TableHead>
+      <TableHead className={headerCellClass("hidden text-center xl:table-cell", fixed)}>
+        MAC Address
+      </TableHead>
+      <TableHead className={headerCellClass("hidden text-center xl:table-cell", fixed)}>
+        IP Address
+      </TableHead>
       <TableHead className={headerCellClass("text-center", fixed)}>
-        Throughput (MB/s)
+        I/O (MB/s)
       </TableHead>
       <TableHead className={headerCellClass("hidden text-center lg:table-cell", fixed)}>
-        Total I/O
+        I/O (Total)
       </TableHead>
       <TableHead className={headerCellClass("hidden text-center xl:table-cell", fixed)}>
         Image

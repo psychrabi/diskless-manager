@@ -205,7 +205,13 @@ impl DhcpService {
         for interface in &self.settings.server.interface {
             validate_interface_name(interface)?;
         }
-        run_sudo_command(["dhcpd", "-t", "-cf", "/etc/dhcp/dhcpd.conf"]).await?;
+        crate::infrastructure::command::run_command_async([
+            "dhcpd",
+            "-t",
+            "-cf",
+            "/etc/dhcp/dhcpd.conf",
+        ])
+        .await?;
         Ok(())
     }
 

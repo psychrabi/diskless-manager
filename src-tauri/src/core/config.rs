@@ -201,8 +201,8 @@ impl Default for HttpConfig {
             enabled: true,
             root_dir: PathBuf::from("/srv/tftp").display().to_string(),
             server_ip: "192.168.1.250".to_string(),
-            port: 443,
-            tls_enabled: true,
+            port: 80,
+            tls_enabled: false,
             tls_cert_path: "/etc/diskless-manager/boot.crt".to_string(),
             tls_key_path: "/etc/diskless-manager/boot.key".to_string(),
         }

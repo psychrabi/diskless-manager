@@ -82,8 +82,9 @@ const RateLine = ({ metricValue, icon: Icon, iconClassName, label }) => (
   </span>
 );
 
-const TotalLine = ({ byteValue, label }) => (
-  <span title={`${label} since the disk counters last restarted`}>
+const TotalLine = ({ byteValue, icon: Icon, iconClassName, label }) => (
+  <span className="flex items-center gap-1" title={`${label} since the disk counters last restarted`}>
+    <Icon className={`size-3 shrink-0 ${iconClassName}`} />
     {formatDiskBytes(byteValue)}
   </span>
 );
@@ -95,7 +96,7 @@ const UptimeCell = ({ uptimeSeconds }) => {
 
   return (
     <span className="flex items-center gap-1">
-      <Clock className="size-3 text-secondary" />
+      <Clock className="size-3 text-muted-foreground" />
       {formatUptime(uptimeSeconds)}
     </span>
   );
@@ -109,12 +110,14 @@ const ClientTableRow = ({ client, clientMetrics }) => {
           <ClientStatusIcon status={client.status} />
           <span className="truncate  font-bold mt-0.5">{client.name}</span>
         </div>
-        <div className="mt-0.5 truncate  text-xs text-muted-foreground">
-          {client.mac} • {client.ip}
-        </div>
       </TableCell>
-      <TableCell className=" text-xs text-center ">
-        <div className="flex flex-col gap-1">
+      <TableCell className="hidden text-center  text-sm xl:table-cell">
+        {client.mac}
+      </TableCell>
+      <TableCell className="hidden text-center  text-sm xl:table-cell">
+        {client.ip}</TableCell>
+      <TableCell className="text-xs text-center">
+        <div className="flex gap-1 justify-evenly">
           <RateLine
             metricValue={clientMetrics?.iscsi?.read_speed_mbps}
             icon={MoveUp}
@@ -124,15 +127,17 @@ const ClientTableRow = ({ client, clientMetrics }) => {
           <RateLine
             metricValue={clientMetrics?.iscsi?.write_speed_mbps}
             icon={MoveDown}
-            iconClassName="text-secondary"
+            iconClassName="text-muted-foreground"
             label="Write speed (MB/s)"
           />
         </div>
       </TableCell>
       <TableCell className="hidden text-center  text-xs lg:table-cell">
-        <div className="flex flex-col gap-1">
-          <TotalLine byteValue={clientMetrics?.iscsi?.total_read_bytes} label="Total read" />
-          <TotalLine byteValue={clientMetrics?.iscsi?.total_write_bytes} label="Total written" />
+        <div className="flex gap-1 justify-evenly">
+          <TotalLine icon={MoveUp}
+          iconClassName="text-primary" byteValue={clientMetrics?.iscsi?.total_read_bytes} label="Total read" />
+          <TotalLine icon={MoveDown}
+          iconClassName="text-primary" byteValue={clientMetrics?.iscsi?.total_write_bytes} label="Total written" />
         </div>
       </TableCell>
       <TableCell className="hidden max-w-36 xl:table-cell">
@@ -145,7 +150,9 @@ const ClientTableRow = ({ client, clientMetrics }) => {
         </div>
       </TableCell>
       <TableCell className="hidden text-center text-xs lg:table-cell">
-        <UptimeCell uptimeSeconds={clientMetrics?.uptime_seconds} />
+        <div className="flex justify-center">
+          <UptimeCell uptimeSeconds={clientMetrics?.uptime_seconds} />
+        </div>
       </TableCell>
       <TableCell>
         <ControlActionButtons client={client} onActionComplete={() => {}} />

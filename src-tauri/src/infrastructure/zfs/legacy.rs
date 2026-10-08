@@ -11,11 +11,19 @@ pub fn zfs_destroy(dataset: &str) -> Result<(), AppError> {
         .map_err(|error| AppError::Command(error.to_string()))
 }
 
+/// Resolve the client's clone destination under the first writeback dataset,
+/// falling back to the pool root when no writeback dataset can be listed.
+///
+/// # Arguments
+///
+/// * `client_name` - Client name used to build the destination dataset name.
+///
+/// # Returns
+///
+/// The full destination dataset name for the client's writeback clone.
 pub fn get_writeback_or_default_dataset(client_name: &str) -> String {
     let zpool = get_zpool_name();
-    let mut writeback_path = format!("{}/{}-disk", zpool, client_name.to_uppercase());
-
-    if let Ok(pool_list) = run_command_output_no_sudo(&[
+    let listing = run_command_output_no_sudo(&[
         "zfs",
         "list",
         "-H",
@@ -23,13 +31,10 @@ pub fn get_writeback_or_default_dataset(client_name: &str) -> String {
         "name,org.diskless:type",
         "-r",
         &zpool,
-    ]) {
-        if let Some(parent) = writeback_parent(&pool_list) {
-            writeback_path = format!("{}/{}-disk", parent, client_name.to_uppercase());
-        }
-    }
+    ])
+    .unwrap_or_default();
 
-    writeback_path
+    client_writeback_dataset(client_name, &zpool, &listing)
 }
 
 fn writeback_parent(listing: &str) -> Option<&str> {
@@ -39,9 +44,14 @@ fn writeback_parent(listing: &str) -> Option<&str> {
     })
 }
 
+fn client_writeback_dataset(client_name: &str, pool: &str, listing: &str) -> String {
+    let parent = writeback_parent(listing).unwrap_or(pool);
+    format!("{}/{}-disk", parent, client_name.to_uppercase())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::writeback_parent;
+    use super::{client_writeback_dataset, writeback_parent};
 
     #[test]
     fn bulk_listing_selects_first_writeback_and_ignores_other_types() {
@@ -51,5 +61,25 @@ mod tests {
             None
         );
         assert_eq!(writeback_parent("\ninvalid\n"), None);
+    }
+
+    #[test]
+    fn client_clone_is_created_under_writeback_dataset_when_available() {
+        assert_eq!(
+            client_writeback_dataset(
+                "pc001",
+                "diskless",
+                "diskless\t-\ndiskless/images\timage\ndiskless/writeback\twriteback\n"
+            ),
+            "diskless/writeback/PC001-disk"
+        );
+    }
+
+    #[test]
+    fn client_clone_falls_back_to_pool_root_without_writeback_dataset() {
+        assert_eq!(
+            client_writeback_dataset("pc001", "diskless", "diskless\t-\n"),
+            "diskless/PC001-disk"
+        );
     }
 }

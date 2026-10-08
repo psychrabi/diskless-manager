@@ -1,10 +1,10 @@
-use crate::config::{get_config, get_zpool_name};
+use crate::config::get_config;
 use crate::core::client::Client;
 use crate::core::provisioning_transaction::ProvisioningTransaction;
 use crate::domain::provisioning::TargetIqn;
 use crate::domain::storage::{ClientStorageSpec, StorageSource};
 use crate::error::AppError;
-use crate::infrastructure::command::{run_command, run_command_async, run_command_output_no_sudo};
+use crate::infrastructure::command::{run_command, run_command_async};
 use crate::infrastructure::dhcp::{create_dhcp_entry_for_server, update_dhcp_config};
 use crate::infrastructure::zfs::legacy::get_writeback_or_default_dataset;
 use crate::state::AppState;
@@ -276,35 +276,6 @@ pub async fn add_client_provisioning(
     // -----------------------------------------------------------------
 
     let mut paths = get_client_paths_with_master(&name, &mac, &master);
-
-    if let Ok(pool_list) =
-        run_command_output_no_sudo(["zfs", "list", "-H", "-o", "name", "-r", &get_zpool_name()])
-    {
-        if let Some(parent) =
-            pool_list
-                .lines()
-                .filter(|line| !line.is_empty())
-                .find_map(|dataset| {
-                    match run_command_output_no_sudo([
-                        "zfs",
-                        "get",
-                        "-H",
-                        "-o",
-                        "value",
-                        "org.diskless:type",
-                        dataset,
-                    ]) {
-                        Ok(value) if value.trim() == "writeback" => Some(dataset.to_string()),
-
-                        _ => None,
-                    }
-                })
-        {
-            paths.dataset = format!("{}/{}-disk", parent, name.to_uppercase());
-        } else {
-            paths.dataset = format!("{}/{}-disk", get_zpool_name(), name.to_uppercase());
-        }
-    }
 
     info!("Client storage paths: {:?}", paths);
 

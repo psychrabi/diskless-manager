@@ -63,9 +63,9 @@ pub(crate) async fn publish_client_ipxe(reservation: &BootReservation) -> Result
     let script = crate::infrastructure::pxe::render_client_script_with_scheme(
         &reservation.client_name,
         &reservation.target_iqn,
-        settings.http.port,
+        80,
         true,
-        settings.http.tls_enabled,
+        false,
         reservation.chap.as_ref(),
     );
     // Image/snapshot updates leave the menu byte-identical; skip the
