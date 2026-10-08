@@ -297,7 +297,8 @@ async fn client_network_config(
         "ip": client.ip.to_string(),
         "gateway": settings.dhcp.gateway_ip,
         "dns": dns,
-    })).into_response()
+    }))
+    .into_response()
 }
 
 async fn enroll_client(
