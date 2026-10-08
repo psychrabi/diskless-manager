@@ -38,18 +38,7 @@ chain http://${{next-server}}/snponly-nvmeof.efi || goto failed
 /// `client_mac_script_path()` and then chains the generated per-client menu.
 #[must_use]
 pub fn render_client_dispatcher_autoexec(http_port: u16, enroll_port: u16) -> String {
-    render_client_dispatcher_autoexec_with_scheme(http_port, enroll_port, false)
-}
-
-#[must_use]
-pub fn render_client_dispatcher_autoexec_with_scheme(
-    http_port: u16,
-    enroll_port: u16,
-    https: bool,
-) -> String {
-    let scheme = if https { "https" } else { "http" };
-    let default_port = if https { 443 } else { 80 };
-    let port_suffix = if http_port == default_port {
+    let port_suffix = if http_port == 80 {
         String::new()
     } else {
         format!(":{http_port}")
@@ -61,7 +50,7 @@ pub fn render_client_dispatcher_autoexec_with_scheme(
 # Common dispatcher: client policy lives in clients/<mac>.ipxe.
 
 dhcp || goto failed
-set boot-url {scheme}://${{next-server}}{port_suffix}
+set boot-url http://${{next-server}}{port_suffix}
 set client-mac ${{net0/mac:hexraw}}
 
 echo Diskless Manager client MAC: ${{net0/mac}}
@@ -127,9 +116,10 @@ mod tests {
     }
 
     #[test]
-    fn secure_dispatcher_uses_https() {
-        let script = render_client_dispatcher_autoexec_with_scheme(443, 4237, true);
-        assert!(script.contains("set boot-url https://${next-server}"));
+    fn dispatcher_uses_http_for_all_boot_assets() {
+        let script = render_client_dispatcher_autoexec(80, 4237);
+        assert!(script.contains("set boot-url http://${next-server}"));
+        assert!(!script.contains("https://"));
     }
 
     #[test]

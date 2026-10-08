@@ -1,18 +1,45 @@
 import { act, render, screen } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { getClientNvmeOfStatus } from "@/api/modules/clients";
+import { getClientNvmeOfStatus, updateClient } from "@/api/modules/clients";
 import { listGameDisks } from "@/api/modules/zfs";
 import ClientFormModal from "./ClientFormModal";
 
 vi.mock("@/api/modules/clients", async (original) => ({
   ...await original(),
   getClientNvmeOfStatus: vi.fn(),
+  updateClient: vi.fn(),
 }));
 
 vi.mock("@/api/modules/zfs", () => ({
   listGameDisks: vi.fn().mockResolvedValue({ disks: [] }),
 }));
+
+it("saves an unchecked keep-writeback setting as false", async () => {
+  const user = userEvent.setup();
+  getClientNvmeOfStatus.mockResolvedValue(null);
+  updateClient.mockResolvedValue({});
+  const client = {
+    id: "six",
+    name: "PC006",
+    mac: "00:11:22:33:44:69",
+    ip: "192.168.1.106",
+    master: "windows",
+    snapshot: "windows@ready",
+    keep_writeback: true,
+  };
+  render(
+    <MemoryRouter>
+      <ClientFormModal client={client} masters={[]} isOpen onClose={() => {}} refresh={() => {}} />
+    </MemoryRouter>,
+  );
+
+  await user.click(await screen.findByRole("checkbox", { name: /keep writeback/i }));
+  await user.click(screen.getByRole("button", { name: "Save" }));
+
+  expect(updateClient).toHaveBeenCalledWith("six", { keep_writeback: false });
+});
 
 it("ignores an earlier client's status response after switching clients", async () => {
   let finishFirst;

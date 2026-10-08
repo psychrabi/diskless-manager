@@ -39,6 +39,19 @@ struct ClientRow {
     chap_enabled: Option<i64>,
 }
 
+#[derive(Debug, FromRow)]
+pub(crate) struct NvmeOfClient {
+    pub id: String,
+    pub name: String,
+    pub mac: String,
+    pub ip: String,
+    pub enabled: i64,
+    pub block_device: Option<String>,
+    pub block_store: Option<String>,
+    pub target_iqn: Option<String>,
+    pub boot_image: String,
+}
+
 #[derive(Clone)]
 pub struct ClientRepository {
     pool: SqlitePool,
@@ -53,29 +66,29 @@ impl ClientRepository {
         let row = sqlx::query_as::<_, ClientRow>(
             r#"
             SELECT
-                id,
-                name,
-                mac,
-                ip,
-                master,
-                enabled,
-                created_at,
-                updated_at,
-                snapshot,
-                block_store,
-                target_iqn,
-                writeback,
-                last_modified,
-                block_device,
-                status,
-                mode,
-                pxe_mode,
-                boot_image,
-                keep_writeback,
-                use_game_disk,
-                chap_user,
-                chap_secret,
-                chap_enabled
+                CAST(id AS TEXT) AS id,
+                CAST(name AS TEXT) AS name,
+                CAST(mac AS TEXT) AS mac,
+                CAST(ip AS TEXT) AS ip,
+                CAST(master AS TEXT) AS master,
+                CAST(enabled AS INTEGER) AS enabled,
+                CAST(created_at AS TEXT) AS created_at,
+                CAST(updated_at AS TEXT) AS updated_at,
+                CAST(snapshot AS TEXT) AS snapshot,
+                CAST(block_store AS TEXT) AS block_store,
+                CAST(target_iqn AS TEXT) AS target_iqn,
+                CAST(writeback AS TEXT) AS writeback,
+                CAST(last_modified AS TEXT) AS last_modified,
+                CAST(block_device AS TEXT) AS block_device,
+                CAST(status AS TEXT) AS status,
+                CAST(mode AS TEXT) AS mode,
+                CAST(pxe_mode AS TEXT) AS pxe_mode,
+                CAST(boot_image AS TEXT) AS boot_image,
+                CAST(keep_writeback AS INTEGER) AS keep_writeback,
+                CAST(use_game_disk AS INTEGER) AS use_game_disk,
+                CASE WHEN typeof(chap_user) = 'text' THEN chap_user END AS chap_user,
+                CASE WHEN typeof(chap_secret) = 'text' THEN chap_secret END AS chap_secret,
+                CAST(chap_enabled AS INTEGER) AS chap_enabled
             FROM clients
             WHERE id = ?
             "#,
@@ -86,6 +99,29 @@ impl ClientRepository {
         .context("failed to query client by id")?;
 
         row.map(Self::row_to_domain).transpose()
+    }
+
+    pub(crate) async fn find_nvmeof_client(&self, id: &ClientId) -> Result<Option<NvmeOfClient>> {
+        sqlx::query_as::<_, NvmeOfClient>(
+            r#"
+            SELECT
+                CAST(id AS TEXT) AS id,
+                CAST(name AS TEXT) AS name,
+                CAST(mac AS TEXT) AS mac,
+                CAST(ip AS TEXT) AS ip,
+                CAST(enabled AS INTEGER) AS enabled,
+                CAST(block_device AS TEXT) AS block_device,
+                CAST(block_store AS TEXT) AS block_store,
+                CAST(target_iqn AS TEXT) AS target_iqn,
+                CAST(boot_image AS TEXT) AS boot_image
+            FROM clients
+            WHERE id = ?
+            "#,
+        )
+        .bind(id.as_str())
+        .fetch_optional(&self.pool)
+        .await
+        .context("failed to query NVMe-oF client")
     }
 
     pub async fn find_by_name(&self, name: &str) -> Result<Option<Client>> {
@@ -390,8 +426,8 @@ impl ClientRepository {
                 boot_image = ?,
                 keep_writeback = ?,
                 use_game_disk = ?,
-                chap_user = ?,
-                chap_secret = ?,
+                chap_user = COALESCE(?, chap_user),
+                chap_secret = COALESCE(?, chap_secret),
                 chap_enabled = ?
             WHERE id = ?
             "#,
@@ -693,6 +729,28 @@ mod tests {
             .unwrap();
         assert!(repository.find_all().await.is_err());
         assert!(repository.find_by_name("Alpha").await.is_err());
+        let client_id = ClientId::from_string("a").unwrap();
+        let client = repository.find_by_id(&client_id).await.unwrap().unwrap();
+        assert_eq!(client.name, "Alpha");
+        assert_eq!(client.chap_secret, None);
+        repository.update(&client).await.unwrap();
+        let secret_type: String =
+            sqlx::query_scalar("SELECT typeof(chap_secret) FROM clients WHERE id='a'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(secret_type, "blob");
+        sqlx::query("UPDATE clients SET target_iqn='iqn.test' WHERE id='a'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let boot_client = repository
+            .find_nvmeof_client(&client_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(boot_client.name, "Alpha");
+        assert_eq!(boot_client.target_iqn.as_deref(), Some("iqn.test"));
     }
 
     #[tokio::test]

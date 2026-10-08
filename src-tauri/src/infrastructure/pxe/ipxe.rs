@@ -154,31 +154,27 @@ pub fn render_client_script_with_mode(
     ready: bool,
     chap: Option<&crate::infrastructure::iscsi::ChapCredentials>,
 ) -> String {
-    render_client_script_with_scheme(
+    render_client_script_for_boot(
         client_name,
         target_iqn,
         http_port,
         ready,
-        false,
         chap,
         crate::domain::ClientBootImage::Windows,
     )
 }
 
 #[must_use]
-pub fn render_client_script_with_scheme(
+pub fn render_client_script_for_boot(
     client_name: &str,
     target_iqn: &str,
     http_port: u16,
     ready: bool,
-    https: bool,
     chap: Option<&crate::infrastructure::iscsi::ChapCredentials>,
     boot_image: crate::domain::ClientBootImage,
 ) -> String {
     let slug = client_script_slug(client_name);
-    let scheme = if https { "https" } else { "http" };
-    let default_port = if https { 443 } else { 80 };
-    let port_suffix = if http_port == default_port {
+    let port_suffix = if http_port == 80 {
         String::new()
     } else {
         format!(":{http_port}")
@@ -204,7 +200,7 @@ dhcp
 # Attach its iSCSI disk and boot WinPE for installation.
 set client {slug}
 set target-iqn {target_iqn}
-set boot-url {scheme}://${{next-server}}{port_suffix}
+set boot-url http://${{next-server}}{port_suffix}
 set keep-san 1
 {chap_settings}
 isset ${{root-path}} || goto no_target
@@ -252,7 +248,7 @@ set client {slug}
 set target-iqn {target_iqn}
 set initiator-iqn {initiator_iqn}
 set nvme-nqn {nvme_nqn}
-set boot-url {scheme}://${{next-server}}{port_suffix}
+set boot-url http://${{next-server}}{port_suffix}
 set keep-san 1
 {chap_settings}
 :start
@@ -523,17 +519,17 @@ mod tests {
     }
 
     #[test]
-    fn secure_client_scripts_use_https() {
-        let script = render_client_script_with_scheme(
+    fn boot_scripts_use_http_only() {
+        let script = render_client_script_for_boot(
             "PC001",
             "iqn.example:pc001",
-            443,
-            true,
+            80,
             true,
             None,
             crate::domain::ClientBootImage::Windows,
         );
-        assert!(script.contains("set boot-url https://${next-server}"));
+        assert!(script.contains("set boot-url http://${next-server}"));
+        assert!(!script.contains("https://"));
     }
 
     #[test]
@@ -543,15 +539,8 @@ mod tests {
             (crate::domain::ClientBootImage::Winpe, "boot_pe"),
             (crate::domain::ClientBootImage::Linux, "boot_ubuntu"),
         ] {
-            let script = render_client_script_with_scheme(
-                "PC001",
-                "iqn.example:pc001",
-                80,
-                true,
-                false,
-                None,
-                image,
-            );
+            let script =
+                render_client_script_for_boot("PC001", "iqn.example:pc001", 80, true, None, image);
             assert!(script.contains(&format!("--default {expected}")));
         }
     }

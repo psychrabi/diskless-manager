@@ -61,12 +61,11 @@ pub(crate) async fn publish_client_ipxe(reservation: &BootReservation) -> Result
     }
 
     let path = root.join(&relative);
-    let script = crate::infrastructure::pxe::render_client_script_with_scheme(
+    let script = crate::infrastructure::pxe::render_client_script_for_boot(
         &reservation.client_name,
         &reservation.target_iqn,
-        settings.http.port,
+        80,
         true,
-        settings.http.tls_enabled,
         reservation.chap.as_ref(),
         reservation.boot_image,
     );

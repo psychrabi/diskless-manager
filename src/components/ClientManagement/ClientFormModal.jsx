@@ -59,7 +59,7 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
   const {
     register,
     handleSubmit,
-    formState: { errors, isSubmitting, isDirty, isValid },
+    formState: { errors, isSubmitting, isDirty, isValid, dirtyFields },
     setValue,
     control,
     reset,
@@ -208,19 +208,27 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
         });
         success("Client Management", `Client ${data.name} added successfully.`);
       } else {
-        await updateClient(client.id, {
-          name: data.name,
-          mac: data.mac,
-          ip: data.ip,
-          master: data.master,
-          boot_image: data.boot_image,
-          snapshot: data.snapshot || null,
-          keep_writeback: data.keep_writeback,
-          use_game_disk: data.use_game_disk,
-          game_disks: data.game_disks || [],
-          chap_enabled: data.chap_enabled ?? true,
-          enabled: data.enabled ?? true,
-        });
+        const editableFields = [
+          "name",
+          "mac",
+          "ip",
+          "boot_image",
+          "keep_writeback",
+          "use_game_disk",
+          "game_disks",
+          "chap_enabled",
+          "enabled",
+        ];
+        const update = Object.fromEntries(
+          editableFields
+            .filter((field) => dirtyFields[field])
+            .map((field) => [field, data[field]]),
+        );
+        if (dirtyFields.master || dirtyFields.snapshot) {
+          update.master = data.master;
+          update.snapshot = data.snapshot || null;
+        }
+        await updateClient(client.id, update);
         success(
           "Client Management",
           `Client ${data.name} updated successfully.`

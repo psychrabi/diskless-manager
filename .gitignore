@@ -34,3 +34,5 @@ gha-creds-*.json
 .agents/
 skills-lock.json
 docs/
+
+**/target/
