@@ -122,13 +122,12 @@ pub async fn update_client(
         .clients
         .get_by_string(&id)
         .await
-        .map_err(|error| {
-            tracing::error!(client_id = %id, %error, "failed to load client for game-disk update");
+        .map_err(|_| {
             (
-                StatusCode::INTERNAL_SERVER_ERROR,
+                StatusCode::NOT_FOUND,
                 Json(ErrorResponse {
-                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                    error: "Failed to load client".to_string(),
+                    status: StatusCode::NOT_FOUND.as_u16(),
+                    error: "Client not found".to_string(),
                 }),
             )
         })?

@@ -200,21 +200,12 @@ impl DhcpService {
     /// Validate the complete ISC DHCP configuration, including clients.conf,
     /// before a caller reloads the service.
     pub async fn validate_config(&self) -> anyhow::Result<()> {
-        self.validate_settings()?;
-        run_sudo_command(["dhcpd", "-t", "-cf", "/etc/dhcp/dhcpd.conf"]).await?;
-        Ok(())
-    }
-
-    /// Validate DHCP settings without invoking the external daemon validator.
-    pub fn validate_settings(&self) -> anyhow::Result<()> {
         validate_dhcp_config(&self.settings.dhcp)?;
         validate_server_consistency(&self.settings)?;
-        if self.settings.server.interface.is_empty() {
-            anyhow::bail!("At least one DHCP interface must be configured");
-        }
         for interface in &self.settings.server.interface {
             validate_interface_name(interface)?;
         }
+        run_sudo_command(["dhcpd", "-t", "-cf", "/etc/dhcp/dhcpd.conf"]).await?;
         Ok(())
     }
 

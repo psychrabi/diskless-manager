@@ -33,80 +33,23 @@ pub struct BootHistoryQuery {
 /// legacy mutation path until their infrastructure adapters are migrated.
 pub async fn list_clients(
     State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>, ClientApiError> {
-    match state.application.clients.list().await {
-        Ok(clients) => serde_json::to_value(clients)
-            .map(Json)
-            .map_err(|error| ClientApiError {
-                error: format!("Failed to serialize clients: {error}"),
-            }),
-        Err(error) => {
-            tracing::warn!(
+) -> Result<Json<Vec<crate::domain::Client>>, ClientApiError> {
+    state
+        .application
+        .clients
+        .list()
+        .await
+        .map(Json)
+        .map_err(|error| {
+            tracing::error!(
                 error = %error,
-                "strict client decoding failed; serving legacy client rows"
+                "failed to list clients"
             );
-            let rows = sqlx::query_scalar::<_, String>(
-                r#"
-                SELECT json_object(
-                    'id', id,
-                    'name', name,
-                    'mac', mac,
-                    'ip', ip,
-                    'master', master,
-                    'enabled', json(CASE WHEN enabled <> 0 THEN 'true' ELSE 'false' END),
-                    'created_at', created_at,
-                    'updated_at', updated_at,
-                    'snapshot', snapshot,
-                    'block_store', block_store,
-                    'target_iqn', target_iqn,
-                    'writeback', writeback,
-                    'last_modified', last_modified,
-                    'block_device', block_device,
-                    'status', status,
-                    'mode', mode,
-                    'pxe_mode', pxe_mode,
-                    'boot_image', boot_image,
-                    'keep_writeback', json(CASE
-                        WHEN keep_writeback IS NULL THEN 'null'
-                        WHEN keep_writeback <> 0 THEN 'true'
-                        ELSE 'false' END),
-                    'use_game_disk', json(CASE
-                        WHEN use_game_disk IS NULL THEN 'null'
-                        WHEN use_game_disk <> 0 THEN 'true'
-                        ELSE 'false' END),
-                    'chap_enabled', json(CASE
-                        WHEN chap_enabled IS NULL THEN 'null'
-                        WHEN chap_enabled <> 0 THEN 'true'
-                        ELSE 'false' END),
-                    'game_disks', json(COALESCE((
-                        SELECT json_group_array(master_dataset)
-                        FROM client_game_disks
-                        WHERE client_id = clients.id
-                    ), '[]'))
-                )
-                FROM clients
-                ORDER BY name
-                "#,
-            )
-            .fetch_all(&state.db_pool)
-            .await
-            .map_err(|error| {
-                tracing::error!(error = %error, "failed to read raw client rows");
-                ClientApiError {
-                    error: "Failed to load clients".to_string(),
-                }
-            })?;
-            let clients = rows
-                .into_iter()
-                .map(|row| {
-                    serde_json::from_str(&row).map_err(|error| ClientApiError {
-                        error: format!("Failed to decode client rows: {error}"),
-                    })
-                })
-                .collect::<Result<Vec<serde_json::Value>, _>>()?;
-            Ok(Json(serde_json::Value::Array(clients)))
-        }
-    }
+
+            ClientApiError {
+                error: "Failed to load clients".to_string(),
+            }
+        })
 }
 
 /// GET /api/clients/{id}
@@ -159,47 +102,4 @@ pub async fn get_client_boot_history(
                 error: "Failed to load client boot history".to_string(),
             }
         })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::state::AppState;
-    use std::sync::Arc;
-    use tokio::sync::{Mutex, RwLock};
-
-    #[tokio::test]
-    async fn list_includes_legacy_clients_with_invalid_network_metadata() {
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .expect("in-memory database should open");
-        sqlx::migrate!("./migrations")
-            .run(&pool)
-            .await
-            .expect("database should migrate");
-        sqlx::query("INSERT INTO clients (id,name,mac,ip,master,enabled,created_at,updated_at) VALUES ('legacy','PC-legacy','unknown','invalid','pending',2,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')")
-            .execute(&pool)
-            .await
-            .expect("legacy client should be inserted");
-        let state = AppState {
-            client_mutations: Arc::new(Mutex::new(())),
-            settings: Arc::new(RwLock::new(crate::core::config::Settings::default())),
-            db_pool: pool.clone(),
-            config_path: std::path::PathBuf::new(),
-            client_ips: Arc::new(RwLock::new(Vec::new())),
-            metrics_collector: Arc::new(crate::metrics::MetricsCollector::default()),
-            ssh_executor: Arc::new(crate::ssh_executor::SshExecutor::new()),
-            application: Arc::new(crate::application::ApplicationServices::new(pool)),
-        };
-
-        let response = list_clients(State(state)).await;
-        assert!(response.is_ok(), "legacy client rows should remain visible");
-        let clients = serde_json::to_value(response.expect("response should be present").0)
-            .expect("clients should serialize");
-        assert_eq!(clients.as_array().map(|rows| rows.len()), Some(1));
-        assert_eq!(clients[0]["id"], "legacy");
-        assert_eq!(clients[0]["mac"], "unknown");
-    }
 }
