@@ -29,6 +29,14 @@ impl From<ImageBackendInfo> for ImageInfo {
 }
 
 pub trait ImageBackend: Send + Sync {
+    /// Reject a volume whose local mounts prevent an exclusive iSCSI export.
+    ///
+    /// `name` identifies the volume, including any mounted partitions or mappings.
+    /// Returns an error when mount inspection is unavailable or a mount is found.
+    fn validate_unmounted(&self, _name: &str) -> Result<()> {
+        anyhow::bail!("volume mount inspection is unavailable")
+    }
+
     /// Wait until device names reflect completed storage changes.
     fn settle_device_changes(&self) -> Result<()> {
         anyhow::bail!("device settling is unavailable")

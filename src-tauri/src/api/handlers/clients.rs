@@ -18,20 +18,6 @@ use crate::{
     validation::{validate_ip_address, validate_mac_address},
 };
 
-/// Helper function to determine the master OS.
-///
-/// This is currently based on the master name. It can later be replaced
-/// with a proper image repository lookup.
-fn get_master_os(master_name: &str) -> Option<String> {
-    if master_name.to_lowercase().contains("windows") {
-        Some("windows".to_string())
-    } else if master_name.to_lowercase().contains("linux") {
-        Some("linux".to_string())
-    } else {
-        None
-    }
-}
-
 fn image_service(state: &AppState) -> ImageService {
     ImageService::new(ImageRepository::new(state.db_pool.clone()))
 }
@@ -730,82 +716,11 @@ pub async fn update_client(
                     ));
                 }
 
-                let master_os = get_master_os(&existing_client.master)
-                    .unwrap_or_default()
-                    .to_lowercase();
-
-                if master_os.contains("linux") {
-                    let mut cmd = Command::new("ssh");
-                    cmd.args([
-                        "-o",
-                        "StrictHostKeyChecking=no",
-                        "-o",
-                        "ConnectTimeout=5",
-                        &format!("root@{}", ip),
-                        "reboot",
-                    ]);
-                    let output = crate::api::util::run_command(&mut cmd).await.map_err(|e| {
-                        (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ErrorResponse {
-                                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                                error: format!("Failed to execute SSH: {}", e),
-                            }),
-                        )
-                    })?;
-
-                    if !output.status.success() {
-                        let error_msg = format!(
-                            "Failed to reboot Linux client (SSH): {}",
-                            String::from_utf8_lossy(&output.stderr)
-                        );
-
-                        return Err((
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ErrorResponse {
-                                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                                error: error_msg,
-                            }),
-                        ));
-                    }
-                } else {
-                    let mut cmd = Command::new("net");
-                    cmd.args([
-                        "rpc",
-                        "shutdown",
-                        "-r",
-                        "-I",
-                        ip,
-                        "-U",
-                        "diskless%1",
-                        "-f",
-                        "-t",
-                        "0",
-                    ]);
-                    let output = crate::api::util::run_command(&mut cmd).await.map_err(|e| {
-                        (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ErrorResponse {
-                                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                                error: format!("Failed to execute net rpc: {}", e),
-                            }),
-                        )
-                    })?;
-
-                    if !output.status.success() {
-                        let error_msg = format!(
-                            "Failed to reboot client: {}",
-                            String::from_utf8_lossy(&output.stderr)
-                        );
-
-                        return Err((
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ErrorResponse {
-                                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                                error: error_msg,
-                            }),
-                        ));
-                    }
+                let master_os = super::control::resolve_master_os(&state.db_pool, &existing_client.master).await.map_err(|error| (StatusCode::BAD_REQUEST, Json(ErrorResponse { status: 400, error })))?;
+                let mut cmd = super::control::build_power_command("reboot", ip, &master_os, master_os == "windows", "diskless");
+                let output = crate::api::util::run_command(&mut cmd).await.map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { status: 500, error: error.to_string() })))?;
+                if !output.status.success() {
+                    return Err((StatusCode::BAD_GATEWAY, Json(ErrorResponse { status: 502, error: format!("Failed to reboot client: {}", String::from_utf8_lossy(&output.stderr)) })));
                 }
 
                 info!("Reboot command sent to {} ({})", existing_client.name, ip);
@@ -831,81 +746,11 @@ pub async fn update_client(
                     ));
                 }
 
-                let master_os = get_master_os(&existing_client.master)
-                    .unwrap_or_default()
-                    .to_lowercase();
-
-                if master_os.contains("linux") {
-                    let mut cmd = Command::new("ssh");
-                    cmd.args([
-                        "-o",
-                        "StrictHostKeyChecking=no",
-                        "-o",
-                        "ConnectTimeout=5",
-                        &format!("root@{}", ip),
-                        "poweroff",
-                    ]);
-                    let output = crate::api::util::run_command(&mut cmd).await.map_err(|e| {
-                        (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ErrorResponse {
-                                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                                error: format!("Failed to execute SSH: {}", e),
-                            }),
-                        )
-                    })?;
-
-                    if !output.status.success() {
-                        let error_msg = format!(
-                            "Failed to shutdown Linux client (SSH): {}",
-                            String::from_utf8_lossy(&output.stderr)
-                        );
-
-                        return Err((
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ErrorResponse {
-                                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                                error: error_msg,
-                            }),
-                        ));
-                    }
-                } else {
-                    let mut cmd = Command::new("net");
-                    cmd.args([
-                        "rpc",
-                        "shutdown",
-                        "-I",
-                        ip,
-                        "-U",
-                        "diskless%1",
-                        "-f",
-                        "-t",
-                        "0",
-                    ]);
-                    let output = crate::api::util::run_command(&mut cmd).await.map_err(|e| {
-                        (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ErrorResponse {
-                                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                                error: format!("Failed to execute net rpc: {}", e),
-                            }),
-                        )
-                    })?;
-
-                    if !output.status.success() {
-                        let error_msg = format!(
-                            "Failed to shutdown client: {}",
-                            String::from_utf8_lossy(&output.stderr)
-                        );
-
-                        return Err((
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ErrorResponse {
-                                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                                error: error_msg,
-                            }),
-                        ));
-                    }
+                let master_os = super::control::resolve_master_os(&state.db_pool, &existing_client.master).await.map_err(|error| (StatusCode::BAD_REQUEST, Json(ErrorResponse { status: 400, error })))?;
+                let mut cmd = super::control::build_power_command("shutdown", ip, &master_os, master_os == "windows", "diskless");
+                let output = crate::api::util::run_command(&mut cmd).await.map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { status: 500, error: error.to_string() })))?;
+                if !output.status.success() {
+                    return Err((StatusCode::BAD_GATEWAY, Json(ErrorResponse { status: 502, error: format!("Failed to shutdown client: {}", String::from_utf8_lossy(&output.stderr)) })));
                 }
 
                 info!("Shutdown command sent to {} ({})", existing_client.name, ip);
@@ -1060,7 +905,7 @@ pub async fn update_client(
                                 Json(ErrorResponse {
                                     status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
                                     error: format!(
-                                        "Failed to activate Super client storage: {}",
+                                        "Failed to activate Super client storage: {:#}",
                                         error
                                     ),
                                 }),

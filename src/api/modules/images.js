@@ -31,7 +31,7 @@ export async function deleteImage(id) {
 }
 
 export async function createSnapshot(sourceId, snapshotName) {
-  return apiRequest(`/api/images/${sourceId}/snapshots`, {
+  return apiRequest(`/api/images/${encodeURIComponent(sourceId)}/snapshots`, {
     method: "POST",
     body: JSON.stringify({ snapshot_name: snapshotName }),
   });

@@ -318,19 +318,23 @@ export const useClientActions = (
         return;
       }
 
-      const snapshotName = `${client.master}@${suffix
-        .trim()
-        .replace(/\s+/g, "-")}`;
+      const snapshotName = suffix.trim().replace(/\s+/g, "-");
 
       try {
         const response = await createSnapshot(client.master, snapshotName);
-        if (response.message) success("Client Management", response.message);
+        await updateClient(client.id, { action: "super", make_super: false });
+        success(
+          "Client Management",
+          response.message
+            ? `${response.message} Client returned to writeback mode.`
+            : "Super changes saved and client returned to writeback mode."
+        );
         fetchData();
         closeContextMenu();
       } catch (error) {
         showError(
           "Client Management",
-          `Failed to save super: ${error.message || String(error)}`
+          `Failed to save Super changes or return to writeback mode: ${error.message || String(error)}`
         );
       }
     },

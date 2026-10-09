@@ -1,7 +1,7 @@
 import { buttonVariants } from "@/components/ui/button";
 import { Card as ShadcnCard, CardContent, CardDescription, CardTitle } from "@/components/ui/card";
 import { Download, File, PlusCircle, Wrench } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useAuth } from "@/contexts/auth";
 import { Link } from "react-router-dom";
 import { useAppStore } from "../../store/useAppStore";
@@ -43,7 +43,7 @@ const ImageManagement = () => {
     try {
       const result = await scanAndImportImages();
       await Promise.all([fetchMasters(), fetchImages()]);
-      const activePool = zpools[0]?.name;
+      const activePool = zpools[0];
       if (activePool) {
         await fetchDatasets(activePool);
       }
@@ -60,13 +60,12 @@ const ImageManagement = () => {
     }
   };
 
-  // Set default pool when zpools are loaded
-  const poolInitialized = useRef(false);
+  const activePool = zpools[0];
   useEffect(() => {
-    if (zpools.length > 0 && !poolInitialized.current) {
-      poolInitialized.current = true;
+    if (activePool) {
+      fetchDatasets(activePool);
     }
-  }, [zpools]);
+  }, [activePool, fetchDatasets]);
 
   return (
     <div className="flex flex-col gap-4">

@@ -1,6 +1,5 @@
 import { Button } from "@/components/ui";
 import { Badge } from "@/components/ui/badge";
-import { CardDescription } from "@/components/ui/card";
 import { useMasterManager } from "@/hooks/useMasterManager";
 import { ChevronDown, ChevronRight, History } from "lucide-react";
 import { RotateCcw, Trash2 } from "lucide-react";
@@ -89,7 +88,7 @@ export const SnapshotsList = ({ master }) => {
     [master?.snapshots]
   );
 
-  if (!master) return null;
+  if (!master || snapshots.length === 0) return null;
 
   return (
     <div role="tree" aria-label={`Snapshot chain for ${master.name}`}>
@@ -121,19 +120,14 @@ export const SnapshotsList = ({ master }) => {
         </Button>
         <History className="h-4 w-4 shrink-0 text-primary" />
         <span className="min-w-0 flex-1 truncate text-sm font-medium">
-          Snapshots
+          Restore Points
         </span>
         <Badge variant="secondary" className="shrink-0">
           {snapshots.length} snapshot{snapshots.length === 1 ? "" : "s"}
         </Badge>
       </div>
 
-      {expanded &&
-        (snapshots.length === 0 ? (
-          <CardDescription className="ml-11 border-l border-border pl-4 py-2">
-            No snapshots found for this image.
-          </CardDescription>
-        ) : (
+      {expanded && (
           <ol
             role="group"
             aria-label="Snapshots in creation order"
@@ -151,7 +145,7 @@ export const SnapshotsList = ({ master }) => {
               />
             ))}
           </ol>
-        ))}
+        )}
     </div>
   );
 };

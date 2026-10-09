@@ -11,28 +11,26 @@ export const useMasterManager = () => {
 
   const handleDeleteSnapshot = useCallback(async (snapshot, image) => {
     if (!snapshot || !image) return;
-    confirm({
-      title: "Delete Snapshot",
-      description: `Are you sure you want to delete snapshot "${snapshot}" for image "${image}"? This action cannot be undone and might affect clones.`,
-      confirmText: "Delete Snapshot",
-      cancelText: "Cancel",
-      confirmVariant: "primary",
-      size: "2xl",
-    })
-      .then((ok) => {
-        if (!ok) return;
-        deleteSnapshot(image, snapshot)
-          .then(async (response) => {
-            await fetchMasters();
-            if (response.message) success(response.message);
-          })
-          .catch((err) => {
-            error(err?.error || String(err));
-          });
-      })
-      .catch((err) => {
-        console.error("Confirmation dialog error:", err);
+    try {
+      const ok = await confirm({
+        title: "Delete Snapshot",
+        description: `Are you sure you want to delete snapshot "${snapshot}" for image "${image}"? This action cannot be undone and might affect clones.`,
+        confirmText: "Delete Snapshot",
+        cancelText: "Cancel",
+        confirmVariant: "primary",
+        size: "2xl",
       });
+      if (!ok) return;
+
+      const response = await deleteSnapshot(image, snapshot);
+      await fetchMasters();
+      success(
+        "Image Management",
+        response.message || "Snapshot deleted successfully"
+      );
+    } catch (err) {
+      error(err?.error || err?.message || String(err));
+    }
   }, [confirm, fetchMasters, success, error]);
 
   const handleRollbackSnapshot = useCallback(async (snapshot, image) => {

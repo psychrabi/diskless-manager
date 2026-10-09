@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useAppStore } from "@/store/useAppStore";
 import { Power, RefreshCw } from "lucide-react";
 import { useToastStore } from "@/store/useToastStore";
 import { shutdownClient, rebootClient } from "@/api/modules/control";
@@ -13,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { FieldDescription } from "@/components/ui/field";
+import { Field, FieldLabel, FieldDescription } from "@/components/ui/field";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Spinner } from "@/components/ui/spinner";
@@ -45,6 +46,9 @@ const PowerActionModal = ({ client, isOpen, onClose, onSuccess, type = "shutdown
   const [mode, setMode] = useState("graceful");
   const [delayMinutes, setDelayMinutes] = useState(0);
   const [useScheduled, setUseScheduled] = useState(false);
+  const [sshUsername, setSshUsername] = useState("diskless");
+  const imageOs = useAppStore((state) => state.masters.find((image) => image.name === client?.master || image.id === client?.master)?.os_type);
+  const isLinux = imageOs ? imageOs === "linux" : !/windows/i.test(client?.master || "");
 
   const cfg = CONFIG[type] || CONFIG.shutdown;
 
@@ -57,7 +61,9 @@ const PowerActionModal = ({ client, isOpen, onClose, onSuccess, type = "shutdown
       const response = await cfg.apiCall(client.id, {
         force: mode === "force",
         delay_minutes: useScheduled ? delayMinutes : null,
+        ssh_username: isLinux ? sshUsername : undefined,
       });
+      if (response?.success === false) throw new Error(response.message);
 
       success(
         "Control Operations",
@@ -81,6 +87,7 @@ const PowerActionModal = ({ client, isOpen, onClose, onSuccess, type = "shutdown
     setMode("graceful");
     setDelayMinutes(0);
     setUseScheduled(false);
+    setSshUsername("diskless");
     onClose();
   };
 
@@ -104,6 +111,14 @@ const PowerActionModal = ({ client, isOpen, onClose, onSuccess, type = "shutdown
               {cfg.verbing}: <span className="font-semibold text-foreground">{client?.name}</span>
             </AlertDescription>
           </Alert>
+
+          {isLinux && (
+            <Field>
+              <FieldLabel htmlFor="power-ssh-user">SSH username</FieldLabel>
+              <Input id="power-ssh-user" value={sshUsername} onChange={(event) => setSshUsername(event.target.value)} required pattern="[A-Za-z0-9_.][A-Za-z0-9_.-]*" maxLength={64} />
+              <FieldDescription>The server needs SSH key access and permission to run power commands without a sudo password.</FieldDescription>
+            </Field>
+          )}
 
           <div className="flex flex-col gap-2">
             <Label className="font-medium">{cfg.noun} Mode</Label>

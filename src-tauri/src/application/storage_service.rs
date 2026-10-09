@@ -196,6 +196,10 @@ impl StorageService {
         }
     }
 
+    /// Validate a Super-mode master before removing any existing client storage.
+    ///
+    /// `dataset` must be an existing managed volume with no local mounts.
+    /// Returns an error for invalid names, missing volumes, or failed mount inspection.
     pub fn validate_existing_dataset(&self, dataset: &str) -> Result<()> {
         crate::validation::validate_managed_dataset(
             dataset,
@@ -205,7 +209,7 @@ impl StorageService {
         if !self.image_backend.exists(dataset)? {
             bail!("existing ZFS volume does not exist: {dataset}");
         }
-        Ok(())
+        self.image_backend.validate_unmounted(dataset)
     }
 
     /// ZFS snapshot on a game master that per-client clones are created from.
@@ -938,7 +942,7 @@ impl StorageService {
             .remove_target_with_backstores(storage.target_iqn(), &owned_backstores)
             .with_context(|| format!("failed to remove iSCSI target '{}'", storage.target_iqn()))?;
 
-        if storage.owns_dataset() {
+        if storage.owns_dataset() && self.image_backend.exists(storage.dataset())? {
             self.image_backend
                 .destroy(storage.dataset())
                 .with_context(|| {
@@ -951,7 +955,7 @@ impl StorageService {
             tracing::debug!(
                 client_id = %storage.client_id,
                 dataset = %storage.dataset(),
-                "preserving non-owned ZFS volume"
+                "no owned ZFS volume to remove"
             );
         }
 

@@ -83,7 +83,9 @@ impl StorageService {
     }
 
     /// Resume committed cleanup, or restore the original after an interrupted
-    /// switch. The caller must establish that the client is offline.
+    /// switch. If neither the original nor a backup exists, rebuild an
+    /// uncommitted clone from its recorded snapshot. The caller must establish
+    /// that the client is offline.
     pub fn recover_offline(&self, operation: &OfflineReplacement) -> Result<()> {
         let spec = &operation.spec;
         if operation.committed {
@@ -106,6 +108,18 @@ impl StorageService {
                 .rename(&operation.backup, &spec.dataset)?;
             self.expose_existing(spec)?;
         } else {
+            if !self.image_backend.exists(&spec.dataset)? {
+                self.validate_spec(spec)?;
+                let StorageSource::Snapshot(snapshot) = &spec.source else {
+                    bail!("cannot recover missing client volume without a snapshot");
+                };
+                if snapshot.split('@').next() == Some(spec.dataset.as_str()) {
+                    bail!("refusing to rebuild a master volume");
+                }
+                self.image_backend
+                    .clone_image(snapshot, &spec.dataset)
+                    .context("failed to rebuild missing client clone from recorded snapshot")?;
+            }
             self.expose_existing(spec)?;
         }
         if self.image_backend.exists(&operation.staged)? {
@@ -118,8 +132,8 @@ impl StorageService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::infrastructure::{image::ImageBackendInfo, iscsi::IscsiTargetState};
     use crate::infrastructure::iscsi::{ChapCredentials, IscsiLunState};
+    use crate::infrastructure::{image::ImageBackendInfo, iscsi::IscsiTargetState};
     use std::{collections::HashMap, path::Path, sync::Mutex};
 
     #[derive(Default)]
@@ -273,6 +287,30 @@ mod tests {
         (service, disks, target, operation)
     }
     #[test]
+    fn cleanup_can_be_retried_after_client_clone_is_already_absent() {
+        let (service, disks, target, op) = fixture();
+        disks.destroy(&op.spec.dataset).unwrap();
+        let current = ClientStorage {
+            client_id: op.spec.client_id.clone(),
+            source: op.spec.source.clone(),
+            volume: StorageVolume::new(
+                &op.spec.dataset,
+                op.spec.block_device(),
+                &op.spec.backstore,
+                &op.spec.target_iqn,
+                op.spec.lun,
+            ),
+            use_game_disk: false,
+        };
+
+        service.destroy_client_storage(&current).unwrap();
+        service.destroy_client_storage(&current).unwrap();
+
+        assert!(!disks.exists(&op.spec.dataset).unwrap());
+        assert!(!*target.attached.lock().unwrap());
+    }
+
+    #[test]
     fn success_retains_original_until_durable_commit() {
         let (service, disks, target, mut op) = fixture();
         service.replace_offline(&op).unwrap();
@@ -313,6 +351,37 @@ mod tests {
         );
         assert!(*target.attached.lock().unwrap());
     }
+    #[test]
+    fn uncommitted_recovery_rebuilds_missing_clone_from_recorded_snapshot() {
+        let (service, disks, target, op) = fixture();
+        disks.destroy(&op.spec.dataset).unwrap();
+        *target.attached.lock().unwrap() = false;
+
+        service.recover_offline(&op).unwrap();
+
+        assert_eq!(
+            disks.volumes.lock().unwrap().get(&op.spec.dataset).unwrap(),
+            "clean"
+        );
+        assert!(*target.attached.lock().unwrap());
+        assert_eq!(disks.volumes.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn committed_recovery_preserves_backup_when_replacement_is_missing() {
+        let (service, disks, _, mut op) = fixture();
+        disks.rename(&op.spec.dataset, &op.backup).unwrap();
+        op.committed = true;
+
+        assert!(service.recover_offline(&op).is_err());
+
+        assert_eq!(
+            disks.volumes.lock().unwrap().get(&op.backup).unwrap(),
+            "user changes"
+        );
+        assert!(!disks.exists(&op.spec.dataset).unwrap());
+    }
+
     #[test]
     fn restart_between_renames_restores_original() {
         let (service, disks, target, op) = fixture();

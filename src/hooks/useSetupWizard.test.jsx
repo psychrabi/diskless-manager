@@ -55,13 +55,13 @@ it("keeps completion failure visible after refreshing readiness", async () => {
   expect(result.current.setupError).toBe("Cannot save completion marker");
 });
 
-it("persists Samba settings before configuring and restarting the service", async () => {
+it("persists Samba settings and relies on configure to reload the service", async () => {
   const { result } = renderHook(() => useSetupWizard());
   await waitFor(() => expect(result.current.activeStep).toBe(7));
   const config = { enabled: true, share_name: "games", share_path: "/srv/games" };
   await act(() => result.current.handleSambaSubmit(config));
   expect(api.saveSettings).toHaveBeenCalledWith({ samba: config });
   expect(api.configureService).toHaveBeenCalledWith("samba");
-  expect(api.restartService).toHaveBeenCalledWith("samba");
+  expect(api.restartService).not.toHaveBeenCalled();
   expect(result.current.activeStep).toBe(7); // Readiness still reports Samba missing.
 });

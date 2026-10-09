@@ -1,4 +1,4 @@
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { vi, test, expect, beforeEach } from 'vitest';
 import { AuthContext } from '@/contexts/auth';
@@ -15,7 +15,7 @@ test('does not render dashboard while readiness is pending', () => { getSetupSta
 test('incomplete server sends administrator to setup', async () => {getSetupStatus.mockResolvedValue({completed:false,ready:true,missing:[]});mount(); expect(await screen.findByText('Setup wizard')).toBeInTheDocument();expect(screen.queryByText('Dashboard contents')).toBeNull();});
 test('status error blocks dashboard and retry checks again',async()=>{getSetupStatus.mockRejectedValueOnce(new Error('offline')).mockResolvedValue({completed:true,ready:true,missing:[]});mount();fireEvent.click(await screen.findByRole('button',{name:'Retry'}));expect(await screen.findByText('Dashboard contents')).toBeInTheDocument();});
 test('non-admin cannot open incomplete setup wizard',async()=>{getSetupStatus.mockResolvedValue({completed:false,ready:false,missing:['storage']});mount('user',true);expect(await screen.findByText(/ask an administrator/i)).toBeInTheDocument();expect(screen.queryByText('Setup wizard')).toBeNull();});
-test('marker with failed readiness still blocks dashboard', async()=>{getSetupStatus.mockResolvedValue({completed:true,ready:false,missing:['boot']});mount();await waitFor(()=>expect(screen.getByText('Setup wizard')).toBeInTheDocument());});
+test('a completed setup marker keeps later readiness issues from reopening setup', async()=>{getSetupStatus.mockResolvedValue({completed:true,ready:false,missing:['boot']});mount();expect(await screen.findByText('Dashboard contents')).toBeInTheDocument();});
 
 test('does not recheck setup readiness when navigating within the dashboard', async () => {
   getSetupStatus.mockResolvedValue({completed:true,ready:true,missing:[]});

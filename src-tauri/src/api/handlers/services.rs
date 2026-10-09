@@ -350,22 +350,6 @@ pub async fn configure_service(
         }
 
         log::info!("Raw configuration saved for service: {}", name);
-    } else {
-        // Regenerate config from current settings (settings page flow)
-        let settings = state.settings.read().await;
-        let service_manager = ServiceManager::new(settings.clone(), state.db_pool.clone());
-        service_manager
-            .generate_service_config(&name)
-            .await
-            .map_err(|e| {
-                log::error!("Failed to generate config for {}: {}", name, e);
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?;
-
-        log::info!(
-            "Configuration regenerated from settings for service: {}",
-            name
-        );
     }
 
     // Reload the service to pick up new config

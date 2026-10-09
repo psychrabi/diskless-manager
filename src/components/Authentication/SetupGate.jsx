@@ -26,7 +26,7 @@ export default function SetupGate({ children, setup = false }) {
   if (!user || !token) return <Navigate to="/login" replace />;
   if (!result || result.token !== token || result.attempt !== attempt) return <Loading message="Checking server setup…" />;
   if (result.error) return <div role="alert" className="p-6 space-y-4"><p>Unable to check server setup. Management is unavailable until the check succeeds.</p><Button onClick={() => setAttempt(value => value + 1)}>Retry</Button></div>;
-  const complete = result.status?.completed === true && result.status?.ready === true;
+  const complete = result.status?.completed === true;
   if (!complete && user.role !== "admin") return <div className="p-6 space-y-4"><p>Please ask an administrator to complete server setup.</p><Button onClick={() => setAttempt(value => value + 1)}>Retry</Button></div>;
   if (!setup && !complete) return <Navigate to="/setup" replace />;
   if (setup && complete) return <Navigate to="/" replace />;

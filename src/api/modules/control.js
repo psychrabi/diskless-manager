@@ -6,6 +6,7 @@ export async function shutdownClient(clientId, options = {}) {
     body: JSON.stringify({
       force: options.force || false,
       delay_minutes: options.delay_minutes || null,
+      ssh_username: options.ssh_username,
     }),
   });
 }
@@ -16,6 +17,7 @@ export async function rebootClient(clientId, options = {}) {
     body: JSON.stringify({
       force: options.force || false,
       delay_minutes: options.delay_minutes || null,
+      ssh_username: options.ssh_username,
     }),
   });
 }
@@ -24,8 +26,9 @@ export async function remoteDesktopClient(clientId, credentials = {}) {
   return apiRequest(`/api/clients/${clientId}/remote-desktop`, {
     method: "POST",
     body: JSON.stringify({
-      username: credentials.username || "diskless",
-      password: credentials.password || "1",
+      username: credentials.username,
+      password: credentials.password,
+      port: credentials.port ?? 3389,
     }),
   });
 }

@@ -157,19 +157,6 @@ impl ServiceManager {
         Ok(())
     }
 
-    pub async fn generate_service_config(&self, service: &str) -> anyhow::Result<()> {
-        self.settings.validate()?;
-        match service {
-            "dhcp" => self.dhcp.generate_config().await,
-            "tftp" => self.tftp.generate_config().await,
-            "iscsi" => self.generate_iscsi_config().await,
-            "nfs" => self.nfs.generate_config().await,
-            "http" => self.http.generate_config().await,
-            "samba" => self.samba.generate_config().await,
-            _ => Err(anyhow::anyhow!("Unknown service: {}", service)),
-        }
-    }
-
     // ========================================================================
     // START / STOP / RESTART
     // ========================================================================

@@ -5,6 +5,7 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
+use std::io::Write;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use tracing::{debug, error, info};
@@ -14,15 +15,146 @@ use crate::state::AppState;
 use chrono::Utc;
 use sqlx::sqlite::SqlitePool;
 
-// Helper function to get master OS
-fn get_master_os(master_name: &str) -> Option<String> {
-    if master_name.to_lowercase().contains("windows") {
-        Some("windows".to_string())
-    } else if master_name.to_lowercase().contains("linux") {
-        Some("linux".to_string())
-    } else {
-        None
+#[cfg(test)]
+mod linux_control_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn metadata_wins_and_legacy_distros_resolve_without_windows_fallback() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::query("CREATE TABLE images (id TEXT, name TEXT, os_type TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO images VALUES ('custom', 'diskless/image-disk/windows-looking', 'linux')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            resolve_master_os(&pool, "diskless/image-disk/windows-looking")
+                .await
+                .unwrap(),
+            "linux"
+        );
+        for name in [
+            "fedora-fixed",
+            "cachyos",
+            "ubuntu-24-04",
+            "kubuntu",
+            "debian",
+            "arch",
+            "steamos",
+        ] {
+            assert_eq!(resolve_master_os(&pool, name).await.unwrap(), "linux");
+        }
+        assert_eq!(
+            resolve_master_os(&pool, "windows11").await.unwrap(),
+            "windows"
+        );
+        assert!(resolve_master_os(&pool, "unknown-image").await.is_err());
     }
+
+    #[test]
+    fn linux_power_uses_safe_noninteractive_ssh_and_sudo() {
+        for action in ["shutdown", "reboot"] {
+            for force in [false, true] {
+                let cmd = build_power_command(action, "192.168.1.101", "linux", force, "diskless");
+                assert_eq!(cmd.get_program(), "ssh");
+                let args: Vec<_> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
+                assert!(args.contains(&"BatchMode=yes"));
+                assert!(args.contains(&"StrictHostKeyChecking=yes"));
+                assert!(args.contains(&"diskless"));
+                let remote = args.last().unwrap();
+                assert!(remote.starts_with("sudo -n systemctl --no-block"));
+                assert_eq!(remote.contains("--force"), force);
+                assert!(remote.ends_with(if action == "shutdown" {
+                    "poweroff"
+                } else {
+                    "reboot"
+                }));
+            }
+        }
+        assert_eq!(
+            build_power_command("reboot", "192.168.1.102", "windows", false, "diskless")
+                .get_program(),
+            "net"
+        );
+    }
+
+    #[test]
+    fn ssh_user_validation_rejects_options_and_shell_input() {
+        assert_eq!(power_ssh_user(None).unwrap(), "diskless");
+        assert_eq!(power_ssh_user(Some("admin-user")).unwrap(), "admin-user");
+        for name in ["", "-oProxyCommand=x", "user;id", "user@host", "a\nb"] {
+            assert!(power_ssh_user(Some(name)).is_err());
+        }
+    }
+
+    #[test]
+    fn linux_rdp_negotiates_security_and_keeps_password_out_of_args() {
+        let cmd = build_rdp_command("xfreerdp", "192.168.1.101", 3390, "diskless", "linux");
+        let args: Vec<_> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
+        assert!(args.contains(&"/from-stdin:force"));
+        assert!(args.contains(&"/v:192.168.1.101:3390"));
+        assert!(!args
+            .iter()
+            .any(|a| a.starts_with("/p:") || *a == "/sec:nla"));
+        assert!(build_rdp_command(
+            "xfreerdp",
+            "192.168.1.102",
+            3389,
+            "Administrator",
+            "windows"
+        )
+        .get_args()
+        .any(|a| a == "/sec:nla"));
+    }
+}
+
+pub(super) async fn resolve_master_os(pool: &SqlitePool, master: &str) -> Result<String, String> {
+    let name = master.split('@').next().unwrap_or(master);
+    let metadata: Option<String> =
+        sqlx::query_scalar("SELECT os_type FROM images WHERE name = ? OR id = ? LIMIT 1")
+            .bind(name)
+            .bind(name)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| format!("Failed to read image OS: {e}"))?;
+    if let Some(os) = metadata {
+        return os
+            .parse::<crate::core::image::OsType>()
+            .map(|os| os.to_string())
+            .map_err(|e| e.to_string());
+    }
+    let name = name.rsplit('/').next().unwrap_or(name).to_lowercase();
+    if name.contains("windows") {
+        Ok("windows".into())
+    } else if [
+        "linux", "fedora", "cachyos", "ubuntu", "debian", "arch", "steamos", "mint", "opensuse",
+    ]
+    .iter()
+    .any(|os| name.contains(os))
+    {
+        Ok("linux".into())
+    } else {
+        Err("Image OS is unknown. Set the image OS type to Linux or Windows before using remote controls.".into())
+    }
+}
+
+fn power_ssh_user(username: Option<&str>) -> Result<String, String> {
+    let user = username.unwrap_or("diskless");
+    if user.is_empty()
+        || user.len() > 64
+        || user.starts_with('-')
+        || !user
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"_.-".contains(&c))
+    {
+        return Err("Invalid Linux SSH username".into());
+    }
+    Ok(user.into())
 }
 
 /// Request to perform a shutdown operation
@@ -30,6 +162,7 @@ fn get_master_os(master_name: &str) -> Option<String> {
 pub struct ShutdownRequest {
     pub force: Option<bool>,
     pub delay_minutes: Option<u32>,
+    pub ssh_username: Option<String>,
 }
 
 /// Request to perform a reboot operation
@@ -37,6 +170,7 @@ pub struct ShutdownRequest {
 pub struct RebootRequest {
     pub force: Option<bool>,
     pub delay_minutes: Option<u32>,
+    pub ssh_username: Option<String>,
 }
 
 /// Request for remote desktop connection
@@ -44,6 +178,7 @@ pub struct RebootRequest {
 pub struct RemoteDesktopRequest {
     pub username: Option<String>,
     pub password: Option<String>,
+    pub port: Option<u16>,
 }
 
 /// Request to cancel a scheduled operation
@@ -110,22 +245,42 @@ struct ScheduledPowerOp {
     operation_type: String,
     master_os: String,
     force: bool,
+    ssh_username: String,
 }
 
 /// Build the OS-specific command used to shutdown or reboot a client.
-fn build_power_command(operation_type: &str, ip: &str, master_os: &str, force: bool) -> Command {
+pub(super) fn build_power_command(
+    operation_type: &str,
+    ip: &str,
+    master_os: &str,
+    force: bool,
+    ssh_username: &str,
+) -> Command {
     let is_shutdown = operation_type == "shutdown";
     if master_os.contains("linux") {
-        let action: &str = match (is_shutdown, force) {
-            (true, true) => "poweroff -f",
-            (true, false) => "shutdown -h now",
-            (false, true) => "reboot -f",
-            (false, false) => "shutdown -r now",
-        };
+        let action = format!(
+            "sudo -n systemctl --no-block {}{}",
+            if force { "--force " } else { "" },
+            if is_shutdown { "poweroff" } else { "reboot" }
+        );
         let mut cmd = Command::new("ssh");
-        cmd.args(["-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5"])
-            .arg(format!("root@{}", ip))
-            .arg(action);
+        cmd.args([
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            "ConnectTimeout=5",
+            "-o",
+            "ServerAliveInterval=5",
+            "-o",
+            "ServerAliveCountMax=1",
+            "-l",
+            ssh_username,
+            "--",
+            ip,
+        ])
+        .arg(action);
         cmd
     } else if is_shutdown {
         let mut cmd = Command::new("net");
@@ -196,6 +351,7 @@ async fn run_scheduled_power_op(pool: SqlitePool, op: ScheduledPowerOp, delay_se
         &op.client_ip,
         &op.master_os,
         op.force,
+        &op.ssh_username,
     ))
     .await
     {
@@ -374,6 +530,16 @@ pub async fn shutdown_client(
 ) -> Result<Json<ControlOperationResponse>, (StatusCode, Json<ErrorResponse>)> {
     let force = request.force.unwrap_or(false);
     let delay_minutes = request.delay_minutes;
+    let ssh_username = power_ssh_user(request.ssh_username.as_deref()).map_err(|error| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                status: 400,
+                error,
+                details: None,
+            }),
+        )
+    })?;
 
     info!(
         "Shutdown request for client {} (force={}, delay={:?})",
@@ -396,9 +562,18 @@ pub async fn shutdown_client(
         ));
     }
 
-    let master_os = get_master_os(&client.master)
-        .unwrap_or_default()
-        .to_lowercase();
+    let master_os = resolve_master_os(&state.db_pool, &client.master)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    status: 400,
+                    error,
+                    details: None,
+                }),
+            )
+        })?;
 
     if let Some(delay_minutes) = delay_minutes {
         if delay_minutes > 0 {
@@ -442,6 +617,7 @@ pub async fn shutdown_client(
                 operation_type: "shutdown".to_string(),
                 master_os: master_os.clone(),
                 force,
+                ssh_username: ssh_username.clone(),
             };
             let delay_secs = u64::from(delay_minutes) * 60;
             tokio::spawn(async move {
@@ -465,7 +641,11 @@ pub async fn shutdown_client(
     }
 
     let (success, message) = match crate::api::util::run_command(&mut build_power_command(
-        "shutdown", ip, &master_os, force,
+        "shutdown",
+        ip,
+        &master_os,
+        force,
+        &ssh_username,
     ))
     .await
     {
@@ -524,6 +704,16 @@ pub async fn shutdown_client(
         error!("Failed to log shutdown operation: {}", e);
     }
 
+    if !success {
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            Json(ErrorResponse {
+                status: 502,
+                error: message,
+                details: None,
+            }),
+        ));
+    }
     Ok(Json(ControlOperationResponse {
         success,
         message,
@@ -540,6 +730,16 @@ pub async fn reboot_client(
 ) -> Result<Json<ControlOperationResponse>, (StatusCode, Json<ErrorResponse>)> {
     let force = request.force.unwrap_or(false);
     let delay_minutes = request.delay_minutes;
+    let ssh_username = power_ssh_user(request.ssh_username.as_deref()).map_err(|error| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                status: 400,
+                error,
+                details: None,
+            }),
+        )
+    })?;
 
     info!(
         "Reboot request for client {} (force={}, delay={:?})",
@@ -562,9 +762,18 @@ pub async fn reboot_client(
         ));
     }
 
-    let master_os = get_master_os(&client.master)
-        .unwrap_or_default()
-        .to_lowercase();
+    let master_os = resolve_master_os(&state.db_pool, &client.master)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    status: 400,
+                    error,
+                    details: None,
+                }),
+            )
+        })?;
 
     if let Some(delay_minutes) = delay_minutes {
         if delay_minutes > 0 {
@@ -608,6 +817,7 @@ pub async fn reboot_client(
                 operation_type: "reboot".to_string(),
                 master_os: master_os.clone(),
                 force,
+                ssh_username: ssh_username.clone(),
             };
             let delay_secs = u64::from(delay_minutes) * 60;
             tokio::spawn(async move {
@@ -631,7 +841,11 @@ pub async fn reboot_client(
     }
 
     let (success, message) = match crate::api::util::run_command(&mut build_power_command(
-        "reboot", ip, &master_os, force,
+        "reboot",
+        ip,
+        &master_os,
+        force,
+        &ssh_username,
     ))
     .await
     {
@@ -690,6 +904,16 @@ pub async fn reboot_client(
         error!("Failed to log reboot operation: {}", e);
     }
 
+    if !success {
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            Json(ErrorResponse {
+                status: 502,
+                error: message,
+                details: None,
+            }),
+        ));
+    }
     Ok(Json(ControlOperationResponse {
         success,
         message,
@@ -698,8 +922,35 @@ pub async fn reboot_client(
     }))
 }
 
+fn build_rdp_command(program: &str, ip: &str, port: u16, username: &str, os: &str) -> Command {
+    let mut cmd = Command::new(program);
+    let endpoint = if ip.contains(':') {
+        format!("[{ip}]:{port}")
+    } else {
+        format!("{ip}:{port}")
+    };
+    cmd.args([
+        format!("/v:{endpoint}"),
+        format!("/u:{username}"),
+        "/d:".into(),
+        "/from-stdin:force".into(),
+        "/cert:tofu".into(),
+        "/w:1920".into(),
+        "/h:1080".into(),
+        "/dynamic-resolution".into(),
+        "/network:lan".into(),
+        "/timeout:20000".into(),
+    ]);
+    if os == "windows" {
+        cmd.arg("/sec:nla");
+    }
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    cmd
+}
+
 /// Handle remote desktop request for a client
-#[allow(unused_assignments)]
 pub async fn remote_desktop_client(
     State(state): State<AppState>,
     Path(client_id): Path<String>,
@@ -723,268 +974,86 @@ pub async fn remote_desktop_client(
         ));
     }
 
-    let username = request
-        .username
-        .unwrap_or_else(|| "Administrator".to_string());
-    let password = request.password.unwrap_or_else(|| "1".to_string());
-    let client_name = client.name.clone();
-
-    let master_os = get_master_os(&client.master)
-        .unwrap_or_default()
-        .to_lowercase();
-    let protocol_used: String;
-    let mut success = true;
-    let mut message = String::new();
-
-    if master_os.contains("windows") {
-        // Windows: Launch RDP client
-        protocol_used = "RDP".to_string();
-
-        // Try to launch xfreerdp (v2/v3 binary naming) with proper display
-        // handling. Distros ship the FreeRDP 3 binary either as 'xfreerdp3'
-        // (Debian/Ubuntu) or 'xfreerdp' (Fedora/RHEL).
-        let freerdp_names = ["xfreerdp3", "xfreerdp"];
-        let mut freerdp_child = None;
-        let mut freerdp_error: Option<std::io::Error> = None;
-
-        for freerdp_name in freerdp_names {
-            let mut freerdp_cmd = Command::new(freerdp_name);
-            freerdp_cmd
-                .args(&[
-                    "/v:".to_string() + &ip,
-                    "/u:".to_string() + &username,
-                    "/p:".to_string() + &password,
-                    "/cert:ignore".to_string(),
-                    "/w:1920".to_string(),
-                    "/h:1080".to_string(),
-                    "/dynamic-resolution".to_string(),
-                    "/gdi:hw".to_string(),
-                    "/network:lan".to_string(),
-                    "/bpp:32".to_string(),
-                    "/sec:nla".to_string(),
-                    "/timeout:20000".to_string(),
-                ])
-                .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped());
-
-            // Set DISPLAY if available
-            if let Ok(display) = std::env::var("DISPLAY") {
-                freerdp_cmd.env("DISPLAY", display);
-            }
-
-            match freerdp_cmd.spawn() {
-                Ok(child) => {
-                    freerdp_child = Some(child);
-                    break;
-                }
-                Err(e) => {
-                    debug!("Failed to launch {}: {}", freerdp_name, e);
-                    freerdp_error = Some(e);
-                }
-            }
+    let master_os = resolve_master_os(&state.db_pool, &client.master)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    status: 400,
+                    error,
+                    details: None,
+                }),
+            )
+        })?;
+    let username = request.username.unwrap_or_else(|| {
+        if master_os == "linux" {
+            "diskless".into()
+        } else {
+            "Administrator".into()
         }
-
-        match freerdp_child {
-            Some(child) => {
-                // Spawn a thread to wait for the process and log any errors
-                std::thread::spawn(move || {
-                    if let Ok(output) = child.wait_with_output() {
-                        if !output.status.success() {
-                            let stderr = String::from_utf8_lossy(&output.stderr);
-                            let stdout = String::from_utf8_lossy(&output.stdout);
-                            if !stderr.is_empty() {
-                                error!("xfreerdp error: {}", stderr);
-                            }
-                            if !stdout.is_empty() {
-                                info!("xfreerdp output: {}", stdout);
-                            }
-                        } else {
-                            info!("xfreerdp connection closed successfully");
-                        }
-                    }
-                });
-                success = true;
-                message = format!(
-                    "RDP connection initiated to {} ({}). The RDP window should open shortly.",
-                    client_name, ip
-                );
-                info!("{}", message);
-            }
-            None => {
-                let launch_error = freerdp_error
-                    .as_ref()
-                    .map(|e| e.to_string())
-                    .unwrap_or_else(|| "unknown error".to_string());
-
-                error!("Failed to launch xfreerdp: {}", launch_error);
-
-                // Fallback to rdesktop with NLA/CredSSP bypass
-                let mut rdesktop_cmd = Command::new("rdesktop");
-                rdesktop_cmd
-                    .args([
-                        ip.as_str(),
-                        "-u",
-                        username.as_str(),
-                        "-p",
-                        password.as_str(),
-                        "-x",
-                        "m",
-                        "-a",
-                        "32",
-                        "-N", // Disable encryption
-                        "-V",
-                        "1.2", // TLS version 1.2
-                        "-E",  // Disable encryption from client to server
-                    ])
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped());
-
-                // Set DISPLAY if available
-                if let Ok(display) = std::env::var("DISPLAY") {
-                    rdesktop_cmd.env("DISPLAY", display);
+    });
+    let password = request.password.unwrap_or_default();
+    let port = request.port.unwrap_or(3389);
+    if username.trim().is_empty()
+        || username.len() > 256
+        || username.contains(['\r', '\n', '\0'])
+        || password.is_empty()
+        || password.len() > 1024
+        || password.contains(['\r', '\n', '\0'])
+        || port == 0
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                status: 400,
+                error:
+                    "Enter an RDP username and password (password must not contain line breaks)."
+                        .into(),
+                details: None,
+            }),
+        ));
+    }
+    let protocol_used = "RDP".to_string();
+    let mut child = None;
+    let mut launch_error = String::new();
+    for program in ["xfreerdp3", "xfreerdp"] {
+        match build_rdp_command(program, &ip, port, &username, &master_os).spawn() {
+            Ok(mut process) => {
+                let written = process
+                    .stdin
+                    .take()
+                    .ok_or_else(|| std::io::Error::other("RDP password pipe unavailable"))
+                    .and_then(|mut stdin| writeln!(stdin, "{}", password));
+                if let Err(error) = written {
+                    let _ = process.kill();
+                    let _ = process.wait();
+                    launch_error = error.to_string();
+                    continue;
                 }
-
-                match rdesktop_cmd.spawn() {
-                    Ok(child) => {
-                        let ip_clone = ip.clone();
-                        // Spawn a thread to wait for the process and log any errors
-                        std::thread::spawn(move || {
-                            if let Ok(output) = child.wait_with_output() {
-                                if !output.status.success() {
-                                    let stderr = String::from_utf8_lossy(&output.stderr);
-                                    let stdout = String::from_utf8_lossy(&output.stdout);
-
-                                    if stderr.contains("CredSSP") || stdout.contains("CredSSP") {
-                                        error!("RDP connection failed: CredSSP/NLA is required by the Windows client. To fix this, on the Windows client run: gpedit.msc > Computer Configuration > Administrative Templates > System > Credentials Delegation > Allow delegating fresh credentials with NTLM-only server authentication > Enable and set to 'true'");
-                                    } else if !stderr.is_empty() {
-                                        error!("rdesktop error: {}", stderr);
-                                    }
-                                    if !stdout.is_empty() {
-                                        info!("rdesktop output: {}", stdout);
-                                    }
-                                } else {
-                                    info!("rdesktop connection closed successfully");
-                                }
-                            }
-                        });
-                        success = true;
-                        message = format!("RDP connection initiated to {} ({}). The RDP window should open shortly.", client_name, ip_clone);
-                        info!("{}", message);
-                    }
-                    Err(e) => {
-                        success = false;
-                        message = format!(
-                            "Failed to launch RDP client: {}. Make sure rdesktop is installed.",
-                            e
-                        );
-                        error!("{}", message);
-                    }
-                }
+                child = Some(process);
+                break;
             }
-        }
-    } else {
-        // Linux: Launch VNC client
-        protocol_used = "VNC".to_string();
-
-        // Try to launch VNC client (vncviewer or vinagre)
-        let mut vncviewer_cmd = Command::new("vncviewer");
-        vncviewer_cmd
-            .arg(ip.as_str())
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        // Set DISPLAY if available
-        if let Ok(display) = std::env::var("DISPLAY") {
-            vncviewer_cmd.env("DISPLAY", display);
-        }
-
-        let result = vncviewer_cmd.spawn();
-
-        match result {
-            Ok(child) => {
-                let ip_clone = ip.clone();
-                // Spawn a thread to wait for the process and log any errors
-                std::thread::spawn(move || {
-                    if let Ok(output) = child.wait_with_output() {
-                        if !output.status.success() {
-                            let stderr = String::from_utf8_lossy(&output.stderr);
-                            let stdout = String::from_utf8_lossy(&output.stdout);
-                            if stderr.contains("Connection refused") || stderr.contains("refused") {
-                                error!("VNC connection refused for {}. Make sure VNC server is running on the client.", ip_clone);
-                            } else if !stderr.is_empty() {
-                                error!("vncviewer error: {}", stderr);
-                            }
-                            if !stdout.is_empty() {
-                                info!("vncviewer output: {}", stdout);
-                            }
-                        } else {
-                            info!("vncviewer connection closed successfully");
-                        }
-                    }
-                });
-                success = true;
-                message = format!(
-                    "VNC connection initiated to {} ({}). The VNC window should open shortly.",
-                    client_name, ip
-                );
-                info!("{}", message);
-            }
-            Err(e) => {
-                error!("Failed to launch vncviewer: {}", e);
-
-                // Fallback to vinagre
-                let mut vinagre_cmd = Command::new("vinagre");
-                vinagre_cmd
-                    .arg(ip.as_str())
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped());
-
-                // Set DISPLAY if available
-                if let Ok(display) = std::env::var("DISPLAY") {
-                    vinagre_cmd.env("DISPLAY", display);
-                }
-
-                match vinagre_cmd.spawn() {
-                    Ok(child) => {
-                        let ip_clone = ip.clone();
-                        // Spawn a thread to wait for the process and log any errors
-                        std::thread::spawn(move || {
-                            if let Ok(output) = child.wait_with_output() {
-                                if !output.status.success() {
-                                    let stderr = String::from_utf8_lossy(&output.stderr);
-                                    let stdout = String::from_utf8_lossy(&output.stdout);
-                                    if stderr.contains("Connection refused")
-                                        || stderr.contains("refused")
-                                    {
-                                        error!("VNC connection refused for {}. Make sure VNC server is running on the client.", ip_clone);
-                                    } else if !stderr.is_empty() {
-                                        error!("vinagre error: {}", stderr);
-                                    }
-                                    if !stdout.is_empty() {
-                                        info!("vinagre output: {}", stdout);
-                                    }
-                                } else {
-                                    info!("vinagre connection closed successfully");
-                                }
-                            }
-                        });
-                        success = true;
-                        message = format!("VNC connection initiated to {} ({}). The VNC window should open shortly.", client_name, ip);
-                        info!("{}", message);
-                    }
-                    Err(e) => {
-                        success = false;
-                        message = format!("Failed to launch VNC client: {}. Make sure vncviewer or vinagre is installed, and VNC server is running on the client.", e);
-                        error!("{}", message);
-                    }
-                }
-            }
+            Err(error) => launch_error = error.to_string(),
         }
     }
+    let success = child.is_some();
+    let message = if let Some(mut process) = child {
+        // Spawning a viewer confirms launch, not authentication or connection.
+        std::thread::spawn(move || {
+            if let Ok(status) = process.wait() {
+                if !status.success() {
+                    error!("RDP viewer exited with {}", status);
+                }
+            }
+        });
+        format!("RDP viewer opened for {} ({}). Enable Remote Desktop on the client and allow its RDP port through the firewall.", client.name, ip)
+    } else {
+        format!(
+            "Failed to launch RDP viewer: {}. Install FreeRDP on the server.",
+            launch_error
+        )
+    };
 
     // Log the operation
     let audit_logger = AuditLogger::new(Arc::new(state.db_pool.clone()));
@@ -1009,6 +1078,16 @@ pub async fn remote_desktop_client(
         error!("Failed to log remote desktop operation: {}", e);
     }
 
+    if !success {
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            Json(ErrorResponse {
+                status: 502,
+                error: message,
+                details: None,
+            }),
+        ));
+    }
     Ok(Json(RemoteDesktopResponse {
         success,
         protocol_used,

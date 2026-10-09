@@ -1,5 +1,5 @@
 import { getSettings, saveSettings } from "@/api/modules/system";
-import { configureService, restartService } from "@/api/modules/services";
+import { configureService } from "@/api/modules/services";
 import { getNetworkInterfaces, detectServerNetwork, applyNetworkSettings as applyNetworkSettingsApi } from "@/api/modules/network";
 import { updateAdminPassword } from "@/api/modules/auth";
 import { activateLicense as activateLicenseApi } from "@/api/modules/license";
@@ -39,7 +39,6 @@ export const useSettings = () => {
 
           if (serviceName) {
             await configureService(serviceName);
-            await restartService(serviceName);
           }
 
           await fetchConfig();

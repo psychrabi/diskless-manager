@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useAppStore } from "@/store/useAppStore";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -25,11 +26,14 @@ import { Spinner } from "@/components/ui/spinner";
 const remoteDesktopSchema = z.object({
   username: z.string().min(1, "Username is required"),
   password: z.string().min(1, "Password is required"),
+  port: z.coerce.number().int().min(1).max(65535),
 });
 
 const RemoteDesktopModal = ({ client, isOpen, onClose, onSuccess }) => {
   const { success, error: showError } = useToastStore();
   const [isLoading, setIsLoading] = useState(false);
+  const imageOs = useAppStore((state) => state.masters.find((image) => image.name === client?.master || image.id === client?.master)?.os_type);
+  const defaultUsername = (imageOs ? imageOs === "windows" : /windows/i.test(client?.master || "")) ? "Administrator" : "diskless";
 
   const {
     register,
@@ -39,10 +43,15 @@ const RemoteDesktopModal = ({ client, isOpen, onClose, onSuccess }) => {
   } = useForm({
     resolver: zodResolver(remoteDesktopSchema),
     defaultValues: {
-      username: "Administrator",
-      password: "1",
+      username: defaultUsername,
+      password: "",
+      port: 3389,
     },
   });
+
+  useEffect(() => {
+    if (isOpen) reset({ username: defaultUsername, password: "", port: 3389 });
+  }, [isOpen, client?.id, defaultUsername, reset]);
 
   const onSubmit = async (data) => {
     setIsLoading(true);
@@ -50,7 +59,9 @@ const RemoteDesktopModal = ({ client, isOpen, onClose, onSuccess }) => {
       const response = await remoteDesktopClient(client.id, {
         username: data.username,
         password: data.password,
+        port: data.port,
       });
+      if (response?.success === false) throw new Error(response.message);
 
       success(
         "Remote Desktop",
@@ -88,7 +99,7 @@ const RemoteDesktopModal = ({ client, isOpen, onClose, onSuccess }) => {
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Remote Desktop Credentials</DialogTitle>
-          <DialogDescription>Client: {client?.name}</DialogDescription>
+          <DialogDescription>Connect to {client?.name} using RDP. Remote Desktop must be enabled on the client.</DialogDescription>
         </DialogHeader>
 
         <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
@@ -98,7 +109,7 @@ const RemoteDesktopModal = ({ client, isOpen, onClose, onSuccess }) => {
               <Input
                 id="rd-username"
                 type="text"
-                placeholder="Administrator"
+                placeholder={defaultUsername}
                 aria-invalid={!!errors.username}
                 {...register("username")}
               />
@@ -117,6 +128,14 @@ const RemoteDesktopModal = ({ client, isOpen, onClose, onSuccess }) => {
                 {...register("password")}
               />
               <FieldError>{errors.password?.message}</FieldError>
+            </FieldContent>
+          </Field>
+
+          <Field data-invalid={!!errors.port}>
+            <FieldLabel htmlFor="rd-port">RDP port</FieldLabel>
+            <FieldContent>
+              <Input id="rd-port" type="number" min={1} max={65535} aria-invalid={!!errors.port} {...register("port")} />
+              <FieldError>{errors.port?.message}</FieldError>
             </FieldContent>
           </Field>
 

@@ -225,7 +225,7 @@ shell
         );
     }
 
-    let root = format!("/dev/disk/by-path/ip-${{next-server}}:3260-iscsi-{target_iqn}-lun-0-part2");
+    let root = format!("/dev/disk/by-path/ip-${{next-server}}:3260-iscsi-{target_iqn}-lun-0");
     let initiator_iqn = format!("iqn.2026-01.client:client.{slug}");
     let nvme_nqn = format!("nqn.2026-09.local.diskless:client.{slug}");
 
@@ -402,7 +402,10 @@ mod tests {
     fn deny_scripts_reboot_loop_without_booting() {
         for script in [render_enrollment_disabled(), render_enrollment_closed()] {
             assert!(script.starts_with("#!ipxe"), "must be an iPXE script");
-            assert!(script.contains("reboot"), "deny scripts must loop, never boot");
+            assert!(
+                script.contains("reboot"),
+                "deny scripts must loop, never boot"
+            );
             assert!(!script.contains("sanboot"), "deny scripts must not boot");
             assert!(!script.contains("chain "), "deny scripts must not chain");
         }
@@ -497,21 +500,16 @@ mod tests {
     }
 
     #[test]
-    fn port_80_is_not_rendered_explicitly() {        let script = render_client_script("PC001", "iqn.example:pc001", 80);
+    fn port_80_is_not_rendered_explicitly() {
+        let script = render_client_script("PC001", "iqn.example:pc001", 80);
         assert!(script.contains("set boot-url http://${next-server}"));
         assert!(!script.contains("${next-server}:80"));
     }
 
     #[test]
     fn secure_client_scripts_use_https() {
-        let script = render_client_script_with_scheme(
-            "PC001",
-            "iqn.example:pc001",
-            443,
-            true,
-            true,
-            None,
-        );
+        let script =
+            render_client_script_with_scheme("PC001", "iqn.example:pc001", 443, true, true, None);
         assert!(script.contains("set boot-url https://${next-server}"));
     }
 

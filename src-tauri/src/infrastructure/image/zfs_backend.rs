@@ -10,8 +10,8 @@ use crate::{
     infrastructure::{
         nvmeof::remove_exports_for_block_device,
         zfs::{
-            ZfsCloneOperations, ZfsCommand, ZfsDatasetOperations,
-            ZfsSnapshotOperations, ZfsVolumeOperations,
+            ZfsCloneOperations, ZfsCommand, ZfsDatasetOperations, ZfsSnapshotOperations,
+            ZfsVolumeOperations,
         },
     },
 };
@@ -26,6 +26,17 @@ pub struct ZfsImageBackend {
 }
 
 impl ZfsImageBackend {
+    fn validate_mountpoints(dataset: &str, mountpoints: &str) -> Result<()> {
+        if let Some(mountpoint) = mountpoints.lines().find(|line| !line.trim().is_empty()) {
+            bail!(
+                "Master volume '{dataset}' is mounted on the server at '{}'. \
+                 Unmount its filesystems and exit any installation chroot before enabling Super mode.",
+                mountpoint.trim()
+            );
+        }
+        Ok(())
+    }
+
     pub fn new() -> Self {
         let command = ZfsCommand::new();
 
@@ -94,6 +105,23 @@ impl Default for ZfsImageBackend {
 }
 
 impl ImageBackend for ZfsImageBackend {
+    fn validate_unmounted(&self, name: &str) -> Result<()> {
+        let device = format!("/dev/zvol/{name}");
+        // Include descendants: a mounted partition or device-mapper alias also holds the ZVOL.
+        let mountpoints = crate::infrastructure::command::run_command_output_no_sudo([
+            "lsblk",
+            "--noheadings",
+            "--raw",
+            "--output",
+            "MOUNTPOINTS",
+            "--",
+            &device,
+        ])
+        .map_err(anyhow::Error::from)
+        .context("failed to inspect master volume mounts")?;
+        Self::validate_mountpoints(name, &mountpoints)
+    }
+
     fn settle_device_changes(&self) -> Result<()> {
         crate::infrastructure::command::run_command_output_no_sudo([
             "udevadm",
@@ -296,6 +324,25 @@ impl ImageBackend for ZfsImageBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mounted_partition_blocks_export_with_actionable_error() {
+        let error = ZfsImageBackend::validate_mountpoints(
+            "diskless/image-disk/cachyos",
+            "\n/mnt/cachyos-target/boot/efi\n/mnt/cachyos-target\n",
+        )
+        .unwrap_err();
+
+        let message = error.to_string();
+        assert!(message.contains("diskless/image-disk/cachyos"));
+        assert!(message.contains("/mnt/cachyos-target/boot/efi"));
+        assert!(message.contains("Unmount"));
+    }
+
+    #[test]
+    fn unmounted_volume_and_partitions_allow_export() {
+        assert!(ZfsImageBackend::validate_mountpoints("diskless/master", "\n\n\n").is_ok());
+    }
 
     #[test]
     fn backend_has_default_constructor() {
