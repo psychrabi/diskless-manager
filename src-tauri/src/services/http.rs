@@ -3,16 +3,17 @@ use std::sync::Arc;
 
 use crate::core::config::Settings;
 use crate::infrastructure::{
-    dhcp::{BootReservation, publish_client_ipxe},
+    dhcp::{publish_client_ipxe, BootReservation},
     pxe::render_client_dispatcher_autoexec_with_scheme,
 };
 use crate::services::{
-    ServiceStatus, get_service_pid, is_systemd_service_running, run_sudo_command,
-    write_with_sudo_tee,
+    get_service_pid, is_systemd_service_running, run_sudo_command, write_with_sudo_tee,
+    ServiceStatus,
 };
 use log::info;
 
 pub struct HttpService {
+    pub(crate) db_pool: sqlx::SqlitePool,
     pub(crate) settings: Arc<Settings>,
 }
 
@@ -91,14 +92,14 @@ impl HttpService {
         Ok(())
     }
 
-    /// Rebuild MAC-specific boot menus for clients loaded from the database
-    /// into the runtime configuration cache during AppState startup.
+    /// Rebuild MAC-specific boot menus from persisted clients when HTTP
+    /// configuration is generated.
     ///
     /// This repairs existing installations automatically when the HTTP service
     /// is generated, started, or reloaded. New clients are also generated
     /// transactionally by `IscDhcpPublisher` during provisioning.
     async fn publish_cached_client_menus(&self) -> anyhow::Result<()> {
-        let config = crate::config::get_config();
+        let config = crate::config::read_config_db(&self.db_pool).await?;
         let server_ip = if self.settings.dhcp.next_server_ip.trim().is_empty() {
             self.settings.server.ip_address.trim()
         } else {
@@ -149,13 +150,15 @@ impl HttpService {
                 chap,
             };
 
-            publish_client_ipxe(&reservation).await.map_err(|error| {
-                anyhow::anyhow!(
-                    "failed to regenerate iPXE menu for client '{}': {}",
-                    client.name,
-                    error
-                )
-            })?;
+            publish_client_ipxe(&self.settings, &reservation)
+                .await
+                .map_err(|error| {
+                    anyhow::anyhow!(
+                        "failed to regenerate iPXE menu for client '{}': {}",
+                        client.name,
+                        error
+                    )
+                })?;
             published += 1;
         }
 

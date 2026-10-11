@@ -235,6 +235,7 @@ impl Default for TftpConfig {
 #[serde(default)]
 pub struct IscsiConfig {
     pub enabled: bool,
+    pub backend: IscsiBackend,
     pub target_prefix: String,
     pub portal_port: u16,
     pub targets_dir: PathBuf,
@@ -244,11 +245,20 @@ impl Default for IscsiConfig {
     fn default() -> Self {
         Self {
             enabled: true,
+            backend: IscsiBackend::Targetcli,
             target_prefix: "iqn.2024-01.com.diskless".to_string(),
             portal_port: 3260,
             targets_dir: PathBuf::from("/var/lib/iscsi-targets"),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum IscsiBackend {
+    #[default]
+    Targetcli,
+    InternalConfigfs,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

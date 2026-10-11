@@ -274,12 +274,46 @@ pub fn wol_binary() -> &'static str {
     }
 }
 
+/// Restrict privileged installation to the dependencies offered by server setup.
+pub(crate) fn is_setup_package(package: &str) -> bool {
+    matches!(
+        package,
+        "qemu-utils"
+            | "targetcli-fb"
+            | "isc-dhcp-server"
+            | "tftpd-hpa"
+            | "nfs-kernel-server"
+            | "apache2"
+            | "samba"
+            | "wakeonlan"
+            | "zfsutils-linux"
+            | "freerdp3-x11"
+            | "iftop"
+            | "qemu-img"
+            | "targetcli"
+            | "dhcp-server"
+            | "tftp-server"
+            | "nfs-utils"
+            | "httpd"
+            | "wol"
+            | "zfs"
+            | "freerdp"
+            | "qemu"
+            | "dhcp"
+            | "tftp-hpa"
+            | "apache"
+    )
+}
+
 /// Install a package using the distribution's package manager.
 ///
 /// Records the operation in the application log (visible in the Logs page)
 /// including the package manager command and a tail of the captured output so
 /// administrators can audit dependency installation during setup.
 pub async fn install_package(package: &str) -> Result<String, String> {
+    if !is_setup_package(package) {
+        return Err("Package is not a supported setup dependency".into());
+    }
     let distro = detect();
     // OpenZFS is not shipped by the default Fedora/RHEL repositories; it needs
     // the official zfsonlinux repository and a matching kernel-devel for the
@@ -295,18 +329,26 @@ pub async fn install_package(package: &str) -> Result<String, String> {
         args.join(" ")
     );
 
-    let output = Command::new("sudo").args(&args).output().map_err(|e| {
-        let message = format!("Failed to spawn {}: {}", args[0], e);
-        log::error!("Dependency install '{}' failed to start: {}", package, e);
-        message
-    })?;
+    let output = tokio::process::Command::new("sudo")
+        .args(&args)
+        .output()
+        .await
+        .map_err(|e| {
+            let message = format!("Failed to spawn {}: {}", args[0], e);
+            log::error!("Dependency install '{}' failed to start: {}", package, e);
+            message
+        })?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     if output.status.success() {
         log::info!("Dependency install: '{}' installed successfully", package);
-        match package_version(distro, package) {
+        let package_name = package.to_owned();
+        let version = tokio::task::spawn_blocking(move || package_version(distro, &package_name))
+            .await
+            .map_err(|error| format!("package version worker failed: {error}"))?;
+        match version {
             Some(version) => log::info!(
                 "Dependency install: '{}' is now version {}",
                 package,
@@ -720,5 +762,31 @@ mod tests {
             ["-q", "--queryformat=%{VERSION}", "samba"]
         );
         assert_eq!(Distro::Arch.pkg_version("samba"), ["-Q", "samba"]);
+    }
+    #[tokio::test]
+    async fn setup_installer_rejects_options_paths_and_unknown_packages() {
+        for package in [
+            "--help",
+            "-y",
+            "/tmp/package.rpm",
+            "curl",
+            "samba iftop",
+            "",
+        ] {
+            assert!(install_package(package).await.is_err());
+        }
+        for package in [
+            "samba",
+            "zfs",
+            "targetcli",
+            "targetcli-fb",
+            "isc-dhcp-server",
+            "dhcp-server",
+            "dhcp",
+            "freerdp3-x11",
+            "freerdp",
+        ] {
+            assert!(is_setup_package(package));
+        }
     }
 }

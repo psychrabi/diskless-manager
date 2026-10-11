@@ -19,7 +19,12 @@ use crate::{
 };
 
 fn image_service(state: &AppState) -> ImageService {
-    ImageService::new(ImageRepository::new(state.db_pool.clone()))
+    ImageService::with_backend(
+        ImageRepository::new(state.db_pool.clone()),
+        std::sync::Arc::new(crate::infrastructure::image::ZfsImageBackend::with_config(
+            state.config.clone(),
+        )),
+    )
 }
 
 #[derive(Debug)]
@@ -80,6 +85,7 @@ impl IntoResponse for ErrorResponse {
 /// iSCSI LUN
 /// ```
 fn build_storage_spec(
+    config: &crate::config::RuntimeConfig,
     settings: &crate::core::config::Settings,
     client_id: &str,
     client_name: &str,
@@ -107,8 +113,10 @@ fn build_storage_spec(
 
     match snapshot {
         Some(snapshot) if !snapshot.trim().is_empty() => {
-            let dataset =
-                crate::infrastructure::zfs::legacy::get_writeback_or_default_dataset(client_name);
+            let dataset = crate::infrastructure::zfs::legacy::get_writeback_or_default_dataset(
+                config,
+                client_name,
+            );
 
             Ok(ClientStorageSpec {
                 client_id: client_id.to_string(),
@@ -127,19 +135,22 @@ fn build_storage_spec(
         }
 
         _ => {
-            crate::validation::validate_managed_dataset(master, &crate::config::get_zpool_name())
-                .map_err(|error| format!("Invalid master dataset: {error}"))?;
+            crate::validation::validate_managed_dataset(
+                master,
+                &crate::config::get_zpool_name(config),
+            )
+            .map_err(|error| format!("Invalid master dataset: {error}"))?;
 
             Ok(ClientStorageSpec {
-            client_id: client_id.to_string(),
-            source: StorageSource::ExistingVolume(master.to_string()),
-            dataset: master.to_string(),
-            backstore,
-            target_iqn,
-            lun: 0,
-            use_game_disk,
-            game_disks: Vec::new(),
-            chap: None,
+                client_id: client_id.to_string(),
+                source: StorageSource::ExistingVolume(master.to_string()),
+                dataset: master.to_string(),
+                backstore,
+                target_iqn,
+                lun: 0,
+                use_game_disk,
+                game_disks: Vec::new(),
+                chap: None,
             })
         }
     }
@@ -215,21 +226,22 @@ fn game_configuration_changed(
 /// Empty + switch on means all currently discovered masters; otherwise
 /// the stored/requested list intersected with discovery.
 fn resolve_effective_game_selection(
+    state: &AppState,
     use_game_disk: bool,
     stored_or_requested: &[String],
 ) -> anyhow::Result<Vec<String>> {
-    let discovered =
-        crate::application::storage_service::StorageService::discover_game_masters()?
-            .into_iter()
-            .map(|master| master.dataset)
-            .collect::<Vec<_>>();
-    Ok(
-        crate::application::storage_service::resolve_game_selection(
-            use_game_disk,
-            stored_or_requested,
-            &discovered,
-        ),
-    )
+    let discovered = state
+        .application
+        .storage
+        .discover_game_masters()?
+        .into_iter()
+        .map(|master| master.dataset)
+        .collect::<Vec<_>>();
+    Ok(crate::application::storage_service::resolve_game_selection(
+        use_game_disk,
+        stored_or_requested,
+        &discovered,
+    ))
 }
 
 /// (Re)publish a provisioned client's static boot menu, embedding CHAP
@@ -260,7 +272,7 @@ async fn publish_boot_menu(
         chap: chap.cloned(),
     };
     if let Err(error) =
-        crate::infrastructure::dhcp::publish_client_ipxe(&reservation).await
+        crate::infrastructure::dhcp::publish_client_ipxe(settings, &reservation).await
     {
         tracing::warn!(
             "Failed to regenerate boot menu for client '{}': {}",
@@ -271,7 +283,8 @@ async fn publish_boot_menu(
 }
 
 /// Replace a client's stored game master selection wholesale.
-async fn persist_game_selection(    pool: &sqlx::SqlitePool,
+async fn persist_game_selection(
+    pool: &sqlx::SqlitePool,
     client_id: &str,
     selection: &[String],
 ) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
@@ -298,22 +311,20 @@ async fn persist_game_selection(    pool: &sqlx::SqlitePool,
             )
         })?;
     for master in selection {
-        sqlx::query(
-            "INSERT INTO client_game_disks (client_id, master_dataset) VALUES (?, ?)",
-        )
-        .bind(client_id)
-        .bind(master)
-        .execute(&mut *transaction)
-        .await
-        .map_err(|error| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    status: 500,
-                    error: error.to_string(),
-                }),
-            )
-        })?;
+        sqlx::query("INSERT INTO client_game_disks (client_id, master_dataset) VALUES (?, ?)")
+            .bind(client_id)
+            .bind(master)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|error| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        status: 500,
+                        error: error.to_string(),
+                    }),
+                )
+            })?;
     }
     transaction.commit().await.map_err(|error| {
         (
@@ -333,10 +344,12 @@ async fn persist_game_selection(    pool: &sqlx::SqlitePool,
 /// This is required when deleting/resetting a client because the actual
 /// application storage object is not persisted separately.
 fn storage_from_client(
+    config: &crate::config::RuntimeConfig,
     settings: &crate::core::config::Settings,
     client: &Client,
 ) -> Result<ClientStorage, String> {
     let mut spec = build_storage_spec(
+        config,
         settings,
         &client.id,
         &client.name,
@@ -418,10 +431,16 @@ async fn persist_client_runtime_state(
 pub async fn create_client(
     State(state): State<AppState>,
     Json(request): Json<CreateClientRequest>,
-) -> Result<Json<crate::domain::Client>, StatusCode> {
+) -> Result<Json<crate::domain::Client>, (StatusCode, Json<ErrorResponse>)> {
     let _client_guard = state.client_mutations.lock().await;
     if validate_ip_address(&request.ip).is_err() || validate_mac_address(&request.mac).is_err() {
-        return Err(StatusCode::BAD_REQUEST);
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                status: StatusCode::BAD_REQUEST.as_u16(),
+                error: "Invalid client IP address or MAC address".to_string(),
+            }),
+        ));
     }
 
     info!("Creating client: {:?}", request);
@@ -433,6 +452,7 @@ pub async fn create_client(
     // ------------------------------------------------------------------------
 
     let mut storage_spec = build_storage_spec(
+        &state.config,
         &settings,
         &request.name,
         &request.name,
@@ -446,12 +466,19 @@ pub async fn create_client(
             request.name, error
         );
 
-        StatusCode::BAD_REQUEST
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                status: StatusCode::BAD_REQUEST.as_u16(),
+                error: format!("Invalid storage configuration: {error}"),
+            }),
+        )
     })?;
 
     // Resolve the game selection up front: empty + switch on means all
     // currently discovered masters.
     storage_spec.game_disks = resolve_effective_game_selection(
+        &state,
         request.use_game_disk.unwrap_or(false),
         request.game_disks.as_deref().unwrap_or(&[]),
     )
@@ -461,7 +488,13 @@ pub async fn create_client(
             request.name, error
         );
 
-        StatusCode::INTERNAL_SERVER_ERROR
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                error: format!("Failed to resolve game selection: {error:#}"),
+            }),
+        )
     })?;
 
     // New clients enforce CHAP unless explicitly opted out. Credentials
@@ -471,15 +504,22 @@ pub async fn create_client(
     let chap_enabled = request.chap_enabled.unwrap_or(true);
     storage_spec.chap = if chap_enabled {
         Some(
-            crate::infrastructure::iscsi::ChapCredentials::generate(&request.name)
-                .map_err(|error| {
+            crate::infrastructure::iscsi::ChapCredentials::generate(&request.name).map_err(
+                |error| {
                     error!(
                         "Failed to generate CHAP credentials for client '{}': {}",
                         request.name, error
                     );
 
-                    StatusCode::INTERNAL_SERVER_ERROR
-                })?,
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ErrorResponse {
+                            status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                            error: format!("Failed to generate client CHAP credentials: {error:#}"),
+                        }),
+                    )
+                },
+            )?,
         )
     } else {
         None
@@ -512,9 +552,15 @@ pub async fn create_client(
         .create_client(create, storage_spec, &settings.dhcp.next_server_ip)
         .await
         .map_err(|error| {
-            error!("Failed to create client '{}': {}", request.name, error);
+            error!("Failed to create client '{}': {:#}", request.name, error);
 
-            StatusCode::INTERNAL_SERVER_ERROR
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                    error: format!("Failed to create client: {error:#}"),
+                }),
+            )
         })?;
 
     info!("Created client: {}", client.name);
@@ -716,11 +762,44 @@ pub async fn update_client(
                     ));
                 }
 
-                let master_os = super::control::resolve_master_os(&state.db_pool, &existing_client.master).await.map_err(|error| (StatusCode::BAD_REQUEST, Json(ErrorResponse { status: 400, error })))?;
-                let mut cmd = super::control::build_power_command("reboot", ip, &master_os, master_os == "windows", "diskless");
-                let output = crate::api::util::run_command(&mut cmd).await.map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { status: 500, error: error.to_string() })))?;
+                let master_os =
+                    super::control::resolve_master_os(&state.db_pool, &existing_client.master)
+                        .await
+                        .map_err(|error| {
+                            (
+                                StatusCode::BAD_REQUEST,
+                                Json(ErrorResponse { status: 400, error }),
+                            )
+                        })?;
+                let mut cmd = super::control::build_power_command(
+                    "reboot",
+                    ip,
+                    &master_os,
+                    master_os == "windows",
+                    "diskless",
+                );
+                let output = crate::api::util::run_command(&mut cmd)
+                    .await
+                    .map_err(|error| {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(ErrorResponse {
+                                status: 500,
+                                error: error.to_string(),
+                            }),
+                        )
+                    })?;
                 if !output.status.success() {
-                    return Err((StatusCode::BAD_GATEWAY, Json(ErrorResponse { status: 502, error: format!("Failed to reboot client: {}", String::from_utf8_lossy(&output.stderr)) })));
+                    return Err((
+                        StatusCode::BAD_GATEWAY,
+                        Json(ErrorResponse {
+                            status: 502,
+                            error: format!(
+                                "Failed to reboot client: {}",
+                                String::from_utf8_lossy(&output.stderr)
+                            ),
+                        }),
+                    ));
                 }
 
                 info!("Reboot command sent to {} ({})", existing_client.name, ip);
@@ -746,11 +825,44 @@ pub async fn update_client(
                     ));
                 }
 
-                let master_os = super::control::resolve_master_os(&state.db_pool, &existing_client.master).await.map_err(|error| (StatusCode::BAD_REQUEST, Json(ErrorResponse { status: 400, error })))?;
-                let mut cmd = super::control::build_power_command("shutdown", ip, &master_os, master_os == "windows", "diskless");
-                let output = crate::api::util::run_command(&mut cmd).await.map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { status: 500, error: error.to_string() })))?;
+                let master_os =
+                    super::control::resolve_master_os(&state.db_pool, &existing_client.master)
+                        .await
+                        .map_err(|error| {
+                            (
+                                StatusCode::BAD_REQUEST,
+                                Json(ErrorResponse { status: 400, error }),
+                            )
+                        })?;
+                let mut cmd = super::control::build_power_command(
+                    "shutdown",
+                    ip,
+                    &master_os,
+                    master_os == "windows",
+                    "diskless",
+                );
+                let output = crate::api::util::run_command(&mut cmd)
+                    .await
+                    .map_err(|error| {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(ErrorResponse {
+                                status: 500,
+                                error: error.to_string(),
+                            }),
+                        )
+                    })?;
                 if !output.status.success() {
-                    return Err((StatusCode::BAD_GATEWAY, Json(ErrorResponse { status: 502, error: format!("Failed to shutdown client: {}", String::from_utf8_lossy(&output.stderr)) })));
+                    return Err((
+                        StatusCode::BAD_GATEWAY,
+                        Json(ErrorResponse {
+                            status: 502,
+                            error: format!(
+                                "Failed to shutdown client: {}",
+                                String::from_utf8_lossy(&output.stderr)
+                            ),
+                        }),
+                    ));
                 }
 
                 info!("Shutdown command sent to {} ({})", existing_client.name, ip);
@@ -825,25 +937,27 @@ pub async fn update_client(
                         .storage
                         .validate_existing_dataset(&master)
                         .map_err(|error| {
-                        (
-                            StatusCode::BAD_REQUEST,
-                            Json(ErrorResponse {
-                                status: StatusCode::BAD_REQUEST.as_u16(),
-                                error: error.to_string(),
-                            }),
-                        )
-                    })?;
-
-                    let current_storage = storage_from_client(&settings, &existing_client)
-                        .map_err(|error| {
                             (
-                                StatusCode::INTERNAL_SERVER_ERROR,
+                                StatusCode::BAD_REQUEST,
                                 Json(ErrorResponse {
-                                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                                    error,
+                                    status: StatusCode::BAD_REQUEST.as_u16(),
+                                    error: error.to_string(),
                                 }),
                             )
                         })?;
+
+                    let current_storage =
+                        storage_from_client(&state.config, &settings, &existing_client).map_err(
+                            |error| {
+                                (
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    Json(ErrorResponse {
+                                        status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                                        error,
+                                    }),
+                                )
+                            },
+                        )?;
 
                     if let Err(error) = state
                         .application
@@ -884,10 +998,7 @@ pub async fn update_client(
                                 StatusCode::INTERNAL_SERVER_ERROR,
                                 Json(ErrorResponse {
                                     status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                                    error: format!(
-                                        "Failed to resolve CHAP credentials: {}",
-                                        error
-                                    ),
+                                    error: format!("Failed to resolve CHAP credentials: {}", error),
                                 }),
                             )
                         })?,
@@ -984,16 +1095,18 @@ pub async fn update_client(
 
                     let snapshot_source = format!("{}@{}", master, snapshot_image.name);
 
-                    let current_storage = storage_from_client(&settings, &existing_client)
-                        .map_err(|error| {
-                            (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                Json(ErrorResponse {
-                                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                                    error,
-                                }),
-                            )
-                        })?;
+                    let current_storage =
+                        storage_from_client(&state.config, &settings, &existing_client).map_err(
+                            |error| {
+                                (
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    Json(ErrorResponse {
+                                        status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                                        error,
+                                    }),
+                                )
+                            },
+                        )?;
 
                     if let Err(error) = state
                         .application
@@ -1008,6 +1121,7 @@ pub async fn update_client(
                     }
 
                     let mut spec = build_storage_spec(
+                        &state.config,
                         &settings,
                         &existing_client.id,
                         &existing_client.name,
@@ -1041,10 +1155,7 @@ pub async fn update_client(
                             StatusCode::INTERNAL_SERVER_ERROR,
                             Json(ErrorResponse {
                                 status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                                error: format!(
-                                    "Failed to resolve CHAP credentials: {}",
-                                    error
-                                ),
+                                error: format!("Failed to resolve CHAP credentials: {}", error),
                             }),
                         )
                     })?;
@@ -1140,6 +1251,7 @@ pub async fn update_client(
                 let settings = state.settings.read().await;
 
                 let mut spec = build_storage_spec(
+                    &state.config,
                     &settings,
                     &existing_client.id,
                     &existing_client.name,
@@ -1159,8 +1271,8 @@ pub async fn update_client(
 
                 preserve_persisted_target_iqn(&mut spec, &existing_client);
 
-                let current =
-                    storage_from_client(&settings, &existing_client).map_err(|error| {
+                let current = storage_from_client(&state.config, &settings, &existing_client)
+                    .map_err(|error| {
                         (
                             StatusCode::INTERNAL_SERVER_ERROR,
                             Json(ErrorResponse {
@@ -1179,7 +1291,7 @@ pub async fn update_client(
                             StatusCode::INTERNAL_SERVER_ERROR,
                             Json(ErrorResponse {
                                 status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                                error: format!("Failed to reset client storage: {}", error),
+                                error: format!("Failed to reset client storage: {error:#}"),
                             }),
                         )
                     })?;
@@ -1206,6 +1318,7 @@ pub async fn update_client(
                     .filter(|value| !value.trim().is_empty());
 
                 let mut spec = build_storage_spec(
+                    &state.config,
                     &settings,
                     &existing_client.id,
                     &existing_client.name,
@@ -1225,8 +1338,8 @@ pub async fn update_client(
 
                 preserve_persisted_target_iqn(&mut spec, &existing_client);
 
-                let current =
-                    storage_from_client(&settings, &existing_client).map_err(|error| {
+                let current = storage_from_client(&state.config, &settings, &existing_client)
+                    .map_err(|error| {
                         (
                             StatusCode::INTERNAL_SERVER_ERROR,
                             Json(ErrorResponse {
@@ -1245,7 +1358,7 @@ pub async fn update_client(
                             StatusCode::INTERNAL_SERVER_ERROR,
                             Json(ErrorResponse {
                                 status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                                error: format!("Failed to reset client storage: {}", error),
+                                error: format!("Failed to reset client storage: {error:#}"),
                             }),
                         )
                     })?;
@@ -1275,47 +1388,42 @@ pub async fn update_client(
     if request.master.is_none() && request.snapshot.is_none() {
         request.snapshot = existing_client.snapshot.clone();
     }
-    let stored_game_disks =
-        crate::core::reconciliation::stored_game_selection(&state.db_pool, &id)
-            .await
-            .map_err(|error| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        status: 500,
-                        error: error.to_string(),
-                    }),
-                )
-            })?;
-    let existing_game_flag = existing_client.use_game_disk.unwrap_or(false);
-    let boot_changed = storage_configuration_changed(&existing_client, &request);
-    let game_changed =
-        game_configuration_changed(existing_game_flag, &stored_game_disks, &request);
-
-    // CHAP: resolve once for every path below. Generation is idempotent
-    // (read-first), so resolving on every update is cheap and keeps all
-    // provisioning paths converged without per-branch duplication.
-    let existing_chap = existing_client.chap_enabled.unwrap_or(false);
-    let chap_enabled = request.chap_enabled.unwrap_or(existing_chap);
-    let chap_changed = request.chap_enabled.is_some_and(|value| value != existing_chap);
-    let chap_name = request.name.as_deref().unwrap_or(&existing_client.name);
-    let chap_creds = if chap_enabled {
-        crate::core::reconciliation::ensure_chap_credentials(
-            &state.db_pool,
-            &id,
-            chap_name,
-            true,
-        )
+    let stored_game_disks = crate::core::reconciliation::stored_game_selection(&state.db_pool, &id)
         .await
         .map_err(|error| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
                     status: 500,
-                    error: format!("Failed to ensure CHAP credentials: {}", error),
+                    error: error.to_string(),
                 }),
             )
-        })?
+        })?;
+    let existing_game_flag = existing_client.use_game_disk.unwrap_or(false);
+    let boot_changed = storage_configuration_changed(&existing_client, &request);
+    let game_changed = game_configuration_changed(existing_game_flag, &stored_game_disks, &request);
+
+    // CHAP: resolve once for every path below. Generation is idempotent
+    // (read-first), so resolving on every update is cheap and keeps all
+    // provisioning paths converged without per-branch duplication.
+    let existing_chap = existing_client.chap_enabled.unwrap_or(false);
+    let chap_enabled = request.chap_enabled.unwrap_or(existing_chap);
+    let chap_changed = request
+        .chap_enabled
+        .is_some_and(|value| value != existing_chap);
+    let chap_name = request.name.as_deref().unwrap_or(&existing_client.name);
+    let chap_creds = if chap_enabled {
+        crate::core::reconciliation::ensure_chap_credentials(&state.db_pool, &id, chap_name, true)
+            .await
+            .map_err(|error| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        status: 500,
+                        error: format!("Failed to ensure CHAP credentials: {}", error),
+                    }),
+                )
+            })?
     } else {
         None
     };
@@ -1332,20 +1440,23 @@ pub async fn update_client(
         // Remove BEFORE persisting: if the file cannot go, the record
         // must stay enabled so disk and database cannot disagree about
         // whether this machine boots.
-        crate::infrastructure::dhcp::remove_client_ipxe_menu(&existing_client.mac)
-            .await
-            .map_err(|error| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        status: 500,
-                        error: format!(
-                            "Failed to remove boot menu for '{}': {}",
-                            existing_client.name, error
-                        ),
-                    }),
-                )
-            })?;
+        crate::infrastructure::dhcp::remove_client_ipxe_menu(
+            &state.settings.read().await.clone(),
+            &existing_client.mac,
+        )
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    status: 500,
+                    error: format!(
+                        "Failed to remove boot menu for '{}': {}",
+                        existing_client.name, error
+                    ),
+                }),
+            )
+        })?;
     } else if will_be_enabled {
         // Best-effort: a missing menu self-heals on the next boot via the
         // enrollment redirect path, so regeneration must not fail saves.
@@ -1433,21 +1544,16 @@ pub async fn update_client(
             .game_disks
             .clone()
             .unwrap_or_else(|| stored_game_disks.clone());
-        let resolved =
-            resolve_effective_game_selection(effective_flag, &effective_stored).map_err(
-                |error| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(ErrorResponse {
-                            status: 500,
-                            error: format!(
-                                "Failed to resolve game selection: {}",
-                                error
-                            ),
-                        }),
-                    )
-                },
-            )?;
+        let resolved = resolve_effective_game_selection(&state, effective_flag, &effective_stored)
+            .map_err(|error| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        status: 500,
+                        error: format!("Failed to resolve game selection: {}", error),
+                    }),
+                )
+            })?;
         let target_iqn = existing_client.target_iqn.clone().unwrap_or_else(|| {
             format!(
                 "{}:client.{}",
@@ -1505,35 +1611,31 @@ pub async fn update_client(
     //     master volume
     // ------------------------------------------------------------------------
 
-    let current_storage = storage_from_client(&settings, &existing_client).map_err(|error| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                error,
-            }),
-        )
-    })?;
+    let current_storage =
+        storage_from_client(&state.config, &settings, &existing_client).map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                    error,
+                }),
+            )
+        })?;
 
     // Refuse to rebuild storage under an active session, mirroring the
     // repair guard: tearing down LUNs under a booted client corrupts it.
     {
         let sessions =
-            crate::infrastructure::iscsi::target_has_active_sessions(
-                current_storage.target_iqn(),
-            )
-            .map_err(|error| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        status: 500,
-                        error: format!(
-                            "Failed to check iSCSI sessions: {}",
-                            error
-                        ),
-                    }),
-                )
-            })?;
+            crate::infrastructure::iscsi::target_has_active_sessions(current_storage.target_iqn())
+                .map_err(|error| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ErrorResponse {
+                            status: 500,
+                            error: format!("Failed to check iSCSI sessions: {}", error),
+                        }),
+                    )
+                })?;
         crate::core::reconciliation::ensure_storage_repair_safe(
             current_storage.target_iqn(),
             sessions,
@@ -1549,23 +1651,31 @@ pub async fn update_client(
         })?;
     }
 
-    if let Err(error) = state
+    state
         .application
         .storage
         .destroy_client_storage(&current_storage)
-    {
-        tracing::warn!(
-            "Failed to remove existing storage for client '{}': {}",
-            existing_client.name,
-            error
-        );
-    }
+        .map_err(|error| {
+            tracing::error!(
+                "Failed to remove existing storage for client '{}': {:#}",
+                existing_client.name,
+                error
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                    error: format!("Failed to remove existing storage: {error:#}"),
+                }),
+            )
+        })?;
 
     // ------------------------------------------------------------------------
     // Create desired new storage.
     // ------------------------------------------------------------------------
 
     let mut storage_spec = build_storage_spec(
+        &state.config,
         &settings,
         &existing_client.id,
         new_name,
@@ -1597,7 +1707,7 @@ pub async fn update_client(
         .clone()
         .unwrap_or_else(|| stored_game_disks.clone());
     storage_spec.game_disks =
-        resolve_effective_game_selection(effective_game_flag, &effective_game_stored)
+        resolve_effective_game_selection(&state, effective_game_flag, &effective_game_stored)
             .map_err(|error| {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -1701,10 +1811,7 @@ pub async fn rotate_client_chap(
     let err = |error: String| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                status: 500,
-                error,
-            }),
+            Json(ErrorResponse { status: 500, error }),
         )
     };
 
@@ -1724,24 +1831,19 @@ pub async fn rotate_client_chap(
         .clone()
         .filter(|name| !name.trim().is_empty())
         .unwrap_or_else(|| {
-            crate::infrastructure::iscsi::ChapCredentials::username_for_client(
-                &existing.name,
-            )
+            crate::infrastructure::iscsi::ChapCredentials::username_for_client(&existing.name)
         });
-    let mut creds =
-        crate::infrastructure::iscsi::ChapCredentials::generate(&existing.name)
-            .map_err(|error| err(format!("Failed to generate CHAP secret: {}", error)))?;
+    let mut creds = crate::infrastructure::iscsi::ChapCredentials::generate(&existing.name)
+        .map_err(|error| err(format!("Failed to generate CHAP secret: {}", error)))?;
     creds.username = username.clone();
 
-    sqlx::query(
-        "UPDATE clients SET chap_user = ?, chap_secret = ?, chap_enabled = 1 WHERE id = ?",
-    )
-    .bind(&creds.username)
-    .bind(&creds.password)
-    .bind(&id)
-    .execute(&state.db_pool)
-    .await
-    .map_err(|error| err(format!("Failed to persist CHAP secret: {}", error)))?;
+    sqlx::query("UPDATE clients SET chap_user = ?, chap_secret = ?, chap_enabled = 1 WHERE id = ?")
+        .bind(&creds.username)
+        .bind(&creds.password)
+        .bind(&id)
+        .execute(&state.db_pool)
+        .await
+        .map_err(|error| err(format!("Failed to persist CHAP secret: {}", error)))?;
 
     if let Some(target_iqn) = existing
         .target_iqn
@@ -1779,7 +1881,6 @@ pub async fn rotate_client_chap(
         "chap_enabled": true,
     })))
 }
-
 
 #[cfg(test)]
 mod error_contract_tests {

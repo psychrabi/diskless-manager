@@ -10,12 +10,12 @@ use super::{
     targetcli::TargetCliProvisioner,
     IscsiProvisioner,
 };
+use crate::core::config::IscsiBackend;
 
 /// Application-facing iSCSI provisioner that refuses destructive changes
 /// while an initiator is connected to the target.
 ///
-/// The backend is resolved once at construction: native configfs when the
-/// installed executable supports it, otherwise targetcli.
+/// The backend is selected from system settings and remains fixed until restart.
 #[derive(Clone)]
 pub struct SafeIscsiProvisioner {
     inner: Arc<dyn IscsiProvisioner>,
@@ -23,17 +23,15 @@ pub struct SafeIscsiProvisioner {
 
 impl SafeIscsiProvisioner {
     pub fn new() -> Self {
-        if ConfigfsProvisioner::probe() {
-            tracing::info!("native iSCSI backend selected");
-            Self {
-                inner: Arc::new(ConfigfsProvisioner::new()),
-            }
-        } else {
-            tracing::warn!("native iSCSI unavailable; using targetcli. Install the updated executable and refresh privileged access to enable native provisioning");
-            Self {
-                inner: Arc::new(TargetCliProvisioner::new()),
-            }
-        }
+        Self::with_backend(IscsiBackend::default())
+    }
+
+    pub fn with_backend(backend: IscsiBackend) -> Self {
+        let inner: Arc<dyn IscsiProvisioner> = match backend {
+            IscsiBackend::Targetcli => Arc::new(TargetCliProvisioner::new()),
+            IscsiBackend::InternalConfigfs => Arc::new(ConfigfsProvisioner::new()),
+        };
+        Self { inner }
     }
 
     fn ensure_disconnected(&self, target_iqn: &str) -> Result<()> {

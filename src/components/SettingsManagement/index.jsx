@@ -13,6 +13,7 @@ import EnrollmentControl from "./EnrollmentControl";
 import NetworkConfig from "./NetworkConfig";
 import { clientLifecycleSchema } from "@/schema";
 import ClientLifecycleForm from "./Forms/ClientLifecycleForm";
+import IscsiBackendSetting from "./IscsiBackendSetting";
 
 const SECTIONS = [
   { section: "client_lifecycle", title: "Client Reset", schema: clientLifecycleSchema, Form: ClientLifecycleForm },
@@ -38,6 +39,7 @@ const SettingsManagement = () => {
       />
       <div className="grid grid-cols-1 items-stretch gap-4 md:grid-cols-2 xl:grid-cols-6">
         <NetworkConfig />
+        <IscsiBackendSetting />
 
         {SECTIONS.map(({ section, title, schema, Form }) => (
           <ConfigForm

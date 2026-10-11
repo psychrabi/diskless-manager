@@ -111,7 +111,9 @@ async fn publish_boot_menu(
         chap: chap.cloned(),
     };
 
-    if let Err(error) = crate::infrastructure::dhcp::publish_client_ipxe(&reservation).await {
+    if let Err(error) =
+        crate::infrastructure::dhcp::publish_client_ipxe(settings, &reservation).await
+    {
         tracing::warn!(
             client_id = %client.id,
             %error,
@@ -208,20 +210,23 @@ pub async fn update_client(
     };
 
     if existing.enabled && !enabled {
-        crate::infrastructure::dhcp::remove_client_ipxe_menu(existing.mac.as_str())
-            .await
-            .map_err(|error| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        status: 500,
-                        error: format!(
-                            "Failed to remove boot menu for '{}': {error}",
-                            existing.name
-                        ),
-                    }),
-                )
-            })?;
+        crate::infrastructure::dhcp::remove_client_ipxe_menu(
+            &state.settings.read().await.clone(),
+            existing.mac.as_str(),
+        )
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    status: 500,
+                    error: format!(
+                        "Failed to remove boot menu for '{}': {error}",
+                        existing.name
+                    ),
+                }),
+            )
+        })?;
     } else if enabled {
         publish_boot_menu(&settings, &existing, chap.as_ref()).await;
     }

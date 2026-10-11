@@ -212,8 +212,11 @@ pub async fn update_client(
                 server_ip: server_ip.to_string(),
                 chap,
             };
-            if let Err(error) =
-                crate::infrastructure::dhcp::publish_client_ipxe(&reservation).await
+            if let Err(error) = crate::infrastructure::dhcp::publish_client_ipxe(
+                &state.settings.read().await.clone(),
+                &reservation,
+            )
+            .await
             {
                 tracing::warn!(client_id = %id, %error, "failed to regenerate boot menu while updating client");
             }

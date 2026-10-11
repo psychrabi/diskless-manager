@@ -21,8 +21,11 @@ pub fn zfs_destroy(dataset: &str) -> Result<(), AppError> {
 /// # Returns
 ///
 /// The full destination dataset name for the client's writeback clone.
-pub fn get_writeback_or_default_dataset(client_name: &str) -> String {
-    let zpool = get_zpool_name();
+pub fn get_writeback_or_default_dataset(
+    config: &crate::config::RuntimeConfig,
+    client_name: &str,
+) -> String {
+    let zpool = get_zpool_name(config);
     let listing = run_command_output_no_sudo(&[
         "zfs",
         "list",

@@ -159,7 +159,7 @@ const ClientManagement = () => {
         title="Client Management"
         description="Manage diskless boot clients and monitor their connection status"
         actions={
-          <div className="flex gap-2">
+          <div className="flex w-full flex-wrap gap-2 sm:w-auto [&>button]:flex-1 sm:[&>button]:flex-none">
             <Button
               variant="outline"
               size="sm"

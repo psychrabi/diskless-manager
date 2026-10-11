@@ -1,10 +1,10 @@
-import { render, screen } from "@testing-library/react";
+import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import ClientTableHeader from "./ClientTableHeader";
 
 describe("ClientTableHeader", () => {
   it("shows one disk throughput read and write pair", () => {
-    render(
+    const { container } = render(
       <table>
         <thead>
           <ClientTableHeader />
@@ -12,14 +12,11 @@ describe("ClientTableHeader", () => {
       </table>
     );
 
-    expect(screen.getByRole("columnheader", { name: "Throughput (MB/s)" })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "Total I/O" })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "Client" })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "Mode" })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "Actions" })).toBeInTheDocument();
-    expect(screen.queryByText("Restore Point")).not.toBeInTheDocument();
-    expect(screen.queryByText("Boot disk")).not.toBeInTheDocument();
-    expect(screen.queryByText(/Network/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/iSCSI/)).not.toBeInTheDocument();
+    expect(container.querySelector("thead").textContent).toContain("I/O (MB/s)");
+    expect(container.querySelector("thead").textContent).toContain("I/O (Total)");
+    expect(container.querySelector("thead").textContent).toContain("Name");
+    expect(container.querySelector("thead").textContent).toContain("Mode");
+    expect(container.querySelector("thead").textContent).toContain("Actions");
+    expect(container.querySelector("thead").textContent).not.toMatch(/Restore Point|Boot disk|Network|iSCSI/);
   });
 });

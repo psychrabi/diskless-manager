@@ -94,6 +94,17 @@ impl ConfigFs for FixtureFs {
             ] {
                 self.attribute(path.join(attr), value)?;
             }
+        } else if path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|s| s.to_str())
+            == Some("iscsi")
+        {
+            for dir in ["param", "fabric_statistics"] {
+                let directory = path.join(dir);
+                std::fs::create_dir(&directory)?;
+                self.implicit.borrow_mut().insert(directory);
+            }
         } else if name.starts_with("iblock_") {
             self.attribute(path.join("hba_info"), "")?;
             self.attribute(path.join("hba_mode"), "0")?;
@@ -426,4 +437,34 @@ fn real_lio_create_inspect_and_remove() {
         panic!()
     };
     assert!(state.is_ready());
+}
+
+#[test]
+fn target_removal_allows_kernel_attributes_but_preserves_other_portal_groups() {
+    let (dir, engine, spec) = fixture();
+    engine
+        .execute(Operation::Create(spec.clone()), &mut || Ok(()))
+        .unwrap();
+    let target = dir.path().join("iscsi").join(&spec.target_iqn);
+    assert!(target.join("fabric_statistics").exists());
+    std::fs::create_dir(target.join("tpgt_2")).unwrap();
+    assert!(engine
+        .execute(
+            Operation::RemoveTarget {
+                target: spec.target_iqn.clone()
+            },
+            &mut || Ok(())
+        )
+        .is_err());
+    assert!(target.join("tpgt_1").exists());
+    std::fs::remove_dir(target.join("tpgt_2")).unwrap();
+    engine
+        .execute(
+            Operation::RemoveTarget {
+                target: spec.target_iqn,
+            },
+            &mut || Ok(()),
+        )
+        .unwrap();
+    assert!(!target.exists());
 }

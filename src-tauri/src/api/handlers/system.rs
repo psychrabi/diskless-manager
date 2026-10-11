@@ -38,7 +38,10 @@ pub async fn get_server_status(
     State(state): State<AppState>,
 ) -> Result<Json<crate::commands::system::ServerStatus>, StatusCode> {
     let settings = state.settings.read().await.clone();
-    let service_manager = crate::services::ServiceManager::new(settings, state.db_pool.clone());
+    let mut active_settings = settings;
+    active_settings.iscsi.backend = state.application.iscsi_backend;
+    let service_manager =
+        crate::services::ServiceManager::new(active_settings, state.db_pool.clone());
     let service_names = ["dhcp", "tftp", "iscsi", "nfs", "samba", "http"];
     let mut services_running = 0;
     for name in service_names {
@@ -229,7 +232,7 @@ pub async fn apply_network_settings(
         }
 
         // 3. Save to Database to ensure consistency on restart
-        let current_config = crate::config::get_config();
+        let current_config = crate::config::get_config(&state.config);
         let mut new_config = current_config;
 
         let new_settings_value = match serde_json::to_value(&settings) {
@@ -254,10 +257,14 @@ pub async fn apply_network_settings(
         {
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
         }
+        crate::config::set_config(&state.config, &new_config);
     }
 
-    // Regenerate and reload all services
-    let service_manager = crate::services::ServiceManager::new(settings, state.db_pool.clone());
+    // Regenerate and reload all services with the backend active at startup.
+    let mut active_settings = settings;
+    active_settings.iscsi.backend = state.application.iscsi_backend;
+    let service_manager =
+        crate::services::ServiceManager::new(active_settings, state.db_pool.clone());
     if service_manager.generate_all_configs().await.is_err() {
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
@@ -288,7 +295,7 @@ pub async fn save_settings(
     })?;
 
     // Update the settings in the database (merging with existing fields to avoid losing zpool_name etc)
-    let current_config = crate::config::get_config();
+    let current_config = crate::config::get_config(&state.config);
     let mut new_config = current_config;
 
     let new_settings_value = match serde_json::to_value(&settings) {
@@ -341,7 +348,7 @@ async fn persist_settings_snapshot(
         .commit()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    crate::config::set_config(new_config);
+    crate::config::set_config(&state.config, new_config);
 
     // Also persist to config.toml for redundancy and manual editing support
     let toml_path = state.config_path.with_extension("toml");
@@ -380,10 +387,10 @@ pub async fn open_enrollment(
         guard.clone()
     };
 
-    let current_config = crate::config::get_config();
+    let current_config = crate::config::get_config(&state.config);
     let mut new_config = current_config;
-    new_config.settings = serde_json::to_value(&settings)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    new_config.settings =
+        serde_json::to_value(&settings).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     persist_settings_snapshot(&state, &new_config, &settings).await?;
     *state.settings.write().await = settings.clone();
 
@@ -414,10 +421,10 @@ pub async fn close_enrollment(
         guard.clone()
     };
 
-    let current_config = crate::config::get_config();
+    let current_config = crate::config::get_config(&state.config);
     let mut new_config = current_config;
-    new_config.settings = serde_json::to_value(&settings)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    new_config.settings =
+        serde_json::to_value(&settings).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     persist_settings_snapshot(&state, &new_config, &settings).await?;
     *state.settings.write().await = settings.clone();
 
@@ -449,8 +456,7 @@ pub async fn get_firewall_status(
         .await;
     let running = running_output
         .map(|output| {
-            output.status.success()
-                && String::from_utf8_lossy(&output.stdout).trim() == "running"
+            output.status.success() && String::from_utf8_lossy(&output.stdout).trim() == "running"
         })
         .unwrap_or(false);
 

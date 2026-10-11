@@ -149,7 +149,7 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
       className="h-full md:col-span-2 xl:col-span-4"
     >
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div data-testid="network-sections" className="grid grid-cols-1 gap-4 xl:grid-cols-2">
           <NetworkInterfaceSelector
             loading={loadingInterfaces}
             interfaces={interfaces}
@@ -181,25 +181,25 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
             />
           </div>
 
-          <div className="col-span-2">
-            <div className="flex items-center justify-between">
+          <div className="xl:col-span-2">
+            <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-between">
               <Label className="text-sm font-semibold text-muted-foreground uppercase tracking-tight flex items-center gap-2">
                 <Shield size={14} /> Addressing (Static IP)
               </Label>
               <Button
                 type="button"
                 variant="ghost"
-                size="xs"
+                size="sm"
                 onClick={onAutoPopulate}
-                className="gap-1.5 h-7 px-2 hover:bg-primary/20 hover:text-primary transition-colors text-xs"
+                icon={RefreshCcw}
+                className="w-full whitespace-nowrap transition-colors hover:bg-primary/20 hover:text-primary sm:w-auto"
                 title="Fill from system defaults"
               >
-                <RefreshCcw size={12} />
                 Auto-Detect
               </Button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <Input
                 label="IP Address"
                 id="server-ip"
@@ -251,8 +251,9 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center justify-end pt-4 gap-2">
+        <div data-testid="network-actions" className="flex flex-nowrap items-center justify-end gap-1 pt-4 sm:gap-2">
           <Button
+            className="min-w-0 flex-1 shrink px-1 text-center text-xs leading-tight whitespace-normal sm:px-2 sm:text-sm sm:whitespace-nowrap"
             variant="ghost"
             type="button"
             onClick={() => reset(formatServerSettingsForForm(appConfig?.settings?.server))}
@@ -261,6 +262,7 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
             Reset
           </Button>
           <Button
+            className="min-w-0 flex-1 shrink px-1 text-center text-xs leading-tight whitespace-normal sm:px-2 sm:text-sm sm:whitespace-nowrap"
             variant="warning"
             type="button"
             onClick={handleApplyStatic}
@@ -270,6 +272,7 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
           </Button>
 
           <Button
+            className="min-w-0 flex-1 shrink px-1 text-center text-xs leading-tight whitespace-normal sm:px-2 sm:text-sm sm:whitespace-nowrap"
             variant="primary"
             type="submit"
             loading={isSubmitting}

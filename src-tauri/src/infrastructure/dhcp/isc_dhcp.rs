@@ -30,10 +30,12 @@ pub trait BootReservationPublisher: Send + Sync {
 }
 
 #[derive(Debug, Default)]
-pub struct IscDhcpPublisher;
+pub struct IscDhcpPublisher {
+    pub config: crate::config::RuntimeConfig,
+}
 
-fn runtime_settings() -> crate::core::config::Settings {
-    let config = crate::config::get_config();
+fn runtime_settings(config: &crate::config::RuntimeConfig) -> crate::core::config::Settings {
+    let config = crate::config::get_config(config);
     serde_json::from_value::<crate::core::config::Settings>(config.settings).unwrap_or_else(
         |error| {
             tracing::warn!(
@@ -50,8 +52,10 @@ fn runtime_settings() -> crate::core::config::Settings {
 /// This is public within the crate so reconciliation/experimental boot flows
 /// can repair menu files for clients that existed before per-client dispatch
 /// was introduced.
-pub(crate) async fn publish_client_ipxe(reservation: &BootReservation) -> Result<PathBuf> {
-    let settings = runtime_settings();
+pub(crate) async fn publish_client_ipxe(
+    settings: &crate::core::config::Settings,
+    reservation: &BootReservation,
+) -> Result<PathBuf> {
     let root = PathBuf::from(&settings.http.root_dir);
     let relative = crate::infrastructure::pxe::client_mac_script_path(&reservation.mac);
 
@@ -119,8 +123,10 @@ async fn remove_generated_ipxe(path: &Path) -> Result<()> {
 /// a missing file is not an error. This is the enforcement behind the
 /// client `enabled` switch for already-provisioned machines (whose boots
 /// otherwise never consult the enrollment endpoint).
-pub(crate) async fn remove_client_ipxe_menu(mac: &str) -> Result<()> {
-    let settings = runtime_settings();
+pub(crate) async fn remove_client_ipxe_menu(
+    settings: &crate::core::config::Settings,
+    mac: &str,
+) -> Result<()> {
     let root = PathBuf::from(&settings.http.root_dir);
     let relative = crate::infrastructure::pxe::client_mac_script_path(mac);
 
@@ -164,7 +170,8 @@ impl BootReservationPublisher for IscDhcpPublisher {
             // Publish the MAC-specific menu before making the DHCP reservation
             // live. A client should never be directed to autoexec.ipxe unless
             // its corresponding clients/<mac>.ipxe file already exists.
-            let script_path = publish_client_ipxe(reservation).await?;
+            let settings = runtime_settings(&self.config);
+            let script_path = publish_client_ipxe(&settings, reservation).await?;
 
             let entry = super::create_dhcp_entry_for_server(
                 &reservation.client_name,
@@ -212,7 +219,7 @@ impl BootReservationPublisher for IscDhcpPublisher {
         reservation: &'a BootReservation,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
-            let settings = runtime_settings();
+            let settings = runtime_settings(&self.config);
             let root = PathBuf::from(&settings.http.root_dir);
             let script_cleanup = async {
                 crate::domain::MacAddress::parse(&reservation.mac)?;

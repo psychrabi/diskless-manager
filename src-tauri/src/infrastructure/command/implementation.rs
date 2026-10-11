@@ -116,7 +116,7 @@ where
         .join(" ");
     // Only print in debug mode to improve performance
     #[cfg(debug_assertions)]
-    println!("Executing command: sudo {}", cmd_str);
+    log::debug!("Executing command: sudo {}", cmd_str);
 
     match exec_sudo_cmd(args_vec.iter()) {
         Ok(_) => Ok(()),
@@ -125,10 +125,10 @@ where
                 CommandError::Failure { stderr, .. } => stderr.clone(),
                 _ => String::new(),
             };
-            eprintln!("Command failed: sudo {}", cmd_str);
-            eprintln!("Error: {}", e);
+            log::error!("Command failed: sudo {}", cmd_str);
+            log::error!("Error: {}", e);
             if !stderr.is_empty() {
-                eprintln!("Stderr: {}", stderr);
+                log::error!("Stderr: {}", stderr);
             }
 
             Err(AppError::Command(format!("{} (stderr: {})", e, stderr)))
@@ -148,7 +148,9 @@ where
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|error| AppError::Command(format!("failed to execute redacted command: {error}")))?;
+        .map_err(|error| {
+            AppError::Command(format!("failed to execute redacted command: {error}"))
+        })?;
     child
         .stdin
         .take()
@@ -202,8 +204,7 @@ where
         .join(" ");
     #[cfg(debug_assertions)]
     log::info!("Executing command: sudo {}", cmd_str);
-    let output =
-        exec_sudo_cmd(args_vec.iter()).map_err(|e| AppError::Command(e.to_string()))?;
+    let output = exec_sudo_cmd(args_vec.iter()).map_err(|e| AppError::Command(e.to_string()))?;
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
@@ -234,7 +235,8 @@ pub fn restorecon_paths(paths: &[&str]) -> Result<(), AppError> {
     run_command(args)
 }
 
-pub fn read_file_with_sudo(path: &std::path::Path) -> Result<Option<String>, AppError> {    use std::ffi::OsStr;
+pub fn read_file_with_sudo(path: &std::path::Path) -> Result<Option<String>, AppError> {
+    use std::ffi::OsStr;
     match std::fs::read_to_string(path) {
         Ok(content) => Ok(Some(content)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),

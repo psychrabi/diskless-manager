@@ -24,7 +24,11 @@ fn parse_luns(output: &str) -> Vec<(u32, &str)> {
             let mut tokens = line.split_whitespace();
             while tokens.next()? != "o-" {}
             let lun = tokens.next()?.strip_prefix("lun")?.parse().ok()?;
-            let backstore = tokens.next()?.strip_prefix('[')?.rsplit('/').next()?;
+            let backstore = tokens
+                .find(|token| token.starts_with('['))?
+                .strip_prefix('[')?
+                .rsplit('/')
+                .next()?;
             Some((lun, backstore))
         })
         .collect()
@@ -37,7 +41,9 @@ fn parse_backstore<'a>(output: &'a str, name: &str) -> Option<(&'a str, bool)> {
         if tokens.next()? != name {
             return None;
         }
-        let device = tokens.next()?.strip_prefix('[')?;
+        let device = tokens
+            .find(|token| token.starts_with('['))?
+            .strip_prefix('[')?;
         Some((device, line.contains(") ro ")))
     })
 }

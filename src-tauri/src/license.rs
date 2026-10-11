@@ -48,8 +48,8 @@ async fn verify_license_remote(key: &str) -> Result<LicenseVerifyResponse, Strin
         .map_err(|error| format!("failed to parse license server response: {error}"))
 }
 
-pub fn get_license_info() -> Result<LicenseInfo, String> {
-    let config = config::get_config();
+pub fn get_license_info(runtime: &crate::config::RuntimeConfig) -> Result<LicenseInfo, String> {
+    let config = config::get_config(runtime);
     let settings = config.settings.as_object();
 
     Ok(LicenseInfo {
@@ -109,6 +109,7 @@ pub async fn activate_license_http(state: AppState, key: &str) -> Result<String,
     config::write_config(&state.db_pool, &config)
         .await
         .map_err(|error| format!("failed to save license: {error}"))?;
+    config::set_config(&state.config, &config);
 
     info!("{message}");
     Ok(message)

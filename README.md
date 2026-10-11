@@ -33,6 +33,11 @@ For a source build, install Bun, a current stable Rust toolchain, and native bui
 tools including `pkg-config` and OpenSSL development headers. React 19 and Vite 8
 are installed through `bun install`; they are not separate server prerequisites.
 
+Package installation is restricted to administrators and the setup dependency list.
+Account passwords must be 8-72 bytes and include uppercase, lowercase, and a digit.
+Client API responses omit CHAP credentials; administrators can see new credentials
+once after rotating them. Failed storage cleanup retains the client record for retry.
+
 The setup wizard checks distribution-specific packages and can install them
 through the authorized backend account. Core tools include OpenZFS, `targetcli`,
 `qemu-img`, ISC DHCP, TFTP, Apache, and Samba. NFS tools are required when NFS is

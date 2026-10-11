@@ -7,9 +7,9 @@ This branch separates Windows driver package handling from boot-time registry ar
 - Parse complete Windows INF packages instead of guessing driver names by vendor.
 - Match client hardware deterministically using INF hardware IDs and architecture.
 - Install drivers through DISM as complete packages.
-- Arm only Windows services that already exist in the target SYSTEM hive.
+- Arm registered services and reflect missing selected kernel services from verified DISM-staged INF packages.
 - Keep invasive compatibility tweaks opt-in.
-- Never create broad vendor NIC service keys, never copy standalone SYS binaries, and never inject CriticalDeviceDatabase entries.
+- Never guess vendor services or use loose uploaded SYS files; never inject CriticalDeviceDatabase entries.
 
 ## Driver harvesting
 
@@ -23,6 +23,7 @@ This branch separates Windows driver package handling from boot-time registry ar
 - hardware IDs
 - compatible IDs
 - AddService declarations
+- associated function-driver services (`SPSVCINST_ASSOCSERVICE`, flag `0x2`), distinct from filters
 - ServiceBinary declarations
 
 It handles UTF-8, UTF-8 BOM, UTF-16LE and UTF-16BE INF files. Legacy non-UTF-8 files are decoded lossily so structural ASCII tokens remain usable.
@@ -50,9 +51,12 @@ The armer:
 - resolves `Select\Current`
 - inspects the Net class GUID `{4d36e972-e325-11ce-bfc1-08002be10318}`
 - discovers the NIC services Windows already bound
-- verifies service keys already exist before changing them
+- also arms function-driver services from the selected network INFs, even without a device binding
+- verifies registered services are kernel/filesystem drivers
+- reflects absent selected kernel services only from explicit, unambiguous INF service declarations and a byte-matched DISM-staged package
+- preserves declared service parameters; refuses unsupported directives, unresolved Include/Needs and conflicting variants
 - sets native NIC driver `Start=0`
-- sets `BootFlags=1` only when the service is a driver service
+- adds the network-boot bit to existing `BootFlags` only when the service is a driver service
 - arms existing `iScsiPrt` when present
 - sets existing `Tcpip` and `ndis` to boot-start
 - leaves `MSiSCSI` unchanged
@@ -62,11 +66,19 @@ The armer does not:
 
 - fabricate Realtek or Intel services
 - choose a driver by vendor name
-- replace driver binaries
+- replace differing existing driver binaries
 - write CriticalDeviceDatabase entries
 - rewrite GroupOrderList
 - apply NIC-vendor PHY settings
 - delete SYSTEM.LOG1 / SYSTEM.LOG2
+
+Selection uses complete packages and Windows/DISM still installs them. The INF parser
+does not execute `Include/Needs`; network packages whose associated service cannot be
+resolved are rejected before mounting rather than reported ready. Missing services with unsupported service directives or differing architecture/OS profiles are rejected. Dirid 13 services load from the staged DriverStore package; dirid 12 services copy only the verified staged binary and refuse a differing destination file. A registered,
+armed service is not a substitute for a boot test on the new hardware.
+The result warns when a selected service has no native Net-class adapter binding
+in the offline inventory. An existing binding also does not prove that a new PCI
+location or MAC address can initialize before Windows needs the boot disk.
 
 ## Dirty hives
 
@@ -308,3 +320,35 @@ Host-key verification is still mandatory. Add the Windows worker's host key to
 the service account's `~/.ssh/known_hosts` before using the UI. Password
 authentication remains supported, but key-based authentication is preferred,
 especially when the browser management interface is served over plain HTTP.
+
+## Managed image snapshots
+
+Windows Servicing defaults to a managed Windows image and snapshot. Start with a snapshot already known to boot from SAN: NIC servicing prepares drivers and registry services; it does not repair an unrelated EFI/BCD configuration. Supply the SSH worker, a new output image name, the server iSCSI address reachable by the worker, and imported packages or an existing worker driver folder. WIM-file servicing remains available.
+
+The server clones the immutable snapshot, marks the clone preparing, and creates a unique CHAP-protected servicing target. The Windows helper identifies its disk through that exact iSCSI session, refuses boot/system disks, captures both GPT headers and partition tables, temporarily changes a colliding disk ID, mounts only that disk's partitions, and runs offline DISM and registry preparation. Windows may also regenerate partition GUIDs when bringing a colliding clone online. After removing mount paths and offlining the disk, the helper restores the original disk and partition GUIDs, verifies both GPT copies, and disconnects before reporting success. Restoration refuses partition layout changes or invalid checksums. Supported GPT geometry is 512/4096-byte sectors with 128 entries of 128 bytes.
+
+Only after the safe iSCSI provisioner confirms no active sessions and removes the owned target/backstore does the server create the output snapshot and publish the clone as a selectable master image. Logical publication does not ZFS-promote the clone or move source snapshots. Dry run removes the disposable clone after release; source images and client targets remain unchanged.
+
+Failures retain the clone and any remaining servicing target with an explicit error naming them. If worker release fails, its staging lease records disk number, saved GPT identity and target. Inspect that worker and confirm release before deleting retained resources. An HTTP disconnect does not cancel the server's cleanup task.
+
+Offline reflection supports explicit kernel service declarations, repeated service-relative AddReg entries, BootFlags, and the default System event source. EventMessageFile remains REG_EXPAND_SZ and must point inside Windows System32. It refuses a dirty SYSTEM hive before registry loading unless the override is enabled. Filters, unsupported directives/flags and ambiguous variants require installing the NIC in the image first. Every new hardware family still needs a real SAN boot test; successful servicing is not proof of universal hardware compatibility.
+
+### Windows 11 VM validation (2026-10-10)
+
+The serviced clone preserved the source GPT metadata byte-for-byte and booted
+through VirtIO. A newly introduced Intel e1000e adapter did not reconnect to
+iSCSI during the kernel handoff. Adding Intel as a secondary adapter to the
+VirtIO-booted clone let Windows install it natively; that same Intel instance
+then reached the Windows sign-in screen with no VirtIO adapter attached.
+Moving Intel to a different PCI location and MAC did not reconnect. Reapplying
+boot-start settings to the native-installed snapshot and disabling automatic
+restart confirmed `INACCESSIBLE_BOOT_DEVICE (0x7B)`, with parameter 2
+`0xC0000034` (`STATUS_OBJECT_NAME_NOT_FOUND`). Native installation on one VM is
+therefore insufficient evidence of portability to another client. These tests left MSiSCSI unchanged
+and did not inject CriticalDeviceDatabase entries.
+
+The resulting `windows11-virtio-intel-verified@native-nic-verified-20261010`
+snapshot is a diagnostic baseline for those tested adapter instances. A
+target-specific Windows/WinPE adapter preparation stage remains necessary to
+investigate first-boot automation; offline package/service preparation alone
+has not met the universal-boot goal.

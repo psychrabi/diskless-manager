@@ -31,6 +31,7 @@ pub(crate) async fn setup() -> (AppState, Router, String, String) {
         .unwrap()
         .token;
     let state = AppState {
+        config: crate::config::RuntimeConfig::default(),
         client_mutations: Arc::new(Mutex::new(())),
         settings: Arc::new(RwLock::new(crate::core::config::Settings::default())),
         db_pool: pool.clone(),
@@ -300,4 +301,58 @@ async fn assert_open_websocket_closes(expire_token: bool) {
     server.abort();
     result.expect("revoked WebSocket should close before the timeout");
     assert_revoked(&app, &user).await;
+}
+
+#[tokio::test]
+async fn audit_sensitive_mutations_require_admin() {
+    let (_, app, _, user) = setup().await;
+    for path in ["/api/services/install", "/api/clients/missing/chap/rotate"] {
+        assert_eq!(
+            request(&app, "POST", path, &user, json!({"service":"iftop"})).await,
+            StatusCode::FORBIDDEN
+        );
+    }
+}
+
+#[tokio::test]
+async fn audit_password_mutations_reject_weak_passwords() {
+    let (_, app, admin, _) = setup().await;
+    for (method, path, body) in [
+        (
+            "POST",
+            "/api/users",
+            json!({"username":"newuser","password":"","role":"user"}),
+        ),
+        (
+            "PUT",
+            "/api/users/operator/password",
+            json!({"password":"short"}),
+        ),
+        (
+            "PUT",
+            "/api/auth/admin/password",
+            json!({"old_password":"StrongPass1","new_password":"weak"}),
+        ),
+    ] {
+        assert_eq!(
+            request(&app, method, path, &admin, body).await,
+            StatusCode::BAD_REQUEST
+        );
+    }
+}
+
+#[tokio::test]
+async fn audit_install_rejects_arbitrary_packages() {
+    let (_, app, admin, _) = setup().await;
+    assert_eq!(
+        request(
+            &app,
+            "POST",
+            "/api/services/install",
+            &admin,
+            json!({"service":"--help"})
+        )
+        .await,
+        StatusCode::BAD_REQUEST
+    );
 }

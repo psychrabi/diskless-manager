@@ -91,7 +91,12 @@ impl ZfsDatasetOperations {
             .with_context(|| format!("failed to create ZFS dataset '{dataset}'"))
     }
 
-    pub fn create_volume(&self, volume: &str, size: &str, properties: &[(&str, &str)]) -> Result<()> {
+    pub fn create_volume(
+        &self,
+        volume: &str,
+        size: &str,
+        properties: &[(&str, &str)],
+    ) -> Result<()> {
         if self.exists(volume)? {
             bail!("ZFS volume already exists: {volume}");
         }

@@ -11,7 +11,12 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 fn image_service(state: &AppState) -> ImageService {
-    ImageService::new(ImageRepository::new(state.db_pool.clone()))
+    ImageService::with_backend(
+        ImageRepository::new(state.db_pool.clone()),
+        std::sync::Arc::new(crate::infrastructure::image::ZfsImageBackend::with_config(
+            state.config.clone(),
+        )),
+    )
 }
 
 fn images_to_snapshots(images: &[Image], parent_id: &str) -> Vec<crate::types::image::Snapshot> {
@@ -285,7 +290,7 @@ pub async fn create_snapshot(
         .map(Json)
         .map_err(|error| {
             log::error!(
-                "Failed to create snapshot '{}': {}",
+                "Failed to create snapshot '{}': {:#}",
                 request.snapshot_name,
                 error
             );

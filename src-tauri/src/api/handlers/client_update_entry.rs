@@ -6,7 +6,7 @@ use axum::{
 
 use super::clients::ErrorResponse;
 use crate::{
-    application::storage_service::{resolve_game_selection, StorageService},
+    application::storage_service::resolve_game_selection,
     core::client::{Client, UpdateClientRequest},
     domain::{BootMode, ClientStatus, PxeMode, UpdateClient},
     state::AppState,
@@ -100,10 +100,14 @@ fn domain_to_legacy(client: crate::domain::Client) -> Client {
 }
 
 fn resolve_effective_game_selection(
+    state: &AppState,
     use_game_disk: bool,
     stored_or_requested: &[String],
 ) -> anyhow::Result<Vec<String>> {
-    let discovered = StorageService::discover_game_masters()?
+    let discovered = state
+        .application
+        .storage
+        .discover_game_masters()?
         .into_iter()
         .map(|master| master.dataset)
         .collect::<Vec<_>>();
@@ -149,7 +153,9 @@ async fn publish_boot_menu(
         chap: chap.cloned(),
     };
 
-    if let Err(error) = crate::infrastructure::dhcp::publish_client_ipxe(&reservation).await {
+    if let Err(error) =
+        crate::infrastructure::dhcp::publish_client_ipxe(settings, &reservation).await
+    {
         tracing::warn!(client_id = %client.id, %error, "failed to regenerate boot menu during game-disk update");
     }
 }
@@ -227,8 +233,8 @@ pub async fn update_client(
         .game_disks
         .clone()
         .unwrap_or_else(|| existing.game_disks.clone());
-    let resolved =
-        resolve_effective_game_selection(effective_flag, &effective_stored).map_err(|error| {
+    let resolved = resolve_effective_game_selection(&state, effective_flag, &effective_stored)
+        .map_err(|error| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {

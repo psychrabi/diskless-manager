@@ -15,11 +15,7 @@ use crate::{
     state::AppState,
     types::Claims,
 };
-use axum::{
-    extract::State,
-    http::StatusCode,
-    Extension, Json,
-};
+use axum::{extract::State, http::StatusCode, Extension, Json};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -57,9 +53,7 @@ pub struct CatalogWindowsPreparationRequest {
     pub driver_ids: Vec<String>,
 }
 
-fn require_admin(
-    claims: &Claims,
-) -> Result<(), (StatusCode, Json<WindowsServicingError>)> {
+fn require_admin(claims: &Claims) -> Result<(), (StatusCode, Json<WindowsServicingError>)> {
     if claims.role != "admin" {
         return Err((
             StatusCode::FORBIDDEN,
@@ -108,7 +102,7 @@ fn operation_error(error: anyhow::Error) -> (StatusCode, Json<WindowsServicingEr
     (
         StatusCode::BAD_REQUEST,
         Json(WindowsServicingError {
-            error: error.to_string(),
+            error: format!("{error:#}"),
         }),
     )
 }
@@ -119,7 +113,6 @@ fn internal_message(message: String) -> (StatusCode, Json<WindowsServicingError>
         Json(WindowsServicingError { error: message }),
     )
 }
-
 
 pub async fn remote_capabilities(
     Extension(claims): Extension<Claims>,
@@ -147,12 +140,12 @@ pub async fn prepare_image_remote(
         .map_err(operation_error)
 }
 
-
 pub async fn prepare_image_remote_catalog(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Json(request): Json<CatalogWindowsPreparationRequest>,
-) -> Result<Json<RemoteWindowsCatalogPreparationResult>, (StatusCode, Json<WindowsServicingError>)> {
+) -> Result<Json<RemoteWindowsCatalogPreparationResult>, (StatusCode, Json<WindowsServicingError>)>
+{
     require_admin(&claims)?;
 
     if request.driver_ids.is_empty() {
@@ -174,19 +167,20 @@ pub async fn prepare_image_remote_catalog(
         .collect::<Vec<_>>();
 
     let root = state.settings.read().await.http.root_dir.clone();
-    let packages = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<StagedDriverPackage>> {
-        let plugin = NetworkDriverInjectionPlugin::new(PathBuf::from(root));
-        unique_ids
-            .into_iter()
-            .map(|id| {
-                let source_dir = plugin.package_directory(&id)?;
-                Ok(StagedDriverPackage { id, source_dir })
-            })
-            .collect()
-    })
-    .await
-    .map_err(|error| internal_message(error.to_string()))?
-    .map_err(operation_error)?;
+    let packages =
+        tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<StagedDriverPackage>> {
+            let plugin = NetworkDriverInjectionPlugin::new(PathBuf::from(root));
+            unique_ids
+                .into_iter()
+                .map(|id| {
+                    let source_dir = plugin.package_directory(&id)?;
+                    Ok(StagedDriverPackage { id, source_dir })
+                })
+                .collect()
+        })
+        .await
+        .map_err(|error| internal_message(error.to_string()))?
+        .map_err(operation_error)?;
 
     let preparation = WindowsImagePreparationRequest {
         image_path: request.image_path,
@@ -196,6 +190,7 @@ pub async fn prepare_image_remote_catalog(
         recursive: true,
         commit: request.commit,
         boot_arm: request.boot_arm,
+        iscsi: None,
     };
 
     RemoteWindowsServicer::new()
@@ -210,4 +205,47 @@ pub async fn prepare_image_remote_catalog(
         .await
         .map(Json)
         .map_err(operation_error)
+}
+
+/// The detached task finishes release even if the HTTP caller closes its connection.
+pub async fn prepare_image_managed(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Json(request): Json<crate::application::windows_servicing::ManagedWindowsPreparationRequest>,
+) -> Result<
+    Json<crate::application::windows_servicing::ManagedWindowsPreparationResult>,
+    (StatusCode, Json<WindowsServicingError>),
+> {
+    require_admin(&claims)?;
+    request.validate().map_err(operation_error)?;
+    let result = tokio::spawn(async move {
+        let _guard = state.client_mutations.lock().await;
+        let settings = state.settings.read().await;
+        let root = settings.http.root_dir.clone();
+        drop(settings);
+        let ids = request.driver_ids.iter().cloned().collect::<BTreeSet<_>>();
+        let packages =
+            tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<StagedDriverPackage>> {
+                let plugin = NetworkDriverInjectionPlugin::new(PathBuf::from(root));
+                ids.into_iter()
+                    .map(|id| {
+                        let source_dir = plugin.package_directory(&id)?;
+                        Ok(StagedDriverPackage { id, source_dir })
+                    })
+                    .collect()
+            })
+            .await??;
+        crate::application::windows_servicing::prepare_managed(
+            state.db_pool.clone(),
+            state.application.iscsi_backend,
+            state.config.clone(),
+            request,
+            packages,
+        )
+        .await
+    })
+    .await
+    .map_err(|error| internal_message(error.to_string()))?
+    .map_err(operation_error)?;
+    Ok(Json(result))
 }

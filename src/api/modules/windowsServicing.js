@@ -32,3 +32,10 @@ export async function prepareWindowsImageRemoteCatalog(request) {
     body: JSON.stringify(request),
   });
 }
+
+export async function prepareWindowsImageManaged(request) {
+  return apiRequest("/api/pxe/windows/prepare-image/managed", {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+}

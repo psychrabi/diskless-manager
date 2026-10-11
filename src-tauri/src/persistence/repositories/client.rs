@@ -199,6 +199,7 @@ impl ClientRepository {
     }
 
     pub async fn insert(&self, client: &Client) -> Result<()> {
+        let mut transaction = self.pool.begin().await?;
         sqlx::query(
             r#"
             INSERT INTO clients (
@@ -254,10 +255,19 @@ impl ClientRepository {
         .bind(&client.chap_user)
         .bind(&client.chap_secret)
         .bind(if client.chap_enabled { 1 } else { 0 })
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await
         .context("failed to insert client")?;
 
+        for master in &client.game_disks {
+            sqlx::query("INSERT INTO client_game_disks (client_id, master_dataset) VALUES (?, ?)")
+                .bind(client.id.as_str())
+                .bind(master)
+                .execute(&mut *transaction)
+                .await
+                .context("failed to insert client game selection")?;
+        }
+        transaction.commit().await?;
         Ok(())
     }
 
@@ -295,12 +305,11 @@ impl ClientRepository {
         &self,
         id: &ClientId,
     ) -> Result<(Option<String>, Option<String>)> {
-        let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
-            "SELECT chap_user, chap_secret FROM clients WHERE id = ?",
-        )
-        .bind(id.as_str())
-        .fetch_optional(&self.pool)
-        .await?;
+        let row: Option<(Option<String>, Option<String>)> =
+            sqlx::query_as("SELECT chap_user, chap_secret FROM clients WHERE id = ?")
+                .bind(id.as_str())
+                .fetch_optional(&self.pool)
+                .await?;
         Ok(row.unwrap_or((None, None)))
     }
 
@@ -321,24 +330,18 @@ impl ClientRepository {
     }
 
     /// Replace a client's stored game master selection wholesale.
-    pub async fn set_game_selection(
-        &self,
-        id: &ClientId,
-        masters: &[String],
-    ) -> Result<()> {
+    pub async fn set_game_selection(&self, id: &ClientId, masters: &[String]) -> Result<()> {
         let mut transaction = self.pool.begin().await?;
         sqlx::query("DELETE FROM client_game_disks WHERE client_id = ?")
             .bind(id.as_str())
             .execute(&mut *transaction)
             .await?;
         for master in masters {
-            sqlx::query(
-                "INSERT INTO client_game_disks (client_id, master_dataset) VALUES (?, ?)",
-            )
-            .bind(id.as_str())
-            .bind(master)
-            .execute(&mut *transaction)
-            .await?;
+            sqlx::query("INSERT INTO client_game_disks (client_id, master_dataset) VALUES (?, ?)")
+                .bind(id.as_str())
+                .bind(master)
+                .execute(&mut *transaction)
+                .await?;
         }
         transaction.commit().await?;
         Ok(())

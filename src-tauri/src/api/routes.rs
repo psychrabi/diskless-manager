@@ -45,7 +45,10 @@ use crate::api::handlers::{
     },
     nvmeof::{inspect_nvmeof_boot, prepare_nvmeof_boot, remove_nvmeof_boot},
     pxe::select_network_drivers,
-    reconciliation::{inspect_storage_reconciliation, repair_storage_reconciliation},
+    reconciliation::{
+        inspect_storage_reconciliation, list_pending_client_recoveries,
+        repair_storage_reconciliation, retry_pending_client_recovery,
+    },
     services::{
         configure_service, disable_service_boot, enable_service_boot, get_service_config,
         get_service_status, install_service, list_services, restart_all_services, restart_service,
@@ -63,8 +66,8 @@ use crate::api::handlers::{
     system_reconciliation::inspect_system_reconciliation_handler,
     users::{create_user, delete_user, get_user, list_users, update_user, update_user_password},
     windows_servicing::{
-        capabilities as windows_servicing_capabilities,
-        prepare_image as prepare_windows_image,
+        capabilities as windows_servicing_capabilities, prepare_image as prepare_windows_image,
+        prepare_image_managed as prepare_windows_image_managed,
         prepare_image_remote as prepare_windows_image_remote,
         prepare_image_remote_catalog as prepare_windows_image_remote_catalog,
         remote_capabilities as windows_servicing_remote_capabilities,
@@ -89,17 +92,51 @@ fn request_timeout_for(path: &str) -> Duration {
     match path {
         "/api/pxe/windows/prepare-image"
         | "/api/pxe/windows/prepare-image/remote"
-        | "/api/pxe/windows/prepare-image/remote/catalog" => Duration::from_secs(3900),
+        | "/api/pxe/windows/prepare-image/remote/catalog"
+        | "/api/pxe/windows/prepare-image/managed" => Duration::from_secs(3900),
         _ => Duration::from_secs(300),
     }
 }
 
-async fn apply_request_timeout(request: Request<Body>, next: Next) -> Response {
-    let timeout = request_timeout_for(request.uri().path());
-    match tokio::time::timeout(timeout, next.run(request)).await {
-        Ok(response) => response,
+async fn await_request(timeout: Duration, task: tokio::task::JoinHandle<Response>) -> Response {
+    // Dropping a JoinHandle detaches work; its mutation guards stay owned by the task.
+    match tokio::time::timeout(timeout, task).await {
+        Ok(Ok(response)) => response,
+        Ok(Err(error)) => {
+            tracing::error!(%error, "API request task failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
         Err(_) => StatusCode::REQUEST_TIMEOUT.into_response(),
     }
+}
+
+async fn apply_request_timeout(request: Request<Body>, next: Next) -> Response {
+    let path = request.uri().path();
+    let timeout = request_timeout_for(path);
+    // shortcut: legacy storage handlers mix synchronous integrations with SQLx; migrate
+    // their commands to native async if blocking-pool occupancy becomes a bottleneck.
+    let legacy_storage = [
+        "/api/clients",
+        "/api/disks",
+        "/api/zfs",
+        "/api/services",
+        "/api/system",
+        "/api/reconciliation",
+    ]
+    .iter()
+    .any(|prefix| {
+        path == *prefix
+            || path
+                .strip_prefix(prefix)
+                .is_some_and(|tail| tail.starts_with('/'))
+    });
+    let task = if legacy_storage {
+        let runtime = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || runtime.block_on(next.run(request)))
+    } else {
+        tokio::spawn(next.run(request))
+    };
+    await_request(timeout, task).await
 }
 
 pub fn create_app(state: crate::state::AppState) -> Router {
@@ -277,6 +314,14 @@ pub fn create_app(state: crate::state::AppState) -> Router {
             post(repair_storage_reconciliation),
         )
         .route(
+            "/api/system/reconciliation/recoveries",
+            get(list_pending_client_recoveries),
+        )
+        .route(
+            "/api/system/reconciliation/recoveries/{id}/retry",
+            post(retry_pending_client_recovery),
+        )
+        .route(
             "/api/system/reconciliation/dhcp",
             get(inspect_dhcp_reconciliation),
         )
@@ -346,6 +391,10 @@ pub fn create_app(state: crate::state::AppState) -> Router {
             post(prepare_windows_image_remote),
         )
         .route(
+            "/api/pxe/windows/prepare-image/managed",
+            post(prepare_windows_image_managed),
+        )
+        .route(
             "/api/pxe/windows/prepare-image/remote/catalog",
             post(prepare_windows_image_remote_catalog),
         )
@@ -411,12 +460,16 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .layer(ConcurrencyLimitLayer::new(100))
         .layer(DefaultBodyLimit::max(16 * 1024 * 1024))
         .layer(axum::middleware::from_fn(apply_request_timeout))
+        .layer(axum::middleware::from_fn(
+            crate::api::error::normalize_api_errors,
+        ))
         .with_state(state)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{is_api_or_ws_path, request_timeout_for};
+    use axum::response::IntoResponse;
     use std::time::Duration;
 
     #[test]
@@ -436,8 +489,31 @@ mod tests {
             Duration::from_secs(3900)
         );
         assert_eq!(
+            request_timeout_for("/api/pxe/windows/prepare-image/managed"),
+            Duration::from_secs(3900)
+        );
+        assert_eq!(
             request_timeout_for("/api/clients"),
             Duration::from_secs(300)
         );
+    }
+    #[tokio::test]
+    async fn request_timeout_keeps_the_mutation_lock_until_work_finishes() {
+        let lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+        let guard = lock.clone().lock_owned().await;
+        let finish = std::sync::Arc::new(tokio::sync::Notify::new());
+        let worker_finish = finish.clone();
+        let task = tokio::spawn(async move {
+            let _guard = guard;
+            worker_finish.notified().await;
+            axum::http::StatusCode::OK.into_response()
+        });
+        let response = super::await_request(Duration::from_millis(1), task).await;
+        assert_eq!(response.status(), axum::http::StatusCode::REQUEST_TIMEOUT);
+        assert!(lock.try_lock().is_err());
+        finish.notify_one();
+        let _guard = tokio::time::timeout(Duration::from_secs(1), lock.lock())
+            .await
+            .unwrap();
     }
 }

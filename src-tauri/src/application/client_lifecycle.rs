@@ -96,13 +96,18 @@ fn storage_spec(client: &Client, prefix: &str) -> Result<ClientStorageSpec> {
     })
 }
 
-fn ensure_no_nvme_export(client: &Client) -> Result<()> {
+async fn ensure_no_nvme_export(client: &Client) -> Result<()> {
     let device = client
         .block_device
         .as_deref()
         .or(client.block_store.as_deref())
         .context("client has no disk")?;
-    if crate::infrastructure::nvmeof::block_device_is_exported(std::path::Path::new(device))? {
+    let device = std::path::PathBuf::from(device);
+    if tokio::task::spawn_blocking(move || {
+        crate::infrastructure::nvmeof::block_device_is_exported(&device)
+    })
+    .await??
+    {
         bail!("automatic reset deferred while an NVMe export exists");
     }
     Ok(())
@@ -126,10 +131,12 @@ async fn tick(state: &AppState) -> Result<()> {
         // Shares a lock with edits/deletion/NVMe export creation. Re-read after
         // acquiring it so an old snapshot of configuration cannot trigger a reset.
         let _guard = state.client_mutations.lock().await;
-        let current = repository
-            .find_by_id(&client.id)
-            .await?
-            .with_context(|| format!("client '{}' disappeared during lifecycle processing", client.id))?;
+        let current = repository.find_by_id(&client.id).await?.with_context(|| {
+            format!(
+                "client '{}' disappeared during lifecycle processing",
+                client.id
+            )
+        })?;
         if let Err(error) = process(state, &current).await {
             tracing::warn!(client_id = %client.id, %error, "automatic client reset deferred");
             let failures: Option<i64> = sqlx::query_scalar(
@@ -154,8 +161,8 @@ async fn tick(state: &AppState) -> Result<()> {
 async fn process(state: &AppState, client: &Client) -> Result<()> {
     let settings = state.settings.read().await.clone();
     let now = chrono::Utc::now().timestamp();
-    let eligible = !client.keep_writeback
-        && client.snapshot.as_deref().is_some_and(|s| !s.is_empty());
+    let eligible =
+        !client.keep_writeback && client.snapshot.as_deref().is_some_and(|s| !s.is_empty());
     let fingerprint = serde_json::to_string(&(
         client.snapshot.as_ref(),
         client.block_device.as_ref(),
@@ -215,7 +222,7 @@ async fn process(state: &AppState, client: &Client) -> Result<()> {
         if now < saved.retry_after {
             return Ok(());
         }
-        ensure_no_nvme_export(client)?;
+        ensure_no_nvme_export(client).await?;
         let operation: OfflineReplacement = serde_json::from_str(journal)?;
         let storage = state.application.storage.clone();
         tokio::task::spawn_blocking(move || storage.recover_offline(&operation)).await??;
@@ -258,7 +265,7 @@ async fn process(state: &AppState, client: &Client) -> Result<()> {
         }
         Decision::Wait => {}
         Decision::Reset => {
-            ensure_no_nvme_export(client)?;
+            ensure_no_nvme_export(client).await?;
             let mut spec = storage_spec(client, &settings.iscsi.target_prefix)?;
             // A rebuilt target must keep its authentication: resolve (and
             // generate, once) the client's CHAP credentials here.
@@ -269,9 +276,7 @@ async fn process(state: &AppState, client: &Client) -> Result<()> {
                 client.chap_enabled,
             )
             .await
-            .map_err(|error| {
-                anyhow::anyhow!("failed to resolve CHAP credentials: {error:#}")
-            })?;
+            .map_err(|error| anyhow::anyhow!("failed to resolve CHAP credentials: {error:#}"))?;
             // Shared datasets are never eligible even if a legacy record claims ownership.
             let other: i64 = sqlx::query_scalar(
                 "SELECT COUNT(*) FROM clients WHERE id <> ? AND (block_device = ? OR block_store = ? OR master = ?)",
@@ -316,18 +321,27 @@ async fn process(state: &AppState, client: &Client) -> Result<()> {
                     if client.use_game_disk {
                         match crate::core::reconciliation::resolved_game_selection(
                             &state.db_pool,
+                            &state.application.storage,
                             client.id.as_str(),
                             true,
                         )
                         .await
                         {
                             Ok(masters) => {
-                                if let Err(error) = state.application.storage.reset_game_clones(
-                                    client.id.as_str(),
-                                    &target,
-                                    &masters,
-                                    operation.spec.chap.as_ref(),
-                                ) {
+                                let storage = state.application.storage.clone();
+                                let client_id = client.id.to_string();
+                                let game_target = target.clone();
+                                let chap = operation.spec.chap.clone();
+                                let result = tokio::task::spawn_blocking(move || {
+                                    storage.reset_game_clones(
+                                        &client_id,
+                                        &game_target,
+                                        &masters,
+                                        chap.as_ref(),
+                                    )
+                                })
+                                .await?;
+                                if let Err(error) = result {
                                     // The boot reset already committed; game
                                     // clones heal on the next ensure. Never
                                     // fail a boot reset over games.
@@ -366,6 +380,81 @@ async fn process(state: &AppState, client: &Client) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Manually retry a persisted storage recovery without starting a new reset.
+#[derive(Debug, thiserror::Error)]
+pub enum PendingRecoverySafetyError {
+    #[error("client is connected; disconnect it before retrying recovery")]
+    ClientConnected,
+    #[error("client disk is exported over NVMe-oF; remove that export before retrying recovery")]
+    NvmeExported,
+}
+
+pub async fn retry_pending_recovery(state: &AppState, id: &str) -> Result<bool> {
+    let Some((journal, failures)) = sqlx::query_as::<_, (Option<String>, i64)>(
+        "SELECT operation, failures FROM client_offline_resets WHERE client_id = ?",
+    )
+    .bind(id)
+    .fetch_optional(&state.db_pool)
+    .await?
+    else {
+        return Ok(false);
+    };
+    let Some(journal) = journal else {
+        return Ok(false);
+    };
+    let operation: OfflineReplacement = serde_json::from_str(&journal)?;
+    anyhow::ensure!(
+        operation.spec.client_id == id,
+        "recovery journal client mismatch"
+    );
+
+    let client_id = crate::domain::ClientId::from_string(id.to_owned())?;
+    let client = ClientRepository::new(state.db_pool.clone())
+        .find_by_id(&client_id)
+        .await?
+        .context("client no longer exists")?;
+    let target = operation.spec.target_iqn.clone();
+    if tokio::task::spawn_blocking(move || {
+        crate::infrastructure::iscsi::reconcile::target_has_active_sessions(&target)
+    })
+    .await??
+    {
+        return Err(PendingRecoverySafetyError::ClientConnected.into());
+    }
+    let device = client
+        .block_device
+        .as_deref()
+        .or(client.block_store.as_deref())
+        .context("client has no disk")?;
+    let device = std::path::PathBuf::from(device);
+    if tokio::task::spawn_blocking(move || {
+        crate::infrastructure::nvmeof::block_device_is_exported(&device)
+    })
+    .await??
+    {
+        return Err(PendingRecoverySafetyError::NvmeExported.into());
+    }
+
+    let storage = state.application.storage.clone();
+    if let Err(error) =
+        tokio::task::spawn_blocking(move || storage.recover_offline(&operation)).await?
+    {
+        sqlx::query("UPDATE client_offline_resets SET failures = failures + 1, retry_after = ?, last_error = ? WHERE client_id = ? AND operation IS NOT NULL")
+            .bind(chrono::Utc::now().timestamp() + retry_delay(failures))
+            .bind(format!("{error:#}"))
+            .bind(id)
+            .execute(&state.db_pool)
+            .await?;
+        return Err(error).context("storage recovery retry failed");
+    }
+
+    sqlx::query("UPDATE client_offline_resets SET operation = NULL, failures = 0, retry_after = 0, last_error = NULL WHERE client_id = ? AND operation IS NOT NULL")
+        .bind(id)
+        .execute(&state.db_pool)
+        .await?;
+    Ok(true)
 }
 
 #[cfg(test)]

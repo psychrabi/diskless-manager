@@ -26,11 +26,12 @@ pub struct NvmeOfBootPreparation {
 #[derive(Clone)]
 pub struct NvmeOfBootService {
     clients: ClientRepository,
+    config: crate::config::RuntimeConfig,
 }
 
 impl NvmeOfBootService {
-    pub fn new(clients: ClientRepository) -> Self {
-        Self { clients }
+    pub fn new(clients: ClientRepository, config: crate::config::RuntimeConfig) -> Self {
+        Self { clients, config }
     }
 
     /// Prepare an existing client for an experimental Windows NVMe/TCP boot.
@@ -79,7 +80,8 @@ impl NvmeOfBootService {
             // NVMe path keeps the legacy open menu; CHAP is an iSCSI-plane concern.
             chap: None,
         };
-        publish_client_ipxe(&reservation)
+        let settings = serde_json::from_value(crate::config::get_config(&self.config).settings)?;
+        publish_client_ipxe(&settings, &reservation)
             .await
             .with_context(|| format!("failed to publish iPXE menu for client '{}'", client.name))?;
 

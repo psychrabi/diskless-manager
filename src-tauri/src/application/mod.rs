@@ -14,3 +14,5 @@ pub use nvmeof_boot_service::{NvmeOfBootPreparation, NvmeOfBootService};
 pub use provisioning_service::ProvisioningService;
 pub use services::ApplicationServices;
 pub use storage_service::StorageService;
+
+pub mod windows_servicing;

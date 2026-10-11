@@ -149,12 +149,10 @@ async fn ensure_client_menu(
         (true, Some(username), Some(password))
             if !username.trim().is_empty() && !password.is_empty() =>
         {
-            Some(
-                crate::infrastructure::iscsi::ChapCredentials {
-                    username: username.to_string(),
-                    password: password.to_string(),
-                },
-            )
+            Some(crate::infrastructure::iscsi::ChapCredentials {
+                username: username.to_string(),
+                password: password.to_string(),
+            })
         }
         _ => None,
     };
@@ -166,7 +164,9 @@ async fn ensure_client_menu(
         server_ip: boot_server_ip(settings),
         chap,
     };
-    if let Err(error) = crate::infrastructure::dhcp::publish_client_ipxe(&reservation).await {
+    if let Err(error) =
+        crate::infrastructure::dhcp::publish_client_ipxe(settings, &reservation).await
+    {
         warn!(
             client = %client.name,
             "failed to regenerate missing iPXE menu during enrollment: {error:#}"

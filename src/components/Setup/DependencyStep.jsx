@@ -39,6 +39,23 @@ const DependencyStep = ({
     >
 
       <div className="border rounded-xl overflow-hidden bg-muted/50 backdrop-blur-sm">
+        <div className="space-y-2 p-3 md:hidden">
+          {dependencies.map((svc) => (
+            <article key={svc.name} data-testid="dependency-mobile-card" className="rounded-lg border bg-background p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h3 className="break-all font-medium">{svc.name}</h3>
+                  <p className="mt-1 break-all text-xs text-muted-foreground">{svc.version || "---"}</p>
+                </div>
+                {svc.installed ? (
+                  <Badge variant="outline" className="gap-1 border-emerald-600/30 text-emerald-600"><Check size={12} /> Installed</Badge>
+                ) : <Badge variant="outline" className="gap-1 border-amber-600/30 text-amber-600">Missing</Badge>}
+              </div>
+              {!svc.installed && <Button className="mt-3 w-full" variant="success" size="sm" loading={installing === svc.name} onClick={() => onInstall(svc.name)}>Install</Button>}
+            </article>
+          ))}
+        </div>
+        <div className="hidden md:block">
         <Table>
           <TableHeader>
             <TableRow className="bg-muted/50">
@@ -85,6 +102,7 @@ const DependencyStep = ({
             ))}
           </TableBody>
         </Table>
+        </div>
       </div>
 
     </Card>

@@ -18,6 +18,7 @@ use crate::{
 
 #[derive(Clone)]
 pub struct ZfsImageBackend {
+    config: crate::config::RuntimeConfig,
     command: ZfsCommand,
     datasets: ZfsDatasetOperations,
     volumes: ZfsVolumeOperations,
@@ -38,9 +39,14 @@ impl ZfsImageBackend {
     }
 
     pub fn new() -> Self {
+        Self::with_config(crate::config::RuntimeConfig::default())
+    }
+
+    pub fn with_config(config: crate::config::RuntimeConfig) -> Self {
         let command = ZfsCommand::new();
 
         Self {
+            config,
             command,
 
             datasets: ZfsDatasetOperations::new(command),
@@ -301,7 +307,7 @@ impl ImageBackend for ZfsImageBackend {
     }
 
     fn image_parent(&self) -> Result<String> {
-        let zpool = get_zpool_name();
+        let zpool = get_zpool_name(&self.config);
 
         let root = format!("{}/image-disk", zpool);
 

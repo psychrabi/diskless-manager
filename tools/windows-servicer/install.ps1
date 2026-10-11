@@ -1,11 +1,15 @@
 [CmdletBinding()]
 param(
-    [string]$BinaryPath = (Join-Path $PSScriptRoot "diskless-windows-servicer.exe"),
+    [string]$BinaryPath,
     [string]$InstallDirectory = (Join-Path $env:ProgramFiles "Diskless Manager"),
     [switch]$ConfigureOpenSsh
 )
 
 $ErrorActionPreference = "Stop"
+
+if ([string]::IsNullOrWhiteSpace($BinaryPath)) {
+    $BinaryPath = Join-Path $PSScriptRoot "diskless-windows-servicer.exe"
+}
 
 function Test-IsAdministrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()

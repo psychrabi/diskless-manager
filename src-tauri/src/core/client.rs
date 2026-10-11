@@ -5,7 +5,7 @@ use sqlx::sqlite::SqlitePool;
 use uuid::Uuid;
 
 /// Core Client type with DateTime fields for business logic
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Client {
     pub id: String,
     pub name: String,
@@ -529,6 +529,16 @@ impl ClientManager {
     }
 }
 
+impl std::fmt::Debug for Client {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Client")
+            .field("id", &self.id)
+            .field("name", &self.name)
+            .field("chap_enabled", &self.chap_enabled)
+            .finish_non_exhaustive()
+    }
+}
+
 #[cfg(test)]
 mod response_tests {
     use super::Client;
@@ -561,6 +571,7 @@ mod response_tests {
             chap_enabled: Some(true),
         };
 
+        assert!(!format!("{client:?}").contains("secret"));
         let encoded = serde_json::to_value(client).unwrap();
         assert!(encoded.get("chap_user").is_none());
         assert!(encoded.get("chap_secret").is_none());

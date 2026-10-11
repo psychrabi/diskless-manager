@@ -10,6 +10,7 @@ use tokio::sync::RwLock;
 
 #[derive(Clone)]
 pub struct AppState {
+    pub config: crate::config::RuntimeConfig,
     /// Serializes client configuration writes and automatic storage resets.
     pub client_mutations: Arc<tokio::sync::Mutex<()>>,
     pub settings: Arc<RwLock<Settings>>,
@@ -55,11 +56,10 @@ impl AppState {
 
         // Run migrations
         Self::init_database(&pool).await?;
-        let application = Arc::new(ApplicationServices::new(pool.clone()));
-
-        // Load config from database and populate the cache
+        let runtime_config = crate::config::RuntimeConfig::default();
+        // Load the instance-owned configuration snapshot.
         if let Ok(config) = crate::config::read_config_db(&pool).await {
-            crate::config::set_config(&config);
+            crate::config::set_config(&runtime_config, &config);
             // Sync settings from DB to the current settings struct if available
             if let Ok(db_settings) = serde_json::from_value::<Settings>(config.settings) {
                 if db_settings.validate().is_ok() {
@@ -71,6 +71,23 @@ impl AppState {
             }
         }
 
+        let mut config = crate::config::get_config(&runtime_config);
+        let typed_settings = serde_json::to_value(&settings)?;
+        if let (Some(existing), Some(typed)) =
+            (config.settings.as_object_mut(), typed_settings.as_object())
+        {
+            existing.extend(typed.clone());
+        } else {
+            config.settings = typed_settings;
+        }
+        crate::config::set_config(&runtime_config, &config);
+
+        let application = Arc::new(ApplicationServices::with_iscsi_backend(
+            pool.clone(),
+            settings.iscsi.backend,
+            runtime_config.clone(),
+        ));
+
         info!("Database initialized at {}", db_path.display());
 
         // Load all client IPs from database
@@ -78,6 +95,7 @@ impl AppState {
         info!("Loaded {} client IPs from database", client_ips.len());
 
         Ok(Self {
+            config: runtime_config,
             client_mutations: Arc::new(tokio::sync::Mutex::new(())),
             settings: Arc::new(RwLock::new(settings)),
             db_pool: pool,
@@ -106,6 +124,16 @@ impl AppState {
     }
 
     async fn init_database(pool: &SqlitePool) -> anyhow::Result<()> {
+        // Legacy unversioned images need these columns before the table-rebuild migration.
+        let images_exist: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'images'",
+        )
+        .fetch_one(pool)
+        .await?;
+        if images_exist != 0 {
+            Self::ensure_column(pool, "images", "kind", "TEXT NOT NULL DEFAULT 'master'").await?;
+            Self::ensure_column(pool, "images", "source_snapshot", "TEXT").await?;
+        }
         static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
         MIGRATOR.run(pool).await?;
 
@@ -505,6 +533,60 @@ mod migration_tests {
             .expect("schema should be readable");
             assert_eq!(exists, 1, "missing table: {table}");
         }
+    }
+
+    #[tokio::test]
+    async fn snapshot_names_are_unique_per_parent_after_migration() {
+        let pool = memory_pool().await;
+        sqlx::raw_sql(include_str!("../../migrations/0001_base_schema.sql"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        let insert = "INSERT INTO images (id, name, kind, os_type, size_gb, path, parent_id, tags, created_at, updated_at) VALUES (?, ?, ?, 'linux', 50, '/dev/zvol/test', ?, 'preserve-me', 'now', 'now')";
+        for (id, name, kind, parent) in [
+            ("fedora", "fedora44", "master", None),
+            ("kubuntu", "kubuntu", "master", None),
+            ("fedora-base", "base", "snapshot", Some("fedora")),
+        ] {
+            sqlx::query(insert)
+                .bind(id)
+                .bind(name)
+                .bind(kind)
+                .bind(parent)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        AppState::init_database(&pool).await.unwrap();
+        sqlx::query(insert)
+            .bind("kubuntu-base")
+            .bind("base")
+            .bind("snapshot")
+            .bind("kubuntu")
+            .execute(&pool)
+            .await
+            .expect("different images may both have a base snapshot");
+        for (id, name, kind, parent) in [
+            ("duplicate-snapshot", "base", "snapshot", Some("kubuntu")),
+            ("duplicate-master", "kubuntu", "master", None),
+        ] {
+            assert!(sqlx::query(insert)
+                .bind(id)
+                .bind(name)
+                .bind(kind)
+                .bind(parent)
+                .execute(&pool)
+                .await
+                .is_err());
+        }
+        let tags: String = sqlx::query_scalar("SELECT tags FROM images WHERE id = 'fedora-base'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(tags, "preserve-me");
+        AppState::init_database(&pool)
+            .await
+            .expect("migration is restartable");
     }
 
     #[tokio::test]

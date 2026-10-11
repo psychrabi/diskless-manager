@@ -16,7 +16,7 @@ pub struct CommandResult {
 }
 
 /// SSH connection configuration
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SshConfig {
     /// Connection timeout in seconds
     pub connection_timeout: u64,
@@ -30,6 +30,15 @@ pub struct SshConfig {
     pub disable_host_key_verification: bool,
     /// Maximum number of retries on connection failure
     pub max_retries: u32,
+}
+
+impl std::fmt::Debug for SshConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SshConfig")
+            .field("username", &self.username)
+            .field("password", &"[REDACTED]")
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for SshConfig {
@@ -162,11 +171,7 @@ impl SshExecutor {
                     timeout_secs,
                     disable_host_key_verification,
                 )?;
-                Self::execute_command_internal_blocking(
-                    &session,
-                    &command_owned,
-                    input.as_deref(),
-                )
+                Self::execute_command_internal_blocking(&session, &command_owned, input.as_deref())
             }),
         )
         .await
@@ -253,9 +258,7 @@ impl SshExecutor {
             error!("SFTP upload timeout on {}", host_owned);
             AppError::SshTimeout
         })?
-        .map_err(|error| {
-            AppError::SshCommand(format!("SFTP worker task failed: {error}"))
-        })?
+        .map_err(|error| AppError::SshCommand(format!("SFTP worker task failed: {error}")))?
     }
 
     fn upload_directory_blocking(
@@ -285,8 +288,7 @@ impl SshExecutor {
                         ))
                     })?;
                 }
-                uploaded +=
-                    Self::upload_directory_blocking(sftp, &entry.path(), &remote_path)?;
+                uploaded += Self::upload_directory_blocking(sftp, &entry.path(), &remote_path)?;
                 continue;
             }
 
@@ -408,9 +410,9 @@ impl SshExecutor {
         // service deployments, no password means: try the SSH agent first and
         // then the server account's standard private-key files.
         match password {
-            Some(password) => session
-                .userauth_password(username, password)
-                .map_err(|e| AppError::SshAuth(format!("SSH password authentication failed: {e}")))?,
+            Some(password) => session.userauth_password(username, password).map_err(|e| {
+                AppError::SshAuth(format!("SSH password authentication failed: {e}"))
+            })?,
             None => Self::authenticate_with_agent_or_default_keys(&session, username)?,
         }
 
@@ -498,21 +500,27 @@ impl SshExecutor {
         let (key, _) = session.host_key().ok_or_else(|| {
             AppError::SshConnection("SSH server did not provide a host key".to_string())
         })?;
-        let mut known_hosts = session
-            .known_hosts()
-            .map_err(|error| AppError::SshConnection(format!("failed to initialize known hosts: {error}")))?;
+        let mut known_hosts = session.known_hosts().map_err(|error| {
+            AppError::SshConnection(format!("failed to initialize known hosts: {error}"))
+        })?;
         let mut loaded = 0;
         for path in [
-            std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".ssh/known_hosts")),
+            std::env::var_os("HOME")
+                .map(|home| std::path::PathBuf::from(home).join(".ssh/known_hosts")),
             Some(std::path::PathBuf::from("/etc/ssh/ssh_known_hosts")),
         ]
         .into_iter()
         .flatten()
         {
             if path.exists() {
-                loaded += known_hosts.read_file(&path, KnownHostFileKind::OpenSSH).map_err(|error| {
-                    AppError::SshConnection(format!("failed to read known hosts {}: {error}", path.display()))
-                })?;
+                loaded += known_hosts
+                    .read_file(&path, KnownHostFileKind::OpenSSH)
+                    .map_err(|error| {
+                        AppError::SshConnection(format!(
+                            "failed to read known hosts {}: {error}",
+                            path.display()
+                        ))
+                    })?;
             }
         }
         if loaded == 0 {
@@ -653,6 +661,7 @@ mod tests {
             disable_host_key_verification: false,
             max_retries: 2,
         };
+        assert!(!format!("{config:?}").contains("testpass"));
         let executor = SshExecutor::with_config(config);
         assert_eq!(executor.config.connection_timeout, 10);
         assert_eq!(executor.config.command_timeout, 60);

@@ -65,6 +65,26 @@ const AuditLogTable = ({
         </div>
       ) : (
         <>
+          <div className="space-y-3 md:hidden">
+            {paginatedLogs.map((log) => (
+              <article key={log.id} data-testid="audit-log-mobile-card" className="rounded-lg border bg-card p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <h3 className="truncate font-semibold">{log.client_name}</h3>
+                    <p className="mt-1 break-all text-xs text-muted-foreground">{log.client_ip}</p>
+                  </div>
+                  <Badge variant={getBadgeVariant(log.result, RESULT_BADGE_VARIANT)}>{log.result}</Badge>
+                </div>
+                <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
+                  <div><dt className="text-xs text-muted-foreground">Time</dt><dd className="mt-1">{formatTimestamp(log.timestamp)}</dd></div>
+                  <div><dt className="text-xs text-muted-foreground">Duration</dt><dd className="mt-1">{log.duration_ms || "-"} ms</dd></div>
+                  <div><dt className="text-xs text-muted-foreground">Operation</dt><dd className="mt-1"><Badge variant={getBadgeVariant(log.operation_type, OPERATION_BADGE_VARIANT)}>{log.operation_type}</Badge></dd></div>
+                  <div><dt className="text-xs text-muted-foreground">Mode</dt><dd className="mt-1">{log.operation_mode || "-"}</dd></div>
+                </dl>
+              </article>
+            ))}
+          </div>
+          <div className="hidden overflow-x-auto md:block">
           <Table className="overflow-hidden rounded-lg border border-border">
             <TableHeader>
               <TableRow className="bg-muted hover:bg-muted">
@@ -105,6 +125,7 @@ const AuditLogTable = ({
               ))}
             </TableBody>
           </Table>
+          </div>
 
           {totalPages > 1 && (
             <div className="flex items-center justify-between border-t border-border py-4">

@@ -14,30 +14,31 @@ pub async fn rotate_client_chap(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     let _client_guard = state.client_mutations.lock().await;
 
-    let (client, credentials) = state
-        .application
-        .clients
-        .rotate_chap(&id)
-        .await
-        .map_err(|error| {
-            let not_found = error.to_string().contains("client not found");
-            let status = if not_found {
-                StatusCode::NOT_FOUND
-            } else {
-                StatusCode::INTERNAL_SERVER_ERROR
-            };
-            (
-                status,
-                Json(ErrorResponse {
-                    status: status.as_u16(),
-                    error: if not_found {
-                        format!("Client not found: {id}")
-                    } else {
-                        format!("Failed to rotate CHAP credentials: {error}")
-                    },
-                }),
-            )
-        })?;
+    let (client, credentials) =
+        state
+            .application
+            .clients
+            .rotate_chap(&id)
+            .await
+            .map_err(|error| {
+                let not_found = error.to_string().contains("client not found");
+                let status = if not_found {
+                    StatusCode::NOT_FOUND
+                } else {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                };
+                (
+                    status,
+                    Json(ErrorResponse {
+                        status: status.as_u16(),
+                        error: if not_found {
+                            format!("Client not found: {id}")
+                        } else {
+                            format!("Failed to rotate CHAP credentials: {error}")
+                        },
+                    }),
+                )
+            })?;
 
     if let Some(target_iqn) = client
         .target_iqn
@@ -75,7 +76,12 @@ pub async fn rotate_client_chap(
             chap: Some(credentials.clone()),
         };
 
-        if let Err(error) = crate::infrastructure::dhcp::publish_client_ipxe(&reservation).await {
+        if let Err(error) = crate::infrastructure::dhcp::publish_client_ipxe(
+            &state.settings.read().await.clone(),
+            &reservation,
+        )
+        .await
+        {
             tracing::warn!(client_id = %id, %error, "failed to republish boot menu after CHAP rotation");
         }
     }

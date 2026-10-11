@@ -14,6 +14,8 @@ use crate::{
     validation::validate_zfs_name,
 };
 
+/// Image orchestration: run synchronous storage work on blocking workers,
+/// using the existing runtime for database awaits.
 #[derive(Clone)]
 pub struct ImageService {
     repository: ImageRepository,
@@ -47,6 +49,15 @@ impl ImageService {
     }
 
     pub async fn create(&self, request: CreateImageRequest) -> Result<Image> {
+        let service = self.clone();
+
+        let runtime = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || runtime.block_on(service.create_blocking(request)))
+            .await
+            .context("image worker failed")?
+    }
+
+    async fn create_blocking(&self, request: CreateImageRequest) -> Result<Image> {
         validate_create_request(&request)?;
 
         let os_type = request.os_type.parse::<OsType>()?;
@@ -119,6 +130,18 @@ impl ImageService {
     }
 
     pub async fn rename(&self, id: &str, new_name: &str) -> Result<Image> {
+        let service = self.clone();
+        let id = id.to_owned();
+        let new_name = new_name.to_owned();
+        let runtime = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || {
+            runtime.block_on(service.rename_blocking(&id, &new_name))
+        })
+        .await
+        .context("image worker failed")?
+    }
+
+    async fn rename_blocking(&self, id: &str, new_name: &str) -> Result<Image> {
         validate_zfs_name(new_name)?;
 
         let mut image = self.get(id).await?;
@@ -153,6 +176,15 @@ impl ImageService {
     }
 
     pub async fn update(&self, id: &str, request: UpdateImageRequest) -> Result<Image> {
+        let service = self.clone();
+        let id = id.to_owned();
+        let runtime = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || runtime.block_on(service.update_blocking(&id, request)))
+            .await
+            .context("image worker failed")?
+    }
+
+    async fn update_blocking(&self, id: &str, request: UpdateImageRequest) -> Result<Image> {
         let mut image = self.get(id).await?;
 
         if let Some(name) = request.name {
@@ -183,6 +215,24 @@ impl ImageService {
     }
 
     pub async fn clone_image(
+        &self,
+        source_id: &str,
+        snapshot_name: &str,
+        new_name: &str,
+    ) -> Result<Image> {
+        let service = self.clone();
+        let source_id = source_id.to_owned();
+        let snapshot_name = snapshot_name.to_owned();
+        let new_name = new_name.to_owned();
+        let runtime = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || {
+            runtime.block_on(service.clone_image_blocking(&source_id, &snapshot_name, &new_name))
+        })
+        .await
+        .context("image worker failed")?
+    }
+
+    async fn clone_image_blocking(
         &self,
         source_id: &str,
         snapshot_name: &str,
@@ -306,7 +356,41 @@ impl ImageService {
         Ok(image)
     }
 
+    /// Publish a completed servicing clone without ZFS promotion, preserving source snapshots.
+    pub async fn publish_serviced_clone(&self, id: &str) -> Result<Image> {
+        let mut image = self.get(id).await?;
+        if image.kind != ImageKind::Clone
+            || image.status != "preparing"
+            || self.snapshots(id).await?.is_empty()
+        {
+            bail!("only a completed servicing clone with a snapshot can be published");
+        }
+        image.kind = ImageKind::Master;
+        image.parent_id = None;
+        image.source_snapshot = None;
+        image.status = "ready".into();
+        image.updated_at = Utc::now();
+        self.repository.update(&image).await?;
+        Ok(image)
+    }
+
     pub async fn rollback_snapshot(
+        &self,
+        master_id_or_name: &str,
+        snapshot_name: &str,
+    ) -> Result<usize> {
+        let service = self.clone();
+        let master_id_or_name = master_id_or_name.to_owned();
+        let snapshot_name = snapshot_name.to_owned();
+        let runtime = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || {
+            runtime.block_on(service.rollback_snapshot_blocking(&master_id_or_name, &snapshot_name))
+        })
+        .await
+        .context("image worker failed")?
+    }
+
+    async fn rollback_snapshot_blocking(
         &self,
         master_id_or_name: &str,
         snapshot_name: &str,
@@ -346,6 +430,15 @@ impl ImageService {
     }
 
     pub async fn import(&self, request: ImportImageRequest) -> Result<Image> {
+        let service = self.clone();
+
+        let runtime = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || runtime.block_on(service.import_blocking(request)))
+            .await
+            .context("image worker failed")?
+    }
+
+    async fn import_blocking(&self, request: ImportImageRequest) -> Result<Image> {
         use crate::infrastructure::image::{ImageConversionBackend, QemuImgBackend};
 
         validate_zfs_name(&request.name)?;
@@ -450,6 +543,17 @@ impl ImageService {
     }
 
     pub async fn resize(&self, id: &str, new_size_gb: u64) -> Result<Image> {
+        let service = self.clone();
+        let id = id.to_owned();
+        let runtime = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || {
+            runtime.block_on(service.resize_blocking(&id, new_size_gb))
+        })
+        .await
+        .context("image worker failed")?
+    }
+
+    async fn resize_blocking(&self, id: &str, new_size_gb: u64) -> Result<Image> {
         if new_size_gb == 0 {
             bail!("image size must be greater than zero");
         }
@@ -480,12 +584,30 @@ impl ImageService {
     }
 
     pub async fn verify(&self, id: &str) -> Result<bool> {
+        let service = self.clone();
+        let id = id.to_owned();
+        let runtime = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || runtime.block_on(service.verify_blocking(&id)))
+            .await
+            .context("image worker failed")?
+    }
+
+    async fn verify_blocking(&self, id: &str) -> Result<bool> {
         let image = self.get(id).await?;
 
         self.backend.verify(&image.name)
     }
 
     pub async fn get_info(&self, id: &str) -> Result<ImageInfo> {
+        let service = self.clone();
+        let id = id.to_owned();
+        let runtime = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || runtime.block_on(service.get_info_blocking(&id)))
+            .await
+            .context("image worker failed")?
+    }
+
+    async fn get_info_blocking(&self, id: &str) -> Result<ImageInfo> {
         let image = self.get(id).await?;
 
         let info = self.backend.info(&image.name)?;
@@ -494,6 +616,18 @@ impl ImageService {
     }
 
     pub async fn create_snapshot(&self, id: &str, snapshot_name: &str) -> Result<Image> {
+        let service = self.clone();
+        let id = id.to_owned();
+        let snapshot_name = snapshot_name.to_owned();
+        let runtime = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || {
+            runtime.block_on(service.create_snapshot_blocking(&id, &snapshot_name))
+        })
+        .await
+        .context("image worker failed")?
+    }
+
+    async fn create_snapshot_blocking(&self, id: &str, snapshot_name: &str) -> Result<Image> {
         validate_zfs_name(snapshot_name)?;
 
         let source = self.get(id).await?;
@@ -577,6 +711,15 @@ impl ImageService {
     }
 
     pub async fn delete(&self, id: &str) -> Result<()> {
+        let service = self.clone();
+        let id = id.to_owned();
+        let runtime = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || runtime.block_on(service.delete_blocking(&id)))
+            .await
+            .context("image worker failed")?
+    }
+
+    async fn delete_blocking(&self, id: &str) -> Result<()> {
         let image = self.get(id).await?;
 
         if image.is_default {
@@ -673,9 +816,18 @@ impl ImageService {
     /// duplicate snapshot name) is skipped with a warning rather than aborting
     /// the whole scan.
     pub async fn import_existing_images(&self) -> Result<ImportScanResult> {
-        use crate::infrastructure::zfs::{
-            ZfsCommand, ZfsDatasetOperations, ZfsSnapshotOperations,
-        };
+        let service = self.clone();
+
+        let runtime = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || {
+            runtime.block_on(service.import_existing_images_blocking())
+        })
+        .await
+        .context("image worker failed")?
+    }
+
+    async fn import_existing_images_blocking(&self) -> Result<ImportScanResult> {
+        use crate::infrastructure::zfs::{ZfsCommand, ZfsDatasetOperations, ZfsSnapshotOperations};
 
         let parent = self.backend.image_parent()?;
 

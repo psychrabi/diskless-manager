@@ -500,7 +500,10 @@ impl<F: ConfigFs> Engine<F> {
             self.fs
                 .entries(&self.target(target))?
                 .iter()
-                .all(|p| p.file_name().and_then(|s| s.to_str()) == Some("tpgt_1")),
+                .all(|p| matches!(
+                    p.file_name().and_then(|s| s.to_str()),
+                    Some("tpgt_1" | "param" | "fabric_statistics")
+                )),
             "target contains unmanaged portal groups"
         );
         let tpg = self.tpg(target);

@@ -73,9 +73,10 @@ const ImageManagement = () => {
         title="Image Management"
         description="Manage diskless boot images and their snapshots"
         actions={
-          <div className="flex items-center gap-2">
+          <div data-testid="image-page-actions" className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center">
             {user?.role === "admin" && (
               <Button
+                className="w-full sm:w-auto"
                 variant="outline"
                 onClick={() => setWindowsServicingOpen(true)}
                 icon={Wrench}
@@ -85,6 +86,7 @@ const ImageManagement = () => {
               </Button>
             )}
             <Button
+              className="w-full sm:w-auto"
               variant="ghost"
               onClick={handleImportExisting}
               icon={Download}
@@ -95,6 +97,7 @@ const ImageManagement = () => {
             </Button>
             {masters.length > 0 && (
               <Button
+                className="w-full sm:w-auto"
                 variant="primary"
                 onClick={handleCreateImage}
                 icon={PlusCircle}
@@ -153,6 +156,7 @@ const ImageManagement = () => {
         <WindowsServicingModal
           isOpen={windowsServicingOpen}
           onClose={() => setWindowsServicingOpen(false)}
+          onPrepared={() => Promise.all([fetchMasters(), fetchImages()])}
         />
       )}
     </div>

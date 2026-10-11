@@ -82,7 +82,7 @@ impl MacAddress {
             .chunks(2)
             .map(|chunk| {
                 // `cleaned` is ASCII hex, therefore this conversion is safe.
-                std::str::from_utf8(chunk).unwrap()
+                std::str::from_utf8(chunk).expect("MAC normalization contains only ASCII hex")
             })
             .collect::<Vec<_>>()
             .join(":");
@@ -160,7 +160,7 @@ impl BootMode {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Client {
     pub id: ClientId,
     pub name: String,
@@ -192,10 +192,10 @@ pub struct Client {
     pub game_disks: Vec<String>,
 
     /// One-way iSCSI CHAP username (server-generated, stable).
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub chap_user: Option<String>,
     /// One-way iSCSI CHAP secret (server-generated; rotated, never input).
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub chap_secret: Option<String>,
     /// Whether the target enforces CHAP. Existing rows default off.
     #[serde(default)]
@@ -360,4 +360,14 @@ pub struct UpdateClient {
 
     pub pxe_mode: Option<PxeMode>,
     pub mode: Option<BootMode>,
+}
+
+impl std::fmt::Debug for Client {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Client")
+            .field("id", &self.id)
+            .field("name", &self.name)
+            .field("chap_enabled", &self.chap_enabled)
+            .finish_non_exhaustive()
+    }
 }

@@ -1,10 +1,12 @@
+import { listMasters } from "@/api/modules/images";
 import { listNetworkDrivers } from "@/api/modules/networkDrivers";
 import {
   getRemoteWindowsServicingCapabilities,
+  prepareWindowsImageManaged,
   prepareWindowsImageRemote,
   prepareWindowsImageRemoteCatalog,
 } from "@/api/modules/windowsServicing";
-import { Button, Modal } from "@/components/ui";
+import { Button, Modal, Select } from "@/components/ui";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useConfirm } from "@/contexts/confirmDialog";
@@ -24,6 +26,10 @@ const DEFAULTS = {
   username: "Administrator",
   password: "",
   executablePath: "",
+  imageId: "",
+  snapshot: "",
+  newName: "",
+  portal: "",
   imagePath: "",
   driverRoot: "",
   imageIndex: 1,
@@ -78,12 +84,14 @@ function formatBytes(value) {
   return (value / (1024 * 1024 * 1024)).toFixed(2) + " GiB";
 }
 
-export default function WindowsServicingModal({ isOpen, onClose }) {
+export default function WindowsServicingModal({ isOpen, onClose, onPrepared }) {
   const [form, setForm] = useState(DEFAULTS);
   const [worker, setWorker] = useState(null);
   const [result, setResult] = useState(null);
   const [checking, setChecking] = useState(false);
   const [preparing, setPreparing] = useState(false);
+  const [imageMode, setImageMode] = useState("managed");
+  const [images, setImages] = useState([]);
   const [driverSource, setDriverSource] = useState("catalog");
   const [drivers, setDrivers] = useState([]);
   const [driversLoading, setDriversLoading] = useState(true);
@@ -95,6 +103,11 @@ export default function WindowsServicingModal({ isOpen, onClose }) {
     if (!isOpen) return undefined;
 
     let active = true;
+    listMasters().then((items) => {
+      if (active) setImages(items.filter((image) => image.os_type === "windows" && image.status === "ready"));
+    }).catch((err) => {
+      if (active) error("Windows Servicing", "Failed to load images: " + (err?.message || String(err)));
+    });
     listNetworkDrivers()
       .then((items) => {
         if (active) setDrivers(Array.isArray(items) ? items : []);
@@ -129,11 +142,12 @@ export default function WindowsServicingModal({ isOpen, onClose }) {
         worker?.elevated &&
         form.host.trim() &&
         form.username.trim() &&
-        form.imagePath.trim() &&
-        Number(form.imageIndex) > 0 &&
+        (imageMode === "managed"
+          ? worker.iscsi_volume_servicing && form.imageId && form.snapshot && form.newName.trim() && form.portal.trim()
+          : form.imagePath.trim() && Number(form.imageIndex) > 0) &&
         driverReady
     );
-  }, [worker, form, driverSource, selectedDriverIds]);
+  }, [worker, form, driverSource, selectedDriverIds, imageMode]);
 
   const update = (field, value) => {
     setForm((current) => ({ ...current, [field]: value }));
@@ -218,13 +232,15 @@ export default function WindowsServicingModal({ isOpen, onClose }) {
   };
 
   const runPreparation = async (commit) => {
-    if (!canRun) return;
+    if (!canRun || preparing) return;
 
     if (commit) {
       const ok = await confirm({
         title: "Commit Windows Image Preparation",
         description:
-          "This will install the selected driver package(s), arm the offline SYSTEM hive for network boot, and commit the WIM. Test with Dry Run first. Continue?",
+          imageMode === "managed"
+            ? "This will clone the selected snapshot, prepare its NIC drivers, and save a new image and snapshot after disconnecting the worker. The source image stays intact. Continue?"
+            : "This will install the selected driver package(s), arm the offline SYSTEM hive for network boot, and commit the WIM. Test with Dry Run first. Continue?",
         confirmText: "Prepare and Commit",
         cancelText: "Cancel",
         confirmVariant: "destructive",
@@ -237,7 +253,14 @@ export default function WindowsServicingModal({ isOpen, onClose }) {
     setResult(null);
     try {
       let response;
-      if (driverSource === "catalog") {
+      if (imageMode === "managed") {
+        response = await prepareWindowsImageManaged({
+          ...remoteIdentity(), image_id: form.imageId, source_snapshot: form.snapshot,
+          new_name: form.newName.trim(), portal: form.portal.trim(), commit, boot_arm: bootArm(),
+          ...(driverSource === "catalog" ? { driver_ids: selectedDriverIds } : { driver_root: form.driverRoot.trim() }),
+        });
+        if (commit) onPrepared?.();
+      } else if (driverSource === "catalog") {
         response = await prepareWindowsImageRemoteCatalog({
           ...remoteIdentity(),
           image_path: form.imagePath.trim(),
@@ -256,7 +279,9 @@ export default function WindowsServicingModal({ isOpen, onClose }) {
       const preparation = response.preparation || response;
       setResult({
         preparation,
-        staging: response.preparation
+        image: response.image,
+        snapshot: response.snapshot,
+        staging: response.preparation && response.staged_package_count > 0
           ? {
               packageCount: response.staged_package_count,
               uploadedBytes: response.uploaded_bytes,
@@ -269,7 +294,9 @@ export default function WindowsServicingModal({ isOpen, onClose }) {
         "Windows Servicing",
         commit
           ? "Windows image preparation committed successfully."
-          : "Dry run completed; all DISM changes were discarded."
+          : imageMode === "managed"
+            ? "Dry run completed; the temporary clone was deleted."
+            : "Dry run completed; all DISM changes were discarded."
       );
     } catch (err) {
       error("Windows Servicing", err?.message || String(err));
@@ -283,6 +310,7 @@ export default function WindowsServicingModal({ isOpen, onClose }) {
     setForm(DEFAULTS);
     setWorker(null);
     setResult(null);
+    setImageMode("managed");
     setDriverSource("catalog");
     setSelectedDriverIds([]);
     onClose?.();
@@ -314,6 +342,7 @@ export default function WindowsServicingModal({ isOpen, onClose }) {
           </div>
         </div>
 
+        <fieldset disabled={preparing} className="space-y-6 border-0 p-0">
         <section className="space-y-3">
           <h3 className="text-sm font-semibold">Worker connection</h3>
           <div className="grid gap-3 md:grid-cols-2">
@@ -392,6 +421,38 @@ export default function WindowsServicingModal({ isOpen, onClose }) {
 
         <section className="space-y-3">
           <h3 className="text-sm font-semibold">Windows image</h3>
+          <Select label="Image source" value={imageMode} disabled={preparing} onChange={(event) => setImageMode(event.target.value)}>
+            <option value="managed">Managed image snapshot</option>
+            <option value="wim">WIM file on worker</option>
+          </Select>
+          {imageMode === "managed" ? (
+            <div className="grid gap-3 md:grid-cols-2">
+              <Select label="Source Windows image" value={form.imageId} disabled={preparing} onChange={(event) => {
+                update("imageId", event.target.value); update("snapshot", "");
+              }}>
+                <option value="">Select an image</option>
+                {images.map((image) => <option key={image.id} value={image.id}>{image.name}</option>)}
+              </Select>
+              <Select label="Source snapshot" value={form.snapshot} disabled={preparing} onChange={(event) => update("snapshot", event.target.value)}>
+                <option value="">Select a snapshot</option>
+                {images.find((image) => image.id === form.imageId)?.snapshots?.map((snapshot) => (
+                  <option key={snapshot.name} value={snapshot.name}>{snapshot.name}</option>
+                ))}
+              </Select>
+              <div className="space-y-1.5">
+                <Label htmlFor="serviced-image-name">New image name</Label>
+                <Input id="serviced-image-name" value={form.newName} onChange={(event) => update("newName", event.target.value)} placeholder="windows11-serviced" />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="servicing-portal">Server iSCSI address</Label>
+                <Input id="servicing-portal" value={form.portal} onChange={(event) => update("portal", event.target.value)} placeholder="Server address reachable from worker" />
+              </div>
+              <p className="text-xs text-muted-foreground md:col-span-2">
+                Choose a snapshot that already boots from iSCSI. Preparation uses a separate clone. Dry Run deletes that clone; committing saves a new image and snapshot.
+              </p>
+              {worker && !worker.iscsi_volume_servicing && <p role="alert" className="text-sm text-destructive md:col-span-2">Update the Windows helper to enable managed image servicing.</p>}
+            </div>
+          ) : (
           <div className="grid gap-3 md:grid-cols-2">
             <div className="space-y-1.5 md:col-span-2">
               <Label htmlFor="windows-image-path">WIM image path on worker</Label>
@@ -413,6 +474,7 @@ export default function WindowsServicingModal({ isOpen, onClose }) {
               />
             </div>
           </div>
+          )}
         </section>
 
         <section className="space-y-3">
@@ -594,12 +656,13 @@ export default function WindowsServicingModal({ isOpen, onClose }) {
           </div>
         </section>
 
+        </fieldset>
         <div className="flex flex-wrap items-center gap-2 border-t pt-4">
           <Button
             variant="outline"
             icon={FlaskConical}
             loading={preparing}
-            disabled={!canRun}
+            disabled={!canRun || preparing}
             onClick={() => runPreparation(false)}
           >
             Dry Run
@@ -608,7 +671,7 @@ export default function WindowsServicingModal({ isOpen, onClose }) {
             variant="primary"
             icon={ShieldCheck}
             loading={preparing}
-            disabled={!canRun}
+            disabled={!canRun || preparing}
             onClick={() => runPreparation(true)}
           >
             Prepare and Commit
@@ -631,6 +694,9 @@ export default function WindowsServicingModal({ isOpen, onClose }) {
                   {preparationResult.drivers_added} INF package(s) processed ·
                   index {preparationResult.image_index}
                 </p>
+                {result.image && (
+                  <p className="mt-1 text-sm">Saved {result.image.name}@{result.snapshot?.name}. Select this image and snapshot for the client’s boot test.</p>
+                )}
                 {result.staging && (
                   <p className="mt-1 text-xs text-muted-foreground">
                     Staged {result.staging.packageCount} imported package(s) ·{" "}
@@ -679,6 +745,14 @@ export default function WindowsServicingModal({ isOpen, onClose }) {
                     </span>
                     <p className="font-mono">
                       {plan.native_nic_services?.join(", ") || "None detected"}
+                    </p>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">
+                      Selected NIC driver services
+                    </span>
+                    <p className="font-mono">
+                      {plan.selected_nic_services?.join(", ") || "None selected"}
                     </p>
                   </div>
                 </div>

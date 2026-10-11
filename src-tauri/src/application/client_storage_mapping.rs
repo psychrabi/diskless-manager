@@ -21,6 +21,7 @@ fn target_iqn(settings: &Settings, client_name: &str, persisted: Option<&str>) -
 }
 
 pub fn storage_spec_for_values(
+    config: &crate::config::RuntimeConfig,
     settings: &Settings,
     client_id: impl Into<String>,
     client_name: &str,
@@ -46,11 +47,17 @@ pub fn storage_spec_for_values(
     let (source, dataset) = match snapshot.map(str::trim).filter(|value| !value.is_empty()) {
         Some(snapshot) => (
             StorageSource::Snapshot(snapshot.to_string()),
-            crate::infrastructure::zfs::legacy::get_writeback_or_default_dataset(client_name),
+            crate::infrastructure::zfs::legacy::get_writeback_or_default_dataset(
+                config,
+                client_name,
+            ),
         ),
         None => {
-            crate::validation::validate_managed_dataset(master, &crate::config::get_zpool_name())
-                .map_err(|error| format!("Invalid master dataset: {error}"))?;
+            crate::validation::validate_managed_dataset(
+                master,
+                &crate::config::get_zpool_name(config),
+            )
+            .map_err(|error| format!("Invalid master dataset: {error}"))?;
             (
                 StorageSource::ExistingVolume(master.to_string()),
                 master.to_string(),
@@ -71,8 +78,13 @@ pub fn storage_spec_for_values(
     })
 }
 
-pub fn storage_from_client(settings: &Settings, client: &Client) -> Result<ClientStorage, String> {
+pub fn storage_from_client(
+    config: &crate::config::RuntimeConfig,
+    settings: &Settings,
+    client: &Client,
+) -> Result<ClientStorage, String> {
     let mut spec = storage_spec_for_values(
+        config,
         settings,
         client.id.to_string(),
         &client.name,

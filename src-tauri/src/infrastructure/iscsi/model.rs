@@ -119,12 +119,21 @@ impl IscsiTargetSpec {
 /// Stored per client in the database (server-generated, never accepted
 /// from API input) and embedded in the client's boot menu so unattended
 /// boot keeps working. Rotation issues a new secret for the same username.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ChapCredentials {
     /// CHAP username, e.g. `chap-pc001`. Stable for the client lifetime.
     pub username: String,
     /// CHAP secret, 12 alphanumeric characters.
     pub password: String,
+}
+
+impl std::fmt::Debug for ChapCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChapCredentials")
+            .field("username", &self.username)
+            .field("password", &"[REDACTED]")
+            .finish()
+    }
 }
 
 impl ChapCredentials {
@@ -174,8 +183,7 @@ impl ChapCredentials {
 fn generate_chap_secret() -> anyhow::Result<String> {
     use std::io::Read;
 
-    const ALPHABET: &[u8] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     let mut bytes = [0u8; 12];
     std::fs::File::open("/dev/urandom")
         .and_then(|mut file| file.read_exact(&mut bytes))
@@ -514,14 +522,22 @@ mod chap_tests {
     }
 
     #[test]
+    fn chap_debug_redacts_password() {
+        let credentials = ChapCredentials {
+            username: "test-user".into(),
+            password: "test-secret".into(),
+        };
+        let debug = format!("{credentials:?}");
+        assert!(!debug.contains("test-secret"));
+        assert!(debug.contains("test-user"));
+    }
+
+    #[test]
     fn generated_secret_has_required_shape() {
         let creds = ChapCredentials::generate("PC001").expect("generation must succeed");
         assert_eq!(creds.username, "chap-pc001");
         assert_eq!(creds.password.len(), 12);
-        assert!(creds
-            .password
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric()));
+        assert!(creds.password.chars().all(|c| c.is_ascii_alphanumeric()));
     }
 
     #[test]

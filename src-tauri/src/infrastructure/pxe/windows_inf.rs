@@ -4,7 +4,7 @@
 //! it extracts the metadata Diskless Manager needs to select a complete driver
 //! package safely before Windows/DISM performs the authoritative installation.
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -25,8 +25,298 @@ pub struct WindowsInfMetadata {
     pub hardware_ids: Vec<String>,
     pub compatible_ids: Vec<String>,
     pub service_names: Vec<String>,
+    #[serde(default)]
+    pub associated_service_names: Vec<String>,
     pub service_binaries: Vec<String>,
     pub is_network_class: bool,
+}
+
+/// A bounded subset of kernel service declarations for offline boot reflection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InfBootService {
+    pub name: String,
+    pub binary: String,
+    pub group: Option<String>,
+    pub display_name: Option<String>,
+    pub description: Option<String>,
+    pub error_control: u32,
+    pub boot_flags: u32,
+    pub dependencies: Vec<String>,
+    pub parameters: Vec<(String, String, InfServiceValue)>,
+    pub event_log: Vec<(String, InfServiceValue)>,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InfServiceValue {
+    String(String),
+    ExpandString(String),
+    Dword(u32),
+    MultiString(Vec<String>),
+}
+
+pub fn boot_service_profiles(path: &Path) -> Result<Vec<InfBootService>> {
+    let text = decode_inf_bytes(&fs::read(path)?);
+    let sections = parse_sections(&text);
+    let strings = collect_strings(&sections);
+    let mut profiles = BTreeMap::new();
+    for section in sections
+        .values()
+        .filter(|s| s.name.to_ascii_lowercase().ends_with(".services"))
+    {
+        let associated = section
+            .lines
+            .iter()
+            .filter_map(|line| split_assignment(line))
+            .filter(|(key, _)| key.eq_ignore_ascii_case("AddService"))
+            .map(|(_, value)| {
+                split_csv(value)
+                    .iter()
+                    .map(|v| expand_tokens(v, &strings))
+                    .collect::<Vec<_>>()
+            })
+            .any(|fields| {
+                fields.first().is_some_and(|v| !v.is_empty())
+                    && fields
+                        .get(1)
+                        .and_then(|v| parse_inf_number(v))
+                        .is_some_and(|v| v & 2 != 0)
+            });
+        if !associated {
+            continue;
+        }
+        for line in &section.lines {
+            let (key, value) = split_assignment(line).context("invalid service directive")?;
+            if !key.eq_ignore_ascii_case("AddService") {
+                bail!("unsupported service requirement {key}; install this NIC in the image first");
+            }
+            let fields: Vec<_> = split_csv(value)
+                .iter()
+                .map(|v| expand_tokens(v, &strings))
+                .collect();
+            if !(3..=4).contains(&fields.len())
+                || fields[0].is_empty()
+                || parse_inf_number(&fields[1]) != Some(2)
+            {
+                bail!("unsupported AddService requirements; install this NIC in the image first");
+            }
+            let name = fields
+                .first()
+                .context("missing associated service name")?
+                .clone();
+            let install = sections
+                .get(
+                    &fields
+                        .get(2)
+                        .context("missing service installation section")?
+                        .to_ascii_lowercase(),
+                )
+                .context("service installation section not found")?;
+            let mut values = BTreeMap::new();
+            let mut reg_sections = Vec::new();
+            for line in &install.lines {
+                let (key, value) =
+                    split_assignment(line).context("invalid service installation directive")?;
+                let key = key.to_ascii_lowercase();
+                let value = expand_tokens(value, &strings);
+                if key == "addreg" {
+                    reg_sections.extend(split_csv(&value));
+                } else if let Some(old) = values.insert(key.clone(), value.clone()) {
+                    if old != value {
+                        bail!("conflicting service directive {key} for {name}");
+                    }
+                }
+            }
+            let number = |key: &str| -> Result<u32> {
+                values
+                    .get(key)
+                    .and_then(|v| parse_inf_number(v))
+                    .context(format!("invalid service {key}"))
+            };
+            if number("servicetype")? != 1
+                || number("starttype")? > 3
+                || number("errorcontrol")? > 3
+            {
+                bail!("unsupported kernel service declaration for {name}");
+            }
+            for key in values.keys() {
+                if ![
+                    "servicetype",
+                    "starttype",
+                    "errorcontrol",
+                    "servicebinary",
+                    "loadordergroup",
+                    "dependencies",
+                    "displayname",
+                    "description",
+                    "bootflags",
+                    "addreg",
+                ]
+                .contains(&key.as_str())
+                {
+                    bail!("unsupported service directive {key} for {name}; install this NIC in the image first");
+                }
+            }
+            let binary = values
+                .get("servicebinary")
+                .context("service binary is missing")?
+                .clone();
+            let mut boot_flags = values
+                .get("bootflags")
+                .map(|v| parse_inf_number(v).context("invalid BootFlags"))
+                .transpose()?
+                .unwrap_or(0);
+            let mut parameters = Vec::new();
+            {
+                for name in reg_sections {
+                    let reg = sections
+                        .get(&name.to_ascii_lowercase())
+                        .context("service AddReg section not found")?;
+                    for line in &reg.lines {
+                        let fields: Vec<_> = split_csv(line)
+                            .iter()
+                            .map(|v| expand_tokens(v, &strings))
+                            .collect();
+                        if fields.len() < 4 || !fields[0].eq_ignore_ascii_case("HKR") {
+                            bail!("only service-relative AddReg entries are supported");
+                        }
+                        let key = fields[1].clone();
+                        let name = fields[2].clone();
+                        if key.split('\\').any(|v| v == ".." || v == ".")
+                            || key.starts_with('\\')
+                            || key.contains('/')
+                            || key.contains('%')
+                            || name.contains('\0')
+                        {
+                            bail!("invalid service-relative registry path");
+                        }
+                        if name.is_empty()
+                            || (key.is_empty()
+                                && [
+                                    "type",
+                                    "imagepath",
+                                    "start",
+                                    "errorcontrol",
+                                    "group",
+                                    "dependonservice",
+                                ]
+                                .contains(&name.to_ascii_lowercase().as_str()))
+                        {
+                            bail!("unsupported service AddReg value");
+                        }
+                        let flags = if fields[3].is_empty() {
+                            0
+                        } else {
+                            parse_inf_number(&fields[3]).context("unsupported AddReg flags")?
+                        };
+                        let value = match flags {
+                            0 if fields.len() <= 5 => InfServiceValue::String(fields.get(4).cloned().unwrap_or_default()),
+                            0x10001 if fields.len() == 5 => InfServiceValue::Dword(fields.get(4).and_then(|v| parse_inf_number(v)).context("invalid service DWORD")?),
+                            0x10000 => InfServiceValue::MultiString(fields[4..].to_vec()),
+                            _ => bail!("unsupported service AddReg flags; install this NIC in the image first"),
+                        };
+                        if key.is_empty() && name.eq_ignore_ascii_case("BootFlags") {
+                            let InfServiceValue::Dword(flags) = value else {
+                                bail!("BootFlags must be a DWORD")
+                            };
+                            boot_flags = flags;
+                        } else {
+                            parameters.push((key, name, value));
+                        }
+                    }
+                }
+            }
+            if values.get("dependencies").is_some_and(|v| {
+                split_csv(v)
+                    .iter()
+                    .any(|d| d.starts_with('+') || d.contains('%'))
+            }) {
+                bail!("unsupported service dependencies; install this NIC in the image first");
+            }
+            let profile = InfBootService {
+                name: name.clone(),
+                binary,
+                group: values.get("loadordergroup").cloned(),
+                display_name: values.get("displayname").cloned(),
+                description: values.get("description").cloned(),
+                error_control: number("errorcontrol")?,
+                boot_flags,
+                dependencies: values
+                    .get("dependencies")
+                    .map(|v| split_csv(v))
+                    .unwrap_or_default(),
+                parameters,
+                event_log: fields
+                    .get(3)
+                    .filter(|s| !s.is_empty())
+                    .map(|name| event_log_values(name, &sections, &strings))
+                    .transpose()?
+                    .unwrap_or_default(),
+            };
+            if let Some(old) = profiles.insert(name.to_ascii_lowercase(), profile.clone()) {
+                if old != profile {
+                    bail!("architecture/OS service declarations differ; refusing ambiguous offline reflection for {name}");
+                }
+            }
+        }
+    }
+    Ok(profiles.into_values().collect())
+}
+
+fn event_log_values(
+    name: &str,
+    sections: &BTreeMap<String, InfSection>,
+    strings: &BTreeMap<String, String>,
+) -> Result<Vec<(String, InfServiceValue)>> {
+    let section = sections
+        .get(&name.to_ascii_lowercase())
+        .context("event-log section not found")?;
+    let mut values = Vec::new();
+    for line in &section.lines {
+        let (key, value) = split_assignment(line).context("invalid event-log directive")?;
+        if !key.eq_ignore_ascii_case("AddReg") {
+            bail!("unsupported event-log requirement {key}");
+        }
+        for name in split_csv(&expand_tokens(value, strings)) {
+            let reg = sections
+                .get(&name.to_ascii_lowercase())
+                .context("event-log AddReg section not found")?;
+            for line in &reg.lines {
+                let fields: Vec<_> = split_csv(line)
+                    .iter()
+                    .map(|v| expand_tokens(v, strings))
+                    .collect();
+                if fields.len() != 5
+                    || !fields[0].eq_ignore_ascii_case("HKR")
+                    || !fields[1].is_empty()
+                {
+                    bail!("only event-source-relative values are supported");
+                }
+                let flags = parse_inf_number(&fields[3]);
+                let value = if fields[2].eq_ignore_ascii_case("EventMessageFile")
+                    && flags == Some(0x20000)
+                {
+                    let path = fields[4].replace("%%", "%");
+                    if !path.split(';').all(|p| {
+                        p.to_ascii_lowercase()
+                            .starts_with("%systemroot%\\system32\\")
+                            && !p[13..].contains(['%', ':', '/'])
+                            && !p.split('\\').any(|v| v == ".." || v == ".")
+                    }) {
+                        bail!("event message files must be inside Windows System32");
+                    }
+                    InfServiceValue::ExpandString(path)
+                } else if fields[2].eq_ignore_ascii_case("TypesSupported") && flags == Some(0x10001)
+                {
+                    InfServiceValue::Dword(
+                        parse_inf_number(&fields[4]).context("invalid event TypesSupported")?,
+                    )
+                } else {
+                    bail!("unsupported event-log registry requirement");
+                };
+                values.push((fields[2].clone(), value));
+            }
+        }
+    }
+    Ok(values)
 }
 
 #[derive(Debug, Clone)]
@@ -84,8 +374,8 @@ pub fn parse_inf(content: &str) -> WindowsInfMetadata {
     let sections = parse_sections(content);
     let strings = collect_strings(&sections);
 
-    let class = section_value(&sections, "version", "class")
-        .map(|value| expand_tokens(&value, &strings));
+    let class =
+        section_value(&sections, "version", "class").map(|value| expand_tokens(&value, &strings));
     let class_guid = section_value(&sections, "version", "classguid")
         .map(|value| expand_tokens(&value, &strings));
     let provider = section_value(&sections, "version", "provider")
@@ -165,6 +455,7 @@ pub fn parse_inf(content: &str) -> WindowsInfMetadata {
     }
 
     let mut service_names = BTreeSet::new();
+    let mut associated_service_names = BTreeSet::new();
     let mut service_binaries = BTreeSet::new();
     for section in sections.values() {
         let service_section = section.name.to_ascii_lowercase().ends_with(".services");
@@ -175,9 +466,18 @@ pub fn parse_inf(content: &str) -> WindowsInfMetadata {
             let key_lower = key.to_ascii_lowercase();
 
             if service_section && key_lower == "addservice" {
-                if let Some(service) = split_csv(value).first() {
+                let fields = split_csv(value);
+                if let Some(service) = fields.first() {
                     let service = expand_tokens(service, &strings);
                     if !service.is_empty() {
+                        let flags = fields.get(1).map(|value| expand_tokens(value, &strings));
+                        if flags
+                            .as_deref()
+                            .and_then(parse_inf_number)
+                            .is_some_and(|flags| flags & 2 != 0)
+                        {
+                            associated_service_names.insert(service.clone());
+                        }
                         service_names.insert(service);
                     }
                 }
@@ -218,8 +518,20 @@ pub fn parse_inf(content: &str) -> WindowsInfMetadata {
         hardware_ids: hardware_ids.into_iter().collect(),
         compatible_ids: compatible_ids.into_iter().collect(),
         service_names: service_names.into_iter().collect(),
+        associated_service_names: associated_service_names.into_iter().collect(),
         service_binaries: service_binaries.into_iter().collect(),
         is_network_class,
+    }
+}
+
+fn parse_inf_number(value: &str) -> Option<u32> {
+    if let Some(hex) = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+    {
+        u32::from_str_radix(hex, 16).ok()
+    } else {
+        value.parse().ok()
     }
 }
 
@@ -244,10 +556,7 @@ fn parse_sections(content: &str) -> BTreeMap<String, InfSection> {
             continue;
         }
 
-        if let Some(section) = current
-            .as_ref()
-            .and_then(|name| sections.get_mut(name))
-        {
+        if let Some(section) = current.as_ref().and_then(|name| sections.get_mut(name)) {
             section.lines.push(trimmed.to_string());
         }
     }
@@ -358,9 +667,7 @@ fn discover_model_sections(
         let prefix = format!("{}.", base).to_ascii_lowercase();
         for name in sections.keys() {
             if name.starts_with(&prefix)
-                && (name.contains("ntamd64")
-                    || name.contains("ntx86")
-                    || name.contains("ntarm64"))
+                && (name.contains("ntamd64") || name.contains("ntx86") || name.contains("ntarm64"))
             {
                 models.insert(name.clone());
             }
@@ -457,7 +764,9 @@ fn looks_like_device_id(value: &str) -> bool {
 }
 
 fn normalize_device_id(value: &str) -> String {
-    trim_inf_value(value).replace('/', "\\").to_ascii_uppercase()
+    trim_inf_value(value)
+        .replace('/', "\\")
+        .to_ascii_uppercase()
 }
 
 #[cfg(test)]
@@ -514,10 +823,104 @@ Device="Example Ethernet"
     }
 
     #[test]
+    fn distinguishes_function_driver_from_filter_services() {
+        let metadata = parse_inf(&SAMPLE.replace(
+            "AddService = e2fexpress, 2, ServiceInstall",
+            "AddService = filter, 0, FilterInstall\nAddService = %NicService%, %Flags%, ServiceInstall",
+        ).replace("Provider=\"Example Vendor\"", "Provider=\"Example Vendor\"\nNicService=\"e2fexpress\"\nFlags=0x00000012"));
+        assert_eq!(metadata.associated_service_names, vec!["e2fexpress"]);
+        assert_eq!(metadata.service_names, vec!["e2fexpress", "filter"]);
+    }
+
+    #[test]
     fn ignores_semicolon_inside_quotes() {
         assert_eq!(
             strip_comment(r#"Name="value;still-value" ; comment"#),
             r#"Name="value;still-value" "#
         );
+    }
+}
+
+#[cfg(test)]
+mod boot_profile_tests {
+    use super::*;
+    #[test]
+    fn reflects_nic_event_log_and_bootflags_without_skipping_requirements() {
+        let dir = tempfile::tempdir().unwrap();
+        let inf = dir.path().join("nic.inf");
+        let content = r#"[Device.Services]
+AddService=Nic,2,Service,Events
+[Service]
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%13%\nic.sys
+AddReg=Flags
+[Flags]
+HKR,,BootFlags,0x10001,4
+[Events]
+AddReg=EventValues
+[EventValues]
+HKR,,EventMessageFile,0x20000,"%%SystemRoot%%\System32\netevent.dll"
+HKR,,TypesSupported,0x10001,7
+"#;
+        fs::write(&inf, content).unwrap();
+        let profile = boot_service_profiles(&inf).unwrap().remove(0);
+        assert_eq!(profile.boot_flags, 4);
+        assert_eq!(
+            profile.event_log[0].1,
+            InfServiceValue::ExpandString(r"%SystemRoot%\System32\netevent.dll".into())
+        );
+        for (from, to) in [
+            ("Service,Events", "Service,Events,Security,Other"),
+            ("HKR,,TypesSupported", "HKLM,,TypesSupported"),
+            ("System32\\netevent.dll", "System32\\..\\outside.dll"),
+            ("TypesSupported", "ArbitraryValue"),
+        ] {
+            fs::write(&inf, content.replace(from, to)).unwrap();
+            assert!(boot_service_profiles(&inf).is_err(), "{to}");
+        }
+    }
+    #[test]
+    fn preserves_repeated_addreg_and_rejects_unhandled_service_requirements() {
+        let dir = tempfile::tempdir().unwrap();
+        let inf = dir.path().join("nic.inf");
+        let content = "[Device.Services]\nAddService=Nic,2,Service\n[Service]\nServiceType=1\nStartType=3\nErrorControl=1\nServiceBinary=%13%\\nic.sys\nAddReg=First\nAddReg=Second\n[First]\nHKR,Parameters,First,0x10001,1\n[Second]\nHKR,Parameters,Second,0x10001,2\n";
+        fs::write(&inf, content).unwrap();
+        assert_eq!(boot_service_profiles(&inf).unwrap()[0].parameters.len(), 2);
+        for replacement in [
+            "AddService=Nic,2,Service\nInclude=other.inf\nNeeds=Other.Services",
+            "AddService=Nic,2,Service\nAddService=Filter,0,FilterService",
+            "AddService=Nic,0x802,Service",
+            "AddService=Nic,2,Service,EventLog",
+        ] {
+            fs::write(
+                &inf,
+                content.replace("AddService=Nic,2,Service", replacement),
+            )
+            .unwrap();
+            assert!(boot_service_profiles(&inf).is_err(), "{replacement}");
+        }
+        fs::write(
+            &inf,
+            content.replace("StartType=3", "StartType=3\nStartType=0"),
+        )
+        .unwrap();
+        assert!(boot_service_profiles(&inf).is_err());
+    }
+
+    #[test]
+    fn windows_profiles_preserve_parameters_and_reject_foreign_registry_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let inf = dir.path().join("nic.inf");
+        let content = "[Device.NT.Services]\nAddService=netkvm,2,Service\n[Service]\nServiceType=1\nStartType=3\nErrorControl=1\nServiceBinary=%13%\\netkvm.sys\nLoadOrderGroup=NDIS\nAddReg=Params\n[Params]\nHKR,Parameters,DisableMSI,,0\nHKR,Parameters,Value,0x10001,5\n";
+        fs::write(&inf, content).unwrap();
+        let profiles = boot_service_profiles(&inf).unwrap();
+        assert_eq!(profiles[0].binary, "%13%\\netkvm.sys");
+        assert_eq!(profiles[0].parameters[1].2, InfServiceValue::Dword(5));
+        fs::write(&inf, content.replace("HKR,Parameters", "HKLM,Parameters")).unwrap();
+        assert!(boot_service_profiles(&inf).is_err());
+        fs::write(&inf,format!("{content}\n[Other.Services]\nAddService=netkvm,2,Different\n[Different]\nServiceType=1\nStartType=3\nErrorControl=1\nServiceBinary=%12%\\other.sys\n")).unwrap();
+        assert!(boot_service_profiles(&inf).is_err());
     }
 }

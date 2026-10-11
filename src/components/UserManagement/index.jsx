@@ -107,7 +107,22 @@ export default function UserManagement() {
             Create User
           </Button>}
       >
-        <div className="bg-background rounded-lg max-h-[70vh] w-full border border-border overflow-auto">
+        <div className="space-y-3 md:hidden">
+          {loading && users.length === 0 ? <div className="flex justify-center py-8"><Spinner /></div> : users.length === 0 ? <p className="py-8 text-center text-muted-foreground">No users found</p> : users.map((user) => (
+            <article key={user.id} data-testid="user-mobile-card" className="rounded-lg border bg-background p-4">
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="min-w-0 truncate font-medium">{user.username}</h2>
+                <Badge variant={user.role === "admin" ? "default" : "secondary"}>{user.role}</Badge>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2 border-t pt-3">
+                <Button variant="outline" size="sm" onClick={() => handleEditUser(user)} icon={Pencil}>Edit</Button>
+                <Button variant="outline" size="sm" onClick={() => handleChangePassword(user)} icon={Key}>Change password</Button>
+                <Button variant="ghost" size="sm" onClick={() => handleDeleteUser(user)} icon={Trash2} className="text-destructive hover:bg-destructive/10">Delete</Button>
+              </div>
+            </article>
+          ))}
+        </div>
+        <div className="hidden max-h-[70vh] w-full overflow-auto rounded-lg border border-border bg-background md:block">
           <Table className="w-full">
             <TableHeader>
               <TableRow>

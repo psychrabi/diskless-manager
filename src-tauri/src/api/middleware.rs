@@ -157,6 +157,8 @@ fn user_request_is_allowed(method: &Method, path: &str) -> bool {
     // Users may operate the system and manage resources, but cannot remove
     // data or change the server's settings.
     !matches!(method, &Method::DELETE)
+        && path != "/api/services/install"
+        && !(path.starts_with("/api/clients/") && path.ends_with("/chap/rotate"))
         && !(path == "/api/system/settings" && matches!(method, &Method::PUT | &Method::PATCH))
 }
 

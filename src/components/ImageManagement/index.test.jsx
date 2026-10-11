@@ -17,3 +17,15 @@ it("loads image datasets when opened directly", async () => {
   await waitFor(() => expect(state.fetchDatasets).toHaveBeenCalledWith("diskless"));
   expect(screen.getByRole("button", { name: "Create Image" })).toBeDisabled();
 });
+
+it("keeps the image page actions inside a responsive action group", () => {
+  const originalMasters = state.masters;
+  state.masters = [{ id: "image-1", name: "ubuntu" }];
+  const { container } = render(<ImageManagement />);
+  const actions = container.querySelector('[data-testid="image-page-actions"]');
+  expect(actions).toHaveClass("flex-col", "sm:flex-row");
+  expect(screen.getByRole("button", { name: "Windows Servicing" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Import Existing" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Create Image" })).toBeInTheDocument();
+  state.masters = originalMasters;
+});

@@ -1,10 +1,10 @@
 //! User management API handlers
+use crate::auth::hash_password;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
     Extension, Json,
 };
-use bcrypt::{hash, DEFAULT_COST};
 use chrono::Utc;
 use log::info;
 use serde::{Deserialize, Serialize};
@@ -55,6 +55,19 @@ fn require_admin(claims: &Claims) -> Result<(), (StatusCode, Json<ErrorResponse>
         ));
     }
 
+    Ok(())
+}
+
+fn validate_password(password: &str) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    if !crate::auth::valid_password(password) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Password must be 8-72 bytes and contain uppercase, lowercase, and a digit"
+                    .into(),
+            }),
+        ));
+    }
     Ok(())
 }
 
@@ -147,8 +160,10 @@ pub async fn create_user(
         ));
     }
 
+    validate_password(&request.password)?;
+
     // Hash password
-    let password_hash = hash(&request.password, DEFAULT_COST).map_err(|e| {
+    let password_hash = hash_password(&request.password).await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
@@ -282,8 +297,10 @@ pub async fn update_user_password(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     require_admin(&claims)?;
 
+    validate_password(&request.password)?;
+
     // Hash new password
-    let password_hash = hash(&request.password, DEFAULT_COST).map_err(|e| {
+    let password_hash = hash_password(&request.password).await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {

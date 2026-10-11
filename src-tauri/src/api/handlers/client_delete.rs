@@ -5,6 +5,7 @@ use axum::{
 
 use crate::state::AppState;
 
+/// Remove owned storage before deleting metadata; retain the client on cleanup failure.
 pub async fn delete_client(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -34,31 +35,42 @@ pub async fn delete_client(
 
     let settings = state.settings.read().await.clone();
 
-    match crate::application::client_storage_mapping::storage_from_client(&settings, &client) {
-        Ok(storage) => {
-            if let Err(error) = state.application.storage.destroy_client_storage(&storage) {
-                tracing::warn!(client_id = %id, %error, "failed to completely remove client storage");
-            }
-        }
-        Err(error) => {
-            tracing::warn!(client_id = %id, %error, "could not reconstruct client storage during deletion");
-        }
+    // Enrolled pool clients have no storage yet; provisioned clients must be cleaned successfully.
+    let has_storage = client.target_iqn.is_some()
+        || client.block_store.is_some()
+        || client.writeback.is_some()
+        || client.block_device.is_some()
+        || client.snapshot.is_some();
+    if has_storage {
+        let storage = crate::application::client_storage_mapping::storage_from_client(&state.config, &settings, &client)
+            .map_err(|error| {
+                tracing::error!(client_id = %id, %error, "could not reconstruct client storage during deletion");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+        state.application.storage.destroy_client_storage(&storage).map_err(|error| {
+            tracing::error!(client_id = %id, %error, "failed to remove client storage; retaining client record");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
     }
 
     let client_id = client.id.to_string();
-    if let Err(error) = state
-        .application
-        .storage
-        .destroy_client_game_clones(&client_id, client.target_iqn.as_deref())
-    {
-        tracing::warn!(client_id = %id, %error, "failed to completely remove client game clones");
+    if has_storage || client.use_game_disk || !client.game_disks.is_empty() {
+        state
+            .application
+            .storage
+            .destroy_client_game_clones(&client_id, client.target_iqn.as_deref())
+            .map_err(|error| {
+                tracing::error!(client_id = %id, %error, "failed to remove client game clones; retaining client record");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
     }
 
-    if let Err(error) =
-        crate::infrastructure::dhcp::remove_client_ipxe_menu(client.mac.as_str()).await
-    {
-        tracing::warn!(client_id = %id, %error, "failed to remove boot menu for deleted client");
-    }
+    crate::infrastructure::dhcp::remove_client_ipxe_menu(&state.settings.read().await.clone(), client.mac.as_str())
+        .await
+        .map_err(|error| {
+            tracing::error!(client_id = %id, %error, "failed to remove boot menu; retaining client record");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     state
         .application

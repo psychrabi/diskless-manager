@@ -738,6 +738,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let pool = fixture(dir.path()).await;
         let state = AppState {
+            config: Default::default(),
             client_mutations: Arc::new(Mutex::new(())),
             settings: Arc::new(RwLock::new(crate::core::config::Settings::default())),
             db_pool: pool.clone(),

@@ -276,13 +276,11 @@ impl ImageRepository {
             .parse::<ImageFormat>()
             .with_context(|| format!("invalid image format '{}' for image '{}'", format, name))?;
 
-        let created_at = DateTime::parse_from_rfc3339(&created_at)
-            .with_context(|| format!("invalid created_at '{}' for image '{}'", created_at, name))?
-            .with_timezone(&Utc);
+        let created_at = parse_image_datetime(&created_at)
+            .with_context(|| format!("invalid created_at '{}' for image '{}'", created_at, name))?;
 
-        let updated_at = DateTime::parse_from_rfc3339(&updated_at)
-            .with_context(|| format!("invalid updated_at '{}' for image '{}'", updated_at, name))?
-            .with_timezone(&Utc);
+        let updated_at = parse_image_datetime(&updated_at)
+            .with_context(|| format!("invalid updated_at '{}' for image '{}'", updated_at, name))?;
 
         Ok(Image {
             id,
@@ -302,4 +300,14 @@ impl ImageRepository {
             updated_at,
         })
     }
+}
+
+fn parse_image_datetime(value: &str) -> Result<DateTime<Utc>> {
+    if let Ok(value) = DateTime::parse_from_rfc3339(value) {
+        return Ok(value.with_timezone(&Utc));
+    }
+    if let Ok(value) = chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S") {
+        return Ok(value.and_utc());
+    }
+    anyhow::bail!("invalid stored datetime: {value}")
 }

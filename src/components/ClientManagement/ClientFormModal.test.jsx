@@ -1,13 +1,17 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
-import { getClientNvmeOfStatus } from "@/api/modules/clients";
+import { useAuth } from "@/contexts/auth";
+import { getClientNvmeOfStatus, rotateChapSecret } from "@/api/modules/clients";
 import { listGameDisks } from "@/api/modules/zfs";
 import ClientFormModal from "./ClientFormModal";
+
+vi.mock("@/contexts/auth", () => ({ useAuth: vi.fn(() => ({ user: { role: "admin" } })) }));
 
 vi.mock("@/api/modules/clients", async (original) => ({
   ...await original(),
   getClientNvmeOfStatus: vi.fn(),
+  rotateChapSecret: vi.fn(),
 }));
 
 vi.mock("@/api/modules/zfs", () => ({
@@ -58,4 +62,27 @@ it("lists discovered game disks for selection", async () => {
   );
   expect(await screen.findByText("steam-games")).toBeInTheDocument();
   expect(screen.getByText(/50.0 GB/)).toBeInTheDocument();
+});
+
+it("shows credentials only from an administrator's rotation response", async () => {
+  getClientNvmeOfStatus.mockResolvedValue(null);
+  rotateChapSecret.mockResolvedValue({ username: "rotated-user", password: "rotated-secret" });
+  const client = { id: "five", name: "PC005", mac: "00:11:22:33:44:68", ip: "192.168.1.105", master: "windows", chap_secret: "old-secret" };
+  await act(async () => {
+    render(<ClientFormModal client={client} masters={[]} isOpen onClose={() => {}} refresh={() => {}} />);
+  });
+  expect(screen.queryByText("old-secret")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Rotate secret" }));
+  expect(await screen.findByText("rotated-secret")).toBeInTheDocument();
+  expect(screen.getByText("rotated-user")).toBeInTheDocument();
+});
+
+it("disables credential rotation for regular users", async () => {
+  useAuth.mockReturnValue({ user: { role: "user" } });
+  getClientNvmeOfStatus.mockResolvedValue(null);
+  const client = { id: "six", name: "PC006", mac: "00:11:22:33:44:69", ip: "192.168.1.106", master: "windows" };
+  await act(async () => {
+    render(<ClientFormModal client={client} masters={[]} isOpen onClose={() => {}} refresh={() => {}} />);
+  });
+  expect(screen.getByRole("button", { name: "Rotate secret" })).toBeDisabled();
 });

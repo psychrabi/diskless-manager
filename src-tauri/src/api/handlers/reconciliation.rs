@@ -5,6 +5,7 @@ use axum::{
     Json,
 };
 use serde::Serialize;
+use sqlx::FromRow;
 
 use crate::{
     core::reconciliation::{inspect_storage, repair_client_storage, ReconciliationEntry},
@@ -73,4 +74,67 @@ pub async fn repair_storage_reconciliation(
                 error: error.to_string(),
             }
         })
+}
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct PendingClientRecovery {
+    pub client_id: String,
+    pub client_name: String,
+    pub failures: i64,
+    pub retry_after: i64,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PendingClientRecoveriesResponse {
+    pub recoveries: Vec<PendingClientRecovery>,
+}
+
+/// List interrupted per-client storage recovery journals without exposing their contents.
+pub async fn list_pending_client_recoveries(
+    State(state): State<AppState>,
+) -> Result<Json<PendingClientRecoveriesResponse>, ReconciliationApiError> {
+    let recoveries = sqlx::query_as::<_, PendingClientRecovery>(
+        "SELECT c.id AS client_id, c.name AS client_name, r.failures, r.retry_after, r.last_error FROM client_offline_resets r JOIN clients c ON c.id = r.client_id WHERE r.operation IS NOT NULL ORDER BY r.retry_after, c.name COLLATE NOCASE",
+    )
+    .fetch_all(&state.db_pool)
+    .await
+    .map_err(|error| ReconciliationApiError {
+        error: error.to_string(),
+    })?;
+    Ok(Json(PendingClientRecoveriesResponse { recoveries }))
+}
+
+/// Retry one interrupted storage recovery after confirming its client is offline.
+pub async fn retry_pending_client_recovery(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, (StatusCode, Json<ReconciliationApiError>)> {
+    let _client_guard = state.client_mutations.lock().await;
+    match crate::application::client_lifecycle::retry_pending_recovery(&state, &id).await {
+        Ok(true) => Ok(StatusCode::NO_CONTENT),
+        Ok(false) => Err((
+            StatusCode::NOT_FOUND,
+            Json(ReconciliationApiError {
+                error: "No pending storage recovery exists for this client".into(),
+            }),
+        )),
+        Err(error) => {
+            tracing::error!(client_id = %id, error = %error, "manual client storage recovery failed");
+            let status = if error
+                .downcast_ref::<crate::application::client_lifecycle::PendingRecoverySafetyError>()
+                .is_some()
+            {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            Err((
+                status,
+                Json(ReconciliationApiError {
+                    error: error.to_string(),
+                }),
+            ))
+        }
+    }
 }

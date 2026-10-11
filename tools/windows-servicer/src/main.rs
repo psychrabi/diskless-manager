@@ -11,10 +11,13 @@
 mod windows_boot_arming;
 #[path = "../../../src-tauri/src/infrastructure/pxe/windows_driver_injection.rs"]
 mod windows_driver_injection;
+mod windows_gpt_identity;
+#[path = "../../../src-tauri/src/infrastructure/pxe/windows_inf.rs"]
+mod windows_inf;
+#[path = "../../../src-tauri/src/infrastructure/pxe/windows_iscsi_servicing.rs"]
+mod windows_iscsi_servicing;
 
-pub use windows_boot_arming::{
-    WindowsBootArmConfig, WindowsBootArmResult, WindowsBootArmer,
-};
+pub use windows_boot_arming::{WindowsBootArmConfig, WindowsBootArmResult, WindowsBootArmer};
 pub use windows_driver_injection::WindowsDriverInjector;
 
 #[path = "../../../src-tauri/src/infrastructure/pxe/windows_image_preparation.rs"]
@@ -36,6 +39,7 @@ struct WindowsServicerCapabilities {
     platform: &'static str,
     available: bool,
     elevated: bool,
+    iscsi_volume_servicing: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -55,10 +59,11 @@ fn main() {
             platform: std::env::consts::OS,
             available: windows_servicing_available(),
             elevated: is_elevated(),
+            iscsi_volume_servicing: cfg!(windows),
         })
         .map(|_| 0)
         .unwrap_or_else(report_output_error),
-        Some("prepare") => match run_prepare() {
+        Some(command @ ("prepare" | "prepare-volume")) => match run_prepare(command) {
             Ok(result) => write_json(&WindowsServicerResponse {
                 protocol_version: PROTOCOL_VERSION,
                 ok: true,
@@ -77,6 +82,16 @@ fn main() {
                 1
             }
         },
+        Some(command @ ("gpt-capture" | "gpt-restore")) => {
+            let response = match run_gpt(command) {
+                Ok(identity) => serde_json::json!({"ok": true, "result": identity}),
+                Err(error) => serde_json::json!({"ok": false, "error": format!("{error:#}")}),
+            };
+            let code = if response["ok"] == true { 0 } else { 1 };
+            write_json(&response)
+                .map(|_| code)
+                .unwrap_or_else(report_output_error)
+        }
         Some(other) => {
             eprintln!("unknown command: {other}");
             eprintln!("usage: diskless-windows-servicer <capabilities|prepare>");
@@ -91,7 +106,7 @@ fn main() {
     std::process::exit(exit_code);
 }
 
-fn run_prepare() -> anyhow::Result<WindowsImagePreparationResult> {
+fn read_request() -> anyhow::Result<Vec<u8>> {
     let mut stdin = std::io::stdin().take(MAX_REQUEST_BYTES + 1);
     let mut payload = Vec::new();
     stdin.read_to_end(&mut payload)?;
@@ -101,13 +116,54 @@ fn run_prepare() -> anyhow::Result<WindowsImagePreparationResult> {
     if payload.is_empty() {
         anyhow::bail!("servicing request JSON is required on stdin");
     }
+    Ok(payload)
+}
 
-    let request: WindowsImagePreparationRequest =
-        serde_json::from_slice(&payload).map_err(|error| {
-            anyhow::anyhow!("invalid WindowsImagePreparationRequest JSON: {error}")
-        })?;
+fn run_gpt(command: &str) -> anyhow::Result<windows_gpt_identity::GptIdentity> {
+    anyhow::ensure!(
+        cfg!(windows) && is_elevated(),
+        "GPT servicing requires an elevated Windows worker"
+    );
+    #[derive(serde::Deserialize)]
+    struct Request {
+        disk_number: u32,
+        size_bytes: u64,
+        sector_size: u64,
+        #[serde(default)]
+        identity: Option<windows_gpt_identity::GptIdentity>,
+    }
+    let request: Request = serde_json::from_slice(&read_request()?)?;
+    anyhow::ensure!(request.disk_number <= 65535, "invalid physical disk number");
+    let mut disk = std::fs::OpenOptions::new()
+        .read(true)
+        .write(command == "gpt-restore")
+        .open(format!(r"\\.\PhysicalDrive{}", request.disk_number))?;
+    if command == "gpt-restore" {
+        let saved = request
+            .identity
+            .ok_or_else(|| anyhow::anyhow!("saved GPT identity is required"))?;
+        anyhow::ensure!(
+            saved.size_bytes == request.size_bytes && saved.sector_size == request.sector_size,
+            "GPT geometry does not match saved identity"
+        );
+        windows_gpt_identity::restore(&mut disk, &saved)?;
+        disk.sync_all()?;
+    }
+    windows_gpt_identity::capture(&mut disk, request.size_bytes, request.sector_size)
+}
 
-    WindowsImagePreparer::new()?.prepare(request)
+fn run_prepare(command: &str) -> anyhow::Result<WindowsImagePreparationResult> {
+    let payload = read_request()?;
+
+    let request: WindowsImagePreparationRequest = serde_json::from_slice(&payload)
+        .map_err(|error| anyhow::anyhow!("invalid WindowsImagePreparationRequest JSON: {error}"))?;
+
+    let preparer = WindowsImagePreparer::new()?;
+    if command == "prepare-volume" {
+        preparer.prepare_volume(request)
+    } else {
+        preparer.prepare(request)
+    }
 }
 
 fn write_json(value: &impl Serialize) -> std::io::Result<()> {
@@ -122,7 +178,6 @@ fn report_output_error(error: std::io::Error) -> i32 {
     eprintln!("failed to write response: {error}");
     1
 }
-
 
 fn is_elevated() -> bool {
     #[cfg(windows)]

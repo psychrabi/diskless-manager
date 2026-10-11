@@ -48,7 +48,28 @@ const DiskTable = ({ datasets, onRefresh }) => {
 
   return (
     <>
-      <Table className="bg-background rounded-lg" aria-label="ZFS datasets list">
+      <div className="space-y-3 lg:hidden" aria-label="ZFS datasets list">
+        {datasets.map((dataset) => (
+          <article key={dataset.name} data-testid="disk-mobile-card" className="rounded-lg border bg-card p-4">
+            <div className="flex min-w-0 items-start justify-between gap-3">
+              <h2 className="break-all font-semibold">{dataset.name}</h2>
+              <Badge variant="default">{dataset.disk_type || "-"}</Badge>
+            </div>
+            <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
+              <div><dt className="text-xs text-muted-foreground">Used</dt><dd className="mt-1">{dataset.used}</dd></div>
+              <div><dt className="text-xs text-muted-foreground">Available</dt><dd className="mt-1">{dataset.available}</dd></div>
+              <div><dt className="text-xs text-muted-foreground">Referenced</dt><dd className="mt-1">{dataset.referenced}</dd></div>
+              <div className="col-span-2 min-w-0"><dt className="text-xs text-muted-foreground">Mount point</dt><dd className="mt-1 break-all text-muted-foreground">{dataset.mountpoint}</dd></div>
+            </dl>
+            <div className="mt-4 flex gap-2 border-t pt-3">
+              <Button variant="info" className="flex-1" onClick={() => handleRenameDisk(dataset)}>Rename</Button>
+              <Button variant="ghost" className="flex-1" onClick={() => handleDeleteDisk(dataset)}>Delete</Button>
+            </div>
+          </article>
+        ))}
+      </div>
+      <div className="hidden overflow-x-auto lg:block">
+      <Table className="rounded-lg bg-background" aria-label="ZFS datasets list">
         <TableHeader>
           <TableRow>
             <TableHead>Name</TableHead>
@@ -97,6 +118,7 @@ const DiskTable = ({ datasets, onRefresh }) => {
           ))}
         </TableBody>
       </Table>
+      </div>
       {isRenameModalOpen && selectedDisk && (
         <RenameDiskModal
           openRenameModal={isRenameModalOpen}

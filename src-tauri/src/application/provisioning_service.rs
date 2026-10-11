@@ -13,6 +13,7 @@ use super::StorageService;
 /// Infrastructure is created before persistence and is removed if the
 /// database write fails. Existing/shared ZFS volumes remain protected by the
 /// ownership semantics carried in `ClientStorage`.
+#[derive(Clone)]
 pub struct ProvisioningService {
     storage: Arc<StorageService>,
     clients: ClientRepository,
@@ -33,6 +34,22 @@ impl ProvisioningService {
     }
 
     pub async fn create_client(
+        &self,
+        request: CreateClient,
+        storage_spec: ClientStorageSpec,
+        server_ip: &str,
+    ) -> Result<Client> {
+        let service = self.clone();
+        let server_ip = server_ip.to_owned();
+        let runtime = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || {
+            runtime.block_on(service.create_client_blocking(request, storage_spec, &server_ip))
+        })
+        .await
+        .context("client provisioning worker failed")?
+    }
+
+    async fn create_client_blocking(
         &self,
         request: CreateClient,
         mut storage_spec: ClientStorageSpec,
@@ -69,6 +86,12 @@ impl ProvisioningService {
         ) {
             client.writeback = Some(storage.dataset().to_string());
         }
+        if let Some(chap) = &storage_spec.chap {
+            client.chap_user = Some(chap.username.clone());
+            client.chap_secret = Some(chap.password.clone());
+            client.chap_enabled = true;
+        }
+
         client.mark_ready();
 
         let reservation = BootReservation {
@@ -106,29 +129,6 @@ impl ProvisioningService {
             bail!(message);
         }
 
-        // Persist CHAP credentials resolved at the API layer. The target
-        // and menu already enforce/carry them; the database must agree.
-        if let Some(chap) = &storage_spec.chap {
-            if let Err(error) = self
-                .clients
-                .set_chap_credentials(&client.id, &chap.username, &chap.password)
-                .await
-            {
-                tracing::error!(client_id = %client.id, %error, "failed to persist CHAP credentials; continuing without them");
-            }
-            client.chap_user = Some(chap.username.clone());
-            client.chap_secret = Some(chap.password.clone());
-            client.chap_enabled = true;
-        }
-
-        if let Err(error) = self
-            .clients
-            .set_game_selection(&client.id, &client.game_disks)
-            .await
-        {
-            tracing::error!(client_id = %client.id, %error, "failed to persist game selection; continuing without it");
-        }
-
         Ok(client)
     }
 }
@@ -141,7 +141,9 @@ mod tests {
         infrastructure::{
             dhcp::{BootReservation, BootReservationPublisher},
             image::{ImageBackend, ImageBackendInfo},
-            iscsi::{ChapCredentials, IscsiLunState, IscsiProvisioner, IscsiTargetSpec, IscsiTargetState},
+            iscsi::{
+                ChapCredentials, IscsiLunState, IscsiProvisioner, IscsiTargetSpec, IscsiTargetState,
+            },
         },
     };
     use std::path::Path;
@@ -202,7 +204,7 @@ mod tests {
             unreachable!()
         }
         fn remove_target_with_backstores(&self, _: &str, _: &[String]) -> Result<()> {
-            unreachable!()
+            bail!("target has active sessions")
         }
         fn target_exists(&self, _: &str) -> Result<bool> {
             unreachable!()
@@ -512,5 +514,146 @@ mod tests {
         assert!(boot_published.load(Ordering::SeqCst));
         assert!(boot_removed.load(Ordering::SeqCst));
         assert!(iscsi_removed.load(Ordering::SeqCst));
+    }
+    #[tokio::test]
+    async fn audit_credentials_are_inserted_atomically_and_redacted() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        sqlx::query("CREATE TRIGGER no_credential_update BEFORE UPDATE OF chap_user ON clients BEGIN SELECT RAISE(FAIL, 'credentials must be inserted'); END")
+            .execute(&pool).await.unwrap();
+        let service = ProvisioningService::new(
+            Arc::new(StorageService::new(
+                Arc::new(ExistingVolumeBackend),
+                Arc::new(RecordingIscsi(Arc::new(AtomicBool::new(false)))),
+            )),
+            ClientRepository::new(pool.clone()),
+            Arc::new(RecordingBootPublisher {
+                published: Arc::new(AtomicBool::new(false)),
+                removed: Arc::new(AtomicBool::new(false)),
+            }),
+        );
+        let (mut request, mut spec) = request_and_spec();
+        request.chap_enabled = true;
+        spec.chap = Some(ChapCredentials {
+            username: "test-user".into(),
+            password: "test-secret".into(),
+        });
+        let client = service
+            .create_client(request, spec, "192.168.1.250")
+            .await
+            .unwrap();
+        let credentials = service.clients.chap_credentials(&client.id).await.unwrap();
+        assert_eq!(
+            credentials,
+            (client.chap_user.clone(), client.chap_secret.clone())
+        );
+        let response = serde_json::to_value(&client).unwrap();
+        assert!(response.get("chap_secret").is_none());
+        assert!(response.get("chap_user").is_none());
+    }
+
+    #[tokio::test]
+    async fn audit_game_selection_failure_rolls_back_client_and_infrastructure() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        sqlx::query("CREATE TRIGGER reject_game BEFORE INSERT ON client_game_disks BEGIN SELECT RAISE(FAIL, 'selection failed'); END").execute(&pool).await.unwrap();
+        let removed = Arc::new(AtomicBool::new(false));
+        let boot_removed = Arc::new(AtomicBool::new(false));
+        let service = ProvisioningService::new(
+            Arc::new(StorageService::new(
+                Arc::new(ExistingVolumeBackend),
+                Arc::new(RecordingIscsi(removed.clone())),
+            )),
+            ClientRepository::new(pool.clone()),
+            Arc::new(RecordingBootPublisher {
+                published: Arc::new(AtomicBool::new(false)),
+                removed: boot_removed.clone(),
+            }),
+        );
+        let (mut request, spec) = request_and_spec();
+        request.game_disks = vec!["tank/games/test".into()];
+        assert!(service
+            .create_client(request, spec, "192.168.1.250")
+            .await
+            .is_err());
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM clients")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0
+        );
+        assert!(removed.load(Ordering::SeqCst));
+        assert!(boot_removed.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn audit_delete_retains_client_when_storage_mapping_fails() {
+        let (mut state, _, _, _) = crate::api::security_tests::setup().await;
+        let (mut request, _) = request_and_spec();
+        request.master = "invalid".into();
+        request.target_iqn = Some("iqn.test:pc01".into());
+        let client = Client::create(request).unwrap();
+        let repository = ClientRepository::new(state.db_pool.clone());
+        repository.insert(&client).await.unwrap();
+        let mut application = crate::application::ApplicationServices::new(state.db_pool.clone());
+        application.storage = Arc::new(StorageService::new(
+            Arc::new(UnexpectedImageBackend),
+            Arc::new(UnexpectedIscsi),
+        ));
+        state.application = Arc::new(application);
+        let result = crate::api::handlers::client_delete::delete_client(
+            axum::extract::State(state.clone()),
+            axum::extract::Path(client.id.to_string()),
+        )
+        .await;
+        assert_eq!(result, Err(axum::http::StatusCode::INTERNAL_SERVER_ERROR));
+        assert!(state
+            .application
+            .clients
+            .get_by_string(client.id.as_str())
+            .await
+            .unwrap()
+            .is_some());
+    }
+    #[tokio::test]
+    async fn audit_delete_retains_client_when_target_removal_fails() {
+        let (mut state, _, _, _) = crate::api::security_tests::setup().await;
+        let (mut request, _) = request_and_spec();
+        request.master = format!(
+            "{}/image-disk/test",
+            crate::config::get_zpool_name(&crate::config::RuntimeConfig::default())
+        );
+        request.target_iqn = Some("iqn.test:pc01".into());
+        let client = Client::create(request).unwrap();
+        let repository = ClientRepository::new(state.db_pool.clone());
+        repository.insert(&client).await.unwrap();
+        let mut application = crate::application::ApplicationServices::new(state.db_pool.clone());
+        application.storage = Arc::new(StorageService::new(
+            Arc::new(UnexpectedImageBackend),
+            Arc::new(UnexpectedIscsi),
+        ));
+        state.application = Arc::new(application);
+        let result = crate::api::handlers::client_delete::delete_client(
+            axum::extract::State(state.clone()),
+            axum::extract::Path(client.id.to_string()),
+        )
+        .await;
+        assert_eq!(result, Err(axum::http::StatusCode::INTERNAL_SERVER_ERROR));
+        assert!(state
+            .application
+            .clients
+            .get_by_string(client.id.as_str())
+            .await
+            .unwrap()
+            .is_some());
     }
 }

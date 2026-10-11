@@ -18,18 +18,9 @@ impl ConfigfsProvisioner {
     pub const fn new() -> Self {
         Self
     }
-    pub(crate) fn probe() -> bool {
-        matches!(Self::request(Operation::Probe), Ok(Reply::Unit))
-    }
-    /// Persist LIO state for boot. Native when available, otherwise the
-    /// legacy `targetcli saveconfig` (old installations only).
+    /// Persist LIO state for boot using the explicitly selected native backend.
     pub(crate) fn save_config() -> Result<()> {
-        if Self::probe() {
-            return Self::unit(Operation::Save);
-        }
-        crate::infrastructure::command::run_command(["targetcli", "saveconfig"])
-            .map_err(anyhow::Error::from)
-            .context("targetcli saveconfig failed")
+        Self::unit(Operation::Save)
     }
     fn request(operation: Operation) -> Result<Reply> {
         let input = serde_json::to_vec(&Request {

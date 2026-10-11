@@ -83,7 +83,12 @@ pub fn select_drivers(
                 .hardware_ids
                 .iter()
                 .map(|value| normalize_pnp(value))
-                .chain(package.pnp_device_id.iter().map(|value| normalize_pnp(value)))
+                .chain(
+                    package
+                        .pnp_device_id
+                        .iter()
+                        .map(|value| normalize_pnp(value)),
+                )
                 .collect::<HashSet<_>>();
             if !pnp_ids.is_empty() && exact_ids.iter().any(|id| pnp_ids.contains(id)) {
                 score += 9_000;
@@ -96,9 +101,7 @@ pub fn select_drivers(
                 .iter()
                 .map(|value| normalize_pnp(value))
                 .collect::<HashSet<_>>();
-            if !pnp_ids.is_empty()
-                && compatible_ids.iter().any(|id| pnp_ids.contains(id))
-            {
+            if !pnp_ids.is_empty() && compatible_ids.iter().any(|id| pnp_ids.contains(id)) {
                 score += 6_000;
                 identity_match = true;
                 reasons.push("compatible PNP ID match".to_string());
@@ -123,7 +126,10 @@ pub fn select_drivers(
                         .map(|value| value.to_ascii_lowercase()),
                 )
                 .collect::<HashSet<_>>();
-            if package_services.iter().any(|service| services.contains(service)) {
+            if package_services
+                .iter()
+                .any(|service| services.contains(service))
+            {
                 score += 1_000;
                 identity_match = true;
                 reasons.push("driver service match".to_string());

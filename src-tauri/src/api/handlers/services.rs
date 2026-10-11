@@ -354,7 +354,9 @@ pub async fn configure_service(
 
     // Reload the service to pick up new config
     let settings = state.settings.read().await;
-    let service_manager = ServiceManager::new(settings.clone(), state.db_pool.clone());
+    let mut active_settings = settings.clone();
+    active_settings.iscsi.backend = state.application.iscsi_backend;
+    let service_manager = ServiceManager::new(active_settings, state.db_pool.clone());
     if requires_dhcp_validation(&name) {
         service_manager.dhcp.validate_config().await.map_err(|e| {
             log::error!(
@@ -391,6 +393,10 @@ pub async fn install_service(
         .get("service")
         .and_then(|v| v.as_str())
         .ok_or(StatusCode::BAD_REQUEST)?;
+
+    if !crate::platform::is_setup_package(service) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
 
     log::info!(
         "Dependency install: install request received for '{}'",

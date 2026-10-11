@@ -100,7 +100,7 @@ pub async fn update_admin_password(
     Extension(claims): Extension<Claims>,
     Json(request): Json<UpdateAdminPasswordRequest>,
 ) -> Result<Json<UpdateAdminPasswordResponse>, StatusCode> {
-    use bcrypt::{hash, verify, DEFAULT_COST};
+    use crate::auth::{hash_password, verify_password};
     use chrono::Utc;
 
     if claims.role != "admin" {
@@ -121,16 +121,22 @@ pub async fn update_admin_password(
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // Verify old password
-    let valid = verify(&request.old_password, &admin_user.password_hash)
+    let valid = verify_password(&request.old_password, &admin_user.password_hash)
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     if !valid {
         return Err(StatusCode::UNAUTHORIZED);
     }
 
+    if !crate::auth::valid_password(&request.new_password) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
     // Hash new password
-    let hashed =
-        hash(&request.new_password, DEFAULT_COST).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let hashed = hash_password(&request.new_password)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // Update password in database
     let now = Utc::now().to_rfc3339();

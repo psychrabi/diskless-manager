@@ -11,6 +11,7 @@ import { listGameDisks } from "@/api/modules/zfs";
 import { readConfig } from "@/api/modules/config";
 import ClientGameDiskPicker from "./ClientGameDiskPicker";
 import { clientSchema } from "@/schema";
+import { useAuth } from "@/contexts/auth";
 import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Copy, Eye, EyeOff, KeyRound, RefreshCw, Save, Server, Trash2 } from "lucide-react";
@@ -49,6 +50,7 @@ const formDefaults = { enabled: true, chap_enabled: true, use_game_disk: false, 
 
 const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) => {
   const { success, error } = useToastStore();
+  const { user } = useAuth();
   const [nvmeStatus, setNvmeStatus] = useState(null);
   const [nvmeLoading, setNvmeLoading] = useState(Boolean(isOpen && client?.id));
   const [nvmeAction, setNvmeAction] = useState(null);
@@ -252,7 +254,8 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
     name: "chap_enabled",
   });
 
-  const [chapSecret, setChapSecret] = useState(client?.chap_secret ?? null);
+  const [chapSecret, setChapSecret] = useState(null);
+  const [chapUsername, setChapUsername] = useState(null);
   const [chapRevealed, setChapRevealed] = useState(false);
   const [chapRotating, setChapRotating] = useState(false);
 
@@ -262,6 +265,7 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
     try {
       const result = await rotateChapSecret(client.id);
       setChapSecret(result?.password ?? null);
+      setChapUsername(result?.username ?? null);
       setChapRevealed(true);
       success("Client Management", result?.message || "CHAP secret rotated.");
     } catch (e) {
@@ -551,7 +555,7 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
                 <div className="grid gap-1 text-sm">
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-muted-foreground">Username</span>
-                    <span className="">{client.chap_user || "—"}</span>
+                    <span className="">{chapUsername || "—"}</span>
                   </div>
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-muted-foreground">Secret</span>
@@ -589,13 +593,14 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
                     type="button"
                     variant="ghost"
                     icon={RefreshCw}
-                    disabled={chapRotating}
+                    disabled={chapRotating || user?.role !== "admin"}
                     onClick={handleRotateChap}
                   >
                     {chapRotating ? "Rotating..." : "Rotate secret"}
                   </Button>
                 </div>
                 <p className="text-xs text-muted-foreground">
+                  Login credentials are shown only after an administrator rotates the secret.
                   Rotation applies to the live target at once; existing
                   sessions stay up, new logins need the new secret, and the
                   boot menu is republished automatically.
