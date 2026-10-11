@@ -15,10 +15,13 @@ use crate::core::config::IscsiBackend;
 /// Application-facing iSCSI provisioner that refuses destructive changes
 /// while an initiator is connected to the target.
 ///
-/// The backend is selected from system settings and remains fixed until restart.
+/// The configured backend is selected at startup and remains fixed until
+/// restart. Native availability is probed before use; an operation failure
+/// never triggers a targetcli retry because native state may have changed.
 #[derive(Clone)]
 pub struct SafeIscsiProvisioner {
     inner: Arc<dyn IscsiProvisioner>,
+    backend: IscsiBackend,
 }
 
 impl SafeIscsiProvisioner {
@@ -27,11 +30,17 @@ impl SafeIscsiProvisioner {
     }
 
     pub fn with_backend(backend: IscsiBackend) -> Self {
+        let backend = select_backend(backend, ConfigfsProvisioner::probe);
         let inner: Arc<dyn IscsiProvisioner> = match backend {
             IscsiBackend::Targetcli => Arc::new(TargetCliProvisioner::new()),
             IscsiBackend::InternalConfigfs => Arc::new(ConfigfsProvisioner::new()),
         };
-        Self { inner }
+        Self { inner, backend }
+    }
+
+    /// The backend selected after the one-time pre-mutation capability check.
+    pub fn backend(&self) -> IscsiBackend {
+        self.backend
     }
 
     fn ensure_disconnected(&self, target_iqn: &str) -> Result<()> {
@@ -43,6 +52,25 @@ impl SafeIscsiProvisioner {
         }
 
         Ok(())
+    }
+}
+
+fn select_backend(
+    configured: IscsiBackend,
+    native_preflight: impl FnOnce() -> anyhow::Result<()>,
+) -> IscsiBackend {
+    match configured {
+        IscsiBackend::Targetcli => IscsiBackend::Targetcli,
+        IscsiBackend::InternalConfigfs => match native_preflight() {
+            Ok(()) => IscsiBackend::InternalConfigfs,
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    "Native iSCSI preflight failed; selecting targetcli before any mutation"
+                );
+                IscsiBackend::Targetcli
+            }
+        },
     }
 }
 
@@ -99,6 +127,33 @@ impl IscsiProvisioner for SafeIscsiProvisioner {
 
 #[cfg(test)]
 mod tests {
+    use super::select_backend;
+    use crate::core::config::IscsiBackend;
+
+    #[test]
+    fn native_backend_falls_back_to_targetcli_only_when_preflight_fails() {
+        assert_eq!(
+            select_backend(IscsiBackend::InternalConfigfs, || {
+                Err(anyhow::anyhow!("native command unavailable"))
+            }),
+            IscsiBackend::Targetcli
+        );
+        assert_eq!(
+            select_backend(IscsiBackend::InternalConfigfs, || Ok(())),
+            IscsiBackend::InternalConfigfs
+        );
+    }
+
+    #[test]
+    fn targetcli_selection_does_not_probe_native_backend() {
+        assert_eq!(
+            select_backend(IscsiBackend::Targetcli, || {
+                panic!("unexpected native probe")
+            }),
+            IscsiBackend::Targetcli
+        );
+    }
+
     #[test]
     fn safety_error_message_is_specific() {
         let message = format!(

@@ -156,6 +156,14 @@ fn save() -> Result<()> {
     Ok(())
 }
 
+fn decode_request(input: &[u8]) -> Result<Request> {
+    ensure!(input.len() as u64 <= MAX_REQUEST, "iSCSI request too large");
+    let request: Request =
+        serde_json::from_slice(input).map_err(|_| anyhow::anyhow!("invalid iSCSI request"))?;
+    ensure!(request.version == VERSION, "unsupported iSCSI protocol");
+    Ok(request)
+}
+
 /// Private command entrypoint. No application state, database, or GUI startup.
 pub fn run_command() -> Result<()> {
     let result = (|| -> Result<Reply> {
@@ -170,11 +178,8 @@ pub fn run_command() -> Result<()> {
         std::io::stdin()
             .take(MAX_REQUEST + 1)
             .read_to_end(&mut input)?;
-        ensure!(input.len() as u64 <= MAX_REQUEST, "iSCSI request too large");
         // Never echo malformed input: it may contain CHAP secrets.
-        let request: Request =
-            serde_json::from_slice(&input).map_err(|_| anyhow::anyhow!("invalid iSCSI request"))?;
-        ensure!(request.version == VERSION, "unsupported iSCSI protocol");
+        let request = decode_request(&input)?;
         if matches!(request.operation, Operation::Probe) {
             ensure!(
                 Path::new(ROOT).join("iscsi").is_dir(),

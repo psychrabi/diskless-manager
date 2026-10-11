@@ -318,6 +318,26 @@ fn save_delegates_persistence_to_caller() {
 }
 
 #[test]
+fn removing_missing_target_is_idempotent_and_persists_state() {
+    let (_dir, engine, spec) = fixture();
+    let mut saves = 0;
+    let reply = engine
+        .execute(
+            Operation::RemoveTarget {
+                target: spec.target_iqn,
+            },
+            &mut || {
+                saves += 1;
+                Ok(())
+            },
+        )
+        .unwrap();
+
+    assert!(matches!(reply, Reply::Unit));
+    assert_eq!(saves, 1);
+}
+
+#[test]
 fn traversal_and_device_escape_are_rejected_before_mutation() {
     let (dir, engine, spec) = fixture();
     for bad in ["../outside", "a/b", ".", "..", "bad\nname"] {
@@ -467,4 +487,19 @@ fn target_removal_allows_kernel_attributes_but_preserves_other_portal_groups() {
         )
         .unwrap();
     assert!(!target.exists());
+}
+
+#[test]
+fn hidden_cli_rejects_malformed_oversized_and_wrong_version_requests() {
+    let malformed = b"chap-secret=synthetic-test-secret";
+    let error = match super::decode_request(malformed) {
+        Ok(_) => panic!("malformed request unexpectedly decoded"),
+        Err(error) => error,
+    };
+    assert_eq!(error.to_string(), "invalid iSCSI request");
+    assert!(!error.to_string().contains("synthetic-test-secret"));
+    assert!(super::decode_request(&vec![b' '; (super::MAX_REQUEST + 1) as usize]).is_err());
+    assert!(super::decode_request(br#"{"version":99,"operation":"probe"}"#).is_err());
+    assert!(super::decode_request(br#"{"version":1,"operation":"probe","extra":true}"#).is_err());
+    assert!(super::decode_request(br#"{"version":1,"operation":"probe"}"#).is_ok());
 }

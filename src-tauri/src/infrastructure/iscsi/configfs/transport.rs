@@ -22,6 +22,15 @@ impl ConfigfsProvisioner {
     pub(crate) fn save_config() -> Result<()> {
         Self::unit(Operation::Save)
     }
+    /// Check the installed privileged command and initialized LIO before any
+    /// native mutation is selected for this server process.
+    pub(crate) fn probe() -> Result<()> {
+        ensure!(
+            matches!(Self::request(Operation::Probe)?, Reply::Unit),
+            "unexpected native iSCSI probe response"
+        );
+        Ok(())
+    }
     fn request(operation: Operation) -> Result<Reply> {
         let input = serde_json::to_vec(&Request {
             version: VERSION,

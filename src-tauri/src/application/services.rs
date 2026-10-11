@@ -45,8 +45,9 @@ impl ApplicationServices {
         let image_backend: Arc<dyn ImageBackend> =
             Arc::new(ZfsImageBackend::with_config(config.clone()));
 
-        let iscsi: Arc<dyn IscsiProvisioner> =
-            Arc::new(SafeIscsiProvisioner::with_backend(backend));
+        let safe_iscsi = SafeIscsiProvisioner::with_backend(backend);
+        let iscsi_backend = safe_iscsi.backend();
+        let iscsi: Arc<dyn IscsiProvisioner> = Arc::new(safe_iscsi);
 
         let storage = Arc::new(StorageService::with_config(
             image_backend,
@@ -66,7 +67,7 @@ impl ApplicationServices {
         let nvmeof_boot = NvmeOfBootService::new(clients, config);
 
         Self {
-            iscsi_backend: backend,
+            iscsi_backend,
             clients: client_service,
             boot_history,
             storage,
