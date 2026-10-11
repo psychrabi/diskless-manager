@@ -23,7 +23,7 @@ const ImageCard = ({
         size="icon"
         icon={master.is_default ? Star : StarIcon}
         onClick={() => memoizedSetDefaultMaster(master.name)}
-        disabled={master.is_default}
+        disabled={master.is_default || master.status === "missing"}
         title={!master.is_default ? "Set as Default" : "Remove from Default"}
       />
 
@@ -35,6 +35,7 @@ const ImageCard = ({
         size="icon"
         icon={PlusCircle}
         title={"Create Snapshot"}
+        disabled={master.status === "missing"}
       />
       <Button
         variant="info"
@@ -56,6 +57,11 @@ const ImageCard = ({
   )
 
   return <Card title={`${master.name} (${master.size_gb}GB)`} subtitle={master.path} actions={actions}>
+    {master.status === "missing" && (
+      <p className="mb-3 text-sm text-destructive" role="status">
+        Image missing from storage. Delete its snapshots first, then delete this entry to remove the saved record.
+      </p>
+    )}
     <SnapshotsList master={master} />
   </Card>
 };

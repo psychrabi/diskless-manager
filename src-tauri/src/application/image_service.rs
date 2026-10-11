@@ -38,7 +38,36 @@ impl ImageService {
     }
 
     pub async fn list(&self) -> Result<Vec<Image>> {
-        self.repository.list().await
+        let mut images = self.repository.list().await?;
+        if images.is_empty() {
+            return Ok(images);
+        }
+        let names: Vec<String> = images
+            .iter()
+            .map(|image| {
+                if image.kind == ImageKind::Snapshot {
+                    let parent = images
+                        .iter()
+                        .find(|parent| Some(&parent.id) == image.parent_id.as_ref())
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("snapshot '{}' has no parent image", image.name)
+                        })?;
+                    Ok(format!("{}@{}", parent.name, image.name))
+                } else {
+                    Ok(image.name.clone())
+                }
+            })
+            .collect::<Result<_>>()?;
+        let backend = self.backend.clone();
+        let present = tokio::task::spawn_blocking(move || backend.check_presence(&names))
+            .await
+            .context("image worker failed")??;
+        for (image, exists) in images.iter_mut().zip(present) {
+            if !exists {
+                image.status = "missing".to_owned();
+            }
+        }
+        Ok(images)
     }
 
     pub async fn get(&self, id_or_name: &str) -> Result<Image> {
@@ -722,7 +751,7 @@ impl ImageService {
     async fn delete_blocking(&self, id: &str) -> Result<()> {
         let image = self.get(id).await?;
 
-        if image.is_default {
+        if image.is_default && self.backend.exists(&image.name)? {
             bail!("cannot delete the default image");
         }
 
@@ -744,7 +773,12 @@ impl ImageService {
 
                 let parent = self.get(parent_id).await?;
 
-                self.backend.destroy_snapshot(&parent.name, &image.name)?;
+                if self
+                    .backend
+                    .exists(&format!("{}@{}", parent.name, image.name))?
+                {
+                    self.backend.destroy_snapshot(&parent.name, &image.name)?;
+                }
             }
 
             ImageKind::Master | ImageKind::Clone => {
@@ -1037,4 +1071,179 @@ fn parent_dataset(zfs_name: &str) -> Result<String> {
         .rsplit_once('/')
         .map(|(parent, _)| parent.to_string())
         .ok_or_else(|| anyhow::anyhow!("invalid ZFS image name '{}'", zfs_name))
+}
+
+#[cfg(test)]
+mod storage_presence_tests {
+    use super::*;
+    use crate::infrastructure::image::ImageBackendInfo;
+    use std::collections::HashSet;
+    use std::path::Path;
+
+    struct FakeStorage {
+        present: HashSet<String>,
+        fail: bool,
+    }
+    impl ImageBackend for FakeStorage {
+        fn exists(&self, name: &str) -> Result<bool> {
+            if self.fail {
+                bail!("storage query failed");
+            }
+            Ok(self.present.contains(name))
+        }
+        fn destroy(&self, _: &str) -> Result<()> {
+            bail!("unexpected destroy")
+        }
+        fn destroy_snapshot(&self, _: &str, _: &str) -> Result<()> {
+            bail!("unexpected snapshot destroy")
+        }
+        fn create_volume(&self, _: &str, _: u64) -> Result<()> {
+            unreachable!()
+        }
+        fn rename(&self, _: &str, _: &str) -> Result<()> {
+            unreachable!()
+        }
+        fn clone_image(&self, _: &str, _: &str) -> Result<()> {
+            unreachable!()
+        }
+        fn create_snapshot(&self, _: &str, _: &str) -> Result<()> {
+            unreachable!()
+        }
+        fn rollback_snapshot(&self, _: &str, _: &str) -> Result<()> {
+            unreachable!()
+        }
+        fn resize(&self, _: &str, _: u64) -> Result<()> {
+            unreachable!()
+        }
+        fn import_raw(&self, _: &Path, _: &str, _: u64) -> Result<()> {
+            unreachable!()
+        }
+        fn verify(&self, _: &str) -> Result<bool> {
+            unreachable!()
+        }
+        fn info(&self, _: &str) -> Result<ImageBackendInfo> {
+            unreachable!()
+        }
+        fn set_os_type(&self, _: &str, _: &str) -> Result<()> {
+            unreachable!()
+        }
+        fn image_parent(&self) -> Result<String> {
+            unreachable!()
+        }
+    }
+    async fn service(present: &[&str], fail: bool) -> ImageService {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        ImageService::with_backend(
+            ImageRepository::new(pool),
+            Arc::new(FakeStorage {
+                present: present.iter().map(|name| name.to_string()).collect(),
+                fail,
+            }),
+        )
+    }
+    fn image(id: &str, name: &str, parent: Option<&str>) -> Image {
+        Image {
+            id: id.into(),
+            name: name.into(),
+            kind: if parent.is_some() {
+                ImageKind::Snapshot
+            } else {
+                ImageKind::Master
+            },
+            os_type: OsType::Linux,
+            size_gb: 50,
+            path: PathBuf::from("/dev/zvol/pool/image"),
+            format: ImageFormat::Raw,
+            status: "ready".into(),
+            description: None,
+            parent_id: parent.map(str::to_owned),
+            source_snapshot: None,
+            checksum: None,
+            is_default: false,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+    #[tokio::test]
+    async fn listing_checks_volumes_and_snapshot_names_without_removing_records() {
+        let service = service(&["pool/image", "pool/image@present"], false).await;
+        for record in [
+            image("master", "pool/image", None),
+            image("present", "present", Some("master")),
+            image("gone", "gone", Some("master")),
+            image("missing", "pool/missing", None),
+        ] {
+            service.repository.insert(&record).await.unwrap();
+        }
+        let images = service.list().await.unwrap();
+        assert_eq!(
+            images.iter().find(|i| i.id == "gone").unwrap().status,
+            "missing"
+        );
+        assert_eq!(
+            images.iter().find(|i| i.id == "missing").unwrap().status,
+            "missing"
+        );
+        assert_eq!(
+            images.iter().find(|i| i.id == "present").unwrap().status,
+            "ready"
+        );
+        assert_eq!(service.repository.list().await.unwrap().len(), 4);
+    }
+    #[tokio::test]
+    async fn missing_snapshot_then_missing_default_can_be_removed() {
+        let service = service(&[], false).await;
+        let mut master = image("master", "pool/image", None);
+        master.is_default = true;
+        service.repository.insert(&master).await.unwrap();
+        service
+            .repository
+            .insert(&image("snap", "gone", Some("master")))
+            .await
+            .unwrap();
+        service.delete("snap").await.unwrap();
+        service.delete("master").await.unwrap();
+        assert!(service.repository.list().await.unwrap().is_empty());
+    }
+    #[tokio::test]
+    async fn failed_query_never_allows_metadata_deletion() {
+        let service = service(&[], true).await;
+        service
+            .repository
+            .insert(&image("master", "pool/image", None))
+            .await
+            .unwrap();
+        assert!(service.delete("master").await.is_err());
+        assert!(service.repository.get("master").await.unwrap().is_some());
+        assert!(service.list().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn existing_default_and_dependent_records_remain_protected() {
+        let service = service(&["pool/image"], false).await;
+        let mut master = image("master", "pool/image", None);
+        master.is_default = true;
+        service.repository.insert(&master).await.unwrap();
+        assert!(service
+            .delete("master")
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("default"));
+        master.is_default = false;
+        service.repository.update(&master).await.unwrap();
+        service
+            .repository
+            .insert(&image("snap", "gone", Some("master")))
+            .await
+            .unwrap();
+        assert!(service
+            .delete("master")
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("dependent"));
+        assert_eq!(service.repository.list().await.unwrap().len(), 2);
+    }
 }

@@ -47,6 +47,11 @@ pub trait ImageBackend: Send + Sync {
     }
     fn exists(&self, name: &str) -> Result<bool>;
 
+    /// Check storage presence without treating query failures as missing objects.
+    fn check_presence(&self, names: &[String]) -> Result<Vec<bool>> {
+        names.iter().map(|name| self.exists(name)).collect()
+    }
+
     fn create_volume(&self, name: &str, size_gb: u64) -> Result<()>;
 
     fn destroy(&self, name: &str) -> Result<()>;

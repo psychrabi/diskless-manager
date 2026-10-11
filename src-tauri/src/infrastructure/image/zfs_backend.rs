@@ -142,9 +142,18 @@ impl ImageBackend for ZfsImageBackend {
         self.command.get_property("origin", name)
     }
     fn exists(&self, name: &str) -> Result<bool> {
-        // `zfs list` matches any dataset type (filesystem, volume,
-        // snapshot), so one query covers both datasets and volumes.
-        self.datasets.exists(name)
+        Ok(self.check_presence(&[name.to_owned()])?[0])
+    }
+
+    fn check_presence(&self, names: &[String]) -> Result<Vec<bool>> {
+        let output = self
+            .command
+            .execute_output(["zfs", "list", "-H", "-t", "all", "-o", "name"])?;
+        let existing: std::collections::HashSet<&str> = output.lines().collect();
+        Ok(names
+            .iter()
+            .map(|name| existing.contains(name.as_str()))
+            .collect())
     }
 
     fn create_volume(&self, name: &str, size_gb: u64) -> Result<()> {

@@ -62,13 +62,14 @@ pub async fn get_server_status(
         Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
     };
 
-    let images_count: (i64,) = match sqlx::query_as("SELECT COUNT(*) FROM images")
-        .fetch_one(&state.db_pool)
-        .await
-    {
-        Ok(count) => count,
-        Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
-    };
+    let images_count: (i64,) =
+        match sqlx::query_as("SELECT COUNT(*) FROM images WHERE kind IN ('master', 'clone')")
+            .fetch_one(&state.db_pool)
+            .await
+        {
+            Ok(count) => count,
+            Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
+        };
 
     let status = crate::commands::system::ServerStatus {
         initialized: true,
