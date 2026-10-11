@@ -30,9 +30,9 @@ const AdminLayout = () => {
   const pathRestored = useRef(false);
   useEffect(() => {
     if (pathRestored.current) return;
+    pathRestored.current = true;
     const lastPath = localStorage.getItem("last_path");
     if (lastPath && lastPath !== "/" && location.pathname === "/") {
-      pathRestored.current = true;
       navigate(lastPath, { replace: true });
     }
   }, [location.pathname, navigate]);
