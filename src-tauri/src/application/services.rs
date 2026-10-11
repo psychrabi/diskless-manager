@@ -21,6 +21,7 @@ use crate::infrastructure::{
 /// into application services.
 pub struct ApplicationServices {
     pub iscsi_backend: IscsiBackend,
+    pub iscsi: Arc<dyn IscsiProvisioner>,
     pub clients: ClientService,
     pub boot_history: BootHistoryService,
     pub storage: Arc<StorageService>,
@@ -45,13 +46,13 @@ impl ApplicationServices {
         let image_backend: Arc<dyn ImageBackend> =
             Arc::new(ZfsImageBackend::with_config(config.clone()));
 
-        let safe_iscsi = SafeIscsiProvisioner::with_backend(backend);
+        let safe_iscsi = Arc::new(SafeIscsiProvisioner::with_backend(backend));
         let iscsi_backend = safe_iscsi.backend();
-        let iscsi: Arc<dyn IscsiProvisioner> = Arc::new(safe_iscsi);
+        let iscsi: Arc<dyn IscsiProvisioner> = safe_iscsi;
 
         let storage = Arc::new(StorageService::with_config(
             image_backend,
-            iscsi,
+            Arc::clone(&iscsi),
             config.clone(),
         ));
         let boot_history = BootHistoryService::new(BootLogRepository::new(pool.clone()));
@@ -68,11 +69,38 @@ impl ApplicationServices {
 
         Self {
             iscsi_backend,
+            iscsi,
             clients: client_service,
             boot_history,
             storage,
             provisioning,
             nvmeof_boot,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn storage_and_managed_servicing_share_the_selected_iscsi_provisioner() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let services = ApplicationServices::with_iscsi_backend(
+            pool,
+            IscsiBackend::Targetcli,
+            crate::config::RuntimeConfig::default(),
+        );
+
+        assert!(Arc::ptr_eq(
+            &services.iscsi,
+            &services.storage.iscsi_provisioner()
+        ));
+        assert_eq!(services.iscsi_backend, IscsiBackend::Targetcli);
     }
 }

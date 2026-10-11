@@ -73,6 +73,7 @@ pub async fn get_server_status(
 
     let status = crate::commands::system::ServerStatus {
         initialized: true,
+        iscsi_backend: state.application.iscsi_backend,
         services_running,
         services_total: service_names.len() as u32,
         clients_count: clients_count.0 as u32,

@@ -422,6 +422,61 @@ fn owned_removal_preserves_game_disk_and_target() {
 }
 
 #[test]
+fn owned_removal_cleans_explicit_acl_mappings() {
+    let (dir, engine, spec) = fixture();
+    engine
+        .execute(Operation::Create(spec.clone()), &mut || Ok(()))
+        .unwrap();
+    let tpg = dir
+        .path()
+        .join("iscsi")
+        .join(&spec.target_iqn)
+        .join("tpgt_1");
+    let acl_lun = tpg.join("acls/iqn.client/lun_0");
+    std::fs::create_dir_all(&acl_lun).unwrap();
+    std::fs::write(tpg.join("acls/iqn.client/info"), "No active iSCSI Session").unwrap();
+    std::os::unix::fs::symlink(tpg.join("lun/lun_0"), acl_lun.join("diskless")).unwrap();
+
+    engine
+        .execute(
+            Operation::RemoveOwned {
+                target: spec.target_iqn.clone(),
+                backstores: vec!["block_test".into()],
+            },
+            &mut || Ok(()),
+        )
+        .unwrap();
+
+    assert!(!acl_lun.exists());
+    assert!(tpg.join("acls/iqn.client").exists());
+}
+
+#[test]
+fn partial_owned_removal_is_persisted_and_remaining_resources_are_retained() {
+    let (dir, engine, spec) = fixture();
+    engine
+        .execute(Operation::Create(spec.clone()), &mut || Ok(()))
+        .unwrap();
+    *engine.fs.fail.borrow_mut() = Some("block_test".into());
+    let mut saves = 0;
+
+    let result = engine.execute(
+        Operation::RemoveOwned {
+            target: spec.target_iqn.clone(),
+            backstores: vec!["block_test".into()],
+        },
+        &mut || {
+            saves += 1;
+            Ok(())
+        },
+    );
+
+    assert!(result.is_err());
+    assert_eq!(saves, 1);
+    assert!(dir.path().join("core/iblock_0/block_test").exists());
+}
+
+#[test]
 #[ignore = "requires root, initialized LIO, and DISKLESS_TEST_ZVOL pointing to a disposable, unexported ZFS volume"]
 fn real_lio_create_inspect_and_remove() {
     let device = std::env::var("DISKLESS_TEST_ZVOL").expect("set disposable test ZVOL");

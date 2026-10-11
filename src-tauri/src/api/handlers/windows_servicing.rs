@@ -19,6 +19,7 @@ use axum::{extract::State, http::StatusCode, Extension, Json};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 #[derive(Debug, Serialize)]
 pub struct WindowsServicingCapabilities {
@@ -237,7 +238,7 @@ pub async fn prepare_image_managed(
             .await??;
         crate::application::windows_servicing::prepare_managed(
             state.db_pool.clone(),
-            state.application.iscsi_backend,
+            Arc::clone(&state.application.iscsi),
             state.config.clone(),
             request,
             packages,

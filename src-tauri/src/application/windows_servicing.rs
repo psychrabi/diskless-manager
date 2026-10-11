@@ -1,12 +1,9 @@
 //! A servicing job owns a clone and a unique target; source/client targets are never changed.
 use crate::{
     application::image_service::ImageService,
-    core::{
-        config::IscsiBackend,
-        image::{Image, ImageKind, OsType, UpdateImageRequest},
-    },
+    core::image::{Image, ImageKind, OsType, UpdateImageRequest},
     infrastructure::{
-        iscsi::{ChapCredentials, IscsiProvisioner, IscsiTargetSpec, SafeIscsiProvisioner},
+        iscsi::{ChapCredentials, IscsiProvisioner, IscsiTargetSpec},
         pxe::{
             windows_iscsi_servicing::{WindowsIscsiConnection, SERVICING_IQN_PREFIX},
             RemoteWindowsCapabilitiesRequest, RemoteWindowsServicer, RemoteWindowsServicingRequest,
@@ -22,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     net::{Ipv4Addr, UdpSocket},
     path::PathBuf,
+    sync::Arc,
 };
 use uuid::Uuid;
 
@@ -85,7 +83,7 @@ pub struct ManagedWindowsPreparationResult {
 
 pub async fn prepare_managed(
     pool: sqlx::SqlitePool,
-    iscsi_backend: IscsiBackend,
+    iscsi: Arc<dyn IscsiProvisioner>,
     config: crate::config::RuntimeConfig,
     request: ManagedWindowsPreparationRequest,
     packages: Vec<StagedDriverPackage>,
@@ -117,7 +115,6 @@ pub async fn prepare_managed(
     let job = Uuid::new_v4();
     let target = format!("{SERVICING_IQN_PREFIX}{job}");
     let backstore = format!("service_{}", job.simple());
-    let iscsi = SafeIscsiProvisioner::with_backend(iscsi_backend);
     let operation = async {
         set_status(&images, &clone.id, "preparing").await?;
         let chap = ChapCredentials::generate(&format!("servicing-{job}"))?;

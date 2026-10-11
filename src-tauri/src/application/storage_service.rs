@@ -207,6 +207,11 @@ impl StorageService {
         }
     }
 
+    /// Return a shared handle to the startup-selected iSCSI provisioner.
+    pub fn iscsi_provisioner(&self) -> Arc<dyn IscsiProvisioner> {
+        Arc::clone(&self.iscsi)
+    }
+
     /// Validate a Super-mode master before removing any existing client storage.
     ///
     /// `dataset` must be an existing managed volume with no local mounts.

@@ -150,6 +150,28 @@ The default network settings target server `192.168.1.250/24`, gateway
 LAN before applying service configuration. HTTP boot files and TFTP default to
 `/srv/tftp`; the Samba share defaults to `/srv/shared`.
 
+### iSCSI backend selection
+
+The configured iSCSI backend is checked at server startup. If native configfs is
+configured but its non-mutating preflight fails, the server selects `targetcli`
+before making changes. The effective backend is shown in the dashboard's system
+information. Selection remains fixed until restart. A later native operation
+failure is reported without retrying through `targetcli`, because the first
+operation may already have changed kernel state. After fixing a preflight issue
+or changing the configured backend, restart the server to apply the selection.
+
+The real-LIO integration test is ignored by default and requires root, initialized
+LIO, and `DISKLESS_TEST_ZVOL` set to a disposable, unexported ZFS volume. It creates
+and removes a uniquely named target and backstore. Never point it at a client or
+production volume. Run it only in an isolated test host:
+
+```bash
+DISKLESS_TEST_ZVOL=diskless/test/iscsi-smoke \
+  cargo test --manifest-path src-tauri/Cargo.toml \
+  infrastructure::iscsi::configfs::tests::real_lio_create_inspect_and_remove \
+  -- --ignored --exact
+```
+
 ### Environment variables
 
 | Variable | Default | Purpose |
