@@ -356,3 +356,143 @@ async fn audit_install_rejects_arbitrary_packages() {
         StatusCode::BAD_REQUEST
     );
 }
+
+fn report_multipart(report: serde_json::Value) -> (String, Vec<u8>) {
+    let boundary = "driver-report-boundary";
+    let mut body = Vec::new();
+    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    body.extend_from_slice(
+        "Content-Disposition: form-data; name=\"report\"\r\nContent-Type: application/json\r\n\r\n"
+            .as_bytes(),
+    );
+    body.extend_from_slice(report.to_string().as_bytes());
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    (boundary.to_string(), body)
+}
+
+async fn submit_report(app: &Router, report: serde_json::Value) -> (StatusCode, serde_json::Value) {
+    let (boundary, body) = report_multipart(report);
+    // oneshot has no socket; provide the peer the handler binds to sessions.
+    let peer: axum::extract::ConnectInfo<std::net::SocketAddr> =
+        axum::extract::ConnectInfo("192.0.2.99:49152".parse().unwrap());
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/pxe/network-drivers/reports")
+                .extension(peer)
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap_or_default();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(json!(null)),
+    )
+}
+
+async fn insert_report_client(
+    pool: &sqlx::SqlitePool,
+    id: &str,
+    octet: u8,
+    target_iqn: Option<&str>,
+) {
+    sqlx::query(
+        "INSERT INTO clients (id, name, mac, ip, master, target_iqn, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+    )
+    .bind(id)
+    .bind(format!("client-{id}"))
+    .bind(format!("02:00:00:00:00:{octet:02x}"))
+    .bind("192.0.2.10")
+    .bind("master")
+    .bind(target_iqn)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+fn valid_report(client_id: &str) -> serde_json::Value {
+    json!({
+        "client_id": client_id,
+        "windows_version": "11 23H2",
+        "architecture": "x64",
+        "boot_nic_ids": ["PCI\\VEN_8086&DEV_15F3"],
+    })
+}
+
+async fn report_count(pool: &sqlx::SqlitePool) -> i64 {
+    sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM windows_driver_reports")
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn driver_report_from_unknown_client_is_rejected_without_mutation() {
+    let (state, app, _, _) = setup().await;
+    let (status, body) = submit_report(&app, valid_report("ghost")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["code"], "not_found");
+    assert_eq!(report_count(&state.db_pool).await, 0);
+}
+
+#[tokio::test]
+async fn driver_report_without_client_target_is_rejected_without_mutation() {
+    let (state, app, _, _) = setup().await;
+    insert_report_client(&state.db_pool, "nt1", 1, None).await;
+    let (status, _) = submit_report(&app, valid_report("nt1")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(report_count(&state.db_pool).await, 0);
+}
+
+#[tokio::test]
+async fn driver_report_without_active_session_is_rejected_without_mutation() {
+    let (state, app, _, _) = setup().await;
+    insert_report_client(
+        &state.db_pool,
+        "nt2",
+        2,
+        Some("iqn.2026-01.test:target.nt2"),
+    )
+    .await;
+    // No live configfs session exists in tests, so the peer binding fails
+    // closed; neither the report row nor the catalog may change.
+    let (status, body) = submit_report(&app, valid_report("nt2")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(body["message"].as_str().unwrap().contains("session"));
+    assert_eq!(report_count(&state.db_pool).await, 0);
+}
+
+#[tokio::test]
+async fn driver_report_requires_boot_nic_ids() {
+    let (state, app, _, _) = setup().await;
+    insert_report_client(
+        &state.db_pool,
+        "nt3",
+        3,
+        Some("iqn.2026-01.test:target.nt3"),
+    )
+    .await;
+    let (status, _) = submit_report(
+        &app,
+        json!({
+            "client_id": "nt3",
+            "windows_version": "11",
+            "architecture": "x64",
+            "boot_nic_ids": [],
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(report_count(&state.db_pool).await, 0);
+}

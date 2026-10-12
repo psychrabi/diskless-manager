@@ -41,7 +41,7 @@ use crate::api::handlers::{
     network_drivers::{
         import as import_network_driver, list as list_network_drivers,
         rebuild as rebuild_network_drivers, remove as remove_network_driver,
-        status as network_driver_status,
+        status as network_driver_status, submit_report as submit_network_driver_report,
     },
     nvmeof::{inspect_nvmeof_boot, prepare_nvmeof_boot, remove_nvmeof_boot},
     pxe::select_network_drivers,
@@ -178,6 +178,13 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route("/api/auth/validate", post(validate_auth_token))
         .route("/api/auth/bootstrap", post(bootstrap_first_admin))
         .route("/api/auth/admin/exists", get(check_admin_exists))
+        // Client driver reports carry no bearer token (no shared credential
+        // lives in the common image); trust comes from the active iSCSI
+        // session peer binding verified in the handler.
+        .route(
+            "/api/pxe/network-drivers/reports",
+            post(submit_network_driver_report),
+        )
         .layer(DefaultBodyLimit::max(16 * 1024 * 1024))
         .with_state(state.clone());
 
