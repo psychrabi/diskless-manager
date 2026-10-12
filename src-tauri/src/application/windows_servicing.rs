@@ -81,6 +81,7 @@ pub struct ManagedWindowsPreparationResult {
     pub staged_package_count: usize,
     pub uploaded_bytes: u64,
     pub staging_cleanup_succeeded: bool,
+    pub revision: Option<ImageDriverRevision>,
 }
 
 pub async fn prepare_managed(
@@ -94,7 +95,7 @@ pub async fn prepare_managed(
     UdpSocket::bind((request.portal.parse::<Ipv4Addr>()?, 0))
         .context("servicing portal is not an address on this server")?;
     let images = ImageService::with_backend(
-        ImageRepository::new(pool),
+        ImageRepository::new(pool.clone()),
         std::sync::Arc::new(crate::infrastructure::image::ZfsImageBackend::with_config(
             config,
         )),
@@ -105,6 +106,33 @@ pub async fn prepare_managed(
         || source.status != "ready"
     {
         bail!("choose a ready Windows image and one of its snapshots");
+    }
+    // Committed builds publish an immutable candidate revision. A repeat of an
+    // already-built driver set reuses the live record instead of cloning and
+    // servicing the image again; dry runs record nothing.
+    let package_ids = packages
+        .iter()
+        .map(|package| package.id.clone())
+        .collect::<Vec<_>>();
+    let mut revision = if request.commit {
+        Some(
+            ensure_managed_revision(&pool, &source.id, &request.source_snapshot, &package_ids)
+                .await?,
+        )
+    } else {
+        None
+    };
+    if let Some(existing) = revision.as_ref() {
+        if matches!(
+            existing.status,
+            DriverRevisionStatus::AwaitingTest | DriverRevisionStatus::Ready
+        ) {
+            bail!(
+                "driver set already built as revision '{}' ({}); awaiting boot test, not rebuilding",
+                existing.id,
+                existing.status
+            );
+        }
     }
     let worker = RemoteWindowsServicer::new();
     let capabilities = worker.capabilities(request.worker.clone()).await?;
@@ -185,6 +213,15 @@ pub async fn prepare_managed(
             images.delete(&clone.id).await?;
             (None, None)
         };
+        // Record the candidate only after the worker disconnected and all
+        // owned temporary iSCSI resources were safely removed above. A
+        // failure anywhere above leaves the source image untouched and
+        // publishes neither an image nor a revision.
+        if let Some(record) = revision.as_mut() {
+            if let Some(published) = image.as_ref() {
+                *record = mark_revision_awaiting_test(&pool, &record.id, &published.id).await?;
+            }
+        }
         Ok::<_, anyhow::Error>(ManagedWindowsPreparationResult {
             preparation,
             image,
@@ -192,6 +229,7 @@ pub async fn prepare_managed(
             staged_package_count: count,
             uploaded_bytes: bytes,
             staging_cleanup_succeeded: cleaned,
+            revision: revision.clone(),
         })
     }
     .await;
@@ -199,6 +237,11 @@ pub async fn prepare_managed(
         Ok(result) => Ok(result),
         Err(error) => {
             let _ = set_status(&images, &clone.id, "servicing-failed").await;
+            // A failed build must not publish: mark the candidate failed so a
+            // retry starts a fresh attempt instead of reusing a stale record.
+            if let Some(record) = revision {
+                let _ = fail_managed_revision(&pool, &record.id).await;
+            }
             // An interrupted worker may still be writing. Retain the target and clone for recovery.
             Err(error.context(format!("servicing failed; retained clone '{}' and any remaining target '{}' for inspection", clone.name, target)))
         }
@@ -249,7 +292,9 @@ pub fn plan_driver_revision(
 }
 
 /// Return the existing revision for this driver set or persist a new
-/// `preparing` record. Idempotent by driver-set hash.
+/// `preparing` record. Idempotent by driver-set hash: failed attempts never
+/// match, so a retry starts a fresh record, while a concurrent insert that
+/// wins the race is returned instead of erroring.
 ///
 /// Note: driver installation runs through DISM signature verification without
 /// any unsigned-driver override (no `/ForceUnsigned` is ever passed), so DISM
@@ -271,13 +316,27 @@ pub async fn ensure_managed_revision(
     {
         return Ok(existing);
     }
+    match repository.insert_driver_revision(&planned).await {
+        Ok(()) => Ok(planned),
+        Err(_) => repository
+            .find_driver_revision_by_hash(source_image_id, &planned.driver_set_hash)
+            .await
+            .with_context(|| {
+                format!("failed to record driver revision for image '{source_image_id}'")
+            })?
+            .context("concurrent driver revision insert did not persist"),
+    }
+}
+
+/// Record a failed build so it publishes nothing and never blocks a retry.
+pub async fn fail_managed_revision(
+    pool: &sqlx::SqlitePool,
+    revision_id: &str,
+) -> Result<ImageDriverRevision> {
+    let repository = ImageRepository::new(pool.clone());
     repository
-        .insert_driver_revision(&planned)
+        .transition_driver_revision(revision_id, DriverRevisionStatus::Failed, None)
         .await
-        .with_context(|| {
-            format!("failed to record driver revision for image '{source_image_id}'")
-        })?;
-    Ok(planned)
 }
 
 /// Record a successfully serviced candidate as `awaiting-test` with its
@@ -428,6 +487,63 @@ mod tests {
         // awaiting-test -> preparing is an invalid transition.
         assert!(repo
             .transition_driver_revision(&first.id, DriverRevisionStatus::Preparing, None)
+            .await
+            .is_err());
+    }
+    #[tokio::test]
+    async fn failed_revision_never_publishes_and_never_blocks_retry() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let repo = ImageRepository::new(pool.clone());
+        let now = chrono::Utc::now();
+        repo.insert(&Image {
+            id: "img".into(),
+            name: "tank/image/windows".into(),
+            kind: ImageKind::Master,
+            os_type: OsType::Windows,
+            size_gb: 50,
+            path: "/dev/zvol/tank/image/windows".into(),
+            format: crate::core::image::ImageFormat::Raw,
+            status: "ready".into(),
+            description: None,
+            parent_id: None,
+            source_snapshot: None,
+            checksum: None,
+            is_default: false,
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .unwrap();
+        let ids = vec!["pkg-a".to_string()];
+        let attempt = ensure_managed_revision(&pool, "img", "snap", &ids)
+            .await
+            .unwrap();
+        let failed = fail_managed_revision(&pool, &attempt.id).await.unwrap();
+        assert_eq!(failed.status, DriverRevisionStatus::Failed);
+        // A failed attempt is invisible to the idempotency lookup...
+        assert!(repo
+            .find_driver_revision_by_hash("img", &attempt.driver_set_hash)
+            .await
+            .unwrap()
+            .is_none());
+        // ...so a retry starts a fresh record instead of reusing stale state.
+        let retry = ensure_managed_revision(&pool, "img", "snap", &ids)
+            .await
+            .unwrap();
+        assert_ne!(retry.id, attempt.id);
+        assert_eq!(retry.status, DriverRevisionStatus::Preparing);
+        // And a failed record can never become a candidate again.
+        assert!(repo
+            .transition_driver_revision(
+                &attempt.id,
+                DriverRevisionStatus::AwaitingTest,
+                Some("rev-image")
+            )
             .await
             .is_err());
     }

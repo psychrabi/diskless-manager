@@ -348,9 +348,10 @@ impl ImageRepository {
         driver_set_hash: &str,
     ) -> Result<Option<ImageDriverRevision>> {
         use anyhow::Context;
+        // Failed attempts never block a retry; only the live record matches.
         let row = sqlx::query_as::<_, (String, String, String, Option<String>, String, String, String, String, String)>(
             r#"SELECT id, source_image_id, source_snapshot, revision_image_id, driver_package_ids, driver_set_hash, status, created_at, updated_at
-            FROM windows_image_driver_revisions WHERE source_image_id = ? AND driver_set_hash = ? LIMIT 1"#,
+            FROM windows_image_driver_revisions WHERE source_image_id = ? AND driver_set_hash = ? AND status != 'failed' LIMIT 1"#,
         )
         .bind(source_image_id)
         .bind(driver_set_hash)

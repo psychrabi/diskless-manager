@@ -15,7 +15,11 @@ use crate::{
     state::AppState,
     types::Claims,
 };
-use axum::{extract::State, http::StatusCode, Extension, Json};
+use axum::{
+    extract::{Query, State},
+    http::StatusCode,
+    Extension, Json,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -249,4 +253,28 @@ pub async fn prepare_image_managed(
     .map_err(|error| internal_message(error.to_string()))?
     .map_err(operation_error)?;
     Ok(Json(result))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RevisionListQuery {
+    pub source_image_id: String,
+}
+
+/// Admin-only listing of driver revision records for one source image, newest
+/// last. Existing client assignments stay pinned; only the boot-test gate
+/// moves a candidate to `ready` for new clients.
+pub async fn list_revisions(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Query(query): Query<RevisionListQuery>,
+) -> Result<
+    Json<Vec<crate::core::image::ImageDriverRevision>>,
+    (StatusCode, Json<WindowsServicingError>),
+> {
+    require_admin(&claims)?;
+    crate::persistence::repositories::image::ImageRepository::new(state.db_pool.clone())
+        .list_driver_revisions(&query.source_image_id)
+        .await
+        .map(Json)
+        .map_err(operation_error)
 }

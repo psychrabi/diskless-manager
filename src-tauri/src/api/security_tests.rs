@@ -496,3 +496,40 @@ async fn driver_report_requires_boot_nic_ids() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(report_count(&state.db_pool).await, 0);
 }
+
+#[tokio::test]
+async fn driver_revisions_are_admin_only() {
+    let (_, app, admin, user) = setup().await;
+    assert_eq!(
+        request(
+            &app,
+            "GET",
+            "/api/pxe/windows/revisions?source_image_id=img",
+            &user,
+            json!(null)
+        )
+        .await,
+        StatusCode::FORBIDDEN
+    );
+    // Admin sees an empty revision list for an unknown source image.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/pxe/windows/revisions?source_image_id=img")
+                .header("authorization", format!("Bearer {admin}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
+        json!([])
+    );
+}

@@ -13,4 +13,4 @@ CREATE TABLE IF NOT EXISTS windows_image_driver_revisions (
 CREATE INDEX IF NOT EXISTS idx_driver_revisions_source ON windows_image_driver_revisions(source_image_id);
 CREATE INDEX IF NOT EXISTS idx_driver_revisions_hash ON windows_image_driver_revisions(driver_set_hash);
 CREATE INDEX IF NOT EXISTS idx_driver_revisions_status ON windows_image_driver_revisions(status);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_driver_revisions_source_hash ON windows_image_driver_revisions(source_image_id, driver_set_hash);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_driver_revisions_source_hash ON windows_image_driver_revisions(source_image_id, driver_set_hash) WHERE status != 'failed';
