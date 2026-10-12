@@ -85,6 +85,10 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host ""
+Write-Host "Client driver reporting is NOT enabled by this installer (worker-only install)."
+Write-Host "On a managed client, register it explicitly with:"
+Write-Host "  .\client-report\register-client-report.ps1 -ServerUrl http://<server>:8080 -ClientId <client-id>"
+Write-Host "See client-report/TESTING.md for the opt-in Windows 10/11 test procedure."
 if ($ConfigureOpenSsh) {
     Write-Host "OpenSSH Server is configured and listening through the Windows firewall."
 }

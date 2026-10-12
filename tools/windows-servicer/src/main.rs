@@ -9,6 +9,7 @@
 
 #[path = "../../../src-tauri/src/infrastructure/pxe/windows_boot_arming.rs"]
 mod windows_boot_arming;
+mod windows_client_report;
 #[path = "../../../src-tauri/src/infrastructure/pxe/windows_driver_injection.rs"]
 mod windows_driver_injection;
 mod windows_gpt_identity;
@@ -91,6 +92,23 @@ fn main() {
             write_json(&response)
                 .map(|_| code)
                 .unwrap_or_else(report_output_error)
+        }
+        Some("report-client") => {
+            let config = std::env::args().nth(2).unwrap_or_else(|| {
+                r"C:\ProgramData\Diskless Manager\client-report.json".to_string()
+            });
+            match windows_client_report::run_report_client(std::path::Path::new(&config)) {
+                Ok(()) => write_json(&serde_json::json!({"ok": true}))
+                    .map(|_| 0)
+                    .unwrap_or_else(report_output_error),
+                Err(error) => {
+                    let _ = write_json(&serde_json::json!({
+                        "ok": false,
+                        "error": format!("{error:#}"),
+                    }));
+                    1
+                }
+            }
         }
         Some(other) => {
             eprintln!("unknown command: {other}");

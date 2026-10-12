@@ -1,0 +1,6 @@
+{
+  "_comment": "Per-client reporter configuration for 'diskless-windows-servicer report-client'. Copy to C:\\ProgramData\\Diskless Manager\\client-report.json and set CLIENT_ID. Contains no secrets: the server authenticates the report against the client's live iSCSI session. Restrict the file to SYSTEM and Administrators.",
+  "server_url": "http://192.0.2.1:8080",
+  "client_id": "REPLACE-WITH-CLIENT-ID",
+  "export_package": true
+}
