@@ -1,7 +1,9 @@
 //! A servicing job owns a clone and a unique target; source/client targets are never changed.
 use crate::{
     application::image_service::ImageService,
-    core::image::{Image, ImageKind, OsType, UpdateImageRequest},
+    core::image::{
+        DriverRevisionStatus, Image, ImageDriverRevision, ImageKind, OsType, UpdateImageRequest,
+    },
     infrastructure::{
         iscsi::{ChapCredentials, IscsiProvisioner, IscsiTargetSpec},
         pxe::{
@@ -218,6 +220,84 @@ async fn set_status(images: &ImageService, id: &str, status: &str) -> Result<()>
     Ok(())
 }
 
+/// Build the deterministic candidate revision for a compatible driver set.
+///
+/// Pure constructor: the driver-set hash makes retries idempotent, so repeated
+/// reports for the same source image and package set resolve to the same
+/// revision instead of creating duplicates. The source image is never
+/// modified; the revision record starts in `preparing`.
+pub fn plan_driver_revision(
+    source_image_id: &str,
+    source_snapshot: &str,
+    package_ids: &[String],
+) -> ImageDriverRevision {
+    let mut ordered: Vec<String> = package_ids.to_vec();
+    ordered.sort();
+    ordered.dedup();
+    let now = chrono::Utc::now();
+    ImageDriverRevision {
+        id: Uuid::new_v4().to_string(),
+        source_image_id: source_image_id.to_string(),
+        source_snapshot: source_snapshot.to_string(),
+        revision_image_id: None,
+        driver_set_hash: ImageDriverRevision::hash_driver_set(&ordered),
+        driver_package_ids: ordered,
+        status: DriverRevisionStatus::Preparing,
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+/// Return the existing revision for this driver set or persist a new
+/// `preparing` record. Idempotent by driver-set hash.
+///
+/// Note: driver installation runs through DISM signature verification without
+/// any unsigned-driver override (no `/ForceUnsigned` is ever passed), so DISM
+/// rejects unsigned packages and the revision never publishes on failure.
+pub async fn ensure_managed_revision(
+    pool: &sqlx::SqlitePool,
+    source_image_id: &str,
+    source_snapshot: &str,
+    package_ids: &[String],
+) -> Result<ImageDriverRevision> {
+    let repository = ImageRepository::new(pool.clone());
+    let planned = plan_driver_revision(source_image_id, source_snapshot, package_ids);
+    if let Some(existing) = repository
+        .find_driver_revision_by_hash(source_image_id, &planned.driver_set_hash)
+        .await
+        .with_context(|| {
+            format!("failed to check existing driver revisions for image '{source_image_id}'")
+        })?
+    {
+        return Ok(existing);
+    }
+    repository
+        .insert_driver_revision(&planned)
+        .await
+        .with_context(|| {
+            format!("failed to record driver revision for image '{source_image_id}'")
+        })?;
+    Ok(planned)
+}
+
+/// Record a successfully serviced candidate as `awaiting-test` with its
+/// published image. Only the boot-test gate may later move it to `ready`,
+/// keeping existing client assignments on their current revision.
+pub async fn mark_revision_awaiting_test(
+    pool: &sqlx::SqlitePool,
+    revision_id: &str,
+    revision_image_id: &str,
+) -> Result<ImageDriverRevision> {
+    let repository = ImageRepository::new(pool.clone());
+    repository
+        .transition_driver_revision(
+            revision_id,
+            DriverRevisionStatus::AwaitingTest,
+            Some(revision_image_id),
+        )
+        .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -288,5 +368,67 @@ mod tests {
         assert!(published.parent_id.is_none());
         assert_eq!(images.get("source").await.unwrap().name, source.name);
         assert!(images.publish_serviced_clone("source").await.is_err());
+    }
+    #[test]
+    fn revision_plan_is_deterministic_and_dedupes_packages() {
+        let a = plan_driver_revision("img", "snap", &["b".into(), "a".into(), "a".into()]);
+        let b = plan_driver_revision("img", "snap", &["a".into(), "b".into()]);
+        assert_eq!(a.driver_package_ids, vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(a.driver_set_hash, b.driver_set_hash);
+        assert_eq!(a.status, DriverRevisionStatus::Preparing);
+        // Terminal/invalid transitions are rejected at the model level.
+        assert!(a.can_transition(DriverRevisionStatus::AwaitingTest));
+        assert!(!a.can_transition(DriverRevisionStatus::Ready));
+    }
+    #[tokio::test]
+    async fn managed_revision_is_idempotent_and_gates_awaiting_test() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let repo = ImageRepository::new(pool.clone());
+        let now = chrono::Utc::now();
+        repo.insert(&Image {
+            id: "img".into(),
+            name: "tank/image/windows".into(),
+            kind: ImageKind::Master,
+            os_type: OsType::Windows,
+            size_gb: 50,
+            path: "/dev/zvol/tank/image/windows".into(),
+            format: crate::core::image::ImageFormat::Raw,
+            status: "ready".into(),
+            description: None,
+            parent_id: None,
+            source_snapshot: None,
+            checksum: None,
+            is_default: false,
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .unwrap();
+        let ids = vec!["pkg-a".to_string()];
+        let first = ensure_managed_revision(&pool, "img", "snap", &ids)
+            .await
+            .unwrap();
+        let second = ensure_managed_revision(&pool, "img", "snap", &ids)
+            .await
+            .unwrap();
+        assert_eq!(first.id, second.id);
+        let awaiting = mark_revision_awaiting_test(&pool, &first.id, "rev-image")
+            .await
+            .unwrap();
+        assert_eq!(awaiting.status, DriverRevisionStatus::AwaitingTest);
+        assert_eq!(awaiting.revision_image_id.as_deref(), Some("rev-image"));
+        // Duplicate revision IDs are rejected by the primary key.
+        let repo = ImageRepository::new(pool.clone());
+        assert!(repo.insert_driver_revision(&first).await.is_err());
+        // awaiting-test -> preparing is an invalid transition.
+        assert!(repo
+            .transition_driver_revision(&first.id, DriverRevisionStatus::Preparing, None)
+            .await
+            .is_err());
     }
 }

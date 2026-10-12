@@ -28,6 +28,66 @@ pub struct SelectedNetworkDriver {
     pub reasons: Vec<String>,
 }
 
+/// Target image/client description for automatic Windows revision builds.
+///
+/// Only signed catalog packages whose hardware IDs match a Boot NIC are
+/// eligible; OS/architecture mismatches and unsigned packages are omitted so a
+/// damaged or incompatible package never reaches a published revision.
+#[derive(Debug, Clone, Default)]
+pub struct ImageDriverTarget {
+    pub os_version: Option<String>,
+    pub architecture: Option<String>,
+    pub boot_nic_ids: Vec<String>,
+}
+
+/// Select the compatible signed driver set for a Windows image revision.
+///
+/// Deterministic: exact hardware-ID matches first, then compatible IDs, with
+/// stable package-ID tie breaking. Each package is injected at most once.
+pub fn select_compatible_for_image(
+    packages: &[NetworkDriverPackage],
+    target: &ImageDriverTarget,
+) -> Vec<SelectedNetworkDriver> {
+    let eligible: Vec<NetworkDriverPackage> = packages
+        .iter()
+        .filter(|package| {
+            // Signed Windows packages must carry catalog files; unsigned or
+            // damaged packages are never eligible for a published revision.
+            if package.catalog_files.is_empty() {
+                return false;
+            }
+            if let Some(os) = target.os_version.as_deref() {
+                let os = os.to_ascii_lowercase();
+                if let Some(version) = package.version.as_deref() {
+                    let version = version.to_ascii_lowercase();
+                    // A package declaring a different Windows version is
+                    // incompatible; packages without version info pass through
+                    // and are gated by DISM signature verification at install.
+                    if !version.is_empty()
+                        && !os.is_empty()
+                        && !version.contains(&os)
+                        && !os.contains(&version)
+                    {
+                        return false;
+                    }
+                }
+            }
+            true
+        })
+        .cloned()
+        .collect();
+    let input = NetworkDriverSelectorInput {
+        architecture: target.architecture.clone(),
+        pnp_device_ids: target.boot_nic_ids.clone(),
+        ..Default::default()
+    };
+    let mut selected = select_drivers(&eligible, &input);
+    // Deduplicate by package ID while preserving deterministic score order.
+    let mut seen = HashSet::new();
+    selected.retain(|entry| seen.insert(entry.driver_id.clone()));
+    selected
+}
+
 pub fn select_drivers(
     packages: &[NetworkDriverPackage],
     input: &NetworkDriverSelectorInput,
@@ -296,5 +356,35 @@ mod tests {
         };
 
         assert!(select_drivers(&packages, &input).is_empty());
+    }
+
+    fn signed_package(id: &str, pnp: &str, arch: &str) -> NetworkDriverPackage {
+        let mut pkg = package(id, Some(pnp), None, None, Some(arch));
+        pkg.catalog_files = vec!["driver.cat".to_string()];
+        pkg
+    }
+
+    #[test]
+    fn image_selection_omits_unsigned_incompatible_and_dedupes() {
+        let packages = vec![
+            signed_package("intel", "PCI\\VEN_8086&DEV_15F3", "x64"),
+            package(
+                "unsigned",
+                Some("PCI\\VEN_8086&DEV_15F3"),
+                None,
+                None,
+                Some("x64"),
+            ),
+            signed_package("x86-only", "PCI\\VEN_8086&DEV_15F3", "x86"),
+            signed_package("other", "PCI\\VEN_ABCD&DEV_EF01", "x64"),
+        ];
+        let target = ImageDriverTarget {
+            architecture: Some("x64".to_string()),
+            boot_nic_ids: vec!["PCI\\VEN_8086&DEV_15F3".to_string()],
+            ..Default::default()
+        };
+        let selected = select_compatible_for_image(&packages, &target);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].driver_id, "intel");
     }
 }

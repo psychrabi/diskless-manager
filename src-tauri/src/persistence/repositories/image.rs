@@ -3,7 +3,9 @@ use chrono::{DateTime, Utc};
 use sqlx::SqlitePool;
 use std::path::PathBuf;
 
-use crate::core::image::{Image, ImageFormat, ImageKind, OsType};
+use crate::core::image::{
+    DriverRevisionStatus, Image, ImageDriverRevision, ImageFormat, ImageKind, OsType,
+};
 
 #[derive(Clone)]
 pub struct ImageRepository {
@@ -298,6 +300,141 @@ impl ImageRepository {
             is_default: is_default != 0,
             created_at,
             updated_at,
+        })
+    }
+
+    /// Create a driver revision record; duplicate IDs are rejected by the PK.
+    pub async fn insert_driver_revision(&self, revision: &ImageDriverRevision) -> Result<()> {
+        use anyhow::Context;
+        sqlx::query(
+            r#"INSERT INTO windows_image_driver_revisions
+            (id, source_image_id, source_snapshot, revision_image_id, driver_package_ids, driver_set_hash, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+        )
+        .bind(&revision.id)
+        .bind(&revision.source_image_id)
+        .bind(&revision.source_snapshot)
+        .bind(&revision.revision_image_id)
+        .bind(serde_json::to_string(&revision.driver_package_ids).context("failed to encode driver package list")?)
+        .bind(&revision.driver_set_hash)
+        .bind(revision.status.to_string())
+        .bind(revision.created_at.to_rfc3339())
+        .bind(revision.updated_at.to_rfc3339())
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("failed to insert driver revision '{}'", revision.id))?;
+        Ok(())
+    }
+
+    pub async fn list_driver_revisions(
+        &self,
+        source_image_id: &str,
+    ) -> Result<Vec<ImageDriverRevision>> {
+        use anyhow::Context;
+        let rows = sqlx::query_as::<_, (String, String, String, Option<String>, String, String, String, String, String)>(
+            r#"SELECT id, source_image_id, source_snapshot, revision_image_id, driver_package_ids, driver_set_hash, status, created_at, updated_at
+            FROM windows_image_driver_revisions WHERE source_image_id = ? ORDER BY created_at"#,
+        )
+        .bind(source_image_id)
+        .fetch_all(&self.pool)
+        .await
+        .with_context(|| format!("failed to list driver revisions for image '{source_image_id}'"))?;
+        rows.into_iter().map(Self::map_revision_row).collect()
+    }
+
+    pub async fn find_driver_revision_by_hash(
+        &self,
+        source_image_id: &str,
+        driver_set_hash: &str,
+    ) -> Result<Option<ImageDriverRevision>> {
+        use anyhow::Context;
+        let row = sqlx::query_as::<_, (String, String, String, Option<String>, String, String, String, String, String)>(
+            r#"SELECT id, source_image_id, source_snapshot, revision_image_id, driver_package_ids, driver_set_hash, status, created_at, updated_at
+            FROM windows_image_driver_revisions WHERE source_image_id = ? AND driver_set_hash = ? LIMIT 1"#,
+        )
+        .bind(source_image_id)
+        .bind(driver_set_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .with_context(|| format!("failed to look up driver revision for image '{source_image_id}'"))?;
+        row.map(Self::map_revision_row).transpose()
+    }
+
+    /// Transition a revision's lifecycle status; invalid transitions are rejected.
+    pub async fn transition_driver_revision(
+        &self,
+        id: &str,
+        next: DriverRevisionStatus,
+        revision_image_id: Option<&str>,
+    ) -> Result<ImageDriverRevision> {
+        let row = sqlx::query_as::<_, (String, String, String, Option<String>, String, String, String, String, String)>(
+            r#"SELECT id, source_image_id, source_snapshot, revision_image_id, driver_package_ids, driver_set_hash, status, created_at, updated_at
+            FROM windows_image_driver_revisions WHERE id = ?"#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("driver revision '{}' not found", id))?;
+        let mut revision = Self::map_revision_row(row)?;
+        if !revision.can_transition(next) {
+            anyhow::bail!(
+                "invalid driver revision transition from '{}' to '{}'",
+                revision.status,
+                next
+            );
+        }
+        revision.status = next;
+        if let Some(image_id) = revision_image_id {
+            revision.revision_image_id = Some(image_id.to_string());
+        }
+        revision.updated_at = Utc::now();
+        sqlx::query(
+            r#"UPDATE windows_image_driver_revisions SET status = ?, revision_image_id = ?, updated_at = ? WHERE id = ?"#,
+        )
+        .bind(revision.status.to_string())
+        .bind(&revision.revision_image_id)
+        .bind(revision.updated_at.to_rfc3339())
+        .bind(&revision.id)
+        .execute(&self.pool)
+        .await?;
+        Ok(revision)
+    }
+
+    fn map_revision_row(
+        row: (
+            String,
+            String,
+            String,
+            Option<String>,
+            String,
+            String,
+            String,
+            String,
+            String,
+        ),
+    ) -> Result<ImageDriverRevision> {
+        let (
+            id,
+            source_image_id,
+            source_snapshot,
+            revision_image_id,
+            package_ids,
+            hash,
+            status,
+            created_at,
+            updated_at,
+        ) = row;
+        Ok(ImageDriverRevision {
+            id,
+            source_image_id,
+            source_snapshot,
+            revision_image_id,
+            driver_package_ids: serde_json::from_str(&package_ids)
+                .context("invalid driver package list")?,
+            driver_set_hash: hash,
+            status: status.parse::<DriverRevisionStatus>()?,
+            created_at: parse_image_datetime(&created_at)?,
+            updated_at: parse_image_datetime(&updated_at)?,
         })
     }
 }
