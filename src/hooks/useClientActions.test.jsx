@@ -5,11 +5,13 @@ import { useClientActions } from "/home/rabistha/Documents/Projects/diskless-man
 const mocks = vi.hoisted(() => ({
   confirm: vi.fn(), success: vi.fn(), error: vi.fn(), info: vi.fn(),
   updateClient: vi.fn(), deleteClient: vi.fn(), createSnapshot: vi.fn(),
+  requestInventoryBoot: vi.fn(),
 }));
 vi.mock("@/contexts/confirmDialog", () => ({ useConfirm: () => mocks.confirm }));
 vi.mock("@/store/useToastStore", () => ({ useToastStore: () => ({ success: mocks.success, error: mocks.error, info: mocks.info }) }));
 vi.mock("../api/modules/clients", () => ({ updateClient: mocks.updateClient, deleteClient: mocks.deleteClient }));
 vi.mock("../api/modules/images", () => ({ createSnapshot: mocks.createSnapshot }));
+vi.mock("../api/modules/networkDrivers", () => ({ requestInventoryBoot: mocks.requestInventoryBoot }));
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -45,4 +47,34 @@ it("leaves Super enabled when saving the snapshot fails", async () => {
 
   expect(mocks.updateClient).not.toHaveBeenCalled();
   expect(mocks.error).toHaveBeenCalledWith("Client Management", "Failed to save Super changes or return to writeback mode: snapshot failed");
+});
+
+it("requests an inventory boot after confirmation", async () => {
+  mocks.confirm.mockResolvedValue(true);
+  mocks.requestInventoryBoot.mockResolvedValue({ message: "Inventory boot requested for 'PC009'" });
+  const fetchData = vi.fn();
+  const closeContextMenu = vi.fn();
+  const { result } = renderHook(() => useClientActions(fetchData, closeContextMenu));
+
+  await act(() => result.current.inventoryBoot({ id: "client-9", name: "PC009" }));
+
+  expect(mocks.requestInventoryBoot).toHaveBeenCalledWith("client-9");
+  expect(mocks.success).toHaveBeenCalledWith("Client Management", "Inventory boot requested for 'PC009'");
+  expect(fetchData).toHaveBeenCalledOnce();
+  expect(closeContextMenu).toHaveBeenCalledOnce();
+});
+
+it("surfaces inventory boot failures without refreshing", async () => {
+  mocks.confirm.mockResolvedValue(true);
+  mocks.requestInventoryBoot.mockRejectedValue(new Error("already provisioned"));
+  const fetchData = vi.fn();
+  const { result } = renderHook(() => useClientActions(fetchData, vi.fn()));
+
+  await act(() => result.current.inventoryBoot({ id: "client-9", name: "PC009" }));
+
+  expect(mocks.error).toHaveBeenCalledWith(
+    "Client Management",
+    "Failed to execute inventoryBoot: already provisioned"
+  );
+  expect(fetchData).not.toHaveBeenCalled();
 });

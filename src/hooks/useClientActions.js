@@ -2,6 +2,7 @@ import { useConfirm } from "@/contexts/confirmDialog";
 import { useToastStore } from "@/store/useToastStore";
 import { useCallback } from "react";
 import { updateClient, deleteClient } from "../api/modules/clients";
+import { requestInventoryBoot } from "../api/modules/networkDrivers";
 import { createSnapshot } from "../api/modules/images";
 
 export const useClientActions = (
@@ -211,6 +212,21 @@ export const useClientActions = (
     [handleAction, showError]
   );
 
+  const handleInventoryBoot = useCallback(
+    (client) =>
+      handleAction(
+        client,
+        'inventoryBoot',
+        'Request Inventory Boot',
+        `"${client.name}" will boot WinPE on its next PXE boot to record its network adapter IDs, then return to the normal boot menu. Continue?`,
+        'Request Inventory Boot',
+        () => requestInventoryBoot(client.id),
+        `Inventory boot requested for '${client.name}'. Reboot the machine to collect its NIC inventory.`,
+        'Inventory boot request cancelled.'
+      ),
+    [handleAction]
+  );
+
   const handleDelete = useCallback(
     async (client) => {
       if (!client) return;
@@ -349,6 +365,7 @@ export const useClientActions = (
     remote: handleRemote,
     reset: handleReset,
     resetToClean: handleResetToClean,
+    inventoryBoot: handleInventoryBoot,
     delete: handleDelete,
     enableSuper: handleEnableSuper,
     disableSuper: handleDisableSuper,

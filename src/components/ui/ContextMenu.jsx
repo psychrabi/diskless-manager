@@ -1,6 +1,7 @@
 import {
   HardDrive,
   History,
+  Network,
   RefreshCw,
   Settings,
   ShieldAlert,
@@ -86,6 +87,7 @@ export const ContextMenu = ({
 
   const isOnline = targetClient?.status === "Online";
   const isSuper = targetClient?.mode === "super";
+  const isUnprovisioned = targetClient?.master === "pending";
   const isPersistent =
     targetClient?.snapshot && targetClient?.keep_writeback && !isSuper;
   const isNonPersistent =
@@ -150,6 +152,15 @@ export const ContextMenu = ({
               label="Edit Client"
               onClick={() => handleAction(actions.edit)}
             />
+
+            {isUnprovisioned && (
+              <MenuItem
+                icon={Network}
+                label="Request Inventory Boot"
+                variant="info"
+                onClick={() => handleAction(actions.inventoryBoot)}
+              />
+            )}
 
             {isPersistent && (
               <MenuItem
