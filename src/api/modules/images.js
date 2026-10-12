@@ -63,3 +63,7 @@ export async function setDefaultImage(masterName) {
     },
   );
 }
+
+export async function getDriverReadiness(imageId) {
+  return apiRequest(`/api/images/${encodeURIComponent(imageId)}/driver-readiness`);
+}

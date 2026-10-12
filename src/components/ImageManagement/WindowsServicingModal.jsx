@@ -1,5 +1,5 @@
-import { listMasters } from "@/api/modules/images";
-import { listNetworkDrivers } from "@/api/modules/networkDrivers";
+import { getDriverReadiness, listMasters } from "@/api/modules/images";
+import { listBootTests, listDriverRevisions, listNetworkDrivers } from "@/api/modules/networkDrivers";
 import {
   getRemoteWindowsServicingCapabilities,
   prepareWindowsImageManaged,
@@ -96,6 +96,9 @@ export default function WindowsServicingModal({ isOpen, onClose, onPrepared }) {
   const [drivers, setDrivers] = useState([]);
   const [driversLoading, setDriversLoading] = useState(true);
   const [selectedDriverIds, setSelectedDriverIds] = useState([]);
+  const [readiness, setReadiness] = useState(null);
+  const [revisions, setRevisions] = useState([]);
+  const [testStates, setTestStates] = useState({});
   const { success, error } = useToastStore();
   const confirm = useConfirm();
 
@@ -130,6 +133,43 @@ export default function WindowsServicingModal({ isOpen, onClose, onPrepared }) {
       active = false;
     };
   }, [isOpen, error]);
+
+  useEffect(() => {
+    if (!isOpen || imageMode !== "managed" || !form.imageId) {
+      return undefined;
+    }
+    let active = true;
+    getDriverReadiness(form.imageId)
+      .then((value) => {
+        if (active) setReadiness(value);
+      })
+      .catch(() => {
+        if (active) setReadiness(null);
+      });
+    listDriverRevisions(form.imageId)
+      .then(async (items) => {
+        if (!active) return;
+        const list = Array.isArray(items) ? items : [];
+        setRevisions(list);
+        const states = {};
+        for (const revision of list.filter((item) => item.status === "awaiting-test")) {
+          try {
+            const tests = await listBootTests(revision.id);
+            const latest = Array.isArray(tests) ? tests[tests.length - 1] : null;
+            states[revision.id] = latest?.status ?? "untested";
+          } catch {
+            states[revision.id] = "unknown";
+          }
+        }
+        if (active) setTestStates(states);
+      })
+      .catch(() => {
+        if (active) setRevisions([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [isOpen, imageMode, form.imageId]);
 
   const canRun = useMemo(() => {
     const driverReady =
@@ -429,6 +469,7 @@ export default function WindowsServicingModal({ isOpen, onClose, onPrepared }) {
             <div className="grid gap-3 md:grid-cols-2">
               <Select label="Source Windows image" value={form.imageId} disabled={preparing} onChange={(event) => {
                 update("imageId", event.target.value); update("snapshot", "");
+                setReadiness(null); setRevisions([]); setTestStates({});
               }}>
                 <option value="">Select an image</option>
                 {images.map((image) => <option key={image.id} value={image.id}>{image.name}</option>)}
@@ -450,6 +491,25 @@ export default function WindowsServicingModal({ isOpen, onClose, onPrepared }) {
               <p className="text-xs text-muted-foreground md:col-span-2">
                 Choose a snapshot that already boots from iSCSI. Preparation uses a separate clone. Dry Run deletes that clone; committing saves a new image and snapshot.
               </p>
+              {form.imageId && (
+                <div className="rounded-md border border-border/60 p-3 text-xs md:col-span-2" data-testid="driver-readiness">
+                  {readiness ? (
+                    <p className="text-muted-foreground">
+                      Latest tested revision: {readiness.latest_ready_revision ? readiness.latest_ready_revision.id.slice(0, 8) : "none"}
+                      {" · "}awaiting test: {readiness.candidate_count}
+                      {" · "}failed: {readiness.failed_count}
+                    </p>
+                  ) : (
+                    <p className="text-muted-foreground">Driver revision status unavailable.</p>
+                  )}
+                  {revisions.filter((item) => item.status === "awaiting-test").map((item) => (
+                    <p key={item.id} className="mt-1 text-muted-foreground">
+                      Candidate {item.id.slice(0, 8)}: boot test {testStates[item.id] ?? "…"}.
+                      New clients stay on the latest tested revision until it passes.
+                    </p>
+                  ))}
+                </div>
+              )}
               {worker && !worker.iscsi_volume_servicing && <p role="alert" className="text-sm text-destructive md:col-span-2">Update the Windows helper to enable managed image servicing.</p>}
             </div>
           ) : (

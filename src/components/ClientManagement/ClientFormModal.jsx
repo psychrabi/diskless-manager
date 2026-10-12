@@ -418,6 +418,13 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
                 ))}
               </NativeSelect>
               <FieldError>{errors.master?.message}</FieldError>
+              {masters?.find((m) => m.name === selectedMaster)?.os_type === "windows" && !client?.id && (
+                <p className="text-xs text-muted-foreground" data-testid="windows-driver-hint">
+                  Windows clients need a preboot NIC inventory and a boot-tested driver revision.
+                  Enroll the machine first, request an inventory boot from its row, then create it —
+                  it will use the newest tested revision automatically.
+                </p>
+              )}
             </FieldContent>
           </Field>
 

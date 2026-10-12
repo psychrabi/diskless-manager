@@ -8,9 +8,9 @@ use crate::{
         iscsi::{ChapCredentials, IscsiProvisioner, IscsiTargetSpec},
         pxe::{
             windows_iscsi_servicing::{WindowsIscsiConnection, SERVICING_IQN_PREFIX},
-            RemoteWindowsCapabilitiesRequest, RemoteWindowsServicer, RemoteWindowsServicingRequest,
-            StagedDriverPackage, WindowsBootArmConfig, WindowsImagePreparationRequest,
-            WindowsImagePreparationResult,
+            NetworkDriverPackage, RemoteWindowsCapabilitiesRequest, RemoteWindowsServicer,
+            RemoteWindowsServicingRequest, StagedDriverPackage, WindowsBootArmConfig,
+            WindowsImagePreparationRequest, WindowsImagePreparationResult,
         },
     },
     persistence::repositories::image::ImageRepository,
@@ -82,6 +82,77 @@ pub struct ManagedWindowsPreparationResult {
     pub uploaded_bytes: u64,
     pub staging_cleanup_succeeded: bool,
     pub revision: Option<ImageDriverRevision>,
+}
+
+/// Assignment of a new client to a tested Windows image revision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowsAssignment {
+    pub revision_id: String,
+    pub revision_image_id: String,
+}
+
+/// Decide the Windows image for a new client.
+///
+/// - `inventory_boot_ids` is `None` when no preboot record exists for the
+///   client's MAC: creation is refused with an actionable message instead of
+///   silently booting an untested image.
+/// - `ready_revisions` must be newest-first; the newest revision whose driver
+///   set covers a Boot NIC ID wins, preserving the last known-good revision
+///   for rollback by never mutating older records.
+/// - A revision with an empty driver set never matches: the Boot NIC driver
+///   is required, secondary adapters alone do not qualify.
+///
+/// Update paths never call this: existing clients stay pinned to the image
+/// they were created with.
+pub fn select_windows_assignment(
+    client_mac: &str,
+    inventory_boot_ids: Option<&[String]>,
+    ready_revisions: &[ImageDriverRevision],
+    catalog: &[NetworkDriverPackage],
+) -> Result<Option<WindowsAssignment>> {
+    let Some(boot_ids) = inventory_boot_ids else {
+        bail!(
+            "no preboot NIC inventory for client MAC '{client_mac}'; request a WinPE inventory boot for this machine before creating it as a Windows client"
+        );
+    };
+    if ready_revisions.is_empty() {
+        bail!(
+            "no tested Windows image revision is available; build a candidate revision and pass its boot test before creating Windows clients"
+        );
+    }
+    let by_id: std::collections::HashMap<&str, &NetworkDriverPackage> = catalog
+        .iter()
+        .map(|package| (package.id.as_str(), package))
+        .collect();
+    for revision in ready_revisions {
+        let covers = revision.driver_package_ids.iter().any(|id| {
+            by_id.get(id.as_str()).is_some_and(|package| {
+                package
+                    .hardware_ids
+                    .iter()
+                    .chain(package.compatible_ids.iter())
+                    .any(|candidate| {
+                        boot_ids
+                            .iter()
+                            .any(|boot| boot.eq_ignore_ascii_case(&candidate.replace('/', "\\")))
+                    })
+            })
+        });
+        if !covers {
+            continue;
+        }
+        let Some(image_id) = revision.revision_image_id.clone() else {
+            continue;
+        };
+        return Ok(Some(WindowsAssignment {
+            revision_id: revision.id.clone(),
+            revision_image_id: image_id,
+        }));
+    }
+    bail!(
+        "no tested driver matches Boot NIC hardware ID(s) {}; import a signed network-driver package for this hardware and pass a boot test first",
+        boot_ids.join(", ")
+    )
 }
 
 pub async fn prepare_managed(
@@ -825,5 +896,95 @@ mod tests {
         assert!(start_boot_test(&pool, &revision.id, "test-1", "")
             .await
             .is_err());
+    }
+    fn gate_package(id: &str, hardware_ids: &[&str]) -> NetworkDriverPackage {
+        NetworkDriverPackage {
+            id: id.to_string(),
+            name: id.to_string(),
+            service_name: None,
+            driver_name: None,
+            pnp_device_id: None,
+            guid: None,
+            mac_address: None,
+            inf_files: vec!["nic.inf".to_string()],
+            provider: None,
+            version: None,
+            architectures: vec!["x64".to_string()],
+            hardware_ids: hardware_ids.iter().map(|value| value.to_string()).collect(),
+            compatible_ids: Vec::new(),
+            service_names: Vec::new(),
+            catalog_files: vec!["nic.cat".to_string()],
+            imported_at: chrono::Utc::now(),
+        }
+    }
+
+    fn gate_revision(id: &str, packages: &[&str], image: Option<&str>) -> ImageDriverRevision {
+        let now = chrono::Utc::now();
+        let package_ids = packages
+            .iter()
+            .map(|value| value.to_string())
+            .collect::<Vec<_>>();
+        ImageDriverRevision {
+            id: id.to_string(),
+            source_image_id: "img".to_string(),
+            source_snapshot: "snap".to_string(),
+            revision_image_id: image.map(str::to_string),
+            driver_set_hash: ImageDriverRevision::hash_driver_set(&package_ids),
+            driver_package_ids: package_ids,
+            status: DriverRevisionStatus::Ready,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn assignment_requires_inventory_and_names_the_mac() {
+        let catalog = vec![gate_package("pkg", &["PCI\\VEN_8086&DEV_15F3"])];
+        let revisions = vec![gate_revision("rev-1", &["pkg"], Some("img-1"))];
+        let error =
+            select_windows_assignment("02:00:00:00:00:09", None, &revisions, &catalog).unwrap_err();
+        assert!(error.to_string().contains("02:00:00:00:00:09"), "{error:#}");
+        assert!(error.to_string().contains("inventory"), "{error:#}");
+    }
+
+    #[test]
+    fn assignment_prefers_newest_covering_revision() {
+        let catalog = vec![
+            gate_package("old-pkg", &["PCI\\VEN_8086&DEV_15F3"]),
+            gate_package("new-pkg", &["PCI\\VEN_8086&DEV_15F3"]),
+        ];
+        let revisions = vec![
+            gate_revision("rev-new", &["new-pkg"], Some("img-new")),
+            gate_revision("rev-old", &["old-pkg"], Some("img-old")),
+        ];
+        let boot = vec!["PCI\\VEN_8086&DEV_15F3".to_string()];
+        let assignment =
+            select_windows_assignment("mac", Some(&boot), &revisions, &catalog).unwrap();
+        assert_eq!(
+            assignment,
+            Some(WindowsAssignment {
+                revision_id: "rev-new".to_string(),
+                revision_image_id: "img-new".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn assignment_refuses_untested_boot_nic_with_hardware_id() {
+        let catalog = vec![gate_package("pkg", &["PCI\\VEN_ABCD&DEV_EF01"])];
+        let revisions = vec![gate_revision("rev-1", &["pkg"], Some("img-1"))];
+        let boot = vec!["PCI\\VEN_8086&DEV_15F3".to_string()];
+        let error =
+            select_windows_assignment("mac", Some(&boot), &revisions, &catalog).unwrap_err();
+        assert!(error.to_string().contains("VEN_8086"), "{error:#}");
+        // A revision without a published image or without packages never matches.
+        let empty = vec![
+            gate_revision("rev-noimg", &["pkg"], None),
+            gate_revision("rev-empty", &[], Some("img-empty")),
+        ];
+        assert!(select_windows_assignment("mac", Some(&boot), &empty, &catalog).is_err());
+        // No ready revision at all is a distinct actionable refusal.
+        let error = select_windows_assignment("mac", Some(&boot), &[], &catalog).unwrap_err();
+        assert!(error.to_string().contains("no tested"), "{error:#}");
     }
 }

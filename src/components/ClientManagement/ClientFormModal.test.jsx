@@ -86,3 +86,21 @@ it("disables credential rotation for regular users", async () => {
   });
   expect(screen.getByRole("button", { name: "Rotate secret" })).toBeDisabled();
 });
+
+it("explains the inventory requirement for a new Windows client", async () => {
+  getClientNvmeOfStatus.mockResolvedValue(null);
+  const masters = [
+    { name: "linux", os_type: "linux", snapshots: [] },
+    { name: "windows11", os_type: "windows", snapshots: [] },
+  ];
+  render(
+    <MemoryRouter>
+      <ClientFormModal client={null} masters={masters} isOpen onClose={() => {}} refresh={() => {}} />
+    </MemoryRouter>,
+  );
+  expect(screen.queryByTestId("windows-driver-hint")).not.toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("Select Image"), { target: { value: "windows11" } });
+  expect(await screen.findByTestId("windows-driver-hint")).toHaveTextContent(/preboot NIC inventory/);
+  fireEvent.change(screen.getByLabelText("Select Image"), { target: { value: "linux" } });
+  expect(screen.queryByTestId("windows-driver-hint")).not.toBeInTheDocument();
+});

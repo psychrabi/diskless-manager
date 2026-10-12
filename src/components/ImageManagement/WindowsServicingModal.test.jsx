@@ -2,8 +2,8 @@ import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import WindowsServicingModal from "./WindowsServicingModal";
 const mocks = vi.hoisted(() => ({ capabilities: vi.fn(), prepare: vi.fn(), success: vi.fn(), error: vi.fn(), confirm: vi.fn() }));
-vi.mock("@/api/modules/images", () => ({ listMasters: async () => [{id:"win",name:"diskless/image-disk/windows11",os_type:"windows",status:"ready",snapshots:[{name:"installed"}]}] }));
-vi.mock("@/api/modules/networkDrivers", () => ({listNetworkDrivers: async () => [{id:"netkvm",name:"VirtIO Ethernet"}]}));
+vi.mock("@/api/modules/images", () => ({ listMasters: async () => [{id:"win",name:"diskless/image-disk/windows11",os_type:"windows",status:"ready",snapshots:[{name:"installed"}]}], getDriverReadiness: async () => ({image_id:"win",latest_ready_revision:{id:"rev-ready-1"},candidate_count:1,failed_count:0}) }));
+vi.mock("@/api/modules/networkDrivers", () => ({listNetworkDrivers: async () => [{id:"netkvm",name:"VirtIO Ethernet"}], listDriverRevisions: async () => [{id:"rev-candidate-1",status:"awaiting-test"}], listBootTests: async () => [{id:"test-1",status:"candidate"}]}));
 vi.mock("@/api/modules/windowsServicing", () => ({getRemoteWindowsServicingCapabilities: mocks.capabilities, prepareWindowsImageManaged: mocks.prepare, prepareWindowsImageRemote: vi.fn(), prepareWindowsImageRemoteCatalog: vi.fn()}));
 vi.mock("@/store/useToastStore", () => ({useToastStore: () => ({success:mocks.success,error:mocks.error})}));
 vi.mock("@/contexts/confirmDialog", () => ({useConfirm: () => mocks.confirm}));
@@ -41,4 +41,10 @@ it("requires a helper that supports managed volumes",async () => {
   expect(screen.getByRole("button",{name:"Prepare and Commit"})).toBeDisabled();
   expect(screen.getByRole("alert")).toHaveTextContent("Update the Windows helper");
   expect(mocks.prepare).not.toHaveBeenCalled();
+});it("shows driver revision readiness for the selected image", async () => {
+  render(<WindowsServicingModal isOpen/>);
+  await screen.findByText("diskless/image-disk/windows11");
+  fireEvent.change(screen.getByLabelText("Source Windows image"),{target:{value:"win"}});
+  expect(await screen.findByTestId("driver-readiness")).toHaveTextContent(/Latest tested revision: rev-read/);
+  expect(await screen.findByText(/Candidate rev-cand.*: boot test candidate/)).toBeInTheDocument();
 });

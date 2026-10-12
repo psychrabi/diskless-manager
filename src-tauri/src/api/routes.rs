@@ -31,10 +31,10 @@ use crate::api::handlers::{
     dhcp_reconciliation::{inspect_dhcp_reconciliation, repair_dhcp_reconciliation},
     disks::{create_pool, list_disks, pool_exists, rename_disk},
     images::{
-        clone_image, create_image, create_snapshot, delete_image, delete_snapshot, get_image,
-        get_image_info, get_snapshots, import_existing_images, import_image, list_images,
-        list_masters, rename_image, resize_image, rollback_snapshot, set_default_image,
-        update_image, verify_image,
+        clone_image, create_image, create_snapshot, delete_image, delete_snapshot,
+        get_driver_readiness, get_image, get_image_info, get_snapshots, import_existing_images,
+        import_image, list_images, list_masters, rename_image, resize_image, rollback_snapshot,
+        set_default_image, update_image, verify_image,
     },
     license::{activate_license_handler, get_license_info_handler},
     logs::{clear_logs, get_logs},
@@ -260,6 +260,10 @@ pub fn create_app(state: crate::state::AppState) -> Router {
             post(rollback_snapshot),
         )
         .route("/api/images/{id}/info", get(get_image_info))
+        .route(
+            "/api/images/{id}/driver-readiness",
+            get(get_driver_readiness),
+        )
         .route("/api/images/{id}/resize", post(resize_image))
         .route("/api/images/{id}/verify", post(verify_image))
         .route("/api/images/{id}/set-default", post(set_default_image))

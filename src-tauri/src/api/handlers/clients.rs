@@ -439,6 +439,92 @@ async fn persist_client_runtime_state(
 // Client CRUD
 // ============================================================================
 
+/// Enforce the Windows boot gate on client creation.
+///
+/// Resolves `request.master`/`request.snapshot` in place: a Windows master
+/// without a tested Boot NIC match refuses creation with an actionable
+/// hardware-ID message, while a covered client is assigned the newest `ready`
+/// revision. Non-Windows masters, unknown image names, and already-pinned
+/// tested revisions pass through unchanged. Must run before any storage or
+/// iPXE side effect.
+async fn gate_windows_assignment(
+    state: &AppState,
+    settings: &crate::core::config::Settings,
+    request: &mut CreateClientRequest,
+) -> Result<(), String> {
+    let repository = ImageRepository::new(state.db_pool.clone());
+    let Ok(Some(master)) = repository.get(&request.master).await else {
+        return Ok(());
+    };
+    if master.os_type != crate::core::image::OsType::Windows {
+        return Ok(());
+    }
+    // An explicitly chosen tested revision stays pinned as requested.
+    let pinned: Option<(String,)> = sqlx::query_as(
+        "SELECT id FROM windows_image_driver_revisions WHERE revision_image_id = ? AND status = 'ready' LIMIT 1",
+    )
+    .bind(&master.id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|error| format!("failed to inspect driver revisions: {error}"))?;
+    if pinned.is_some() {
+        return Ok(());
+    }
+    let mac = crate::domain::MacAddress::parse(&request.mac)
+        .map_err(|_| "client MAC address is invalid".to_string())?;
+    let inventory: Option<(String,)> =
+        sqlx::query_as("SELECT boot_nic_ids FROM windows_nic_inventory WHERE mac = ?")
+            .bind(mac.as_str())
+            .fetch_optional(&state.db_pool)
+            .await
+            .map_err(|error| format!("failed to inspect NIC inventory: {error}"))?;
+    let boot_ids: Option<Vec<String>> = inventory
+        .map(|(raw,)| serde_json::from_str(&raw))
+        .transpose()
+        .map_err(|error| format!("stored NIC inventory is invalid: {error}"))?;
+    let mut revisions = repository
+        .list_driver_revisions(&master.id)
+        .await
+        .map_err(|error| format!("failed to inspect driver revisions: {error:#}"))?;
+    revisions.retain(|revision| {
+        revision.status == crate::core::image::DriverRevisionStatus::Ready
+            && revision.revision_image_id.is_some()
+    });
+    revisions.reverse();
+    let root = std::path::PathBuf::from(&settings.http.root_dir);
+    let catalog = tokio::task::spawn_blocking(move || {
+        crate::infrastructure::pxe::NetworkDriverInjectionPlugin::new(root).list()
+    })
+    .await
+    .map_err(|error| format!("driver catalog check failed: {error}"))?
+    .map_err(|error| format!("driver catalog check failed: {error:#}"))?;
+    let assignment = crate::application::windows_servicing::select_windows_assignment(
+        mac.as_str(),
+        boot_ids.as_deref(),
+        &revisions,
+        &catalog,
+    )
+    .map_err(|error| error.to_string())?;
+    if let Some(assignment) = assignment {
+        let Some(image) = repository
+            .get(&assignment.revision_image_id)
+            .await
+            .map_err(|error| format!("tested revision image is missing: {error:#}"))?
+        else {
+            return Err("tested revision image is missing".to_string());
+        };
+        tracing::info!(
+            client = %request.name,
+            revision = %assignment.revision_id,
+            image = %image.name,
+            "assigning new Windows client to the newest tested revision"
+        );
+        request.master = image.name;
+        request.snapshot = None;
+    }
+    Ok(())
+}
+
 pub async fn create_client(
     State(state): State<AppState>,
     Json(request): Json<CreateClientRequest>,
@@ -457,6 +543,27 @@ pub async fn create_client(
     info!("Creating client: {:?}", request);
 
     let settings = state.settings.read().await.clone();
+
+    // Windows boot gate: a new Windows client must match a preboot Boot NIC
+    // record against a boot-tested revision. This runs before any storage or
+    // iPXE side effect, so a refused client creates nothing. Existing
+    // clients stay pinned: update paths never re-resolve the image.
+    let mut request = request;
+    gate_windows_assignment(&state, &settings, &mut request)
+        .await
+        .map_err(|error| {
+            error!(
+                "Windows assignment gate refused client '{}': {}",
+                request.name, error
+            );
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(ErrorResponse {
+                    status: StatusCode::UNPROCESSABLE_ENTITY.as_u16(),
+                    error,
+                }),
+            )
+        })?;
 
     // ------------------------------------------------------------------------
     // Build desired storage state.

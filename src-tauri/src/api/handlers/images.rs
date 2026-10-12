@@ -89,6 +89,62 @@ pub async fn list_masters(
     Ok(Json(masters_with_snapshots))
 }
 
+/// Driver readiness summary for one source image: the newest `ready`
+/// revision new Windows clients receive, plus candidate/failed counts for
+/// the servicing and boot-test workflow.
+#[derive(Debug, Serialize)]
+pub struct DriverReadiness {
+    pub image_id: String,
+    pub latest_ready_revision: Option<crate::core::image::ImageDriverRevision>,
+    pub candidate_count: usize,
+    pub failed_count: usize,
+}
+
+pub async fn get_driver_readiness(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<DriverReadiness>, StatusCode> {
+    let repository = ImageRepository::new(state.db_pool.clone());
+    let image = repository.get(&id).await.map_err(|error| {
+        log::error!("Failed to get image '{id}': {error}");
+        StatusCode::NOT_FOUND
+    })?;
+    let image = image.ok_or(StatusCode::NOT_FOUND)?;
+    let mut revisions = repository
+        .list_driver_revisions(&image.id)
+        .await
+        .map_err(|error| {
+            log::error!("Failed to list driver revisions for '{id}': {error:#}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    revisions.sort_by_key(|revision| revision.created_at);
+    let latest_ready_revision = revisions
+        .iter()
+        .rev()
+        .find(|revision| revision.status == crate::core::image::DriverRevisionStatus::Ready)
+        .cloned();
+    let candidate_count = revisions
+        .iter()
+        .filter(|revision| {
+            matches!(
+                revision.status,
+                crate::core::image::DriverRevisionStatus::Preparing
+                    | crate::core::image::DriverRevisionStatus::AwaitingTest
+            )
+        })
+        .count();
+    let failed_count = revisions
+        .iter()
+        .filter(|revision| revision.status == crate::core::image::DriverRevisionStatus::Failed)
+        .count();
+    Ok(Json(DriverReadiness {
+        image_id: image.id,
+        latest_ready_revision,
+        candidate_count,
+        failed_count,
+    }))
+}
+
 pub async fn get_image(
     State(state): State<AppState>,
     Path(id): Path<String>,
