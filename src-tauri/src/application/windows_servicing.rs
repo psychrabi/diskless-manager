@@ -96,7 +96,7 @@ pub struct WindowsAssignment {
 /// - `inventory_boot_ids` is `None` when no preboot record exists for the
 ///   client's MAC: creation is refused with an actionable message instead of
 ///   silently booting an untested image.
-/// - `ready_revisions` must be newest-first; the newest revision whose driver
+/// - `ready_revisions` are ordered newest-first internally; the newest revision whose driver
 ///   set covers a Boot NIC ID wins, preserving the last known-good revision
 ///   for rollback by never mutating older records.
 /// - A revision with an empty driver set never matches: the Boot NIC driver
@@ -124,7 +124,9 @@ pub fn select_windows_assignment(
         .iter()
         .map(|package| (package.id.as_str(), package))
         .collect();
-    for revision in ready_revisions {
+    let mut ordered: Vec<&ImageDriverRevision> = ready_revisions.iter().collect();
+    ordered.sort_by_key(|revision| std::cmp::Reverse(revision.created_at));
+    for revision in ordered {
         let covers = revision.driver_package_ids.iter().any(|id| {
             by_id.get(id.as_str()).is_some_and(|package| {
                 package
@@ -919,7 +921,16 @@ mod tests {
     }
 
     fn gate_revision(id: &str, packages: &[&str], image: Option<&str>) -> ImageDriverRevision {
-        let now = chrono::Utc::now();
+        // Deterministic timestamps: fixture order must not decide newness.
+        let now = if id.contains("new") {
+            chrono::DateTime::parse_from_rfc3339("2026-02-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc)
+        } else {
+            chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc)
+        };
         let package_ids = packages
             .iter()
             .map(|value| value.to_string())

@@ -28,7 +28,7 @@ it("lists boot tests for a candidate revision", async () => {
   await listBootTests("rev-1");
 
   expect(fetch).toHaveBeenCalledWith(
-    "/api/pxe/windows/boot-tests?source_image_id=rev-1",
+    "/api/pxe/windows/boot-tests?revision_id=rev-1",
     expect.anything(),
   );
 });

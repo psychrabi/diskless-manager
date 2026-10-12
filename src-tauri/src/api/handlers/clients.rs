@@ -451,7 +451,7 @@ async fn gate_windows_assignment(
     state: &AppState,
     settings: &crate::core::config::Settings,
     request: &mut CreateClientRequest,
-) -> Result<(), String> {
+) -> Result<(), (StatusCode, String)> {
     let repository = ImageRepository::new(state.db_pool.clone());
     let Ok(Some(master)) = repository.get(&request.master).await else {
         return Ok(());
@@ -466,26 +466,45 @@ async fn gate_windows_assignment(
     .bind(&master.id)
     .fetch_optional(&state.db_pool)
     .await
-    .map_err(|error| format!("failed to inspect driver revisions: {error}"))?;
+    .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, format!("failed to inspect driver revisions: {error}")))?;
     if pinned.is_some() {
         return Ok(());
     }
-    let mac = crate::domain::MacAddress::parse(&request.mac)
-        .map_err(|_| "client MAC address is invalid".to_string())?;
+    let mac = crate::domain::MacAddress::parse(&request.mac).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            "client MAC address is invalid".to_string(),
+        )
+    })?;
     let inventory: Option<(String,)> =
         sqlx::query_as("SELECT boot_nic_ids FROM windows_nic_inventory WHERE mac = ?")
             .bind(mac.as_str())
             .fetch_optional(&state.db_pool)
             .await
-            .map_err(|error| format!("failed to inspect NIC inventory: {error}"))?;
+            .map_err(|error| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("failed to inspect NIC inventory: {error}"),
+                )
+            })?;
     let boot_ids: Option<Vec<String>> = inventory
         .map(|(raw,)| serde_json::from_str(&raw))
         .transpose()
-        .map_err(|error| format!("stored NIC inventory is invalid: {error}"))?;
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("stored NIC inventory is invalid: {error}"),
+            )
+        })?;
     let mut revisions = repository
         .list_driver_revisions(&master.id)
         .await
-        .map_err(|error| format!("failed to inspect driver revisions: {error:#}"))?;
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to inspect driver revisions: {error:#}"),
+            )
+        })?;
     revisions.retain(|revision| {
         revision.status == crate::core::image::DriverRevisionStatus::Ready
             && revision.revision_image_id.is_some()
@@ -496,22 +515,40 @@ async fn gate_windows_assignment(
         crate::infrastructure::pxe::NetworkDriverInjectionPlugin::new(root).list()
     })
     .await
-    .map_err(|error| format!("driver catalog check failed: {error}"))?
-    .map_err(|error| format!("driver catalog check failed: {error:#}"))?;
+    .map_err(|error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("driver catalog check failed: {error}"),
+        )
+    })?
+    .map_err(|error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("driver catalog check failed: {error:#}"),
+        )
+    })?;
     let assignment = crate::application::windows_servicing::select_windows_assignment(
         mac.as_str(),
         boot_ids.as_deref(),
         &revisions,
         &catalog,
     )
-    .map_err(|error| error.to_string())?;
+    .map_err(|error| (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()))?;
     if let Some(assignment) = assignment {
         let Some(image) = repository
             .get(&assignment.revision_image_id)
             .await
-            .map_err(|error| format!("tested revision image is missing: {error:#}"))?
+            .map_err(|error| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("tested revision image is missing: {error:#}"),
+                )
+            })?
         else {
-            return Err("tested revision image is missing".to_string());
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "tested revision image is missing".to_string(),
+            ));
         };
         tracing::info!(
             client = %request.name,
@@ -551,15 +588,15 @@ pub async fn create_client(
     let mut request = request;
     gate_windows_assignment(&state, &settings, &mut request)
         .await
-        .map_err(|error| {
+        .map_err(|(status, error)| {
             error!(
                 "Windows assignment gate refused client '{}': {}",
                 request.name, error
             );
             (
-                StatusCode::UNPROCESSABLE_ENTITY,
+                status,
                 Json(ErrorResponse {
-                    status: StatusCode::UNPROCESSABLE_ENTITY.as_u16(),
+                    status: status.as_u16(),
                     error,
                 }),
             )
@@ -2087,5 +2124,186 @@ mod error_contract_tests {
         assert!(payload["operation_id"].as_str().is_some());
         assert_eq!(payload["details"], serde_json::json!({}));
         assert!(payload.get("error").is_none());
+    }
+    async fn gate_state(
+        catalog_json: Option<&str>,
+    ) -> (super::AppState, crate::core::config::Settings) {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        for (id, name, os) in [
+            ("img-win", "tank/image/windows", "windows"),
+            ("img-linux", "tank/image/linux", "linux"),
+            ("img-rev", "tank/image/windows-rev", "windows"),
+        ] {
+            sqlx::query("INSERT INTO images (id, name, kind, os_type, size_gb, path, format, status, created_at, updated_at) VALUES (?, ?, 'master', ?, 50, '/dev/zvol/x', 'raw', 'ready', ?, ?)")
+                .bind(id)
+                .bind(name)
+                .bind(os)
+                .bind(&now)
+                .bind(&now)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let mut settings = crate::core::config::Settings::default();
+        let root = tempfile::tempdir().unwrap();
+        if let Some(catalog) = catalog_json {
+            let dir = root.path().join("pxe/network-drivers");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("index.json"), catalog).unwrap();
+        }
+        // Keep the tempdir alive via the settings path is impossible; leak it
+        // for the test lifetime instead.
+        let root = root.keep();
+        settings.http.root_dir = root.to_string_lossy().into_owned();
+        let state = super::AppState {
+            config: crate::config::RuntimeConfig::default(),
+            client_mutations: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+            settings: std::sync::Arc::new(tokio::sync::RwLock::new(settings.clone())),
+            db_pool: pool.clone(),
+            config_path: std::path::PathBuf::new(),
+            client_ips: std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new())),
+            metrics_collector: std::sync::Arc::new(crate::metrics::MetricsCollector::default()),
+            ssh_executor: std::sync::Arc::new(crate::ssh_executor::SshExecutor::new()),
+            application: std::sync::Arc::new(crate::application::ApplicationServices::new(pool)),
+        };
+        (state, settings)
+    }
+
+    fn gate_request(master: &str) -> super::CreateClientRequest {
+        super::CreateClientRequest {
+            name: "PC001".to_string(),
+            mac: "02:00:00:00:00:09".to_string(),
+            ip: "192.0.2.9".to_string(),
+            master: master.to_string(),
+            snapshot: Some("snap".to_string()),
+            keep_writeback: None,
+            use_game_disk: None,
+            game_disks: None,
+            chap_enabled: None,
+            block_store: None,
+            block_device: None,
+            target_iqn: None,
+        }
+    }
+
+    fn catalog_with(package_id: &str, hardware_id: &str) -> String {
+        serde_json::json!({
+            "version": 2,
+            "drivers": [{
+                "id": package_id,
+                "name": package_id,
+                "service_name": null,
+                "driver_name": null,
+                "pnp_device_id": null,
+                "guid": null,
+                "mac_address": null,
+                "inf_files": ["nic.inf"],
+                "provider": null,
+                "version": null,
+                "architectures": ["x64"],
+                "hardware_ids": [hardware_id],
+                "compatible_ids": [],
+                "service_names": [],
+                "catalog_files": ["nic.cat"],
+                "imported_at": "2026-01-01T00:00:00Z",
+            }],
+        })
+        .to_string()
+    }
+
+    async fn ready_revision(pool: &sqlx::SqlitePool, packages: &[&str]) -> String {
+        let owned: Vec<String> = packages.iter().map(|value| value.to_string()).collect();
+        let revision = crate::application::windows_servicing::ensure_managed_revision(
+            pool, "img-win", "snap", &owned,
+        )
+        .await
+        .unwrap();
+        crate::persistence::repositories::image::ImageRepository::new(pool.clone())
+            .transition_driver_revision(
+                &revision.id,
+                crate::core::image::DriverRevisionStatus::AwaitingTest,
+                Some("img-rev"),
+            )
+            .await
+            .unwrap();
+        crate::persistence::repositories::image::ImageRepository::new(pool.clone())
+            .transition_driver_revision(
+                &revision.id,
+                crate::core::image::DriverRevisionStatus::Ready,
+                None,
+            )
+            .await
+            .unwrap();
+        revision.id
+    }
+
+    #[tokio::test]
+    async fn gate_passes_non_windows_and_unknown_masters_untouched() {
+        let (state, settings) = gate_state(None).await;
+        for master in ["tank/image/linux", "tank/image/missing"] {
+            let mut request = gate_request(master);
+            super::gate_windows_assignment(&state, &settings, &mut request)
+                .await
+                .unwrap();
+            assert_eq!(request.master, master);
+            assert_eq!(request.snapshot.as_deref(), Some("snap"));
+        }
+    }
+
+    #[tokio::test]
+    async fn gate_refuses_windows_client_without_inventory_and_creates_nothing() {
+        let (state, settings) = gate_state(None).await;
+        let mut request = gate_request("tank/image/windows");
+        let (status, message) = super::gate_windows_assignment(&state, &settings, &mut request)
+            .await
+            .unwrap_err();
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(message.contains("02:00:00:00:00:09"), "{message}");
+        // Refusal happens before any storage or client side effect.
+        let clients: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM clients")
+            .fetch_one(&state.db_pool)
+            .await
+            .unwrap();
+        assert_eq!(clients, 0);
+    }
+
+    #[tokio::test]
+    async fn gate_assigns_newest_ready_revision_for_covered_boot_nic() {
+        let (state, settings) =
+            gate_state(Some(&catalog_with("pkg-1", "PCI\\VEN_8086&DEV_15F3"))).await;
+        sqlx::query("INSERT INTO windows_nic_inventory (mac, boot_nic_ids, observed_at) VALUES ('02:00:00:00:00:09', '[\"PCI\\\\VEN_8086&DEV_15F3\"]', '2026-01-01T00:00:00Z')")
+            .execute(&state.db_pool)
+            .await
+            .unwrap();
+        ready_revision(&state.db_pool, &["pkg-1"]).await;
+        let mut request = gate_request("tank/image/windows");
+        super::gate_windows_assignment(&state, &settings, &mut request)
+            .await
+            .unwrap();
+        assert_eq!(request.master, "tank/image/windows-rev");
+        assert_eq!(request.snapshot, None);
+    }
+
+    #[tokio::test]
+    async fn gate_names_missing_hardware_id_for_uncovered_boot_nic() {
+        let (state, settings) =
+            gate_state(Some(&catalog_with("pkg-1", "PCI\\VEN_ABCD&DEV_EF01"))).await;
+        sqlx::query("INSERT INTO windows_nic_inventory (mac, boot_nic_ids, observed_at) VALUES ('02:00:00:00:00:09', '[\"PCI\\\\VEN_8086&DEV_15F3\"]', '2026-01-01T00:00:00Z')")
+            .execute(&state.db_pool)
+            .await
+            .unwrap();
+        ready_revision(&state.db_pool, &["pkg-1"]).await;
+        let mut request = gate_request("tank/image/windows");
+        let (status, message) = super::gate_windows_assignment(&state, &settings, &mut request)
+            .await
+            .unwrap_err();
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(message.contains("VEN_8086"), "{message}");
     }
 }

@@ -287,11 +287,16 @@ pub async fn start_boot_test(
     .map_err(operation_error)
 }
 
+#[derive(Debug, Deserialize)]
+pub struct BootTestListQuery {
+    pub revision_id: String,
+}
+
 /// Admin-only listing of boot tests for one candidate revision, newest last.
 pub async fn list_boot_tests(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
-    Query(query): Query<RevisionListQuery>,
+    Query(query): Query<BootTestListQuery>,
 ) -> Result<
     Json<Vec<crate::core::image::RevisionBootTest>>,
     (StatusCode, Json<WindowsServicingError>),
@@ -315,7 +320,7 @@ pub async fn list_boot_tests(
         reported_revision, reported_nic_id, result_at, created_at
         FROM windows_revision_boot_tests WHERE revision_id = ? ORDER BY created_at"#,
     )
-    .bind(&query.source_image_id)
+    .bind(&query.revision_id)
     .fetch_all(&state.db_pool)
     .await
     .map_err(|error| {

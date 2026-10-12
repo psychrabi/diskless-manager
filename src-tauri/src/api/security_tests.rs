@@ -541,7 +541,7 @@ async fn driver_boot_tests_are_admin_only() {
         request(
             &app,
             "GET",
-            "/api/pxe/windows/boot-tests?source_image_id=img",
+            "/api/pxe/windows/boot-tests?revision_id=img",
             &user,
             json!(null)
         )

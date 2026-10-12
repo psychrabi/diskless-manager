@@ -16,7 +16,7 @@ export async function listDriverRevisions(sourceImageId) {
 
 export async function listBootTests(revisionId) {
   return apiRequest(
-    `/api/pxe/windows/boot-tests?source_image_id=${encodeURIComponent(revisionId)}`,
+    `/api/pxe/windows/boot-tests?revision_id=${encodeURIComponent(revisionId)}`,
   );
 }
 
