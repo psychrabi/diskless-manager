@@ -23,6 +23,13 @@ pub struct ClientReport {
     pub windows_version: String,
     pub architecture: String,
     pub boot_nic_ids: Vec<String>,
+    /// Exact candidate image revision under test. Set only on a designated
+    /// test client via the reporter configuration; otherwise absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_revision: Option<String>,
+    /// Boot NIC hardware ID observed for this boot, sent with a test claim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boot_nic_id: Option<String>,
 }
 
 impl ClientReport {
@@ -48,6 +55,11 @@ pub struct ReporterConfig {
     pub client_id: String,
     #[serde(default)]
     pub export_package: bool,
+    /// Candidate revision this client is designated to test. Only set on the
+    /// disposable test client; the server promotes the revision solely when
+    /// this claim matches the open candidate and the iSCSI session is live.
+    #[serde(default)]
+    pub image_revision: Option<String>,
 }
 
 impl ReporterConfig {
@@ -320,7 +332,13 @@ pub fn run_report_client(config_path: &Path) -> Result<()> {
         client_id: config.client_id.clone(),
         windows_version,
         architecture,
-        boot_nic_ids: vec![boot_id],
+        boot_nic_ids: vec![boot_id.clone()],
+        image_revision: config
+            .image_revision
+            .clone()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+        boot_nic_id: Some(boot_id),
     };
     report.validate()?;
 
@@ -559,6 +577,8 @@ mod tests {
     #[test]
     fn report_contract_round_trips_and_validates() {
         let report = ClientReport {
+            image_revision: Some("rev-9".into()),
+            boot_nic_id: Some("PCI\\VEN_8086&DEV_15F3".into()),
             client_id: "client-1".into(),
             windows_version: "Windows 11 23H2".into(),
             architecture: "x64".into(),

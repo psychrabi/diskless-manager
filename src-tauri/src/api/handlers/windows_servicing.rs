@@ -260,6 +260,119 @@ pub struct RevisionListQuery {
     pub source_image_id: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct StartBootTestRequest {
+    pub revision_id: String,
+    pub test_client_id: String,
+    pub expected_nic_id: String,
+}
+
+/// Admin-only designation of the disposable test client for one candidate
+/// revision. Real hardware tests run only on this client; production
+/// assignments never change here.
+pub async fn start_boot_test(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Json(request): Json<StartBootTestRequest>,
+) -> Result<Json<crate::core::image::RevisionBootTest>, (StatusCode, Json<WindowsServicingError>)> {
+    require_admin(&claims)?;
+    crate::application::windows_servicing::start_boot_test(
+        &state.db_pool,
+        &request.revision_id,
+        &request.test_client_id,
+        &request.expected_nic_id,
+    )
+    .await
+    .map(Json)
+    .map_err(operation_error)
+}
+
+/// Admin-only listing of boot tests for one candidate revision, newest last.
+pub async fn list_boot_tests(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Query(query): Query<RevisionListQuery>,
+) -> Result<
+    Json<Vec<crate::core::image::RevisionBootTest>>,
+    (StatusCode, Json<WindowsServicingError>),
+> {
+    require_admin(&claims)?;
+    let rows = sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            String,
+        ),
+    >(
+        r#"SELECT id, revision_id, test_client_id, expected_nic_id, status,
+        reported_revision, reported_nic_id, result_at, created_at
+        FROM windows_revision_boot_tests WHERE revision_id = ? ORDER BY created_at"#,
+    )
+    .bind(&query.source_image_id)
+    .fetch_all(&state.db_pool)
+    .await
+    .map_err(|error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(WindowsServicingError {
+                error: format!("failed to list boot tests: {error}"),
+            }),
+        )
+    })?;
+    let mut tests = Vec::with_capacity(rows.len());
+    for (
+        id,
+        revision_id,
+        test_client_id,
+        expected_nic_id,
+        status,
+        reported_revision,
+        reported_nic_id,
+        result_at,
+        created_at,
+    ) in rows
+    {
+        let parse_time = |value: &str| {
+            chrono::DateTime::parse_from_rfc3339(value)
+                .map(|value| value.with_timezone(&chrono::Utc))
+                .map_err(|error| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(WindowsServicingError {
+                            error: format!("invalid boot test timestamp: {error}"),
+                        }),
+                    )
+                })
+        };
+        tests.push(crate::core::image::RevisionBootTest {
+            id,
+            revision_id,
+            test_client_id,
+            expected_nic_id,
+            status: status.parse().map_err(|error| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(WindowsServicingError {
+                        error: format!("invalid boot test status: {error}"),
+                    }),
+                )
+            })?,
+            reported_revision,
+            reported_nic_id,
+            result_at: result_at.as_deref().map(parse_time).transpose()?,
+            created_at: parse_time(&created_at)?,
+        });
+    }
+    Ok(Json(tests))
+}
+
 /// Admin-only listing of driver revision records for one source image, newest
 /// last. Existing client assignments stay pinned; only the boot-test gate
 /// moves a candidate to `ready` for new clients.

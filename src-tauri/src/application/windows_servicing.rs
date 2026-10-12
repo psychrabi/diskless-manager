@@ -357,6 +357,158 @@ pub async fn mark_revision_awaiting_test(
         .await
 }
 
+/// Start a boot test for a candidate revision on its designated test client.
+///
+/// The revision must be `awaiting-test` and the client registered. Starting
+/// never changes production client assignments; it only records which
+/// machine may promote the candidate by booting it.
+pub async fn start_boot_test(
+    pool: &sqlx::SqlitePool,
+    revision_id: &str,
+    test_client_id: &str,
+    expected_nic_id: &str,
+) -> Result<crate::core::image::RevisionBootTest> {
+    use crate::core::image::{BootTestStatus, RevisionBootTest};
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT status FROM windows_image_driver_revisions WHERE id = ?")
+            .bind(revision_id)
+            .fetch_optional(pool)
+            .await
+            .with_context(|| format!("failed to inspect revision '{revision_id}'"))?;
+    let Some((status,)) = row else {
+        bail!("driver revision '{revision_id}' not found");
+    };
+    if status != DriverRevisionStatus::AwaitingTest.to_string() {
+        bail!("only an awaiting-test revision can start a boot test (revision '{revision_id}' is '{status}')");
+    }
+    let client: Option<(String,)> = sqlx::query_as("SELECT id FROM clients WHERE id = ?")
+        .bind(test_client_id)
+        .fetch_optional(pool)
+        .await
+        .with_context(|| format!("failed to inspect test client '{test_client_id}'"))?;
+    if client.is_none() {
+        bail!("test client '{test_client_id}' is not registered");
+    }
+    let expected = expected_nic_id.trim().replace('/', "\\");
+    if expected.is_empty() || expected.len() > 128 {
+        bail!("a valid expected Boot NIC hardware ID is required");
+    }
+    let now = chrono::Utc::now();
+    let test = RevisionBootTest {
+        id: Uuid::new_v4().to_string(),
+        revision_id: revision_id.to_string(),
+        test_client_id: test_client_id.to_string(),
+        expected_nic_id: expected,
+        status: BootTestStatus::Candidate,
+        reported_revision: None,
+        reported_nic_id: None,
+        result_at: None,
+        created_at: now,
+    };
+    sqlx::query(
+        r#"INSERT INTO windows_revision_boot_tests
+        (id, revision_id, test_client_id, expected_nic_id, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)"#,
+    )
+    .bind(&test.id)
+    .bind(&test.revision_id)
+    .bind(&test.test_client_id)
+    .bind(&test.expected_nic_id)
+    .bind(test.status.to_string())
+    .bind(now.to_rfc3339())
+    .execute(pool)
+    .await
+    .map_err(|error| anyhow::anyhow!("failed to start boot test: {error}"))?;
+    Ok(test)
+}
+
+/// Outcome of evaluating one boot report against its candidate test.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BootTestOutcome {
+    Passed,
+    Failed,
+    NoCandidate,
+}
+
+/// Record a boot report against the client's open candidate test.
+///
+/// The caller must have already verified the reporter's active iSCSI session;
+/// this function matches identity only. A pass moves the test to `passed`
+/// and the revision to `ready` in one transaction, making that driver version
+/// eligible for new client assignments. A mismatch marks the test `failed`
+/// without changing the revision, keeping the prior revision current.
+pub async fn record_boot_test_result(
+    pool: &sqlx::SqlitePool,
+    client_id: &str,
+    reported_revision: &str,
+    reported_nic_id: &str,
+) -> Result<BootTestOutcome> {
+    let mut transaction = pool
+        .begin()
+        .await
+        .context("failed to record boot test result")?;
+    let test: Option<(String, String, String, String)> = sqlx::query_as(
+        r#"SELECT id, revision_id, test_client_id, expected_nic_id FROM windows_revision_boot_tests
+        WHERE test_client_id = ? AND status = 'candidate' ORDER BY created_at LIMIT 1"#,
+    )
+    .bind(client_id)
+    .fetch_optional(&mut *transaction)
+    .await
+    .context("failed to look up the candidate boot test")?;
+    let Some((test_id, revision_id, _, expected_nic)) = test else {
+        return Ok(BootTestOutcome::NoCandidate);
+    };
+    let matches = revision_id == reported_revision.trim()
+        && expected_nic.eq_ignore_ascii_case(reported_nic_id.trim());
+    let now = chrono::Utc::now().to_rfc3339();
+    if matches {
+        sqlx::query(
+            "UPDATE windows_revision_boot_tests SET status = 'passed', reported_revision = ?, reported_nic_id = ?, result_at = ? WHERE id = ?",
+        )
+        .bind(reported_revision.trim())
+        .bind(reported_nic_id.trim())
+        .bind(&now)
+        .bind(&test_id)
+        .execute(&mut *transaction)
+        .await
+        .context("failed to record a passing boot test")?;
+        sqlx::query(
+            "UPDATE windows_image_driver_revisions SET status = 'ready', updated_at = ? WHERE id = ? AND status = 'awaiting-test'",
+        )
+        .bind(&now)
+        .bind(&revision_id)
+        .execute(&mut *transaction)
+        .await
+        .context("failed to promote the tested revision")?;
+        transaction
+            .commit()
+            .await
+            .context("failed to record a passing boot test")?;
+        tracing::info!(
+            revision = %revision_id,
+            client = %client_id,
+            "candidate revision passed its boot test and is ready for new clients"
+        );
+        Ok(BootTestOutcome::Passed)
+    } else {
+        sqlx::query(
+            "UPDATE windows_revision_boot_tests SET status = 'failed', reported_revision = ?, reported_nic_id = ?, result_at = ? WHERE id = ?",
+        )
+        .bind(reported_revision.trim())
+        .bind(reported_nic_id.trim())
+        .bind(&now)
+        .bind(&test_id)
+        .execute(&mut *transaction)
+        .await
+        .context("failed to record a failed boot test")?;
+        transaction
+            .commit()
+            .await
+            .context("failed to record a failed boot test")?;
+        Ok(BootTestOutcome::Failed)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -544,6 +696,133 @@ mod tests {
                 DriverRevisionStatus::AwaitingTest,
                 Some("rev-image")
             )
+            .await
+            .is_err());
+    }
+
+    async fn boot_test_pool() -> sqlx::SqlitePool {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let now = chrono::Utc::now();
+        sqlx::query("INSERT INTO images (id, name, kind, os_type, size_gb, path, format, status, description, created_at, updated_at) VALUES ('img', 'tank/image/windows', 'master', 'windows', 50, '/dev/zvol/tank/image/windows', 'raw', 'ready', NULL, ?, ?)")
+            .bind(now.to_rfc3339())
+            .bind(now.to_rfc3339())
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO clients (id, name, mac, ip, master, target_iqn, created_at, updated_at) VALUES ('test-1', 'client-test-1', '02:00:00:00:00:71', '192.0.2.71', 'pending', 'iqn.2026-01.test:target.t1', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool
+    }
+
+    async fn awaiting_revision(pool: &sqlx::SqlitePool) -> ImageDriverRevision {
+        let revision = ensure_managed_revision(pool, "img", "snap", &["pkg-a".to_string()])
+            .await
+            .unwrap();
+        mark_revision_awaiting_test(pool, &revision.id, "rev-image")
+            .await
+            .unwrap()
+    }
+
+    async fn revision_status(pool: &sqlx::SqlitePool, id: &str) -> String {
+        sqlx::query_scalar::<_, String>(
+            "SELECT status FROM windows_image_driver_revisions WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn boot_test_pass_promotes_revision_for_new_clients() {
+        let pool = boot_test_pool().await;
+        let revision = awaiting_revision(&pool).await;
+        let test = start_boot_test(&pool, &revision.id, "test-1", "PCI\\VEN_8086&DEV_15F3")
+            .await
+            .unwrap();
+        assert_eq!(test.status, crate::core::image::BootTestStatus::Candidate);
+        let outcome =
+            record_boot_test_result(&pool, "test-1", &revision.id, "PCI\\VEN_8086&DEV_15F3")
+                .await
+                .unwrap();
+        assert_eq!(outcome, BootTestOutcome::Passed);
+        assert_eq!(revision_status(&pool, &revision.id).await, "ready");
+    }
+
+    #[tokio::test]
+    async fn boot_test_mismatch_fails_without_changing_revision() {
+        for (reported_revision, reported_nic) in [
+            ("other-revision", "PCI\\VEN_8086&DEV_15F3"),
+            ("REV-PLACEHOLDER", "PCI\\VEN_10EC&DEV_8168"),
+        ] {
+            let pool = boot_test_pool().await;
+            let revision = awaiting_revision(&pool).await;
+            let reported = if reported_revision == "REV-PLACEHOLDER" {
+                revision.id.clone()
+            } else {
+                reported_revision.to_string()
+            };
+            start_boot_test(&pool, &revision.id, "test-1", "PCI\\VEN_8086&DEV_15F3")
+                .await
+                .unwrap();
+            let outcome = record_boot_test_result(&pool, "test-1", &reported, reported_nic)
+                .await
+                .unwrap();
+            assert_eq!(
+                outcome,
+                BootTestOutcome::Failed,
+                "report {reported}/{reported_nic}"
+            );
+            assert_eq!(revision_status(&pool, &revision.id).await, "awaiting-test");
+        }
+    }
+
+    #[tokio::test]
+    async fn boot_test_without_candidate_changes_nothing() {
+        let pool = boot_test_pool().await;
+        let revision = awaiting_revision(&pool).await;
+        let outcome = record_boot_test_result(
+            &pool,
+            "ghost-client",
+            &revision.id,
+            "PCI\\VEN_8086&DEV_15F3",
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome, BootTestOutcome::NoCandidate);
+        assert_eq!(revision_status(&pool, &revision.id).await, "awaiting-test");
+    }
+
+    #[tokio::test]
+    async fn boot_test_start_rejects_unknown_or_unready_subjects() {
+        let pool = boot_test_pool().await;
+        assert!(
+            start_boot_test(&pool, "missing", "test-1", "PCI\\VEN_1&DEV_2")
+                .await
+                .is_err()
+        );
+        let preparing = ensure_managed_revision(&pool, "img", "snap", &["pkg-b".to_string()])
+            .await
+            .unwrap();
+        assert!(
+            start_boot_test(&pool, &preparing.id, "test-1", "PCI\\VEN_1&DEV_2")
+                .await
+                .is_err()
+        );
+        let revision = awaiting_revision(&pool).await;
+        assert!(
+            start_boot_test(&pool, &revision.id, "ghost", "PCI\\VEN_1&DEV_2")
+                .await
+                .is_err()
+        );
+        assert!(start_boot_test(&pool, &revision.id, "test-1", "")
             .await
             .is_err());
     }

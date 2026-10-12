@@ -225,6 +225,58 @@ pub struct ImageDriverRevision {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Boot-test record for one candidate image revision on its designated
+/// test client.
+///
+/// A test passes only when the client component reports the exact candidate
+/// revision and Boot NIC after Windows starts and the server confirms the
+/// client's iSCSI session is active. A passing test makes the revision
+/// `ready` for new client assignments; failed tests keep the prior revision
+/// current and never change the revision itself.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum BootTestStatus {
+    Candidate,
+    Passed,
+    Failed,
+}
+
+impl std::fmt::Display for BootTestStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Candidate => write!(f, "candidate"),
+            Self::Passed => write!(f, "passed"),
+            Self::Failed => write!(f, "failed"),
+        }
+    }
+}
+
+impl std::str::FromStr for BootTestStatus {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "candidate" => Ok(Self::Candidate),
+            "passed" => Ok(Self::Passed),
+            "failed" => Ok(Self::Failed),
+            _ => Err(anyhow::anyhow!("invalid boot test status: {}", value)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RevisionBootTest {
+    pub id: String,
+    pub revision_id: String,
+    pub test_client_id: String,
+    pub expected_nic_id: String,
+    pub status: BootTestStatus,
+    pub reported_revision: Option<String>,
+    pub reported_nic_id: Option<String>,
+    pub result_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
 impl ImageDriverRevision {
     /// Deterministic hash of a driver set used for idempotent retries.
     ///

@@ -533,3 +533,30 @@ async fn driver_revisions_are_admin_only() {
         json!([])
     );
 }
+
+#[tokio::test]
+async fn driver_boot_tests_are_admin_only() {
+    let (_, app, _, user) = setup().await;
+    assert_eq!(
+        request(
+            &app,
+            "GET",
+            "/api/pxe/windows/boot-tests?source_image_id=img",
+            &user,
+            json!(null)
+        )
+        .await,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        request(
+            &app,
+            "POST",
+            "/api/pxe/windows/boot-tests",
+            &user,
+            json!({"revision_id":"r","test_client_id":"c","expected_nic_id":"n"})
+        )
+        .await,
+        StatusCode::FORBIDDEN
+    );
+}

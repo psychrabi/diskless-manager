@@ -66,12 +66,12 @@ use crate::api::handlers::{
     system_reconciliation::inspect_system_reconciliation_handler,
     users::{create_user, delete_user, get_user, list_users, update_user, update_user_password},
     windows_servicing::{
-        capabilities as windows_servicing_capabilities, list_revisions as list_driver_revisions,
-        prepare_image as prepare_windows_image,
+        capabilities as windows_servicing_capabilities, list_boot_tests,
+        list_revisions as list_driver_revisions, prepare_image as prepare_windows_image,
         prepare_image_managed as prepare_windows_image_managed,
         prepare_image_remote as prepare_windows_image_remote,
         prepare_image_remote_catalog as prepare_windows_image_remote_catalog,
-        remote_capabilities as windows_servicing_remote_capabilities,
+        remote_capabilities as windows_servicing_remote_capabilities, start_boot_test,
     },
     ws::ws_metrics_handler,
     zfs::{
@@ -391,6 +391,10 @@ pub fn create_app(state: crate::state::AppState) -> Router {
             get(windows_servicing_capabilities),
         )
         .route("/api/pxe/windows/revisions", get(list_driver_revisions))
+        .route(
+            "/api/pxe/windows/boot-tests",
+            get(list_boot_tests).post(start_boot_test),
+        )
         .route(
             "/api/pxe/windows/prepare-image",
             post(prepare_windows_image),

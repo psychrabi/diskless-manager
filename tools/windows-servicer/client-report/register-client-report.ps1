@@ -22,6 +22,10 @@
 
 .PARAMETER NoExport
   Report Boot NIC IDs only; skip `pnputil /export-driver` package upload.
+
+.PARAMETER ImageRevision
+  Candidate revision this client is designated to test. Only set on the
+  disposable test client.
 #>
 [CmdletBinding()]
 param(
@@ -29,6 +33,7 @@ param(
     [string]$ServerUrl,
     [Parameter(Mandatory)]
     [string]$ClientId,
+    [string]$ImageRevision = "",
     [string]$BinaryPath = (Join-Path $env:ProgramFiles "Diskless Manager\diskless-windows-servicer.exe"),
     [switch]$NoExport
 )
@@ -39,11 +44,15 @@ $configDir = Join-Path $env:ProgramData "Diskless Manager"
 $configPath = Join-Path $configDir "client-report.json"
 New-Item -ItemType Directory -Force -Path $configDir | Out-Null
 
-@{
+$config = @{
     server_url     = $ServerUrl.TrimEnd("/")
     client_id      = $ClientId
     export_package = -not $NoExport.IsPresent
-} | ConvertTo-Json -Depth 2 | Set-Content -LiteralPath $configPath -Encoding UTF8
+}
+if (-not [string]::IsNullOrWhiteSpace($ImageRevision)) {
+    $config["image_revision"] = $ImageRevision
+}
+$config | ConvertTo-Json -Depth 2 | Set-Content -LiteralPath $configPath -Encoding UTF8
 
 $acl = Get-Acl -LiteralPath $configPath
 $acl.SetAccessRuleProtection($true, $false)
