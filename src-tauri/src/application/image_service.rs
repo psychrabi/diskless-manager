@@ -823,8 +823,6 @@ impl ImageService {
             bail!("a snapshot cannot be the default image");
         }
 
-        self.repository.clear_default().await?;
-
         self.repository.set_default(&image.id).await?;
 
         self.get(&image.id).await
@@ -1217,6 +1215,121 @@ mod storage_presence_tests {
         assert!(service.delete("master").await.is_err());
         assert!(service.repository.get("master").await.unwrap().is_some());
         assert!(service.list().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn awaiting_windows_revision_cannot_replace_existing_default() {
+        let service = service(&[], false).await;
+        let mut current = image("current", "pool/current", None);
+        current.is_default = true;
+        service.repository.insert(&current).await.unwrap();
+        let candidate = image("candidate", "pool/candidate", None);
+        service.repository.insert(&candidate).await.unwrap();
+        service
+            .repository
+            .insert_driver_revision(&crate::core::image::ImageDriverRevision {
+                id: "revision".into(),
+                source_image_id: "current".into(),
+                source_snapshot: "pool/current@snap".into(),
+                revision_image_id: Some("candidate".into()),
+                driver_package_ids: vec![],
+                driver_set_hash: "hash".into(),
+                status: crate::core::image::DriverRevisionStatus::AwaitingTest,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            })
+            .await
+            .unwrap();
+
+        assert!(service.set_default("candidate").await.is_err());
+        assert!(
+            service
+                .repository
+                .get("current")
+                .await
+                .unwrap()
+                .unwrap()
+                .is_default
+        );
+        assert!(
+            !service
+                .repository
+                .get("candidate")
+                .await
+                .unwrap()
+                .unwrap()
+                .is_default
+        );
+
+        assert!(!service.repository.set_default("missing").await.unwrap());
+        assert!(
+            service
+                .repository
+                .get("current")
+                .await
+                .unwrap()
+                .unwrap()
+                .is_default
+        );
+    }
+
+    #[tokio::test]
+    async fn tested_revision_cannot_be_default_until_all_recorded_nics_pass() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let service = ImageService::with_backend(
+            ImageRepository::new(pool.clone()),
+            Arc::new(FakeStorage {
+                present: HashSet::new(),
+                fail: false,
+            }),
+        );
+        let mut current = image("current", "pool/current", None);
+        current.is_default = true;
+        service.repository.insert(&current).await.unwrap();
+        service
+            .repository
+            .insert(&image("candidate", "pool/candidate", None))
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO clients(id, name, mac, ip, master, created_at, updated_at) VALUES ('test-client', 'test-client', '02:00:00:00:00:01', '192.0.2.10', 'pool/candidate', '2026-10-12T00:00:00Z', '2026-10-12T00:00:00Z')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        service
+            .repository
+            .insert_driver_revision(&crate::core::image::ImageDriverRevision {
+                id: "revision".into(),
+                source_image_id: "current".into(),
+                source_snapshot: "pool/current@snap".into(),
+                revision_image_id: Some("candidate".into()),
+                driver_package_ids: vec!["nic-b".into()],
+                driver_set_hash: "hash".into(),
+                status: crate::core::image::DriverRevisionStatus::Ready,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            })
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO windows_nic_inventory (mac, boot_nic_ids, observed_at) VALUES ('02:00:00:00:00:01', '[\"PCI\\\\VEN_10EC&DEV_8168\"]', '2026-10-12T00:00:00Z')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO windows_revision_boot_tests (id, revision_id, test_client_id, expected_nic_id, candidate_image_id, candidate_snapshot, status, reported_revision, reported_nic_id, result_at, created_at) VALUES ('test', 'revision', 'test-client', 'PCI\\VEN_8086&DEV_15F3', 'candidate', '', 'passed', 'revision', 'PCI\\VEN_8086&DEV_15F3', '2026-10-12T00:00:00Z', '2026-10-12T00:00:00Z')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert!(service.set_default("candidate").await.is_err());
+        assert!(
+            service
+                .repository
+                .get("current")
+                .await
+                .unwrap()
+                .unwrap()
+                .is_default
+        );
     }
 
     #[tokio::test]

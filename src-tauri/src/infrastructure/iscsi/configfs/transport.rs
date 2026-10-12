@@ -81,6 +81,12 @@ impl ConfigfsProvisioner {
 }
 
 impl IscsiProvisioner for ConfigfsProvisioner {
+    fn ensure_initiator_acl(&self, spec: &IscsiTargetSpec) -> Result<()> {
+        if spec.initiator_iqn.is_some() {
+            Self::unit(Operation::EnsureAcl(spec.clone()))?;
+        }
+        Ok(())
+    }
     fn create_target(&self, spec: &IscsiTargetSpec) -> Result<()> {
         self.create_target_transaction(spec).map(|_| ())
     }
@@ -139,6 +145,8 @@ impl IscsiProvisioner for ConfigfsProvisioner {
     fn reconcile(&self, spec: &IscsiTargetSpec) -> Result<()> {
         if !self.inspect_target(spec)?.is_ready() {
             self.create_target(spec)?;
+        } else {
+            self.ensure_initiator_acl(spec)?;
         }
         Ok(())
     }

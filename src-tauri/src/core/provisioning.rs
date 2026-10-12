@@ -340,6 +340,7 @@ pub async fn add_client_provisioning(
 
     let storage_spec = ClientStorageSpec {
         client_id: name.clone(),
+        client_name: name.clone(),
 
         source: if used_master_directly {
             StorageSource::ExistingVolume(master.clone())

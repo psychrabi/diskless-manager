@@ -270,6 +270,8 @@ pub struct RevisionBootTest {
     pub revision_id: String,
     pub test_client_id: String,
     pub expected_nic_id: String,
+    pub candidate_image_id: Option<String>,
+    pub candidate_snapshot: String,
     pub status: BootTestStatus,
     pub reported_revision: Option<String>,
     pub reported_nic_id: Option<String>,

@@ -322,6 +322,7 @@ async fn storage_spec_for_client(
 
             return Ok(Some(ClientStorageSpec {
                 client_id: client.id.to_string(),
+                client_name: client.name.clone(),
                 source: StorageSource::Snapshot(snapshot.to_string()),
                 dataset,
                 backstore,
@@ -337,6 +338,7 @@ async fn storage_spec_for_client(
 
     Ok(Some(ClientStorageSpec {
         client_id: client.id.to_string(),
+        client_name: client.name.clone(),
         dataset: client.master.clone(),
         backstore,
         target_iqn,

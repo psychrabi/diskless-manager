@@ -299,7 +299,7 @@ async fn enroll_client(
                     let settings = state.settings.read().await;
                     ensure_client_menu(&client, &settings).await;
                     crate::infrastructure::pxe::render_enrollment_redirect()
-                } else if inventory_boot_requested(&state, &parsed).await {
+                } else if consume_inventory_boot_request(&state, &parsed).await {
                     tracing::info!(
                         client = %client.name,
                         mac = %parsed.as_str(),
@@ -409,15 +409,6 @@ async fn submit_inventory(
             Json(serde_json::json!({"ok": false, "error": "failed to store inventory"})),
         );
     }
-    // A delivered inventory satisfies the boot request; the next boot returns
-    // to the normal dispatch path.
-    if let Err(error) = sqlx::query("UPDATE clients SET inventory_boot_requested = 0 WHERE mac = ?")
-        .bind(parsed.as_str())
-        .execute(&state.db_pool)
-        .await
-    {
-        error!("failed to clear inventory request flag: {error:#}");
-    }
     tracing::info!(
         mac = %parsed.as_str(),
         boot_nics = validated.boot_nic_ids.len(),
@@ -429,15 +420,15 @@ async fn submit_inventory(
     )
 }
 
-/// Whether an unprovisioned client was asked to boot WinPE for inventory.
-async fn inventory_boot_requested(state: &AppState, mac: &MacAddress) -> bool {
-    sqlx::query_scalar::<_, i64>("SELECT inventory_boot_requested FROM clients WHERE mac = ?")
+/// Consume the one-shot request before sending the client to WinPE. If it never
+/// uploads inventory or fails to boot, its next request returns to normal PXE.
+async fn consume_inventory_boot_request(state: &AppState, mac: &MacAddress) -> bool {
+    sqlx::query("UPDATE clients SET inventory_boot_requested = 0 WHERE mac = ? AND inventory_boot_requested = 1")
         .bind(mac.as_str())
-        .fetch_optional(&state.db_pool)
+        .execute(&state.db_pool)
         .await
         .ok()
-        .flatten()
-        .is_some_and(|flag| flag != 0)
+        .is_some_and(|result| result.rows_affected() == 1)
 }
 
 #[cfg(test)]
@@ -546,6 +537,28 @@ mod tests {
         let (_, script) = get_enroll(&state, "02:00:00:00:00:0c").await;
         assert!(script.contains("boot-inventory.wim"));
         assert!(script.contains("clients/${client-mac}.ipxe"));
+        let (_, next_boot) = get_enroll(&state, "02:00:00:00:00:0c").await;
+        assert!(next_boot.contains("No master image has been assigned yet"));
+        let inventory_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM windows_nic_inventory")
+            .fetch_one(&state.db_pool)
+            .await
+            .unwrap();
+        assert_eq!(inventory_count, 0);
+    }
+
+    #[test]
+    fn winpe_payload_paths_match_the_build_instructions() {
+        let inventory =
+            include_str!("../../../tools/windows-servicer/client-report/winpe-inventory.ps1");
+        let startnet =
+            include_str!("../../../tools/windows-servicer/client-report/winpe-startnet.cmd");
+        let build = include_str!("../../../tools/windows-servicer/client-report/BUILD-WINPE.md");
+
+        assert!(inventory.starts_with("#Requires -RunAsAdministrator\n<#"));
+        assert!(inventory.contains("Join-Path $PSScriptRoot \"diskless-server.txt\""));
+        assert!(startnet.contains("%SYSTEMROOT%\\System32\\winpe-inventory.ps1"));
+        assert!(build.contains("Windows\\System32\\diskless-server.txt"));
+        assert!(build.contains("Windows\\System32\\startnet.cmd"));
     }
 
     #[tokio::test]
@@ -586,7 +599,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn inventory_submit_clears_the_boot_request_flag() {
+    async fn inventory_boot_request_is_consumed_before_upload() {
         let state = test_state().await;
         sqlx::query("INSERT INTO clients (id, name, mac, ip, master, created_at, updated_at) VALUES ('c1', 'client-c1', '02:00:00:00:00:0b', '192.0.2.11', 'pending', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
             .execute(&state.db_pool)
@@ -597,15 +610,20 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            inventory_boot_requested(&state, &MacAddress::parse("02:00:00:00:00:0b").unwrap())
-                .await
+            consume_inventory_boot_request(
+                &state,
+                &MacAddress::parse("02:00:00:00:00:0b").unwrap()
+            )
+            .await
         );
         let (status, _) = post_inventory(&state, "02:00:00:00:00:0b", inventory_body()).await;
         assert_eq!(status, StatusCode::OK);
-        assert!(
-            !inventory_boot_requested(&state, &MacAddress::parse("02:00:00:00:00:0b").unwrap())
+        let flag: i64 =
+            sqlx::query_scalar("SELECT inventory_boot_requested FROM clients WHERE id = 'c1'")
+                .fetch_one(&state.db_pool)
                 .await
-        );
+                .unwrap();
+        assert_eq!(flag, 0);
         let client_id: Option<String> = sqlx::query_scalar(
             "SELECT client_id FROM windows_nic_inventory WHERE mac = '02:00:00:00:00:0b'",
         )
@@ -613,6 +631,40 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(client_id.as_deref(), Some("c1"));
+    }
+
+    #[tokio::test]
+    async fn old_inventory_upload_does_not_clear_a_rearmed_boot_request() {
+        let state = test_state().await;
+        sqlx::query("INSERT INTO clients (id, name, mac, ip, master, created_at, updated_at) VALUES ('c1', 'client-c1', '02:00:00:00:00:0b', '192.0.2.11', 'pending', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+            .execute(&state.db_pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE clients SET inventory_boot_requested = 1 WHERE id = 'c1'")
+            .execute(&state.db_pool)
+            .await
+            .unwrap();
+        assert!(
+            consume_inventory_boot_request(
+                &state,
+                &MacAddress::parse("02:00:00:00:00:0b").unwrap()
+            )
+            .await
+        );
+        sqlx::query("UPDATE clients SET inventory_boot_requested = 1 WHERE id = 'c1'")
+            .execute(&state.db_pool)
+            .await
+            .unwrap();
+
+        let (status, _) = post_inventory(&state, "02:00:00:00:00:0b", inventory_body()).await;
+
+        assert_eq!(status, StatusCode::OK);
+        let flag: i64 =
+            sqlx::query_scalar("SELECT inventory_boot_requested FROM clients WHERE id = 'c1'")
+                .fetch_one(&state.db_pool)
+                .await
+                .unwrap();
+        assert_eq!(flag, 1);
     }
 
     #[test]

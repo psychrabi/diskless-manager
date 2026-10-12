@@ -66,8 +66,11 @@ impl ManagedWindowsPreparationRequest {
             .driver_root
             .as_ref()
             .is_some_and(|p| !p.as_os_str().is_empty());
-        if self.driver_ids.is_empty() == !folder {
-            bail!("choose imported driver packages or an existing worker folder");
+        if folder && !self.driver_ids.is_empty() {
+            bail!("choose imported driver packages or an existing worker folder, not both");
+        }
+        if folder && self.commit {
+            bail!("managed commits require imported catalog packages so the tested revision records its drivers; the existing worker-folder path is available for dry runs only");
         }
         Ok(())
     }
@@ -108,6 +111,7 @@ pub fn select_windows_assignment(
     client_mac: &str,
     inventory_boot_ids: Option<&[String]>,
     ready_revisions: &[ImageDriverRevision],
+    passed_boot_test_nics: &std::collections::HashMap<String, Vec<String>>,
     catalog: &[NetworkDriverPackage],
 ) -> Result<Option<WindowsAssignment>> {
     let Some(boot_ids) = inventory_boot_ids else {
@@ -127,18 +131,19 @@ pub fn select_windows_assignment(
     let mut ordered: Vec<&ImageDriverRevision> = ready_revisions.iter().collect();
     ordered.sort_by_key(|revision| std::cmp::Reverse(revision.created_at));
     for revision in ordered {
-        let covers = revision.driver_package_ids.iter().any(|id| {
-            by_id.get(id.as_str()).is_some_and(|package| {
-                package
-                    .hardware_ids
-                    .iter()
-                    .chain(package.compatible_ids.iter())
-                    .any(|candidate| {
-                        boot_ids
-                            .iter()
-                            .any(|boot| boot.eq_ignore_ascii_case(&candidate.replace('/', "\\")))
-                    })
-            })
+        let tested_nics = passed_boot_test_nics
+            .get(&revision.id)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let covers = boot_ids.iter().any(|boot_id| {
+            tested_nics
+                .iter()
+                .any(|tested| tested.eq_ignore_ascii_case(boot_id))
+                && revision.driver_package_ids.iter().any(|package_id| {
+                    by_id
+                        .get(package_id.as_str())
+                        .is_some_and(|package| package_matches_boot_nic(package, boot_id))
+                })
         });
         if !covers {
             continue;
@@ -152,9 +157,17 @@ pub fn select_windows_assignment(
         }));
     }
     bail!(
-        "no tested driver matches Boot NIC hardware ID(s) {}; import a signed network-driver package for this hardware and pass a boot test first",
+        "no ready revision has a passed boot test and matching driver package for Boot NIC hardware ID(s) {}; test a candidate with this exact NIC before assigning it",
         boot_ids.join(", ")
     )
+}
+
+pub fn package_matches_boot_nic(package: &NetworkDriverPackage, boot_nic_id: &str) -> bool {
+    package
+        .hardware_ids
+        .iter()
+        .chain(package.compatible_ids.iter())
+        .any(|candidate| crate::infrastructure::pxe::pnp_id_matches(candidate, boot_nic_id))
 }
 
 pub async fn prepare_managed(
@@ -442,29 +455,80 @@ pub async fn start_boot_test(
     expected_nic_id: &str,
 ) -> Result<crate::core::image::RevisionBootTest> {
     use crate::core::image::{BootTestStatus, RevisionBootTest};
-    let row: Option<(String,)> =
-        sqlx::query_as("SELECT status FROM windows_image_driver_revisions WHERE id = ?")
-            .bind(revision_id)
-            .fetch_optional(pool)
-            .await
-            .with_context(|| format!("failed to inspect revision '{revision_id}'"))?;
-    let Some((status,)) = row else {
+    let row: Option<(String, Option<String>)> = sqlx::query_as(
+        "SELECT status, revision_image_id FROM windows_image_driver_revisions WHERE id = ?",
+    )
+    .bind(revision_id)
+    .fetch_optional(pool)
+    .await
+    .with_context(|| format!("failed to inspect revision '{revision_id}'"))?;
+    let Some((status, candidate_image_id)) = row else {
         bail!("driver revision '{revision_id}' not found");
     };
     if status != DriverRevisionStatus::AwaitingTest.to_string() {
         bail!("only an awaiting-test revision can start a boot test (revision '{revision_id}' is '{status}')");
     }
-    let client: Option<(String,)> = sqlx::query_as("SELECT id FROM clients WHERE id = ?")
-        .bind(test_client_id)
-        .fetch_optional(pool)
-        .await
-        .with_context(|| format!("failed to inspect test client '{test_client_id}'"))?;
-    if client.is_none() {
-        bail!("test client '{test_client_id}' is not registered");
+    let candidate_image_id =
+        candidate_image_id.context("candidate revision has no published image")?;
+    let candidate: Option<(String, String)> = sqlx::query_as(
+        "SELECT images.name, snapshots.name FROM images JOIN images AS snapshots ON snapshots.parent_id = images.id AND snapshots.kind = 'snapshot' AND snapshots.name LIKE 'serviced-%' AND snapshots.status = 'ready' WHERE images.id = ? AND images.status = 'ready'",
+    ).bind(&candidate_image_id).fetch_optional(pool).await.context("failed to inspect candidate image snapshot")?;
+    let Some((candidate_image_name, snapshot_name)) = candidate else {
+        bail!("candidate revision must have one ready servicing snapshot");
+    };
+    let duplicate_snapshot: Option<(String,)> = sqlx::query_as(
+        "SELECT id FROM images WHERE parent_id = ? AND kind = 'snapshot' AND name LIKE 'serviced-%' AND status = 'ready' LIMIT 1 OFFSET 1",
+    ).bind(&candidate_image_id).fetch_optional(pool).await.context("failed to verify candidate snapshot uniqueness")?;
+    if duplicate_snapshot.is_some() {
+        bail!("candidate revision has ambiguous servicing snapshots");
+    }
+    let candidate_snapshot = format!("{candidate_image_name}@{snapshot_name}");
+    let assigned: Option<(String,)> =
+        sqlx::query_as("SELECT id FROM clients WHERE id = ? AND master = ? AND snapshot = ?")
+            .bind(test_client_id)
+            .bind(&candidate_image_name)
+            .bind(&candidate_snapshot)
+            .fetch_optional(pool)
+            .await
+            .context("failed to verify test client image assignment")?;
+    if assigned.is_none() {
+        bail!("designated test client is not assigned to the candidate revision snapshot");
     }
     let expected = expected_nic_id.trim().replace('/', "\\");
     if expected.is_empty() || expected.len() > 128 {
         bail!("a valid expected Boot NIC hardware ID is required");
+    }
+    let active: Option<(String, String, String, Option<String>, String, String)> = sqlx::query_as(
+        "SELECT id, test_client_id, expected_nic_id, candidate_image_id, candidate_snapshot, created_at FROM windows_revision_boot_tests WHERE revision_id = ? AND status = 'candidate'",
+    )
+    .bind(revision_id)
+    .fetch_optional(pool)
+    .await
+    .context("failed to check for an active boot test")?;
+    if let Some((id, active_client, active_nic, active_image, active_snapshot, created_at)) = active
+    {
+        if active_client != test_client_id
+            || !active_nic.eq_ignore_ascii_case(&expected)
+            || active_image.as_deref() != Some(candidate_image_id.as_str())
+            || active_snapshot != candidate_snapshot
+        {
+            bail!("another boot test is already active for revision '{revision_id}'");
+        }
+        return Ok(RevisionBootTest {
+            id,
+            revision_id: revision_id.to_string(),
+            test_client_id: active_client,
+            expected_nic_id: active_nic,
+            candidate_image_id: active_image,
+            candidate_snapshot: active_snapshot,
+            status: BootTestStatus::Candidate,
+            reported_revision: None,
+            reported_nic_id: None,
+            result_at: None,
+            created_at: chrono::DateTime::parse_from_rfc3339(&created_at)
+                .context("active boot test has an invalid creation timestamp")?
+                .with_timezone(&chrono::Utc),
+        });
     }
     let now = chrono::Utc::now();
     let test = RevisionBootTest {
@@ -472,6 +536,8 @@ pub async fn start_boot_test(
         revision_id: revision_id.to_string(),
         test_client_id: test_client_id.to_string(),
         expected_nic_id: expected,
+        candidate_image_id: Some(candidate_image_id),
+        candidate_snapshot,
         status: BootTestStatus::Candidate,
         reported_revision: None,
         reported_nic_id: None,
@@ -480,13 +546,15 @@ pub async fn start_boot_test(
     };
     sqlx::query(
         r#"INSERT INTO windows_revision_boot_tests
-        (id, revision_id, test_client_id, expected_nic_id, status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)"#,
+        (id, revision_id, test_client_id, expected_nic_id, candidate_image_id, candidate_snapshot, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)"#,
     )
     .bind(&test.id)
     .bind(&test.revision_id)
     .bind(&test.test_client_id)
     .bind(&test.expected_nic_id)
+    .bind(&test.candidate_image_id)
+    .bind(&test.candidate_snapshot)
     .bind(test.status.to_string())
     .bind(now.to_rfc3339())
     .execute(pool)
@@ -502,6 +570,17 @@ pub enum BootTestOutcome {
     Failed,
     NoCandidate,
 }
+
+type CandidateBootTest = (
+    String,
+    String,
+    String,
+    String,
+    Option<String>,
+    String,
+    String,
+    String,
+);
 
 /// Record a boot report against the client's open candidate test.
 ///
@@ -520,22 +599,54 @@ pub async fn record_boot_test_result(
         .begin()
         .await
         .context("failed to record boot test result")?;
-    let test: Option<(String, String, String, String)> = sqlx::query_as(
-        r#"SELECT id, revision_id, test_client_id, expected_nic_id FROM windows_revision_boot_tests
-        WHERE test_client_id = ? AND status = 'candidate' ORDER BY created_at LIMIT 1"#,
+    let test: Option<CandidateBootTest> = sqlx::query_as(
+        r#"SELECT tests.id, tests.revision_id, tests.test_client_id, tests.expected_nic_id,
+                  tests.candidate_image_id, tests.candidate_snapshot, clients.master, COALESCE(clients.snapshot, '')
+        FROM windows_revision_boot_tests AS tests
+        JOIN clients ON clients.id = tests.test_client_id
+        WHERE tests.test_client_id = ? AND tests.status = 'candidate'
+        ORDER BY tests.created_at DESC LIMIT 1"#,
     )
     .bind(client_id)
     .fetch_optional(&mut *transaction)
     .await
     .context("failed to look up the candidate boot test")?;
-    let Some((test_id, revision_id, _, expected_nic)) = test else {
+    let Some((
+        test_id,
+        revision_id,
+        _,
+        expected_nic,
+        candidate_image_id,
+        candidate_snapshot,
+        assigned_master,
+        assigned_snapshot,
+    )) = test
+    else {
         return Ok(BootTestOutcome::NoCandidate);
     };
-    let matches = revision_id == reported_revision.trim()
+    let image_name: Option<(String,)> = if let Some(candidate_image_id) = &candidate_image_id {
+        sqlx::query_as(
+            "SELECT images.name FROM windows_image_driver_revisions AS revisions JOIN images ON images.id = revisions.revision_image_id WHERE revisions.id = ? AND revisions.revision_image_id = ?",
+        )
+        .bind(&revision_id)
+        .bind(candidate_image_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .context("failed to verify candidate image provenance")?
+    } else {
+        None
+    };
+    let provenance_matches = image_name.is_some_and(|(name,)| {
+        !candidate_snapshot.is_empty()
+            && assigned_master == name
+            && assigned_snapshot == candidate_snapshot
+    });
+    let matches = provenance_matches
+        && revision_id == reported_revision.trim()
         && expected_nic.eq_ignore_ascii_case(reported_nic_id.trim());
     let now = chrono::Utc::now().to_rfc3339();
     if matches {
-        sqlx::query(
+        let test_update = sqlx::query(
             "UPDATE windows_revision_boot_tests SET status = 'passed', reported_revision = ?, reported_nic_id = ?, result_at = ? WHERE id = ?",
         )
         .bind(reported_revision.trim())
@@ -545,7 +656,10 @@ pub async fn record_boot_test_result(
         .execute(&mut *transaction)
         .await
         .context("failed to record a passing boot test")?;
-        sqlx::query(
+        if test_update.rows_affected() != 1 {
+            bail!("candidate boot test changed before it could be recorded");
+        }
+        let revision_update = sqlx::query(
             "UPDATE windows_image_driver_revisions SET status = 'ready', updated_at = ? WHERE id = ? AND status = 'awaiting-test'",
         )
         .bind(&now)
@@ -553,6 +667,9 @@ pub async fn record_boot_test_result(
         .execute(&mut *transaction)
         .await
         .context("failed to promote the tested revision")?;
+        if revision_update.rows_affected() != 1 {
+            bail!("candidate revision changed before it could be promoted");
+        }
         transaction
             .commit()
             .await
@@ -564,7 +681,7 @@ pub async fn record_boot_test_result(
         );
         Ok(BootTestOutcome::Passed)
     } else {
-        sqlx::query(
+        let test_update = sqlx::query(
             "UPDATE windows_revision_boot_tests SET status = 'failed', reported_revision = ?, reported_nic_id = ?, result_at = ? WHERE id = ?",
         )
         .bind(reported_revision.trim())
@@ -574,6 +691,9 @@ pub async fn record_boot_test_result(
         .execute(&mut *transaction)
         .await
         .context("failed to record a failed boot test")?;
+        if test_update.rows_affected() != 1 {
+            bail!("candidate boot test changed before it could be recorded");
+        }
         transaction
             .commit()
             .await
@@ -596,6 +716,8 @@ mod tests {
         assert!(request.validate().is_err());
         request.driver_ids.clear();
         assert!(request.validate().is_ok());
+        request.commit = true;
+        assert!(request.validate().is_err());
         request.new_name = "../source".into();
         assert!(request.validate().is_err());
         request.new_name = "new-image".into();
@@ -803,6 +925,29 @@ mod tests {
             .unwrap()
     }
 
+    async fn assign_test_client(pool: &sqlx::SqlitePool, image_name: &str, snapshot: &str) {
+        sqlx::query("UPDATE clients SET master = ?, snapshot = ? WHERE id = 'test-1'")
+            .bind(image_name)
+            .bind(snapshot)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    async fn add_revision_servicing_snapshot(pool: &sqlx::SqlitePool) {
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query("INSERT INTO images (id, name, kind, os_type, size_gb, path, format, status, description, created_at, updated_at) VALUES ('rev-image', 'tank/image/revision', 'master', 'windows', 50, '/dev/zvol/tank/image/revision', 'raw', 'ready', NULL, ?, ?)")
+            .bind(&now).bind(&now).execute(pool).await.unwrap();
+        sqlx::query("INSERT INTO images (id, name, kind, os_type, size_gb, path, format, status, description, parent_id, created_at, updated_at) VALUES ('rev-snapshot', 'serviced-test', 'snapshot', 'windows', 50, '/dev/zvol/tank/image/revision', 'raw', 'ready', NULL, 'rev-image', ?, ?)")
+            .bind(&now).bind(&now).execute(pool).await.unwrap();
+        assign_test_client(
+            pool,
+            "tank/image/revision",
+            "tank/image/revision@serviced-test",
+        )
+        .await;
+    }
+
     async fn revision_status(pool: &sqlx::SqlitePool, id: &str) -> String {
         sqlx::query_scalar::<_, String>(
             "SELECT status FROM windows_image_driver_revisions WHERE id = ?",
@@ -817,6 +962,7 @@ mod tests {
     async fn boot_test_pass_promotes_revision_for_new_clients() {
         let pool = boot_test_pool().await;
         let revision = awaiting_revision(&pool).await;
+        add_revision_servicing_snapshot(&pool).await;
         let test = start_boot_test(&pool, &revision.id, "test-1", "PCI\\VEN_8086&DEV_15F3")
             .await
             .unwrap();
@@ -830,6 +976,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn boot_test_start_retries_same_client_and_rejects_a_second_client() {
+        let pool = boot_test_pool().await;
+        let revision = awaiting_revision(&pool).await;
+        add_revision_servicing_snapshot(&pool).await;
+        let first = start_boot_test(&pool, &revision.id, "test-1", "PCI\\VEN_8086&DEV_15F3")
+            .await
+            .unwrap();
+        let retry = start_boot_test(&pool, &revision.id, "test-1", "pci/ven_8086&dev_15f3")
+            .await
+            .unwrap();
+        assert_eq!(first.id, retry.id);
+
+        sqlx::query("INSERT INTO clients (id, name, mac, ip, master, snapshot, target_iqn, created_at, updated_at) VALUES ('test-2', 'client-test-2', '02:00:00:00:00:72', '192.0.2.72', 'tank/image/revision', 'tank/image/revision@serviced-test', 'iqn.2026-01.test:target.t2', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(
+            start_boot_test(&pool, &revision.id, "test-2", "PCI\\VEN_8086&DEV_15F3")
+                .await
+                .is_err(),
+            "a second client cannot replace the active test"
+        );
+    }
+
+    #[tokio::test]
     async fn boot_test_mismatch_fails_without_changing_revision() {
         for (reported_revision, reported_nic) in [
             ("other-revision", "PCI\\VEN_8086&DEV_15F3"),
@@ -837,6 +1008,7 @@ mod tests {
         ] {
             let pool = boot_test_pool().await;
             let revision = awaiting_revision(&pool).await;
+            add_revision_servicing_snapshot(&pool).await;
             let reported = if reported_revision == "REV-PLACEHOLDER" {
                 revision.id.clone()
             } else {
@@ -855,6 +1027,111 @@ mod tests {
             );
             assert_eq!(revision_status(&pool, &revision.id).await, "awaiting-test");
         }
+    }
+
+    #[tokio::test]
+    async fn changed_candidate_assignment_fails_claim_and_can_be_retried() {
+        let pool = boot_test_pool().await;
+        let revision = awaiting_revision(&pool).await;
+        add_revision_servicing_snapshot(&pool).await;
+        start_boot_test(&pool, &revision.id, "test-1", "PCI\\VEN_8086&DEV_15F3")
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE clients SET master = 'tank/other', snapshot = NULL WHERE id = 'test-1'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            record_boot_test_result(&pool, "test-1", &revision.id, "PCI\\VEN_8086&DEV_15F3")
+                .await
+                .unwrap(),
+            BootTestOutcome::Failed
+        );
+        assert_eq!(revision_status(&pool, &revision.id).await, "awaiting-test");
+
+        assign_test_client(
+            &pool,
+            "tank/image/revision",
+            "tank/image/revision@serviced-test",
+        )
+        .await;
+        start_boot_test(&pool, &revision.id, "test-1", "PCI\\VEN_8086&DEV_15F3")
+            .await
+            .unwrap();
+        assert_eq!(
+            record_boot_test_result(&pool, "test-1", &revision.id, "PCI\\VEN_8086&DEV_15F3")
+                .await
+                .unwrap(),
+            BootTestOutcome::Passed
+        );
+        assert_eq!(revision_status(&pool, &revision.id).await, "ready");
+    }
+
+    #[tokio::test]
+    async fn failed_promotion_rolls_back_test_pass_update() {
+        let pool = boot_test_pool().await;
+        let revision = awaiting_revision(&pool).await;
+        add_revision_servicing_snapshot(&pool).await;
+        let test = start_boot_test(&pool, &revision.id, "test-1", "PCI\\VEN_8086&DEV_15F3")
+            .await
+            .unwrap();
+        sqlx::query("UPDATE windows_image_driver_revisions SET status = 'ready' WHERE id = ?")
+            .bind(&revision.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert!(
+            record_boot_test_result(&pool, "test-1", &revision.id, "PCI\\VEN_8086&DEV_15F3")
+                .await
+                .is_err()
+        );
+        let status: String =
+            sqlx::query_scalar("SELECT status FROM windows_revision_boot_tests WHERE id = ?")
+                .bind(test.id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            status, "candidate",
+            "the test update must roll back when promotion loses its state race"
+        );
+    }
+
+    #[tokio::test]
+    async fn provenance_migration_fails_unverifiable_open_rows_and_keeps_history() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::raw_sql("CREATE TABLE clients (id TEXT PRIMARY KEY, master TEXT, snapshot TEXT); CREATE TABLE images (id TEXT PRIMARY KEY, name TEXT, kind TEXT, status TEXT, parent_id TEXT); CREATE TABLE windows_image_driver_revisions (id TEXT PRIMARY KEY, revision_image_id TEXT); CREATE TABLE windows_revision_boot_tests (id TEXT PRIMARY KEY, revision_id TEXT, test_client_id TEXT, expected_nic_id TEXT, status TEXT, reported_revision TEXT, reported_nic_id TEXT, result_at TEXT, created_at TEXT);")
+            .execute(&pool).await.unwrap();
+        sqlx::raw_sql("INSERT INTO clients VALUES ('client', 'old-image', NULL); INSERT INTO images VALUES ('img', 'old-image', 'master', 'ready', NULL); INSERT INTO windows_image_driver_revisions VALUES ('rev', 'img'); INSERT INTO windows_revision_boot_tests VALUES ('open', 'rev', 'client', 'NIC', 'candidate', NULL, NULL, NULL, '2026-01-01'); INSERT INTO windows_revision_boot_tests VALUES ('done', 'rev', 'client', 'NIC', 'passed', 'rev', 'NIC', '2026-01-02', '2026-01-01');")
+            .execute(&pool).await.unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../migrations/0011_windows_boot_test_provenance_retries.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let statuses: Vec<(String, String)> =
+            sqlx::query_as("SELECT id, status FROM windows_revision_boot_tests ORDER BY id")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            statuses,
+            vec![
+                ("done".into(), "passed".into()),
+                ("open".into(), "failed".into())
+            ]
+        );
+        sqlx::query("INSERT INTO windows_revision_boot_tests (id, revision_id, test_client_id, expected_nic_id, candidate_image_id, candidate_snapshot, status, created_at) VALUES ('retry', 'rev', 'client', 'NIC', 'img', 'old-image@serviced-new', 'candidate', '2026-01-03')")
+            .execute(&pool).await.unwrap();
     }
 
     #[tokio::test]
@@ -890,6 +1167,13 @@ mod tests {
                 .is_err()
         );
         let revision = awaiting_revision(&pool).await;
+        assert!(
+            start_boot_test(&pool, &revision.id, "test-1", "PCI\\VEN_1&DEV_2")
+                .await
+                .is_err(),
+            "must reject a client that is not booting the candidate"
+        );
+        add_revision_servicing_snapshot(&pool).await;
         assert!(
             start_boot_test(&pool, &revision.id, "ghost", "PCI\\VEN_1&DEV_2")
                 .await
@@ -948,12 +1232,31 @@ mod tests {
         }
     }
 
+    fn passed_nic_tests(
+        entries: &[(&str, &str)],
+    ) -> std::collections::HashMap<String, Vec<String>> {
+        let mut passed = std::collections::HashMap::new();
+        for (revision_id, nic_id) in entries {
+            passed
+                .entry((*revision_id).to_string())
+                .or_insert_with(Vec::new)
+                .push((*nic_id).to_string());
+        }
+        passed
+    }
+
     #[test]
     fn assignment_requires_inventory_and_names_the_mac() {
         let catalog = vec![gate_package("pkg", &["PCI\\VEN_8086&DEV_15F3"])];
         let revisions = vec![gate_revision("rev-1", &["pkg"], Some("img-1"))];
-        let error =
-            select_windows_assignment("02:00:00:00:00:09", None, &revisions, &catalog).unwrap_err();
+        let error = select_windows_assignment(
+            "02:00:00:00:00:09",
+            None,
+            &revisions,
+            &passed_nic_tests(&[]),
+            &catalog,
+        )
+        .unwrap_err();
         assert!(error.to_string().contains("02:00:00:00:00:09"), "{error:#}");
         assert!(error.to_string().contains("inventory"), "{error:#}");
     }
@@ -969,8 +1272,12 @@ mod tests {
             gate_revision("rev-old", &["old-pkg"], Some("img-old")),
         ];
         let boot = vec!["PCI\\VEN_8086&DEV_15F3".to_string()];
+        let passed = passed_nic_tests(&[
+            ("rev-new", "PCI\\VEN_8086&DEV_15F3"),
+            ("rev-old", "PCI\\VEN_8086&DEV_15F3"),
+        ]);
         let assignment =
-            select_windows_assignment("mac", Some(&boot), &revisions, &catalog).unwrap();
+            select_windows_assignment("mac", Some(&boot), &revisions, &passed, &catalog).unwrap();
         assert_eq!(
             assignment,
             Some(WindowsAssignment {
@@ -985,17 +1292,37 @@ mod tests {
         let catalog = vec![gate_package("pkg", &["PCI\\VEN_ABCD&DEV_EF01"])];
         let revisions = vec![gate_revision("rev-1", &["pkg"], Some("img-1"))];
         let boot = vec!["PCI\\VEN_8086&DEV_15F3".to_string()];
-        let error =
-            select_windows_assignment("mac", Some(&boot), &revisions, &catalog).unwrap_err();
+        let passed = passed_nic_tests(&[("rev-1", "PCI\\VEN_8086&DEV_15F3")]);
+        let error = select_windows_assignment("mac", Some(&boot), &revisions, &passed, &catalog)
+            .unwrap_err();
         assert!(error.to_string().contains("VEN_8086"), "{error:#}");
         // A revision without a published image or without packages never matches.
         let empty = vec![
             gate_revision("rev-noimg", &["pkg"], None),
             gate_revision("rev-empty", &[], Some("img-empty")),
         ];
-        assert!(select_windows_assignment("mac", Some(&boot), &empty, &catalog).is_err());
+        assert!(select_windows_assignment("mac", Some(&boot), &empty, &passed, &catalog).is_err());
         // No ready revision at all is a distinct actionable refusal.
-        let error = select_windows_assignment("mac", Some(&boot), &[], &catalog).unwrap_err();
+        let error =
+            select_windows_assignment("mac", Some(&boot), &[], &passed, &catalog).unwrap_err();
         assert!(error.to_string().contains("no tested"), "{error:#}");
+    }
+
+    #[test]
+    fn assignment_refuses_package_covered_nic_without_its_own_passed_test() {
+        let nic_a = "PCI\\VEN_8086&DEV_15F3";
+        let nic_b = "PCI\\VEN_10EC&DEV_8168";
+        let catalog = vec![
+            gate_package("pkg-a", &[nic_a]),
+            gate_package("pkg-b", &[nic_b]),
+        ];
+        let revisions = vec![gate_revision("rev-1", &["pkg-a", "pkg-b"], Some("img-1"))];
+        let boot = vec![nic_b.to_string()];
+        let passed = passed_nic_tests(&[("rev-1", nic_a)]);
+
+        let error = select_windows_assignment("mac", Some(&boot), &revisions, &passed, &catalog)
+            .unwrap_err();
+
+        assert!(error.to_string().contains(nic_b), "{error:#}");
     }
 }

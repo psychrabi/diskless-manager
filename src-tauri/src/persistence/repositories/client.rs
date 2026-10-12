@@ -406,19 +406,27 @@ impl ClientRepository {
     pub async fn delete(&self, id: &ClientId) -> Result<bool> {
         // Most child tables have no ON DELETE CASCADE; remove their rows
         // before the parent row or the delete fails with a foreign key error.
+        let mut transaction = self.pool.begin().await?;
         for table in [
             "boot_logs",
             "control_operations",
             "error_logs",
             "scheduled_operations",
             "os_type_cache",
+            "windows_driver_reports",
         ] {
             sqlx::query(&format!("DELETE FROM {table} WHERE client_id = ?"))
                 .bind(id.as_str())
-                .execute(&self.pool)
+                .execute(&mut *transaction)
                 .await
                 .with_context(|| format!("failed to delete {table} for client"))?;
         }
+        sqlx::query("UPDATE windows_revision_boot_tests SET status = 'failed', result_at = COALESCE(result_at, ?) WHERE test_client_id = ? AND status = 'candidate'")
+            .bind(chrono::Utc::now().to_rfc3339())
+            .bind(id.as_str())
+            .execute(&mut *transaction)
+            .await
+            .context("failed to close Windows boot tests for deleted client")?;
         let result = sqlx::query(
             r#"
             DELETE FROM clients
@@ -426,10 +434,14 @@ impl ClientRepository {
             "#,
         )
         .bind(id.as_str())
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await
         .context("failed to delete client")?;
 
+        transaction
+            .commit()
+            .await
+            .context("failed to commit client deletion")?;
         Ok(result.rows_affected() > 0)
     }
 

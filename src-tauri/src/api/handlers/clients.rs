@@ -444,9 +444,9 @@ async fn persist_client_runtime_state(
 /// Resolves `request.master`/`request.snapshot` in place: a Windows master
 /// without a tested Boot NIC match refuses creation with an actionable
 /// hardware-ID message, while a covered client is assigned the newest `ready`
-/// revision. Non-Windows masters, unknown image names, and already-pinned
-/// tested revisions pass through unchanged. Must run before any storage or
-/// iPXE side effect.
+/// revision. Explicit revisions still require matching inventory and always
+/// use their immutable servicing snapshot as the private clone source.
+/// Must run before any storage or iPXE side effect.
 async fn gate_windows_assignment(
     state: &AppState,
     settings: &crate::core::config::Settings,
@@ -459,16 +459,21 @@ async fn gate_windows_assignment(
     if master.os_type != crate::core::image::OsType::Windows {
         return Ok(());
     }
-    // An explicitly chosen tested revision stays pinned as requested.
-    let pinned: Option<(String,)> = sqlx::query_as(
-        "SELECT id FROM windows_image_driver_revisions WHERE revision_image_id = ? AND status = 'ready' LIMIT 1",
+    let pinned: Option<(String, String, String)> = sqlx::query_as(
+        "SELECT id, source_image_id, status FROM windows_image_driver_revisions WHERE revision_image_id = ? LIMIT 1",
     )
     .bind(&master.id)
     .fetch_optional(&state.db_pool)
     .await
     .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, format!("failed to inspect driver revisions: {error}")))?;
-    if pinned.is_some() {
-        return Ok(());
+    if pinned
+        .as_ref()
+        .is_some_and(|(_, _, status)| status != "ready")
+    {
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Windows revision has not passed its boot test".into(),
+        ));
     }
     let mac = crate::domain::MacAddress::parse(&request.mac).map_err(|_| {
         (
@@ -497,7 +502,11 @@ async fn gate_windows_assignment(
             )
         })?;
     let mut revisions = repository
-        .list_driver_revisions(&master.id)
+        .list_driver_revisions(
+            pinned
+                .as_ref()
+                .map_or(master.id.as_str(), |(_, source_id, _)| source_id.as_str()),
+        )
         .await
         .map_err(|error| {
             (
@@ -508,6 +517,9 @@ async fn gate_windows_assignment(
     revisions.retain(|revision| {
         revision.status == crate::core::image::DriverRevisionStatus::Ready
             && revision.revision_image_id.is_some()
+            && pinned
+                .as_ref()
+                .map_or(true, |(id, _, _)| &revision.id == id)
     });
     revisions.reverse();
     let root = std::path::PathBuf::from(&settings.http.root_dir);
@@ -527,10 +539,31 @@ async fn gate_windows_assignment(
             format!("driver catalog check failed: {error:#}"),
         )
     })?;
+    let passed_rows: Vec<(String, String, String, String)> = sqlx::query_as(
+        "SELECT revision_id, expected_nic_id, reported_revision, reported_nic_id FROM windows_revision_boot_tests WHERE status = 'passed'",
+    )
+    .fetch_all(&state.db_pool)
+    .await
+    .map_err(|error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to inspect passed Windows NIC tests: {error}"),
+        )
+    })?;
+    let mut passed_nic_tests = std::collections::HashMap::<String, Vec<String>>::new();
+    for (revision_id, expected_nic, reported_revision, reported_nic) in passed_rows {
+        if reported_revision == revision_id && reported_nic.eq_ignore_ascii_case(&expected_nic) {
+            passed_nic_tests
+                .entry(revision_id)
+                .or_default()
+                .push(expected_nic);
+        }
+    }
     let assignment = crate::application::windows_servicing::select_windows_assignment(
         mac.as_str(),
         boot_ids.as_deref(),
         &revisions,
+        &passed_nic_tests,
         &catalog,
     )
     .map_err(|error| (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()))?;
@@ -556,10 +589,42 @@ async fn gate_windows_assignment(
             image = %image.name,
             "assigning new Windows client to the newest tested revision"
         );
+        request.snapshot = Some(revision_clone_snapshot(&repository, &image).await?);
         request.master = image.name;
-        request.snapshot = None;
     }
     Ok(())
+}
+
+/// A serviced revision is never exposed as writable client storage.
+async fn revision_clone_snapshot(
+    repository: &ImageRepository,
+    image: &crate::core::image::Image,
+) -> Result<String, (StatusCode, String)> {
+    let snapshots = repository.list().await.map_err(|error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to inspect revision snapshot: {error:#}"),
+        )
+    })?;
+    let mut serviced = snapshots.iter().filter(|snapshot| {
+        snapshot.kind == crate::core::image::ImageKind::Snapshot
+            && snapshot.parent_id.as_deref() == Some(image.id.as_str())
+            && snapshot.name.starts_with("serviced-")
+            && snapshot.status == "ready"
+    });
+    let Some(snapshot) = serviced.next() else {
+        return Err((
+            StatusCode::CONFLICT,
+            "Windows revision has no immutable servicing snapshot".into(),
+        ));
+    };
+    if serviced.next().is_some() {
+        return Err((
+            StatusCode::CONFLICT,
+            "Windows revision has ambiguous servicing snapshots".into(),
+        ));
+    }
+    Ok(format!("{}@{}", image.name, snapshot.name))
 }
 
 pub async fn create_client(
@@ -1059,6 +1124,16 @@ pub async fn update_client(
                     ));
                 }
 
+                if make_super {
+                    let revision: Option<(String,)> = sqlx::query_as("SELECT id FROM windows_image_driver_revisions WHERE revision_image_id = (SELECT id FROM images WHERE name = ? OR id = ? LIMIT 1) LIMIT 1")
+                        .bind(&master).bind(&master).fetch_optional(&state.db_pool).await.map_err(|error| {
+                            (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { status: 500, error: error.to_string() }))
+                        })?;
+                    if revision.is_some() {
+                        return Err((StatusCode::CONFLICT, Json(ErrorResponse { status: 409, error: "Windows revisions are immutable; build a new revision to change the image".into() })));
+                    }
+                }
+
                 let client_status =
                     crate::utils::network::get_client_status_realtime(existing_client.ip.clone());
 
@@ -1543,6 +1618,93 @@ pub async fn update_client(
     // explicitly supplies master, allowing a null snapshot to select it directly.
     if request.master.is_none() && request.snapshot.is_none() {
         request.snapshot = existing_client.snapshot.clone();
+    }
+    if is_unprovisioned_enrollment(&existing_client)
+        || request
+            .master
+            .as_ref()
+            .is_some_and(|master| master != &existing_client.master)
+    {
+        let mut assignment = CreateClientRequest {
+            name: request
+                .name
+                .clone()
+                .unwrap_or_else(|| existing_client.name.clone()),
+            mac: request
+                .mac
+                .clone()
+                .unwrap_or_else(|| existing_client.mac.clone()),
+            ip: request
+                .ip
+                .clone()
+                .unwrap_or_else(|| existing_client.ip.clone()),
+            master: request
+                .master
+                .clone()
+                .unwrap_or_else(|| existing_client.master.clone()),
+            snapshot: request.snapshot.clone(),
+            keep_writeback: request.keep_writeback,
+            use_game_disk: request.use_game_disk,
+            game_disks: request.game_disks.clone(),
+            chap_enabled: request.chap_enabled,
+            block_store: None,
+            block_device: None,
+            target_iqn: None,
+        };
+        gate_windows_assignment(&state, &settings, &mut assignment)
+            .await
+            .map_err(|(status, error)| {
+                (
+                    status,
+                    Json(ErrorResponse {
+                        status: status.as_u16(),
+                        error,
+                    }),
+                )
+            })?;
+        request.master = Some(assignment.master);
+        request.snapshot = assignment.snapshot;
+    } else {
+        // A full form may omit the snapshot; a pinned revision still owns a private clone.
+        let repository = ImageRepository::new(state.db_pool.clone());
+        let revision: Option<(String,)> = sqlx::query_as("SELECT id FROM windows_image_driver_revisions WHERE revision_image_id = (SELECT id FROM images WHERE name = ? OR id = ? LIMIT 1) LIMIT 1")
+            .bind(&existing_client.master).bind(&existing_client.master).fetch_optional(&state.db_pool).await.map_err(|error| {
+                (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { status: 500, error: error.to_string() }))
+            })?;
+        if revision.is_some() {
+            let image = repository
+                .get(&existing_client.master)
+                .await
+                .map_err(|error| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ErrorResponse {
+                            status: 500,
+                            error: error.to_string(),
+                        }),
+                    )
+                })?
+                .ok_or_else(|| {
+                    (
+                        StatusCode::CONFLICT,
+                        Json(ErrorResponse {
+                            status: 409,
+                            error: "Windows revision image is missing".into(),
+                        }),
+                    )
+                })?;
+            request.snapshot = Some(revision_clone_snapshot(&repository, &image).await.map_err(
+                |(status, error)| {
+                    (
+                        status,
+                        Json(ErrorResponse {
+                            status: status.as_u16(),
+                            error,
+                        }),
+                    )
+                },
+            )?);
+        }
     }
     let stored_game_disks = crate::core::reconciliation::stored_game_selection(&state.db_pool, &id)
         .await
@@ -2044,8 +2206,8 @@ pub async fn rotate_client_chap(
 }
 
 /// Ask an unprovisioned client to boot WinPE for NIC inventory on its next
-/// enrollment. The flag is consumed when the inventory upload lands; the next
-/// boot after that returns to the normal dispatch path.
+/// enrollment. The flag is consumed when the PXE handler dispatches the
+/// inventory boot; the next boot returns to normal dispatch.
 pub async fn request_inventory_boot(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -2240,6 +2402,23 @@ mod error_contract_tests {
             )
             .await
             .unwrap();
+        sqlx::query("INSERT INTO images (id, name, kind, os_type, size_gb, path, format, status, parent_id, created_at, updated_at) VALUES ('img-rev-snapshot', 'serviced-test', 'snapshot', 'windows', 50, '', 'raw', 'ready', 'img-rev', ?, ?)")
+            .bind(chrono::Utc::now().to_rfc3339())
+            .bind(chrono::Utc::now().to_rfc3339())
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT OR IGNORE INTO clients (id, name, mac, ip, master, enabled, created_at, updated_at) VALUES ('boot-test-client', 'Boot Test Client', '02:00:00:00:00:99', '192.0.2.99', 'img-win', 1, 'now', 'now')")
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO windows_revision_boot_tests (id, revision_id, test_client_id, expected_nic_id, candidate_snapshot, status, reported_revision, reported_nic_id, result_at, created_at) VALUES (?, ?, 'boot-test-client', 'PCI\\VEN_8086&DEV_15F3', 'img-rev@serviced-test', 'passed', ?, 'PCI\\VEN_8086&DEV_15F3', 'now', 'now')")
+            .bind(format!("passed-{}", revision.id))
+            .bind(&revision.id)
+            .bind(&revision.id)
+            .execute(pool)
+            .await
+            .unwrap();
         revision.id
     }
 
@@ -2287,7 +2466,147 @@ mod error_contract_tests {
             .await
             .unwrap();
         assert_eq!(request.master, "tank/image/windows-rev");
-        assert_eq!(request.snapshot, None);
+        assert_eq!(
+            request.snapshot.as_deref(),
+            Some("tank/image/windows-rev@serviced-test")
+        );
+        let first = super::build_storage_spec(
+            &state.config,
+            &settings,
+            "id-1",
+            "PC001",
+            &request.master,
+            request.snapshot.as_deref(),
+            false,
+        )
+        .unwrap();
+        let second = super::build_storage_spec(
+            &state.config,
+            &settings,
+            "id-2",
+            "PC002",
+            &request.master,
+            request.snapshot.as_deref(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            first.source,
+            crate::domain::storage::StorageSource::Snapshot(
+                "tank/image/windows-rev@serviced-test".into()
+            )
+        );
+        assert_eq!(second.source, first.source);
+        assert_ne!(first.dataset, second.dataset);
+        assert_ne!(first.dataset, request.master);
+        assert_ne!(second.dataset, request.master);
+    }
+
+    #[tokio::test]
+    async fn explicit_revision_requires_matching_inventory_and_private_storage() {
+        let (state, settings) =
+            gate_state(Some(&catalog_with("pkg-1", "PCI\\VEN_8086&DEV_15F3"))).await;
+        ready_revision(&state.db_pool, &["pkg-1"]).await;
+        let mut request = gate_request("tank/image/windows-rev");
+        request.snapshot = None;
+        assert!(
+            super::gate_windows_assignment(&state, &settings, &mut request)
+                .await
+                .is_err()
+        );
+        sqlx::query(
+            "INSERT INTO windows_nic_inventory (mac, boot_nic_ids, observed_at) VALUES (?, ?, ?)",
+        )
+        .bind(&request.mac)
+        .bind(serde_json::json!(["PCI\\VEN_8086&DEV_15F3"]).to_string())
+        .bind("2026-01-01T00:00:00Z")
+        .execute(&state.db_pool)
+        .await
+        .unwrap();
+        super::gate_windows_assignment(&state, &settings, &mut request)
+            .await
+            .unwrap();
+        assert_eq!(
+            request.snapshot.as_deref(),
+            Some("tank/image/windows-rev@serviced-test")
+        );
+    }
+
+    #[tokio::test]
+    async fn pending_enrollment_update_requires_windows_inventory_before_storage() {
+        let (state, _) = gate_state(None).await;
+        let mut pending = gate_request("pending");
+        pending.snapshot = None;
+        let existing = super::ClientManager::new(state.db_pool.clone())
+            .create(pending)
+            .await
+            .unwrap();
+        // This pool is deliberately outside the configured pool, so the broken
+        // path refuses validation before it can call privileged infrastructure.
+        let request =
+            serde_json::from_value(serde_json::json!({"master": "tank/image/windows"})).unwrap();
+        let (status, _) = super::update_client(
+            axum::extract::State(state),
+            axum::extract::Path(existing.id),
+            axum::Json(request),
+        )
+        .await
+        .err()
+        .unwrap();
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn revision_cannot_become_a_shared_writable_super_image() {
+        let (state, _) = gate_state(None).await;
+        ready_revision(&state.db_pool, &["pkg-1"]).await;
+        let mut request = gate_request("tank/image/windows-rev");
+        request.snapshot = Some("tank/image/windows-rev@serviced-test".into());
+        let existing = super::ClientManager::new(state.db_pool.clone())
+            .create(request)
+            .await
+            .unwrap();
+        let request =
+            serde_json::from_value(serde_json::json!({"action": "super", "make_super": true}))
+                .unwrap();
+        let (status, error) = super::update_client(
+            axum::extract::State(state),
+            axum::extract::Path(existing.id),
+            axum::Json(request),
+        )
+        .await
+        .err()
+        .unwrap();
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert!(error.0.error.contains("immutable"));
+    }
+
+    #[tokio::test]
+    async fn explicit_revision_refuses_missing_or_ambiguous_immutable_snapshot() {
+        for ambiguous in [false, true] {
+            let (state, settings) =
+                gate_state(Some(&catalog_with("pkg-1", "PCI\\VEN_8086&DEV_15F3"))).await;
+            ready_revision(&state.db_pool, &["pkg-1"]).await;
+            sqlx::query("INSERT INTO windows_nic_inventory (mac, boot_nic_ids, observed_at) VALUES (?, ?, ?)")
+                .bind("02:00:00:00:00:09")
+                .bind(serde_json::json!(["PCI\\VEN_8086&DEV_15F3"]).to_string())
+                .bind("2026-01-01T00:00:00Z")
+                .execute(&state.db_pool).await.unwrap();
+            if ambiguous {
+                sqlx::query("INSERT INTO images (id, name, kind, os_type, size_gb, path, format, status, parent_id, created_at, updated_at) VALUES ('second', 'serviced-other', 'snapshot', 'windows', 50, '', 'raw', 'ready', 'img-rev', ?, ?)")
+                    .bind(chrono::Utc::now().to_rfc3339()).bind(chrono::Utc::now().to_rfc3339()).execute(&state.db_pool).await.unwrap();
+            } else {
+                sqlx::query("DELETE FROM images WHERE id = 'img-rev-snapshot'")
+                    .execute(&state.db_pool)
+                    .await
+                    .unwrap();
+            }
+            let mut request = gate_request("tank/image/windows-rev");
+            let (status, _) = super::gate_windows_assignment(&state, &settings, &mut request)
+                .await
+                .unwrap_err();
+            assert_eq!(status, StatusCode::CONFLICT);
+        }
     }
 
     #[tokio::test]

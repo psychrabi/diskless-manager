@@ -174,7 +174,7 @@ export default function WindowsServicingModal({ isOpen, onClose, onPrepared }) {
   const canRun = useMemo(() => {
     const driverReady =
       driverSource === "catalog"
-        ? selectedDriverIds.length > 0
+        ? imageMode === "managed" || selectedDriverIds.length > 0
         : Boolean(form.driverRoot.trim());
 
     return Boolean(
@@ -542,8 +542,10 @@ export default function WindowsServicingModal({ isOpen, onClose, onPrepared }) {
             <div>
               <h3 className="text-sm font-semibold">Network drivers</h3>
               <p className="text-xs text-muted-foreground">
-                Use imported packages for managed staging, or point at a folder
-                that already exists on the Windows worker.
+                Managed catalog builds add packages matching recorded client Boot NICs and consistent
+                inventory architecture. If architecture is missing or mixed, automatic selection uses
+                architecture-neutral packages only. Manual selections add extra packages. Existing
+                worker folders are for dry runs because their package IDs cannot be recorded in a tested revision.
               </p>
             </div>
             <div className="flex rounded-md border p-1">
@@ -580,9 +582,7 @@ export default function WindowsServicingModal({ isOpen, onClose, onPrepared }) {
                 <span className="text-muted-foreground">
                   {driversLoading
                     ? "Loading imported drivers..."
-                    : selectedDriverIds.length +
-                      " selected of " +
-                      drivers.length}
+                    : selectedDriverIds.length + " manually selected of " + drivers.length}
                 </span>
                 {drivers.length > 0 && (
                   <div className="flex gap-2">
@@ -731,7 +731,7 @@ export default function WindowsServicingModal({ isOpen, onClose, onPrepared }) {
             variant="primary"
             icon={ShieldCheck}
             loading={preparing}
-            disabled={!canRun || preparing}
+            disabled={!canRun || preparing || (imageMode === "managed" && driverSource === "remote")}
             onClick={() => runPreparation(true)}
           >
             Prepare and Commit

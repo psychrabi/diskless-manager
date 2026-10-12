@@ -230,6 +230,53 @@ impl ImageRepository {
     }
 
     pub async fn set_default(&self, id: &str) -> Result<bool> {
+        let mut transaction = self.pool.begin().await?;
+        let revision: Option<(String, String)> = sqlx::query_as(
+            "SELECT id, status FROM windows_image_driver_revisions WHERE revision_image_id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        if let Some((revision_id, status)) = revision {
+            if status != DriverRevisionStatus::Ready.to_string() {
+                anyhow::bail!(
+                    "a Windows image revision must pass boot testing before it can be the default"
+                );
+            }
+            let inventories: Vec<String> =
+                sqlx::query_scalar("SELECT boot_nic_ids FROM windows_nic_inventory ORDER BY mac")
+                    .fetch_all(&mut *transaction)
+                    .await?;
+            let passed_tests: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
+                "SELECT expected_nic_id, reported_revision, reported_nic_id FROM windows_revision_boot_tests WHERE revision_id = ? AND status = 'passed'",
+            )
+            .bind(&revision_id)
+            .fetch_all(&mut *transaction)
+            .await?;
+            for inventory in inventories {
+                let boot_nic_ids: Vec<String> = serde_json::from_str(&inventory)
+                    .context("failed to decode a stored Windows Boot NIC inventory")?;
+                let covered = boot_nic_ids.iter().any(|boot_nic_id| {
+                    passed_tests
+                        .iter()
+                        .any(|(expected, reported_revision, reported_nic)| {
+                            expected.eq_ignore_ascii_case(boot_nic_id)
+                                && reported_revision.as_deref() == Some(revision_id.as_str())
+                                && reported_nic
+                                    .as_deref()
+                                    .is_some_and(|reported| reported.eq_ignore_ascii_case(expected))
+                        })
+                });
+                if !covered {
+                    anyhow::bail!(
+                        "a Windows revision needs a passed matching NIC boot test for every recorded client before it can be the default"
+                    );
+                }
+            }
+        }
+        sqlx::query("UPDATE images SET is_default = 0")
+            .execute(&mut *transaction)
+            .await?;
         let result = sqlx::query(
             r#"
             UPDATE images
@@ -241,10 +288,16 @@ impl ImageRepository {
         )
         .bind(Utc::now().to_rfc3339())
         .bind(id)
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await?;
 
-        Ok(result.rows_affected() > 0)
+        if result.rows_affected() == 0 {
+            transaction.rollback().await?;
+            return Ok(false);
+        }
+
+        transaction.commit().await?;
+        Ok(true)
     }
 
     fn map_row(row: ImageRow) -> Result<Image> {

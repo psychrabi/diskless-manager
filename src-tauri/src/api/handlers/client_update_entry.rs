@@ -278,7 +278,7 @@ pub async fn update_client(
     state
         .application
         .storage
-        .sync_game_storage(&id, &target_iqn, &resolved, chap.as_ref())
+        .sync_game_storage(&id, &existing.name, &target_iqn, &resolved, chap.as_ref())
         .map_err(|error| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,

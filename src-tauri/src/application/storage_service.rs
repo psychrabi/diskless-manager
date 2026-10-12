@@ -517,6 +517,7 @@ impl StorageService {
     pub fn reset_game_clones(
         &self,
         client_id: &str,
+        client_name: &str,
         target_iqn: &str,
         masters: &[String],
         chap: Option<&ChapCredentials>,
@@ -547,6 +548,9 @@ impl StorageService {
         let luns = Self::build_game_luns(client_id, masters);
         if !luns.is_empty() {
             let mut spec = IscsiTargetSpec::with_luns(target_iqn, luns)?;
+            spec.initiator_iqn = Some(crate::infrastructure::pxe::client_initiator_iqn(
+                client_name,
+            ));
             spec.chap = chap.cloned();
             self.iscsi.create_target(&spec).with_context(|| {
                 format!("failed to re-expose game LUNs for client '{client_id}'")
@@ -601,6 +605,7 @@ impl StorageService {
     pub fn sync_game_storage(
         &self,
         client_id: &str,
+        client_name: &str,
         target_iqn: &str,
         masters: &[String],
         chap: Option<&ChapCredentials>,
@@ -615,6 +620,9 @@ impl StorageService {
         self.prune_game_luns(target_iqn, &desired)?;
         if !luns.is_empty() {
             let mut spec = IscsiTargetSpec::with_luns(target_iqn, luns)?;
+            spec.initiator_iqn = Some(crate::infrastructure::pxe::client_initiator_iqn(
+                client_name,
+            ));
             spec.chap = chap.cloned();
             // Additive and idempotent: existing LUNs are left alone.
             self.iscsi
@@ -816,6 +824,7 @@ impl StorageService {
         }
 
         let mut iscsi_spec = IscsiTargetSpec::with_luns(&spec.target_iqn, luns)?;
+        iscsi_spec.initiator_iqn = Some(spec.initiator_iqn());
         // Enforcement travels with every provision: configure_tpg applies
         // (or explicitly clears) target authentication from this field.
         iscsi_spec.chap = spec.chap.clone();
@@ -1065,7 +1074,32 @@ impl StorageService {
             .exists(&spec.dataset)
             .context("failed to inspect ZFS client storage")?;
 
-        let iscsi_spec = if spec.use_game_disk {
+        let iscsi_spec = self.desired_iscsi_spec(spec)?;
+
+        let iscsi_state = self
+            .iscsi
+            .inspect_target(&iscsi_spec)
+            .context("failed to inspect iSCSI client storage")?;
+
+        let iscsi_present = iscsi_state.is_ready();
+
+        let state = match (zfs_present, iscsi_present) {
+            (false, false) => StorageState::Missing,
+            (true, true) => StorageState::Ready,
+            _ => StorageState::Partial,
+        };
+
+        Ok(StorageReconcileResult {
+            state,
+            zfs_present,
+            iscsi_present,
+            target_iqn: spec.target_iqn.clone(),
+            dataset: spec.dataset.clone(),
+        })
+    }
+
+    fn desired_iscsi_spec(&self, spec: &ClientStorageSpec) -> Result<IscsiTargetSpec> {
+        let mut iscsi_spec = if spec.use_game_disk {
             let mut luns = vec![IscsiLunSpec::new(
                 spec.lun,
                 &spec.backstore,
@@ -1093,27 +1127,9 @@ impl StorageService {
                 spec.lun,
             )
         };
+        iscsi_spec.initiator_iqn = Some(spec.initiator_iqn());
 
-        let iscsi_state = self
-            .iscsi
-            .inspect_target(&iscsi_spec)
-            .context("failed to inspect iSCSI client storage")?;
-
-        let iscsi_present = iscsi_state.is_ready();
-
-        let state = match (zfs_present, iscsi_present) {
-            (false, false) => StorageState::Missing,
-            (true, true) => StorageState::Ready,
-            _ => StorageState::Partial,
-        };
-
-        Ok(StorageReconcileResult {
-            state,
-            zfs_present,
-            iscsi_present,
-            target_iqn: spec.target_iqn.clone(),
-            dataset: spec.dataset.clone(),
-        })
+        Ok(iscsi_spec)
     }
 
     /// Reconcile actual infrastructure to desired state.
@@ -1124,7 +1140,11 @@ impl StorageService {
         let state = self.reconcile_client_storage(spec)?;
 
         match state.state {
-            StorageState::Ready => Ok(self.storage_from_spec(spec)),
+            StorageState::Ready => {
+                self.iscsi
+                    .ensure_initiator_acl(&self.desired_iscsi_spec(spec)?)?;
+                Ok(self.storage_from_spec(spec))
+            }
 
             StorageState::Missing => self.create_client_storage(spec),
 
@@ -1212,6 +1232,10 @@ impl StorageService {
     fn validate_spec(&self, spec: &ClientStorageSpec) -> Result<()> {
         if spec.client_id.trim().is_empty() {
             bail!("client ID cannot be empty");
+        }
+
+        if spec.client_name.trim().is_empty() {
+            bail!("client name cannot be empty");
         }
 
         if spec.dataset.trim().is_empty() {

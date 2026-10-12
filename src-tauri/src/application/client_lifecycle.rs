@@ -1,5 +1,5 @@
 //! Durable offline deadlines; independent of UI connections and ping status.
-use super::storage_service::OfflineReplacement;
+use super::storage_service::{OfflineReplacement, StorageService};
 use crate::infrastructure::iscsi::reconcile::confirmed_target_connected as session_state;
 use crate::{
     domain::{
@@ -10,6 +10,7 @@ use crate::{
     state::AppState,
 };
 use anyhow::{bail, Context, Result};
+use std::sync::Arc;
 
 #[derive(Debug, Default, sqlx::FromRow)]
 struct ResetState {
@@ -78,6 +79,7 @@ fn storage_spec(client: &Client, prefix: &str) -> Result<ClientStorageSpec> {
     }
     Ok(ClientStorageSpec {
         client_id: client.id.to_string(),
+        client_name: client.name.clone(),
         source: StorageSource::Snapshot(snapshot.to_owned()),
         dataset: dataset.to_owned(),
         backstore: format!("block_{}", client.name.trim().to_lowercase()),
@@ -192,8 +194,9 @@ async fn process(state: &AppState, client: &Client) -> Result<()> {
 
     // Finish a journal before clearing a deadline or accepting new settings.
     if let Some(journal) = saved.operation.as_deref() {
+        let mut operation: OfflineReplacement = serde_json::from_str(journal)?;
+        validate_recovery_owner(client.id.as_str(), &operation)?;
         if connected == Some(true) {
-            let mut operation: OfflineReplacement = serde_json::from_str(journal)?;
             if !operation.committed {
                 let storage = state.application.storage.clone();
                 let candidate = operation.clone();
@@ -222,14 +225,10 @@ async fn process(state: &AppState, client: &Client) -> Result<()> {
         if now < saved.retry_after {
             return Ok(());
         }
-        ensure_no_nvme_export(client).await?;
-        let operation: OfflineReplacement = serde_json::from_str(journal)?;
         let storage = state.application.storage.clone();
-        tokio::task::spawn_blocking(move || storage.recover_offline(&operation)).await??;
-        sqlx::query("UPDATE client_offline_resets SET operation = NULL WHERE client_id = ?")
-            .bind(client.id.as_str())
-            .execute(&state.db_pool)
-            .await?;
+        let operations: Arc<dyn PendingRecoveryOperations> =
+            Arc::new(SystemPendingRecoveryOperations(storage));
+        recover_pending_operation(&state.db_pool, client, &operation, operations).await?;
         saved.operation = None;
     }
     if saved.fingerprint != fingerprint {
@@ -330,11 +329,13 @@ async fn process(state: &AppState, client: &Client) -> Result<()> {
                             Ok(masters) => {
                                 let storage = state.application.storage.clone();
                                 let client_id = client.id.to_string();
+                                let client_name = client.name.clone();
                                 let game_target = target.clone();
                                 let chap = operation.spec.chap.clone();
                                 let result = tokio::task::spawn_blocking(move || {
                                     storage.reset_game_clones(
                                         &client_id,
+                                        &client_name,
                                         &game_target,
                                         &masters,
                                         chap.as_ref(),
@@ -391,6 +392,105 @@ pub enum PendingRecoverySafetyError {
     NvmeExported,
 }
 
+#[derive(Debug, thiserror::Error)]
+enum PendingRecoveryError {
+    #[error(transparent)]
+    Safety(#[from] PendingRecoverySafetyError),
+    #[error("storage recovery failed: {0:#}")]
+    Attempt(#[source] anyhow::Error),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
+trait PendingRecoveryOperations: Send + Sync + 'static {
+    fn target_connected(&self, target_iqn: &str) -> Result<bool>;
+    fn device_exported(&self, device: &std::path::Path) -> Result<bool>;
+    fn recover_offline(&self, operation: &OfflineReplacement) -> Result<()>;
+}
+
+struct SystemPendingRecoveryOperations(Arc<StorageService>);
+
+impl PendingRecoveryOperations for SystemPendingRecoveryOperations {
+    fn target_connected(&self, target_iqn: &str) -> Result<bool> {
+        crate::infrastructure::iscsi::reconcile::target_has_active_sessions(target_iqn)
+    }
+
+    fn device_exported(&self, device: &std::path::Path) -> Result<bool> {
+        crate::infrastructure::nvmeof::block_device_is_exported(device).map_err(Into::into)
+    }
+
+    fn recover_offline(&self, operation: &OfflineReplacement) -> Result<()> {
+        self.0.recover_offline(operation)
+    }
+}
+
+fn validate_recovery_owner(client_id: &str, operation: &OfflineReplacement) -> Result<()> {
+    anyhow::ensure!(
+        operation.spec.client_id == client_id,
+        "recovery journal client mismatch"
+    );
+    Ok(())
+}
+
+async fn recover_pending_operation(
+    pool: &sqlx::SqlitePool,
+    client: &Client,
+    operation: &OfflineReplacement,
+    operations: Arc<dyn PendingRecoveryOperations>,
+) -> std::result::Result<(), PendingRecoveryError> {
+    validate_recovery_owner(client.id.as_str(), operation).map_err(PendingRecoveryError::Other)?;
+    let device = client
+        .block_device
+        .as_deref()
+        .or(client.block_store.as_deref())
+        .ok_or_else(|| PendingRecoveryError::Other(anyhow::anyhow!("client has no disk")))?;
+    let device = std::path::PathBuf::from(device);
+    let operation = operation.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        if operations
+            .target_connected(&operation.spec.target_iqn)
+            .map_err(PendingRecoveryError::Other)?
+        {
+            return Err(PendingRecoverySafetyError::ClientConnected.into());
+        }
+        if operations
+            .device_exported(&device)
+            .map_err(PendingRecoveryError::Other)?
+        {
+            return Err(PendingRecoverySafetyError::NvmeExported.into());
+        }
+        operations
+            .recover_offline(&operation)
+            .map_err(PendingRecoveryError::Attempt)
+    })
+    .await
+    .map_err(|error| PendingRecoveryError::Other(error.into()))?;
+    result?;
+    sqlx::query(
+        "UPDATE client_offline_resets SET operation = NULL WHERE client_id = ? AND operation IS NOT NULL",
+    )
+    .bind(client.id.as_str())
+    .execute(pool)
+    .await
+    .map_err(|error| PendingRecoveryError::Other(error.into()))?;
+    Ok(())
+}
+
+async fn record_manual_recovery_failure(
+    pool: &sqlx::SqlitePool,
+    client_id: &str,
+    failures: i64,
+    error: &anyhow::Error,
+) -> Result<()> {
+    sqlx::query("UPDATE client_offline_resets SET failures = failures + 1, retry_after = ?, last_error = ? WHERE client_id = ? AND operation IS NOT NULL")
+        .bind(chrono::Utc::now().timestamp() + retry_delay(failures))
+        .bind(format!("{error:#}"))
+        .bind(client_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 pub async fn retry_pending_recovery(state: &AppState, id: &str) -> Result<bool> {
     let Some((journal, failures)) = sqlx::query_as::<_, (Option<String>, i64)>(
         "SELECT operation, failures FROM client_offline_resets WHERE client_id = ?",
@@ -405,52 +505,26 @@ pub async fn retry_pending_recovery(state: &AppState, id: &str) -> Result<bool> 
         return Ok(false);
     };
     let operation: OfflineReplacement = serde_json::from_str(&journal)?;
-    anyhow::ensure!(
-        operation.spec.client_id == id,
-        "recovery journal client mismatch"
-    );
-
+    validate_recovery_owner(id, &operation)?;
     let client_id = crate::domain::ClientId::from_string(id.to_owned())?;
     let client = ClientRepository::new(state.db_pool.clone())
         .find_by_id(&client_id)
         .await?
         .context("client no longer exists")?;
-    let target = operation.spec.target_iqn.clone();
-    if tokio::task::spawn_blocking(move || {
-        crate::infrastructure::iscsi::reconcile::target_has_active_sessions(&target)
-    })
-    .await??
-    {
-        return Err(PendingRecoverySafetyError::ClientConnected.into());
-    }
-    let device = client
-        .block_device
-        .as_deref()
-        .or(client.block_store.as_deref())
-        .context("client has no disk")?;
-    let device = std::path::PathBuf::from(device);
-    if tokio::task::spawn_blocking(move || {
-        crate::infrastructure::nvmeof::block_device_is_exported(&device)
-    })
-    .await??
-    {
-        return Err(PendingRecoverySafetyError::NvmeExported.into());
-    }
-
     let storage = state.application.storage.clone();
-    if let Err(error) =
-        tokio::task::spawn_blocking(move || storage.recover_offline(&operation)).await?
-    {
-        sqlx::query("UPDATE client_offline_resets SET failures = failures + 1, retry_after = ?, last_error = ? WHERE client_id = ? AND operation IS NOT NULL")
-            .bind(chrono::Utc::now().timestamp() + retry_delay(failures))
-            .bind(format!("{error:#}"))
-            .bind(id)
-            .execute(&state.db_pool)
-            .await?;
-        return Err(error).context("storage recovery retry failed");
+    let operations: Arc<dyn PendingRecoveryOperations> =
+        Arc::new(SystemPendingRecoveryOperations(storage));
+    match recover_pending_operation(&state.db_pool, &client, &operation, operations).await {
+        Ok(()) => {}
+        Err(PendingRecoveryError::Attempt(error)) => {
+            record_manual_recovery_failure(&state.db_pool, id, failures, &error).await?;
+            return Err(error).context("storage recovery retry failed");
+        }
+        Err(PendingRecoveryError::Safety(error)) => return Err(error.into()),
+        Err(error) => return Err(error.into()),
     }
 
-    sqlx::query("UPDATE client_offline_resets SET operation = NULL, failures = 0, retry_after = 0, last_error = NULL WHERE client_id = ? AND operation IS NOT NULL")
+    sqlx::query("UPDATE client_offline_resets SET failures = 0, retry_after = 0, last_error = NULL WHERE client_id = ? AND operation IS NULL")
         .bind(id)
         .execute(&state.db_pool)
         .await?;
@@ -474,6 +548,7 @@ mod tests {
             .unwrap();
         let op = OfflineReplacement::new(ClientStorageSpec {
             client_id: "client".into(),
+            client_name: "PC001".into(),
             source: StorageSource::Snapshot("pool/master@ready".into()),
             dataset: "pool/pc001".into(),
             backstore: "block_pc001".into(),
@@ -583,5 +658,223 @@ mod tests {
         assert_eq!(decide(&state, Some(false), true, 500, 300), Decision::Reset);
         assert_eq!(retry_delay(0), 30);
         assert_eq!(retry_delay(100), 960);
+    }
+}
+
+#[cfg(test)]
+mod pending_recovery_tests {
+    use super::*;
+    use crate::domain::storage::ClientStorageSpec;
+    use std::{
+        path::Path,
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        },
+    };
+
+    #[derive(Default)]
+    struct FakeRecoveryOperations {
+        connected: bool,
+        exported: bool,
+        fail_recovery: bool,
+        recovery_called: AtomicBool,
+    }
+
+    impl PendingRecoveryOperations for FakeRecoveryOperations {
+        fn target_connected(&self, _: &str) -> Result<bool> {
+            Ok(self.connected)
+        }
+
+        fn device_exported(&self, _: &Path) -> Result<bool> {
+            Ok(self.exported)
+        }
+
+        fn recover_offline(&self, _: &OfflineReplacement) -> Result<()> {
+            self.recovery_called.store(true, Ordering::SeqCst);
+            if self.fail_recovery {
+                bail!("injected recovery failure");
+            }
+            Ok(())
+        }
+    }
+
+    fn operation(client_id: &str) -> OfflineReplacement {
+        OfflineReplacement::new(ClientStorageSpec {
+            client_id: client_id.to_owned(),
+            client_name: "client".into(),
+            source: StorageSource::Snapshot("pool/master@ready".into()),
+            dataset: "pool/client".into(),
+            backstore: "block_client".into(),
+            target_iqn: "iqn.test:client".into(),
+            lun: 0,
+            use_game_disk: false,
+            game_disks: Vec::new(),
+            chap: None,
+        })
+    }
+
+    fn client(id: &str) -> Client {
+        Client {
+            id: crate::domain::ClientId::from_string(id.to_owned()).unwrap(),
+            name: "client".into(),
+            mac: crate::domain::MacAddress::parse("00:11:22:33:44:55").unwrap(),
+            ip: "192.168.1.101".parse().unwrap(),
+            master: "pool/master".into(),
+            enabled: true,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            snapshot: None,
+            block_store: None,
+            target_iqn: Some("iqn.test:client".into()),
+            writeback: None,
+            last_modified: None,
+            block_device: Some("/dev/zvol/pool/client".into()),
+            status: crate::domain::ClientStatus::Offline,
+            mode: crate::domain::BootMode::Normal,
+            pxe_mode: crate::domain::PxeMode::Uefi,
+            keep_writeback: false,
+            use_game_disk: false,
+            game_disks: Vec::new(),
+            chap_user: None,
+            chap_secret: None,
+            chap_enabled: false,
+        }
+    }
+
+    async fn pending_pool(operation: &OfflineReplacement) -> sqlx::SqlitePool {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        sqlx::query("INSERT INTO clients(id, name, mac, ip, master, created_at, updated_at) VALUES ('client', 'PC001', '00:11:22:33:44:55', '192.168.1.101', 'pool/master', '2026-09-13T00:00:00+00:00', '2026-09-13T00:00:00+00:00')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO client_offline_resets(client_id, fingerprint, failures, retry_after, operation, last_error) VALUES ('client', 'fingerprint', 2, 123, ?, 'previous failure')")
+            .bind(serde_json::to_string(operation).unwrap())
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn shared_recovery_clears_only_the_journal_after_success() {
+        let operation = operation("client");
+        let pool = pending_pool(&operation).await;
+        let operations = Arc::new(FakeRecoveryOperations::default());
+
+        recover_pending_operation(&pool, &client("client"), &operation, operations.clone())
+            .await
+            .unwrap();
+
+        let state: (Option<String>, i64, i64, Option<String>) = sqlx::query_as(
+            "SELECT operation, failures, retry_after, last_error FROM client_offline_resets WHERE client_id = 'client'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(state.0, None);
+        assert_eq!(
+            (state.1, state.2, state.3.as_deref()),
+            (2, 123, Some("previous failure"))
+        );
+        assert!(operations.recovery_called.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn shared_recovery_rejects_unsafe_or_foreign_journals_without_mutation() {
+        for (client_id, connected, exported, expected_safety_error) in [
+            ("client", true, false, Some(true)),
+            ("client", false, true, Some(false)),
+            ("another-client", false, false, None),
+        ] {
+            let operation = operation(client_id);
+            let pool = pending_pool(&operation).await;
+            let operations = Arc::new(FakeRecoveryOperations {
+                connected,
+                exported,
+                ..Default::default()
+            });
+
+            let result =
+                recover_pending_operation(&pool, &client("client"), &operation, operations.clone())
+                    .await;
+
+            match (expected_safety_error, result) {
+                (Some(true), Err(error)) => {
+                    assert!(matches!(
+                        &error,
+                        PendingRecoveryError::Safety(PendingRecoverySafetyError::ClientConnected)
+                    ));
+                }
+                (Some(false), Err(error)) => {
+                    assert!(matches!(
+                        &error,
+                        PendingRecoveryError::Safety(PendingRecoverySafetyError::NvmeExported)
+                    ));
+                }
+                (None, Err(error)) => assert!(error.to_string().contains("client mismatch")),
+                _ => panic!("recovery unexpectedly ran"),
+            }
+            let remaining: Option<String> = sqlx::query_scalar(
+                "SELECT operation FROM client_offline_resets WHERE client_id = 'client'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert!(remaining.is_some());
+            assert!(!operations.recovery_called.load(Ordering::SeqCst));
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_storage_recovery_retains_its_journal() {
+        let operation = operation("client");
+        let pool = pending_pool(&operation).await;
+        let operations = Arc::new(FakeRecoveryOperations {
+            fail_recovery: true,
+            ..Default::default()
+        });
+
+        let result =
+            recover_pending_operation(&pool, &client("client"), &operation, operations).await;
+
+        assert!(matches!(result, Err(PendingRecoveryError::Attempt(_))));
+        let remaining: Option<String> = sqlx::query_scalar(
+            "SELECT operation FROM client_offline_resets WHERE client_id = 'client'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(remaining.is_some());
+    }
+
+    #[tokio::test]
+    async fn manual_storage_failure_records_backoff_without_clearing_journal() {
+        let operation = operation("client");
+        let pool = pending_pool(&operation).await;
+        let before = chrono::Utc::now().timestamp();
+
+        record_manual_recovery_failure(&pool, "client", 2, &anyhow::anyhow!("recovery failed"))
+            .await
+            .unwrap();
+
+        let state: (Option<String>, i64, i64, Option<String>) = sqlx::query_as(
+            "SELECT operation, failures, retry_after, last_error FROM client_offline_resets WHERE client_id = 'client'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(state.0.is_some());
+        assert_eq!(state.1, 3);
+        assert!(
+            (before + retry_delay(2)..=chrono::Utc::now().timestamp() + retry_delay(2))
+                .contains(&state.2)
+        );
+        assert_eq!(state.3.as_deref(), Some("recovery failed"));
     }
 }

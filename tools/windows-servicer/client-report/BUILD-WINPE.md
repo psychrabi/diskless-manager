@@ -44,6 +44,10 @@ Notes:
   pending until the client is assigned, and matching uses hardware IDs.
 - Keep this image separate from the install `boot.wim`: its `startnet.cmd`
   always reboots after reporting, so a client can never stall in WinPE.
+- The reporter selects the one physical adapter Windows routes to the
+  inventory server and maps it by PnP device ID. It fails closed if that route
+  cannot be mapped uniquely, and retries the inventory POST three times before
+  rebooting.
 - Verify on the designated disposable test client only: request an inventory
   boot for its record, confirm the `windows_nic_inventory` row appears, and
   confirm the next boot returns to the normal menu.

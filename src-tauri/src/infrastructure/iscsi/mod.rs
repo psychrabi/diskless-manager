@@ -9,6 +9,6 @@ pub use model::{
     IscsiTargetState,
 };
 
-pub use reconcile::target_has_active_sessions;
+pub use reconcile::{active_session_peer_ips, target_has_active_sessions};
 pub use safe::SafeIscsiProvisioner;
 pub use targetcli::{IscsiProvisioner, TargetCliProvisioner};

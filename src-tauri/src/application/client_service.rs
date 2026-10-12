@@ -282,6 +282,26 @@ mod tests {
         ] {
             sqlx::query(table).execute(&pool).await.unwrap();
         }
+        sqlx::query("INSERT INTO images (id, name, os_type, size_gb, path, created_at, updated_at) VALUES ('image', 'pool/master', 'windows', 50, '/dev/zvol/pool/master', '2026-09-13T00:00:00+00:00', '2026-09-13T00:00:00+00:00')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO windows_image_driver_revisions (id, source_image_id, source_snapshot, revision_image_id, driver_package_ids, driver_set_hash, status, created_at, updated_at) VALUES ('revision', 'image', 'pool/master@snap', NULL, '[]', 'hash', 'ready', '2026-09-13T00:00:00+00:00', '2026-09-13T00:00:00+00:00')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO windows_driver_reports (client_id, windows_version, architecture, peer_address, reported_at) VALUES ('client', '11', 'amd64', '127.0.0.1', '2026-09-13T00:00:00+00:00')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO windows_revision_boot_tests (id, revision_id, test_client_id, expected_nic_id, candidate_snapshot, status, created_at) VALUES ('test', 'revision', 'client', 'nic', '', 'passed', '2026-09-13T00:00:00+00:00')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO windows_revision_boot_tests (id, revision_id, test_client_id, expected_nic_id, candidate_image_id, candidate_snapshot, status, created_at) VALUES ('active-test', 'revision', 'client', 'nic', 'image', 'pool/master@serviced-test', 'candidate', '2026-09-13T00:00:01+00:00')")
+            .execute(&pool)
+            .await
+            .unwrap();
         let service = ClientService::new(ClientRepository::new(pool.clone()));
         let id = ClientId::from_string("client".to_string()).unwrap();
         service.delete(&id).await.unwrap();
@@ -290,6 +310,35 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(remaining, 0);
+        for (table, count) in [
+            ("windows_driver_reports", 0),
+            ("windows_revision_boot_tests", 2),
+            ("windows_image_driver_revisions", 1),
+        ] {
+            let remaining: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(remaining, count, "unexpected rows in {table}");
+        }
+        let historical_test: (String, String) = sqlx::query_as(
+            "SELECT test_client_id, status FROM windows_revision_boot_tests WHERE id = 'test'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(historical_test, ("client".into(), "passed".into()));
+        let closed_test: String = sqlx::query_scalar(
+            "SELECT status FROM windows_revision_boot_tests WHERE id = 'active-test'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(closed_test, "failed");
+        sqlx::query("INSERT INTO windows_revision_boot_tests (id, revision_id, test_client_id, expected_nic_id, candidate_image_id, candidate_snapshot, status, created_at) VALUES ('retry-test', 'revision', 'new-test-client', 'nic', 'image', 'pool/master@serviced-test', 'candidate', '2026-09-13T00:00:02+00:00')")
+            .execute(&pool)
+            .await
+            .unwrap();
         pool.close().await;
         let _ = std::fs::remove_file(path);
     }

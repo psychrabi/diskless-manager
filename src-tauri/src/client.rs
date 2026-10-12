@@ -89,6 +89,7 @@ pub async fn add_client_impl(
     };
     let storage_spec = ClientStorageSpec {
         client_id: name.clone(),
+        client_name: name.clone(),
         source,
         dataset,
         backstore: format!("block_{}", name.to_lowercase()),

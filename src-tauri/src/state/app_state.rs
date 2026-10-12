@@ -134,6 +134,17 @@ impl AppState {
             Self::ensure_column(pool, "images", "kind", "TEXT NOT NULL DEFAULT 'master'").await?;
             Self::ensure_column(pool, "images", "source_snapshot", "TEXT").await?;
         }
+        // Migration 0011 rebuilds boot-test rows and reads clients.snapshot.
+        // Older unversioned databases can have clients before that column was
+        // introduced, so add it before the migration runner reaches 0011.
+        let clients_exist: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'clients'",
+        )
+        .fetch_one(pool)
+        .await?;
+        if clients_exist != 0 {
+            Self::ensure_column(pool, "clients", "snapshot", "TEXT").await?;
+        }
         static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
         MIGRATOR.run(pool).await?;
 

@@ -63,8 +63,22 @@ fn lock_mutations() -> Result<MutexGuard<'static, ()>> {
 /// `create_target_transaction()` is used by application provisioning
 /// when ownership information is required for safe rollback.
 pub trait IscsiProvisioner: Send + Sync {
+    /// Active peer addresses from this client's named ACL.
+    fn active_session_peer_ips(
+        &self,
+        target_iqn: &str,
+        client_name: &str,
+    ) -> Result<Vec<std::net::IpAddr>> {
+        super::reconcile::active_session_peer_ips(target_iqn, client_name)
+    }
     /// Create or reconcile the desired target configuration.
     fn create_target(&self, spec: &IscsiTargetSpec) -> Result<()>;
+
+    /// Add or repair only the managed client's named ACL and mappings.
+    /// The target and requested LUNs must already exist.
+    fn ensure_initiator_acl(&self, _spec: &IscsiTargetSpec) -> Result<()> {
+        Ok(())
+    }
 
     /// Create/reconcile an iSCSI target and report resources created
     /// by this particular transaction.
@@ -194,6 +208,7 @@ impl TargetCliProvisioner {
     }
 
     fn validate_spec(spec: &IscsiTargetSpec) -> Result<()> {
+        Self::validate_acl_spec(spec)?;
         if spec.target_iqn.trim().is_empty() {
             bail!("iSCSI target IQN cannot be empty");
         }
@@ -245,6 +260,24 @@ impl TargetCliProvisioner {
             }
         }
 
+        Ok(())
+    }
+
+    fn validate_acl_spec(spec: &IscsiTargetSpec) -> Result<()> {
+        let Some(initiator) = spec.initiator_iqn.as_deref() else {
+            return Ok(());
+        };
+        for iqn in [&spec.target_iqn, initiator] {
+            anyhow::ensure!(
+                iqn.starts_with("iqn.")
+                    && iqn.len() <= 223
+                    && iqn
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || b"._:-".contains(&c)),
+                "invalid iSCSI IQN"
+            );
+        }
+        anyhow::ensure!(!spec.luns.is_empty(), "iSCSI target must contain a LUN");
         Ok(())
     }
 
@@ -375,6 +408,66 @@ impl TargetCliProvisioner {
                 lun.backstore, lun.lun
             )
         })
+    }
+
+    fn ensure_acl_inner(&self, spec: &IscsiTargetSpec) -> Result<bool> {
+        let Some(initiator) = spec.initiator_iqn.as_deref() else {
+            return Ok(false);
+        };
+        let tpg_luns = self.output(["targetcli", &Self::lun_path(&spec.target_iqn), "ls"])?;
+        let present = parse_luns(&tpg_luns);
+        for lun in &spec.luns {
+            anyhow::ensure!(
+                present
+                    .iter()
+                    .any(|(number, backstore)| *number == lun.lun && *backstore == lun.backstore),
+                "requested LUN is missing or points to another backstore"
+            );
+        }
+        let acls = format!("{}/acls", Self::tpg_path(&spec.target_iqn));
+        let mut changed = false;
+        if !tree_has_node(&self.output(["targetcli", &acls, "ls"])?, initiator) {
+            self.execute([
+                "targetcli",
+                &acls,
+                "create",
+                initiator,
+                "add_mapped_luns=false",
+            ])
+            .context("failed to create named iSCSI ACL")?;
+            changed = true;
+        }
+        let acl = format!("{acls}/{initiator}");
+        // Promoted ACLs use node_auth rather than the TPG's dynamic credentials.
+        if let Some(chap) = spec.chap.as_ref() {
+            self.set_chap(&acl, chap)?;
+            changed = true;
+        }
+        let mappings = self.output(["targetcli", &acl, "ls"])?;
+        for lun in &spec.luns {
+            let mapped = format!("mapped_lun{}", lun.lun);
+            if tree_has_node(&mappings, &mapped) {
+                let expected = format!(
+                    "[lun{} block/{} ({})]",
+                    lun.lun,
+                    lun.backstore,
+                    if lun.readonly { "ro" } else { "rw" }
+                );
+                anyhow::ensure!(
+                    mappings
+                        .lines()
+                        .any(|line| line.contains(&mapped) && line.contains(&expected)),
+                    "existing ACL mapping conflicts with desired LUN"
+                );
+            } else {
+                let number = lun.lun.to_string();
+                let readonly = if lun.readonly { "1" } else { "0" };
+                self.execute(["targetcli", &acl, "create", &number, &number, readonly])
+                    .context("failed to map named iSCSI ACL LUN")?;
+                changed = true;
+            }
+        }
+        Ok(changed)
     }
 
     fn remove_lun(&self, target_iqn: &str, lun_number: u32) -> Result<()> {
@@ -559,6 +652,22 @@ impl TargetCliProvisioner {
 }
 
 impl IscsiProvisioner for TargetCliProvisioner {
+    fn ensure_initiator_acl(&self, spec: &IscsiTargetSpec) -> Result<()> {
+        if spec.initiator_iqn.is_none() {
+            return Ok(());
+        }
+        let _guard = lock_mutations()?;
+        Self::validate_acl_spec(spec)?;
+        let operation = self.ensure_acl_inner(spec);
+        // Even a failed promotion can have retained a live ACL that must survive reboot.
+        match (operation, self.save()) {
+            (Err(error), Err(save)) => {
+                Err(error).context(format!("also failed to persist iSCSI ACL state: {save:#}"))
+            }
+            (Err(error), _) => Err(error),
+            (_, saved) => saved,
+        }
+    }
     fn create_target(&self, spec: &IscsiTargetSpec) -> Result<()> {
         self.create_target_transaction(spec).map(|_| ())
     }
@@ -571,6 +680,13 @@ impl IscsiProvisioner for TargetCliProvisioner {
 
         let operation = (|| -> Result<()> {
             let target_existed = self.target_exists(&spec.target_iqn)?;
+
+            if target_existed && spec.initiator_iqn.is_some() {
+                anyhow::ensure!(
+                    !super::reconcile::target_has_active_sessions(&spec.target_iqn)?,
+                    "cannot provision target while an initiator is connected"
+                );
+            }
 
             self.create_target_object(spec, target_existed)?;
 
@@ -632,6 +748,8 @@ impl IscsiProvisioner for TargetCliProvisioner {
             if !portal_existed {
                 created.portal_created = true;
             }
+
+            self.ensure_acl_inner(spec)?;
 
             self.save()?;
             Ok(())
@@ -733,6 +851,15 @@ impl IscsiProvisioner for TargetCliProvisioner {
                         chap.username
                     )
                 })?;
+                let acls = format!("{tpg}/acls");
+                let output = self.output(["targetcli", &acls, "ls"])?;
+                for initiator in output
+                    .lines()
+                    .filter_map(|line| line.strip_prefix("  o- ")?.split_whitespace().next())
+                {
+                    self.set_chap(&format!("{acls}/{initiator}"), chap)
+                        .context("failed to update named iSCSI ACL credentials")?;
+                }
             }
             None => {
                 self.execute(["targetcli", &tpg, "set", "attribute", "authentication=0"])
@@ -825,6 +952,8 @@ impl IscsiProvisioner for TargetCliProvisioner {
 
         if !state.is_ready() {
             self.create_target(spec)?;
+        } else {
+            self.ensure_initiator_acl(spec)?;
         }
 
         Ok(())
@@ -833,6 +962,131 @@ impl IscsiProvisioner for TargetCliProvisioner {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn named_acl_chap_survives_promotion_and_rotation() {
+        use crate::infrastructure::iscsi::{ChapCredentials, IscsiProvisioner, IscsiTargetSpec};
+        use std::{fs, os::unix::fs::PermissionsExt};
+        const CHILD: &str = "DISKLESS_ACL_CHAP_TEST";
+        if std::env::var_os(CHILD).is_some() {
+            let mut spec = IscsiTargetSpec::new("iqn.test:custom", "block_pc001", "/dev/null", 0);
+            spec.initiator_iqn = Some("iqn.test:first".into());
+            spec.chap = Some(ChapCredentials {
+                username: "chap-test".into(),
+                password: "syntheticsecret1".into(),
+            });
+            let backend = super::TargetCliProvisioner::new();
+            backend.ensure_initiator_acl(&spec).unwrap();
+            spec.chap.as_mut().unwrap().password = "syntheticsecret2".into();
+            backend
+                .set_chap_auth(&spec.target_iqn, spec.chap.as_ref())
+                .unwrap();
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let sudo = dir.path().join("sudo");
+        fs::write(&sudo, r#"#!/bin/sh
+printf '%s\n' "$*" >> "$DISKLESS_COMMAND_LOG"
+case "$*" in
+  '-n targetcli') while IFS= read -r line; do printf '%s\n' "$line" >> "$DISKLESS_COMMAND_LOG.stdin"; done;;
+  *'/tpg1/luns ls') printf '  o- lun0 [block/block_pc001 (/dev/null)]\n';;
+  *'/tpg1/acls ls') if test -f "$DISKLESS_COMMAND_LOG.acl"; then printf '  o- iqn.test:first [Mapped LUNs: 1]\n  o- iqn.test:second [Mapped LUNs: 1]\n'; fi;;
+  *'/tpg1/acls create '*) : > "$DISKLESS_COMMAND_LOG.acl";;
+esac
+exit 0
+"#).unwrap();
+        fs::set_permissions(&sudo, fs::Permissions::from_mode(0o755)).unwrap();
+        let log = dir.path().join("commands");
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "infrastructure::iscsi::targetcli::tests::named_acl_chap_survives_promotion_and_rotation"])
+            .env(CHILD, "1").env("PATH", dir.path()).env("DISKLESS_COMMAND_LOG", &log)
+            .output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let input = fs::read_to_string(log.with_extension("stdin")).unwrap();
+        assert!(
+            input.contains(
+                "/tpg1/acls/iqn.test:first set auth userid=chap-test password=syntheticsecret1"
+            ),
+            "{input}"
+        );
+        for path in [
+            "/tpg1",
+            "/tpg1/acls/iqn.test:first",
+            "/tpg1/acls/iqn.test:second",
+        ] {
+            assert!(
+                input.contains(&format!(
+                    "{path} set auth userid=chap-test password=syntheticsecret2"
+                )),
+                "{input}"
+            );
+        }
+        let commands = fs::read_to_string(log).unwrap();
+        assert!(
+            !commands.contains("syntheticsecret"),
+            "credentials must not be command arguments"
+        );
+        assert!(!commands.contains("delete"), "{commands}");
+    }
+
+    #[test]
+    fn named_acl_only_adds_requested_existing_luns_and_is_idempotent() {
+        use crate::infrastructure::iscsi::{IscsiProvisioner, IscsiTargetSpec};
+        use std::{fs, os::unix::fs::PermissionsExt};
+        const CHILD: &str = "DISKLESS_ACL_TEST";
+        if std::env::var_os(CHILD).is_some() {
+            let mut spec = IscsiTargetSpec::new("iqn.test:custom", "block_pc001", "/dev/null", 0);
+            spec.initiator_iqn = Some("iqn.2026-01.client:client.pc001".into());
+            let backend = super::TargetCliProvisioner::new();
+            backend.ensure_initiator_acl(&spec).unwrap();
+            backend.ensure_initiator_acl(&spec).unwrap();
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let sudo = dir.path().join("sudo");
+        fs::write(&sudo, r#"#!/bin/sh
+printf '%s\n' "$*" >> "$DISKLESS_COMMAND_LOG"
+case "$*" in
+  *'/tpg1/luns ls') printf '  o- lun0 [block/block_pc001 (/dev/null)]\n  o- lun1 [block/other (/dev/null)]\n';;
+  *'/tpg1/acls ls') if test -f "$DISKLESS_COMMAND_LOG.acl"; then printf '  o- iqn.2026-01.client:client.pc001 [Mapped LUNs: 1]\n'; fi;;
+  *'/tpg1/acls/iqn.2026-01.client:client.pc001 ls') if test -f "$DISKLESS_COMMAND_LOG.map"; then printf '  o- mapped_lun0 [lun0 block/block_pc001 (rw)]\n'; fi;;
+  *'/tpg1/acls create '*) : > "$DISKLESS_COMMAND_LOG.acl";;
+  *'/tpg1/acls/iqn.2026-01.client:client.pc001 create '*) : > "$DISKLESS_COMMAND_LOG.map";;
+esac
+exit 0
+"#).unwrap();
+        fs::set_permissions(&sudo, fs::Permissions::from_mode(0o755)).unwrap();
+        let log = dir.path().join("commands");
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "infrastructure::iscsi::targetcli::tests::named_acl_only_adds_requested_existing_luns_and_is_idempotent"])
+            .env(CHILD, "1").env("PATH", dir.path()).env("DISKLESS_COMMAND_LOG", &log)
+            .output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let commands = fs::read_to_string(log).unwrap();
+        assert_eq!(
+            commands.matches("/tpg1/acls create ").count(),
+            1,
+            "{commands}"
+        );
+        assert_eq!(
+            commands
+                .matches("/tpg1/acls/iqn.2026-01.client:client.pc001 create ")
+                .count(),
+            1,
+            "{commands}"
+        );
+        assert!(!commands.contains("attribute"), "{commands}");
+        assert!(!commands.contains("delete"), "{commands}");
+    }
     use super::{parse_backstore, parse_luns, tree_has_node, TargetCliProvisioner};
     use crate::infrastructure::iscsi::IscsiTargetSpec;
     use std::{fs, thread, time::Duration};

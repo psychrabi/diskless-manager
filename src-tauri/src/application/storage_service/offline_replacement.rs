@@ -275,6 +275,7 @@ mod tests {
         let service = StorageService::new(disks.clone(), target.clone());
         let operation = OfflineReplacement::new(ClientStorageSpec {
             client_id: "client-1".into(),
+            client_name: "PC001".into(),
             source: StorageSource::Snapshot("pool/master@ready".into()),
             dataset: "pool/pc001".into(),
             backstore: "block_pc001".into(),

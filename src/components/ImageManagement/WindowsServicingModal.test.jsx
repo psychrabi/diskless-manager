@@ -34,6 +34,14 @@ it("services a selected managed snapshot and refreshes images after saving",asyn
   expect(await screen.findByText(/Saved windows11-serviced@serviced-test/)).toBeInTheDocument();
   expect(onPrepared).toHaveBeenCalledOnce();
 });
+it("allows managed catalog builds without manual driver selections",async () => {
+  render(<WindowsServicingModal isOpen/>);
+  await fillForm();
+  fireEvent.click(screen.getByRole("checkbox",{name:/VirtIO Ethernet/}));
+  expect(screen.getByRole("button",{name:"Prepare and Commit"})).toBeEnabled();
+  fireEvent.click(screen.getByRole("button",{name:"Prepare and Commit"}));
+  await waitFor(() => expect(mocks.prepare).toHaveBeenCalledWith(expect.objectContaining({driver_ids:[]})));
+});
 it("requires a helper that supports managed volumes",async () => {
   mocks.capabilities.mockResolvedValue({available:true,elevated:true,platform:"windows",protocol_version:2});
   render(<WindowsServicingModal isOpen/>);

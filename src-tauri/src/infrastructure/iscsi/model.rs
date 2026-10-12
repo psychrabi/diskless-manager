@@ -58,6 +58,10 @@ pub struct IscsiTargetSpec {
     /// iSCSI Qualified Name.
     pub target_iqn: String,
 
+    /// Named ACL for a managed client's iPXE initiator. Service targets omit it.
+    #[serde(default)]
+    pub initiator_iqn: Option<String>,
+
     /// LUNs exposed by this target.
     pub luns: Vec<IscsiLunSpec>,
 
@@ -83,6 +87,7 @@ impl IscsiTargetSpec {
     ) -> Self {
         Self {
             target_iqn: target_iqn.into(),
+            initiator_iqn: None,
             luns: vec![IscsiLunSpec::new(lun, backstore, block_device)],
             chap: None,
             portal_address: "0.0.0.0".to_string(),
@@ -101,6 +106,7 @@ impl IscsiTargetSpec {
 
         Ok(Self {
             target_iqn: target_iqn.into(),
+            initiator_iqn: None,
             luns,
             chap: None,
             portal_address: "0.0.0.0".to_string(),

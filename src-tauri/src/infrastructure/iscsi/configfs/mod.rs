@@ -39,6 +39,7 @@ enum Operation {
     Probe,
     Save,
     Create(IscsiTargetSpec),
+    EnsureAcl(IscsiTargetSpec),
     RemoveOwned {
         target: String,
         backstores: Vec<String>,
@@ -90,6 +91,10 @@ fn identifier(value: &str) -> Result<()> {
 fn validate_spec(spec: &IscsiTargetSpec) -> Result<()> {
     identifier(&spec.target_iqn)?;
     ensure!(spec.target_iqn.starts_with("iqn."), "invalid target IQN");
+    if let Some(initiator) = &spec.initiator_iqn {
+        identifier(initiator)?;
+        ensure!(initiator.starts_with("iqn."), "invalid initiator IQN");
+    }
     spec.portal_address
         .parse::<std::net::IpAddr>()
         .context("invalid portal address")?;

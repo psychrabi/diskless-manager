@@ -6,6 +6,7 @@ use axum::{
 };
 use serde::Serialize;
 use sqlx::FromRow;
+use tokio::{sync::Mutex, task::JoinHandle};
 
 use crate::{
     core::reconciliation::{inspect_storage, repair_client_storage, ReconciliationEntry},
@@ -90,6 +91,16 @@ pub struct PendingClientRecoveriesResponse {
     pub recoveries: Vec<PendingClientRecovery>,
 }
 
+fn spawn_locked<T: Send + 'static>(
+    lock: std::sync::Arc<Mutex<()>>,
+    task: impl std::future::Future<Output = T> + Send + 'static,
+) -> JoinHandle<T> {
+    tokio::spawn(async move {
+        let _guard = lock.lock_owned().await;
+        task.await
+    })
+}
+
 /// List interrupted per-client storage recovery journals without exposing their contents.
 pub async fn list_pending_client_recoveries(
     State(state): State<AppState>,
@@ -110,16 +121,19 @@ pub async fn retry_pending_client_recovery(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, Json<ReconciliationApiError>)> {
-    let _client_guard = state.client_mutations.lock().await;
-    match crate::application::client_lifecycle::retry_pending_recovery(&state, &id).await {
-        Ok(true) => Ok(StatusCode::NO_CONTENT),
-        Ok(false) => Err((
+    let recovery_id = id.clone();
+    let recovery = spawn_locked(state.client_mutations.clone(), async move {
+        crate::application::client_lifecycle::retry_pending_recovery(&state, &recovery_id).await
+    });
+    match recovery.await {
+        Ok(Ok(true)) => Ok(StatusCode::NO_CONTENT),
+        Ok(Ok(false)) => Err((
             StatusCode::NOT_FOUND,
             Json(ReconciliationApiError {
                 error: "No pending storage recovery exists for this client".into(),
             }),
         )),
-        Err(error) => {
+        Ok(Err(error)) => {
             tracing::error!(client_id = %id, error = %error, "manual client storage recovery failed");
             let status = if error
                 .downcast_ref::<crate::application::client_lifecycle::PendingRecoverySafetyError>()
@@ -136,5 +150,38 @@ pub async fn retry_pending_client_recovery(
                 }),
             ))
         }
+        Err(error) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ReconciliationApiError {
+                error: format!("manual client storage recovery task failed: {error}"),
+            }),
+        )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::spawn_locked;
+    use std::sync::Arc;
+    use tokio::sync::{oneshot, Mutex};
+
+    #[tokio::test]
+    async fn cancelled_request_keeps_the_mutation_lock_until_recovery_finishes() {
+        let lock = Arc::new(Mutex::new(()));
+        let (started_tx, started_rx) = oneshot::channel();
+        let (finish_tx, finish_rx) = oneshot::channel();
+        let request = spawn_locked(lock.clone(), async move {
+            let _ = started_tx.send(());
+            let _ = finish_rx.await;
+        });
+        started_rx.await.unwrap();
+
+        drop(request);
+
+        assert!(lock.try_lock().is_err());
+        finish_tx.send(()).unwrap();
+        let _guard = tokio::time::timeout(std::time::Duration::from_secs(1), lock.lock())
+            .await
+            .unwrap();
     }
 }

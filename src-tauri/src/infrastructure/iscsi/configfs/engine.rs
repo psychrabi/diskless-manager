@@ -41,6 +41,14 @@ impl<F: ConfigFs> Engine<F> {
                 validate_spec(&spec)?;
                 Ok(Reply::Created(self.create(&spec, save)?))
             }
+            Operation::EnsureAcl(spec) => {
+                validate_spec(&spec)?;
+                let mut undo = Vec::new();
+                let operation = self.ensure_acl(&spec, &mut undo);
+                // A new directory may have promoted a live dynamic ACL; removing it would end its session.
+                Self::combine(operation, save())?;
+                Ok(Reply::Unit)
+            }
             Operation::Inspect(spec) => {
                 validate_spec(&spec)?;
                 Ok(Reply::State(self.inspect(&spec)?))
@@ -288,10 +296,71 @@ impl<F: ConfigFs> Engine<F> {
         let tpg = self.tpg(target);
         if let Some(chap) = chap {
             self.fs.write(&tpg.join("attrib/authentication"), "1")?;
-            self.fs.write(&tpg.join("auth/userid"), &chap.username)?;
-            self.fs.write(&tpg.join("auth/password"), &chap.password)?;
+            self.write_chap(&tpg, chap)?;
+            for acl in self.fs.entries(&tpg.join("acls"))? {
+                self.write_chap(&acl, chap)?;
+            }
         } else {
             self.fs.write(&tpg.join("attrib/authentication"), "0")?;
+        }
+        Ok(())
+    }
+
+    fn write_chap(&self, directory: &Path, chap: &ChapCredentials) -> Result<()> {
+        self.fs
+            .write(&directory.join("auth/userid"), &chap.username)?;
+        self.fs
+            .write(&directory.join("auth/password"), &chap.password)
+    }
+
+    fn ensure_acl(&self, spec: &IscsiTargetSpec, undo: &mut Vec<Undo>) -> Result<()> {
+        let Some(initiator) = spec.initiator_iqn.as_ref() else {
+            return Ok(());
+        };
+        let acl = self.tpg(&spec.target_iqn).join("acls").join(initiator);
+        let existing = self.luns(&spec.target_iqn)?;
+        for lun in &spec.luns {
+            let (_, storage) = existing
+                .get(&lun.lun)
+                .context("desired LUN is not present")?;
+            ensure!(
+                storage.file_name().and_then(|name| name.to_str()) == Some(lun.backstore.as_str())
+                    && self.matches(storage, lun)?,
+                "desired LUN has a different backstore, device, or readonly state"
+            );
+        }
+        if !self.fs.exists(&acl)? {
+            self.mkdir(&acl, undo)?;
+        }
+        // Promoted ACLs use node_auth rather than the TPG's dynamic credentials.
+        if let Some(chap) = spec.chap.as_ref() {
+            self.write_chap(&acl, chap)?;
+        }
+        for lun in &spec.luns {
+            let directory = self
+                .tpg(&spec.target_iqn)
+                .join("lun")
+                .join(format!("lun_{}", lun.lun));
+            let mapped = acl.join(format!("lun_{}", lun.lun));
+            if self.fs.exists(&mapped)? {
+                let links = self.links(&mapped)?;
+                ensure!(
+                    links.len() == 1 && links[0].1 == directory,
+                    "existing ACL mapping conflicts with desired LUN"
+                );
+                ensure!(
+                    self.fs.read(&mapped.join("write_protect"))?.trim()
+                        == if lun.readonly { "1" } else { "0" },
+                    "existing ACL write protection conflicts with desired LUN"
+                );
+            } else {
+                self.mkdir(&mapped, undo)?;
+                self.link(&directory, &mapped.join("diskless"), undo)?;
+                self.fs.write(
+                    &mapped.join("write_protect"),
+                    if lun.readonly { "1" } else { "0" },
+                )?;
+            }
         }
         Ok(())
     }
@@ -405,6 +474,7 @@ impl<F: ConfigFs> Engine<F> {
                     }
                 }
             }
+            self.ensure_acl(spec, &mut undo)?;
             if !self.portal_satisfied(spec)? {
                 self.mkdir(&tpg.join("np").join(Self::portal(spec)), &mut undo)?;
                 created.portal_created = true;

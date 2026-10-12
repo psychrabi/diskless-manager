@@ -125,6 +125,15 @@ impl ConfigFs for FixtureFs {
             ] {
                 self.attribute(path.join(attr), "")?;
             }
+        } else if path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|s| s.to_str())
+            == Some("acls")
+        {
+            for attr in ["auth/userid", "auth/password"] {
+                self.attribute(path.join(attr), "")?;
+            }
         } else if name.starts_with("lun_") {
             self.attribute(path.join("write_protect"), "0")?;
         }
@@ -180,6 +189,189 @@ fn fixture() -> (tempfile::TempDir, Engine<FixtureFs>, IscsiTargetSpec) {
     )
     .unwrap();
     (dir, engine, spec)
+}
+
+#[test]
+fn named_acl_chap_survives_promotion_and_rotation() {
+    let (dir, engine, mut spec) = fixture();
+    spec.chap = Some(ChapCredentials {
+        username: "chap-test".into(),
+        password: "syntheticsecret1".into(),
+    });
+    engine
+        .execute(Operation::Create(spec.clone()), &mut || Ok(()))
+        .unwrap();
+    let tpg = dir
+        .path()
+        .join("iscsi/iqn.2024-01.com.diskless:test/tpgt_1");
+    std::fs::write(tpg.join("dynamic_sessions"), "active session\n").unwrap();
+    for initiator in ["iqn.test:first", "iqn.test:second"] {
+        spec.initiator_iqn = Some(initiator.into());
+        engine
+            .execute(Operation::EnsureAcl(spec.clone()), &mut || Ok(()))
+            .unwrap();
+        let acl = tpg.join("acls").join(initiator);
+        assert_eq!(
+            std::fs::read_to_string(acl.join("auth/userid")).unwrap(),
+            "chap-test"
+        );
+        assert_eq!(
+            std::fs::read_to_string(acl.join("auth/password")).unwrap(),
+            "syntheticsecret1"
+        );
+    }
+    let rotated = ChapCredentials {
+        username: "chap-test".into(),
+        password: "syntheticsecret2".into(),
+    };
+    engine
+        .execute(
+            Operation::SetChap {
+                target: spec.target_iqn.clone(),
+                chap: Some(rotated),
+            },
+            &mut || Ok(()),
+        )
+        .unwrap();
+    for directory in [
+        &tpg,
+        &tpg.join("acls/iqn.test:first"),
+        &tpg.join("acls/iqn.test:second"),
+    ] {
+        assert_eq!(
+            std::fs::read_to_string(directory.join("auth/password")).unwrap(),
+            "syntheticsecret2"
+        );
+    }
+    assert_eq!(
+        std::fs::read_to_string(tpg.join("dynamic_sessions")).unwrap(),
+        "active session\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(tpg.join("attrib/generate_node_acls")).unwrap(),
+        "1"
+    );
+    engine
+        .execute(
+            Operation::SetChap {
+                target: spec.target_iqn,
+                chap: None,
+            },
+            &mut || Ok(()),
+        )
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(tpg.join("attrib/authentication")).unwrap(),
+        "0"
+    );
+}
+
+#[test]
+fn named_acl_is_added_to_active_target_without_changing_dynamic_acl_mode() {
+    let (dir, engine, mut spec) = fixture();
+    engine
+        .execute(Operation::Create(spec.clone()), &mut || Ok(()))
+        .unwrap();
+    spec.initiator_iqn = Some("iqn.2026-01.client:client.pc001".into());
+    let tpg = dir
+        .path()
+        .join("iscsi/iqn.2024-01.com.diskless:test/tpgt_1");
+    std::fs::write(tpg.join("dynamic_sessions"), "active session\n").unwrap();
+    engine
+        .execute(Operation::EnsureAcl(spec.clone()), &mut || Ok(()))
+        .unwrap();
+    let acl = tpg.join("acls/iqn.2026-01.client:client.pc001");
+    assert!(acl.join("lun_0/diskless").is_symlink());
+    assert!(acl.join("lun_1/diskless").is_symlink());
+    assert_eq!(
+        std::fs::read_to_string(tpg.join("attrib/generate_node_acls")).unwrap(),
+        "1"
+    );
+    engine
+        .execute(Operation::EnsureAcl(spec), &mut || Ok(()))
+        .unwrap();
+    assert!(engine
+        .execute(
+            Operation::Create(IscsiTargetSpec::new(
+                "iqn.2024-01.com.diskless:test",
+                "block_test",
+                "/dev/zvol/diskless/test",
+                0
+            )),
+            &mut || Ok(())
+        )
+        .is_err());
+}
+
+#[test]
+fn failed_named_acl_mapping_keeps_promoted_live_acl_for_retry() {
+    let (dir, engine, mut spec) = fixture();
+    engine
+        .execute(Operation::Create(spec.clone()), &mut || Ok(()))
+        .unwrap();
+    spec.initiator_iqn = Some("iqn.2026-01.client:client.pc001".into());
+    let tpg = dir
+        .path()
+        .join("iscsi/iqn.2024-01.com.diskless:test/tpgt_1");
+    std::fs::write(tpg.join("dynamic_sessions"), "active session\n").unwrap();
+    *engine.fs.fail.borrow_mut() = Some("lun_1/write_protect".into());
+    assert!(engine
+        .execute(Operation::EnsureAcl(spec.clone()), &mut || Ok(()))
+        .is_err());
+    let acl = tpg.join("acls/iqn.2026-01.client:client.pc001");
+    assert!(
+        acl.exists(),
+        "live ACL must never be deleted during rollback"
+    );
+    assert_eq!(
+        std::fs::read_to_string(tpg.join("dynamic_sessions")).unwrap(),
+        "active session\n"
+    );
+    *engine.fs.fail.borrow_mut() = None;
+    engine
+        .execute(Operation::EnsureAcl(spec), &mut || Ok(()))
+        .unwrap();
+    assert!(acl.join("lun_1/diskless").is_symlink());
+}
+
+#[test]
+fn named_acl_rejects_wrong_backstore_and_readonly_without_changing_live_target() {
+    let (dir, engine, mut spec) = fixture();
+    engine
+        .execute(Operation::Create(spec.clone()), &mut || Ok(()))
+        .unwrap();
+    spec.initiator_iqn = Some("iqn.2026-01.client:client.pc001".into());
+    let tpg = dir
+        .path()
+        .join("iscsi/iqn.2024-01.com.diskless:test/tpgt_1");
+    std::fs::write(tpg.join("dynamic_sessions"), "active session\n").unwrap();
+    let correct = spec.clone();
+    spec.luns[0].backstore = "other".into();
+    assert!(engine
+        .execute(Operation::EnsureAcl(spec.clone()), &mut || Ok(()))
+        .is_err());
+    assert!(!tpg.join("acls/iqn.2026-01.client:client.pc001").exists());
+    spec = correct.clone();
+    spec.luns[0].readonly = true;
+    assert!(engine
+        .execute(Operation::EnsureAcl(spec), &mut || Ok(()))
+        .is_err());
+    assert!(!tpg.join("acls/iqn.2026-01.client:client.pc001").exists());
+    engine
+        .execute(Operation::EnsureAcl(correct.clone()), &mut || Ok(()))
+        .unwrap();
+    std::fs::write(
+        tpg.join("acls/iqn.2026-01.client:client.pc001/lun_0/write_protect"),
+        "1",
+    )
+    .unwrap();
+    assert!(engine
+        .execute(Operation::EnsureAcl(correct), &mut || Ok(()))
+        .is_err());
+    assert_eq!(
+        std::fs::read_to_string(tpg.join("dynamic_sessions")).unwrap(),
+        "active session\n"
+    );
 }
 
 #[test]

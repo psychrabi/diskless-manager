@@ -10,9 +10,11 @@
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::Duration;
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -75,7 +77,25 @@ impl ReporterConfig {
     }
 
     pub fn report_endpoint(&self) -> Result<String> {
-        let base = self.server_url.trim_end_matches('/');
+        let base = self.server_url.trim();
+        anyhow::ensure!(
+            !base.chars().any(char::is_whitespace)
+                && !base.chars().any(char::is_control)
+                && !base.contains('?')
+                && !base.contains('#'),
+            "reporter server_url must not contain whitespace, query parameters, or a fragment"
+        );
+        let rest = base
+            .strip_prefix("http://")
+            .or_else(|| base.strip_prefix("https://"))
+            .context("reporter server_url must use http or https")?;
+        let authority = rest.split('/').next().unwrap_or_default();
+        anyhow::ensure!(!authority.is_empty(), "reporter server_url has no host");
+        anyhow::ensure!(
+            !authority.contains('@'),
+            "reporter server_url must not contain credentials"
+        );
+        let base = base.trim_end_matches('/');
         if base.is_empty() {
             bail!("reporter configuration requires server_url");
         }
@@ -96,39 +116,63 @@ pub struct NetAdapter {
     pub status: String,
     #[serde(rename = "ServiceName", default)]
     pub service_name: String,
-}
-
-/// A PnP device entry carrying the instance (device) ID.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-pub struct PnpDevice {
-    #[serde(rename = "InstanceId")]
-    pub instance_id: String,
-    #[serde(rename = "FriendlyName", default)]
-    pub friendly_name: String,
-}
-
-/// A published third-party driver from `pnputil /enum-drivers`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PublishedDriver {
-    pub published_name: String,
-    pub original_name: String,
-    pub provider: String,
-    pub class: String,
-    pub service_name: String,
+    #[serde(rename = "PnPDeviceID")]
+    pub pnp_device_id: String,
+    #[serde(rename = "HardwareIds", default)]
+    pub hardware_ids: Vec<String>,
+    #[serde(rename = "PublishedInf", default)]
+    pub published_inf: String,
 }
 
 fn run_bounded(program: &str, args: &[&str]) -> Result<String> {
-    let output = Command::new(program)
+    run_with_timeout(program, args, COMMAND_TIMEOUT)
+}
+
+fn run_with_timeout(program: &str, args: &[&str], timeout: Duration) -> Result<String> {
+    let mut child = Command::new(program)
         .args(args)
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .with_context(|| format!("failed to execute {program}"))?;
-    if !output.status.success() {
+    let mut stdout = child.stdout.take().context("child stdout unavailable")?;
+    let mut stderr = child.stderr.take().context("child stderr unavailable")?;
+    let stdout_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout.read_to_end(&mut bytes).map(|_| bytes)
+    });
+    let stderr_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stderr.read_to_end(&mut bytes).map(|_| bytes)
+    });
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        if let Some(status) = child
+            .try_wait()
+            .context("failed waiting for child process")?
+        {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("{program} exceeded the {timeout:?} timeout");
+        }
+        thread::sleep(Duration::from_millis(50));
+    };
+    let stdout = stdout_reader
+        .join()
+        .map_err(|_| anyhow::anyhow!("{program} stdout reader panicked"))??;
+    let stderr = stderr_reader
+        .join()
+        .map_err(|_| anyhow::anyhow!("{program} stderr reader panicked"))??;
+    if !status.success() {
         bail!(
             "{program} failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+            String::from_utf8_lossy(&stderr).trim()
         );
     }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    Ok(String::from_utf8_lossy(&stdout).into_owned())
 }
 
 /// Parse `Get-NetAdapter ... | ConvertTo-Json` output.
@@ -146,129 +190,25 @@ pub fn parse_net_adapters(json: &str) -> Result<Vec<NetAdapter>> {
     }
 }
 
-/// Parse `Get-PnpDevice -Class Net ... | ConvertTo-Json` output.
-pub fn parse_pnp_devices(json: &str) -> Result<Vec<PnpDevice>> {
-    let trimmed = json.trim();
-    if trimmed.is_empty() || trimmed == "null" {
-        return Ok(Vec::new());
-    }
-    if trimmed.starts_with('[') {
-        Ok(serde_json::from_str(trimmed).context("invalid PnP inventory JSON")?)
-    } else {
-        Ok(vec![
-            serde_json::from_str(trimmed).context("invalid PnP inventory JSON")?
-        ])
-    }
-}
-
-/// Parse `pnputil /enum-drivers` text output into published-driver records.
-pub fn parse_enum_drivers(text: &str) -> Vec<PublishedDriver> {
-    let mut drivers = Vec::new();
-    let mut current = PublishedDriver {
-        published_name: String::new(),
-        original_name: String::new(),
-        provider: String::new(),
-        class: String::new(),
-        service_name: String::new(),
-    };
-    let mut in_record = false;
-    for line in text.lines() {
-        let line = line.trim();
-        if line.eq_ignore_ascii_case("published name :") || line.is_empty() {
-            continue;
-        }
-        let Some((key, value)) = line.split_once(':') else {
-            continue;
-        };
-        match key.trim().to_ascii_lowercase().as_str() {
-            "published name" => {
-                if in_record && !current.published_name.is_empty() {
-                    drivers.push(std::mem::replace(
-                        &mut current,
-                        PublishedDriver {
-                            published_name: value.trim().to_string(),
-                            original_name: String::new(),
-                            provider: String::new(),
-                            class: String::new(),
-                            service_name: String::new(),
-                        },
-                    ));
-                } else {
-                    current.published_name = value.trim().to_string();
-                    in_record = true;
-                }
-            }
-            "original name" => current.original_name = value.trim().to_string(),
-            "provider name" => current.provider = value.trim().to_string(),
-            "class name" => current.class = value.trim().to_string(),
-            "service name" => current.service_name = value.trim().to_string(),
-            _ => {}
-        }
-    }
-    if in_record && !current.published_name.is_empty() {
-        drivers.push(current);
-    }
-    drivers
-}
-
 /// Normalize a raw architecture token to the catalog spelling.
 pub fn normalize_architecture(token: &str) -> String {
     match token.trim().to_ascii_lowercase().as_str() {
-        "amd64" | "x86_64" | "x64" => "x64".to_string(),
-        "i386" | "i686" | "x86" => "x86".to_string(),
+        "amd64" | "x86_64" | "x64" | "64-bit" => "x64".to_string(),
+        "i386" | "i686" | "x86" | "32-bit" => "x86".to_string(),
         "aarch64" | "arm64" => "arm64".to_string(),
         other => other.to_string(),
     }
 }
 
-/// Select the Boot NIC: the up, physical adapter most likely carrying iSCSI
-/// boot traffic. Prefers the adapter owning the default route's interface;
-/// falls back to the first up physical adapter. Virtual/tunnel adapters and
-/// disconnected ports are never selected.
-pub fn select_boot_nic<'a>(
-    adapters: &'a [NetAdapter],
-    default_route_interface: Option<&str>,
-) -> Result<&'a NetAdapter> {
-    fn physical(adapter: &NetAdapter) -> bool {
-        let description = adapter.description.to_ascii_lowercase();
-        !description.contains("virtual")
-            && !description.contains("hyper-v")
-            && !description.contains("tunnel")
-            && !description.contains("vpn")
-            && !description.contains("bluetooth")
-    }
-    if let Some(name) = default_route_interface {
-        if let Some(adapter) = adapters
-            .iter()
-            .filter(|adapter| physical(adapter))
-            .find(|adapter| adapter.name.eq_ignore_ascii_case(name))
-        {
-            return Ok(adapter);
-        }
-    }
-    adapters
-        .iter()
-        .find(|adapter| physical(adapter) && adapter.status.eq_ignore_ascii_case("up"))
-        .context("no usable physical network adapter found for Boot NIC reporting")
-}
-
-/// Match the published Net-class driver for the Boot NIC's service name.
-pub fn match_boot_driver<'a>(
-    drivers: &'a [PublishedDriver],
-    service_name: &str,
-) -> Result<&'a PublishedDriver> {
-    let candidates: Vec<&PublishedDriver> = drivers
-        .iter()
-        .filter(|driver| {
-            driver.class.eq_ignore_ascii_case("net")
-                && driver.service_name.eq_ignore_ascii_case(service_name)
-        })
-        .collect();
-    match candidates.as_slice() {
-        [driver] => Ok(driver),
-        [] => bail!("no published Net-class driver for service '{service_name}'"),
-        _ => bail!("multiple published drivers claim service '{service_name}'"),
-    }
+fn is_exportable_published_inf(inf_name: &str) -> bool {
+    let inf_name = inf_name.to_ascii_lowercase();
+    let Some(number) = inf_name
+        .strip_prefix("oem")
+        .and_then(|name| name.strip_suffix(".inf"))
+    else {
+        return false;
+    };
+    !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 /// Invoke the client reporting flow. Windows-only; every step runs as a
@@ -279,51 +219,35 @@ pub fn run_report_client(config_path: &Path) -> Result<()> {
         "client reporting runs on a managed Windows client"
     );
     let config = ReporterConfig::load(config_path)?;
-    let adapters_json = run_bounded(
+    let endpoint = config.report_endpoint()?;
+    let inventory_json = run_bounded(
         "powershell",
         &[
             "-NoProfile",
             "-NonInteractive",
             "-Command",
-            "Get-NetAdapter -Physical | Select-Object Name,MacAddress,InterfaceDescription,Status,ServiceName | ConvertTo-Json -Depth 2",
+            "$sessions = @(Get-IscsiConnection | Select-Object -ExpandProperty InitiatorAddress -Unique); if ($sessions.Count -ne 1) { throw 'Expected one iSCSI boot source address' }; $ips = @(Get-NetIPAddress -IPAddress $sessions[0] -ErrorAction Stop); if ($ips.Count -ne 1) { throw 'Could not uniquely resolve iSCSI boot interface' }; $a = @(Get-NetAdapter -InterfaceIndex $ips[0].InterfaceIndex -Physical); if ($a.Count -ne 1) { throw 'Could not uniquely resolve iSCSI boot adapter' }; $d = Get-PnpDevice -InstanceId $a[0].PnPDeviceID -ErrorAction Stop; $ids = @((Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_HardwareIds' -ErrorAction Stop).Data); $signed = @(Get-CimInstance Win32_PnPSignedDriver | Where-Object { $_.DeviceID -eq $d.InstanceId } | Select-Object -ExpandProperty InfName -Unique); if ($signed.Count -gt 1) { throw 'Could not uniquely resolve Boot NIC published INF' }; $inf = if ($signed.Count -eq 1) { $signed[0] } else { '' }; $o = [pscustomobject]@{Name=$a[0].Name;MacAddress=$a[0].MacAddress;InterfaceDescription=$a[0].InterfaceDescription;Status=$a[0].Status;ServiceName=$a[0].ServiceName;PnPDeviceID=$d.InstanceId;HardwareIds=[string[]]$ids;PublishedInf=$inf}; $o | ConvertTo-Json -Depth 3 -Compress",
         ],
     )?;
-    let adapters = parse_net_adapters(&adapters_json)?;
-    let route_output = run_bounded(
-        "powershell",
-        &[
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "(Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric | Select-Object -First 1).InterfaceAlias",
-        ],
-    )
-    .unwrap_or_default();
-    let boot = select_boot_nic(&adapters, Some(route_output.trim()))?;
+    let mut adapters = parse_net_adapters(&inventory_json)?;
     anyhow::ensure!(
-        !boot.service_name.trim().is_empty(),
-        "Boot NIC '{}' has no associated driver service",
-        boot.name
+        adapters.len() == 1,
+        "iSCSI boot adapter inventory is ambiguous"
     );
-
-    let pnp_json = run_bounded(
-        "powershell",
-        &[
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "Get-PnpDevice -Class Net -PresentOnly | Select-Object InstanceId,FriendlyName | ConvertTo-Json -Depth 2",
-        ],
-    )?;
-    let devices = parse_pnp_devices(&pnp_json)?;
-    let boot_id = hardware_id_for_boot_nic(&devices, boot)?;
+    let boot = adapters
+        .pop()
+        .context("iSCSI boot adapter was not reported")?;
+    anyhow::ensure!(
+        !boot.hardware_ids.is_empty(),
+        "Boot NIC has no PnP hardware IDs"
+    );
     let os = run_bounded(
         "powershell",
         &[
             "-NoProfile",
             "-NonInteractive",
             "-Command",
-            "$os = Get-ComputerInfo -Property OsName,OArchitecture,WindowsVersion | ConvertTo-Json -Compress; $os",
+            "$os = Get-ComputerInfo -Property OsName,OsArchitecture,WindowsVersion | ConvertTo-Json -Compress; $os",
         ],
     )?;
     let (windows_version, architecture) = parse_os_info(&os)?;
@@ -332,50 +256,27 @@ pub fn run_report_client(config_path: &Path) -> Result<()> {
         client_id: config.client_id.clone(),
         windows_version,
         architecture,
-        boot_nic_ids: vec![boot_id.clone()],
+        boot_nic_ids: boot.hardware_ids.clone(),
         image_revision: config
             .image_revision
             .clone()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty()),
-        boot_nic_id: Some(boot_id),
+        boot_nic_id: boot.hardware_ids.first().cloned(),
     };
     report.validate()?;
 
-    let archive = if config.export_package {
-        Some(export_boot_driver(&boot.service_name)?)
+    let exported = if config.export_package && is_exportable_published_inf(&boot.published_inf) {
+        Some(export_boot_driver(&boot.published_inf)?)
     } else {
         None
     };
-    let endpoint = config.report_endpoint()?;
-    post_report(&endpoint, &report, archive.as_deref())?;
-    if let Some(dir) = archive {
-        let _ = std::fs::remove_dir_all(dir.parent().unwrap_or(&dir));
-    }
+    post_report(
+        &endpoint,
+        &report,
+        exported.as_ref().map(|(_, path)| path.as_path()),
+    )?;
     Ok(())
-}
-
-/// Resolve the Boot NIC's hardware ID from the PnP inventory by matching the
-/// adapter description against friendly names, preferring exact matches.
-fn hardware_id_for_boot_nic(devices: &[PnpDevice], boot: &NetAdapter) -> Result<String> {
-    if let Some(device) = devices
-        .iter()
-        .find(|device| device.friendly_name == boot.description)
-        .or_else(|| {
-            devices.iter().find(|device| {
-                device
-                    .friendly_name
-                    .to_ascii_lowercase()
-                    .contains(&boot.service_name.to_ascii_lowercase())
-            })
-        })
-    {
-        if device.instance_id.trim().is_empty() {
-            bail!("Boot NIC PnP entry has no instance ID");
-        }
-        return Ok(device.instance_id.trim().replace('/', "\\"));
-    }
-    bail!("Boot NIC '{}' not found in the PnP inventory", boot.name)
 }
 
 /// Parse `Get-ComputerInfo` JSON into `(windows_version, architecture)`.
@@ -384,7 +285,7 @@ pub fn parse_os_info(json: &str) -> Result<(String, String)> {
     struct OsInfo {
         #[serde(rename = "OsName", default)]
         os_name: String,
-        #[serde(rename = "OArchitecture", default)]
+        #[serde(rename = "OsArchitecture", default)]
         architecture: String,
         #[serde(rename = "WindowsVersion", default)]
         version: String,
@@ -404,73 +305,52 @@ pub fn parse_os_info(json: &str) -> Result<(String, String)> {
 /// Export the Boot NIC's published driver package with pnputil. An export
 /// failure is fatal: it must never produce a successful report, so the caller
 /// fails before anything is posted.
-fn export_boot_driver(service_name: &str) -> Result<PathBuf> {
-    let listing = run_bounded("pnputil", &["/enum-drivers"])?;
-    let parsed = parse_enum_drivers(&listing);
-    let driver = match_boot_driver(&parsed, service_name)?;
-    // Keep the TempDir alive until the archive is posted; leak-and-cleanup
-    // keeps the signature simple while guaranteeing the path stays valid.
-    let staging_path = tempfile::tempdir()
-        .context("failed to create driver export directory")?
-        .keep();
-    let target = staging_path.join("export");
+fn export_boot_driver(inf_name: &str) -> Result<(tempfile::TempDir, PathBuf)> {
+    anyhow::ensure!(
+        is_exportable_published_inf(inf_name),
+        "Boot NIC INF is not an exportable third-party package"
+    );
+    let staging = tempfile::tempdir().context("failed to create driver export directory")?;
+    let target = staging.path().join("export");
     std::fs::create_dir_all(&target)?;
     run_bounded(
         "pnputil",
         &[
             "/export-driver",
-            &driver.published_name,
-            &target.to_string_lossy(),
+            inf_name,
+            target
+                .to_str()
+                .context("driver export path is not valid Unicode")?,
         ],
     )
-    .with_context(|| {
-        let _ = std::fs::remove_dir_all(&staging_path);
-        format!("failed to export driver package {}", driver.published_name)
-    })?;
-    let archive = staging_path.join("driver.zip");
-    let status = Command::new("powershell")
-        .args([
+    .with_context(|| format!("failed to export driver package {inf_name}"))?;
+    let archive = staging.path().join("driver.zip");
+    run_bounded(
+        "powershell",
+        &[
             "-NoProfile",
             "-NonInteractive",
             "-Command",
             &format!(
                 "Compress-Archive -Path '{}/*' -DestinationPath '{}' -Force",
-                target.display(),
-                archive.display()
+                target.display().to_string().replace('\'', "''"),
+                archive.display().to_string().replace('\'', "''")
             ),
-        ])
-        .output()
-        .context("failed to archive the exported driver package")?;
-    if !status.status.success() {
-        let _ = std::fs::remove_dir_all(&staging_path);
-        bail!("failed to archive the exported driver package");
-    }
-    Ok(archive)
+        ],
+    )
+    .context("failed to archive the exported driver package")?;
+    Ok((staging, archive))
 }
 
 /// POST the multipart report. Archive bytes travel in the request body only;
 /// nothing about the package or configuration is logged.
 fn post_report(endpoint: &str, report: &ClientReport, archive: Option<&Path>) -> Result<()> {
     let boundary = "diskless-client-report";
-    let mut body = Vec::new();
-    let part = |name: &str, filename: Option<&str>, content_type: &str| {
-        let mut header = format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"");
-        if let Some(filename) = filename {
-            header.push_str(&format!("; filename=\"{filename}\""));
-        }
-        header.push_str(&format!("\r\nContent-Type: {content_type}\r\n\r\n"));
-        header.into_bytes()
-    };
-    body.extend_from_slice(&part("report", None, "application/json"));
-    body.extend_from_slice(&serde_json::to_vec(report)?);
-    body.extend_from_slice(b"\r\n");
-    if let Some(archive) = archive {
-        let bytes = std::fs::read(archive).context("failed to read the exported driver archive")?;
-        body.extend_from_slice(&part("file", Some("driver.zip"), "application/zip"));
-        body.extend_from_slice(&bytes);
-        body.extend_from_slice(b"\r\n");
-    }
-    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    let temp = tempfile::tempdir().context("failed to create report upload staging directory")?;
+    let body_path = temp.path().join("request.multipart");
+    let mut body = std::fs::File::create(&body_path)?;
+    write_multipart_body(&mut body, report, archive, boundary)?;
+    drop(body);
 
     let response = run_bounded(
         "powershell",
@@ -479,10 +359,10 @@ fn post_report(endpoint: &str, report: &ClientReport, archive: Option<&Path>) ->
             "-NonInteractive",
             "-Command",
             &format!(
-                "$bytes = [Convert]::FromBase64String('{}'); $response = Invoke-WebRequest -Uri '{}' -Method Post -ContentType 'multipart/form-data; boundary={}' -Body $bytes -UseBasicParsing -TimeoutSec {}; if ($response.StatusCode -ge 400) {{ throw \"report rejected: $($response.StatusCode)\" }}",
-                base64_encode(&body),
+                "$response = Invoke-WebRequest -Uri '{}' -Method Post -ContentType 'multipart/form-data; boundary={}' -InFile '{}' -UseBasicParsing -TimeoutSec {}; if ($response.StatusCode -ge 400) {{ throw \"report rejected: $($response.StatusCode)\" }}",
                 endpoint.replace('\'', "''"),
                 boundary,
+                body_path.display().to_string().replace('\'', "''"),
                 COMMAND_TIMEOUT.as_secs(),
             ),
         ],
@@ -490,24 +370,31 @@ fn post_report(endpoint: &str, report: &ClientReport, archive: Option<&Path>) ->
     response.map(|_| ())
 }
 
-fn base64_encode(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let mut value: u32 = 0;
-        for (index, byte) in chunk.iter().enumerate() {
-            value |= u32::from(*byte) << (16 - 8 * index);
+fn write_multipart_body(
+    mut body: &mut impl Write,
+    report: &ClientReport,
+    archive: Option<&Path>,
+    boundary: &str,
+) -> Result<()> {
+    let part = |name: &str, filename: Option<&str>, content_type: &str| {
+        let mut header = format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"");
+        if let Some(filename) = filename {
+            header.push_str(&format!("; filename=\"{filename}\""));
         }
-        let width = chunk.len() + 1;
-        for index in 0..width {
-            let shift = 18 - 6 * index;
-            out.push(ALPHABET[((value >> shift) & 0x3F) as usize] as char);
-        }
-        for _ in width..4 {
-            out.push('=');
-        }
+        header.push_str(&format!("\r\nContent-Type: {content_type}\r\n\r\n"));
+        header
+    };
+    body.write_all(part("report", None, "application/json").as_bytes())?;
+    serde_json::to_writer(&mut body, report)?;
+    body.write_all(b"\r\n")?;
+    if let Some(archive) = archive {
+        body.write_all(part("file", Some("driver.zip"), "application/zip").as_bytes())?;
+        std::io::copy(&mut std::fs::File::open(archive)?, &mut body)
+            .context("failed to stream the exported driver archive")?;
+        body.write_all(b"\r\n")?;
     }
-    out
+    write!(body, "--{boundary}--\r\n")?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -516,62 +403,26 @@ mod tests {
 
     #[test]
     fn adapter_and_pnp_inventory_parse_single_and_multiple() {
-        let single = r#"{"Name":"Ethernet","MacAddress":"02-00-00-00-00-01","InterfaceDescription":"Intel NIC","Status":"Up","ServiceName":"e1dexpress"}"#;
+        let single = r#"{"Name":"Ethernet","MacAddress":"02-00-00-00-00-01","InterfaceDescription":"Intel NIC","Status":"Up","ServiceName":"e1dexpress","PnPDeviceID":"PCI\\VEN_8086&DEV_15F3","HardwareIds":["PCI\\VEN_8086&DEV_15F3","PCI\\VEN_8086"],"PublishedInf":"oem10.inf"}"#;
         assert_eq!(parse_net_adapters(single).unwrap().len(), 1);
         let array = format!("[{single},{single}]");
         assert_eq!(parse_net_adapters(&array).unwrap().len(), 2);
         assert!(parse_net_adapters("").unwrap().is_empty());
-        let pnp = r#"{"InstanceId":"PCI\\VEN_8086&DEV_15F3&SUBSYS_00008086&REV_01\\3&11583659&0&C8","FriendlyName":"Intel NIC"}"#;
-        assert_eq!(parse_pnp_devices(pnp).unwrap().len(), 1);
-        assert!(parse_pnp_devices("not json").is_err());
+        let adapter = parse_net_adapters(single).unwrap().remove(0);
+        assert_eq!(
+            adapter.hardware_ids,
+            ["PCI\\VEN_8086&DEV_15F3", "PCI\\VEN_8086"]
+        );
+        assert_eq!(adapter.published_inf, "oem10.inf");
     }
 
     #[test]
-    fn boot_nic_prefers_default_route_then_first_up_physical() {
-        let adapters = vec![
-            NetAdapter {
-                name: "vEthernet".into(),
-                mac_address: String::new(),
-                description: "Hyper-V Virtual Adapter".into(),
-                status: "Up".into(),
-                service_name: "vmswitch".into(),
-            },
-            NetAdapter {
-                name: "Ethernet".into(),
-                mac_address: String::new(),
-                description: "Intel NIC".into(),
-                status: "Up".into(),
-                service_name: "e1dexpress".into(),
-            },
-            NetAdapter {
-                name: "Ethernet 2".into(),
-                mac_address: String::new(),
-                description: "Intel NIC #2".into(),
-                status: "Disconnected".into(),
-                service_name: "e1dexpress".into(),
-            },
-        ];
-        assert_eq!(
-            select_boot_nic(&adapters, Some("Ethernet")).unwrap().name,
-            "Ethernet"
-        );
-        assert_eq!(select_boot_nic(&adapters, None).unwrap().name, "Ethernet");
-        assert!(select_boot_nic(&adapters[..1], None).is_err());
-    }
-
-    #[test]
-    fn enum_drivers_match_requires_unique_net_service() {
-        let text = "Published Name :     oem10.inf\nOriginal Name :      netkvm.inf\nProvider Name :      Red Hat\nClass Name :         Net\nService Name :       netkvm\n\nPublished Name :     oem11.inf\nOriginal Name :      stor.inf\nProvider Name :      Vendor\nClass Name :         SCSIAdapter\nService Name :       stor\n";
-        let drivers = parse_enum_drivers(text);
-        assert_eq!(drivers.len(), 2);
-        assert_eq!(
-            match_boot_driver(&drivers, "netkvm")
-                .unwrap()
-                .published_name,
-            "oem10.inf"
-        );
-        assert!(match_boot_driver(&drivers, "stor").is_err());
-        assert!(match_boot_driver(&drivers, "missing").is_err());
+    fn only_published_oem_inf_names_are_exportable() {
+        assert!(is_exportable_published_inf("oem10.inf"));
+        assert!(is_exportable_published_inf("OEM10.INF"));
+        assert!(!is_exportable_published_inf("nete1.inf"));
+        assert!(!is_exportable_published_inf(""));
+        assert!(!is_exportable_published_inf("oem.inf"));
     }
 
     #[test]
@@ -611,9 +462,53 @@ mod tests {
     }
 
     #[test]
+    fn reporter_rejects_credentials_and_non_base_urls() {
+        let config = |server_url: &str| ReporterConfig {
+            server_url: server_url.into(),
+            client_id: "client-1".into(),
+            export_package: true,
+            image_revision: None,
+        };
+        assert!(config("https://user:secret@example.test")
+            .report_endpoint()
+            .is_err());
+        assert!(config("https://example.test/?token=secret")
+            .report_endpoint()
+            .is_err());
+        assert!(config("https://example.test/#secret")
+            .report_endpoint()
+            .is_err());
+        assert!(config("https://example.test\n'; exit 1; '")
+            .report_endpoint()
+            .is_err());
+    }
+
+    #[test]
+    fn multipart_upload_streams_archive_bytes_in_the_file_part() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("driver.zip");
+        std::fs::write(&archive, b"zip-data").unwrap();
+        let report = ClientReport {
+            client_id: "client-1".into(),
+            windows_version: "Windows 11 23H2".into(),
+            architecture: "x64".into(),
+            boot_nic_ids: vec!["PCI\\VEN_8086&DEV_15F3".into()],
+            image_revision: None,
+            boot_nic_id: None,
+        };
+        let mut body = Vec::new();
+        write_multipart_body(&mut body, &report, Some(&archive), "boundary").unwrap();
+        let body = String::from_utf8(body).unwrap();
+        assert!(body.contains("name=\"report\""));
+        assert!(body.contains("name=\"file\"; filename=\"driver.zip\""));
+        assert!(body.contains("zip-data"));
+        assert!(body.ends_with("--boundary--\r\n"));
+    }
+
+    #[test]
     fn os_info_parses_and_normalizes() {
         let (version, arch) = parse_os_info(
-            r#"{"OsName":"Microsoft Windows 11 Pro","OArchitecture":"AMD64","WindowsVersion":"23H2"}"#,
+            r#"{"OsName":"Microsoft Windows 11 Pro","OsArchitecture":"64-bit","WindowsVersion":"23H2"}"#,
         )
         .unwrap();
         assert!(version.contains("Windows 11"));
@@ -621,5 +516,14 @@ mod tests {
         assert_eq!(normalize_architecture("AMD64"), "x64");
         assert_eq!(normalize_architecture("ARM64"), "arm64");
         assert!(parse_os_info(r#"{"OsName":""}"#).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn child_process_timeout_kills_a_hung_command() {
+        let started = Instant::now();
+        let error = run_with_timeout("sleep", &["5"], Duration::from_millis(100)).unwrap_err();
+        assert!(error.to_string().contains("timeout"));
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 }

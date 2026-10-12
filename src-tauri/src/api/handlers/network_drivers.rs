@@ -49,12 +49,7 @@ pub async fn import(
     State(state): State<AppState>,
     mut multipart: Multipart,
 ) -> Result<Json<NetworkDriverPackage>, (StatusCode, Json<NetworkDriverError>)> {
-    let temp_dir = std::env::temp_dir().join("diskless-manager-network-drivers");
-    tokio::fs::create_dir_all(&temp_dir)
-        .await
-        .map_err(|e| internal_message(e.to_string()))?;
     let mut archive = None;
-
     while let Some(mut field) = multipart
         .next_field()
         .await
@@ -63,47 +58,52 @@ pub async fn import(
         if field.name() != Some("file") {
             continue;
         }
-        let filename = field.file_name().unwrap_or("driver.zip");
-        let safe_name = filename
-            .chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
-                    c
-                } else {
-                    '_'
-                }
-            })
-            .collect::<String>();
-        let path = temp_dir.join(format!("{}-{}", uuid::Uuid::new_v4(), safe_name));
-        let mut file = tokio::fs::File::create(&path)
-            .await
-            .map_err(|e| internal_message(e.to_string()))?;
-        while let Some(chunk) = field
-            .chunk()
-            .await
-            .map_err(|e| bad_request(e.to_string()))?
-        {
-            file.write_all(&chunk)
-                .await
-                .map_err(|e| internal_message(e.to_string()))?;
+        if archive.is_some() {
+            return Err(bad_request("only one file field is allowed".to_string()));
         }
-        file.flush()
-            .await
-            .map_err(|e| internal_message(e.to_string()))?;
-        archive = Some(path);
-        break;
+        archive = Some(receive_archive(&mut field).await?);
     }
 
     let archive =
         archive.ok_or_else(|| bad_request("multipart field 'file' is required".to_string()))?;
     let plugin = plugin(&state).await.map_err(internal_error)?;
-    let archive_for_job = archive.clone();
-    let result = tokio::task::spawn_blocking(move || plugin.import_zip(&archive_for_job))
+    // The worker owns cleanup even if the waiting HTTP request is cancelled.
+    tokio::task::spawn_blocking(move || plugin.import_zip(archive.path()))
         .await
         .map_err(|e| internal_message(e.to_string()))?
-        .map_err(internal_error);
-    let _ = tokio::fs::remove_file(&archive).await;
-    result.map(Json)
+        .map(Json)
+        .map_err(internal_error)
+}
+
+async fn receive_archive(
+    field: &mut axum::extract::multipart::Field<'_>,
+) -> Result<tempfile::NamedTempFile, (StatusCode, Json<NetworkDriverError>)> {
+    let archive = tokio::task::spawn_blocking(|| {
+        tempfile::Builder::new()
+            .prefix("diskless-driver-upload-")
+            .suffix(".zip")
+            .tempfile()
+    })
+    .await
+    .map_err(|e| internal_message(e.to_string()))?
+    .map_err(|e| internal_message(e.to_string()))?;
+    let handle = archive
+        .reopen()
+        .map_err(|e| internal_message(e.to_string()))?;
+    let mut file = tokio::fs::File::from_std(handle);
+    while let Some(chunk) = field
+        .chunk()
+        .await
+        .map_err(|e| bad_request(e.to_string()))?
+    {
+        file.write_all(&chunk)
+            .await
+            .map_err(|e| internal_message(e.to_string()))?;
+    }
+    file.flush()
+        .await
+        .map_err(|e| internal_message(e.to_string()))?;
+    Ok(archive)
 }
 
 pub async fn remove(
@@ -177,11 +177,7 @@ pub async fn submit_report(
     mut multipart: Multipart,
 ) -> Result<Json<WindowsDriverReportResponse>, (StatusCode, Json<NetworkDriverError>)> {
     let mut report_json: Option<String> = None;
-    let mut archive: Option<PathBuf> = None;
-    let temp_dir = std::env::temp_dir().join("diskless-manager-driver-reports");
-    tokio::fs::create_dir_all(&temp_dir)
-        .await
-        .map_err(|e| internal_message(e.to_string()))?;
+    let mut archive = None;
 
     while let Some(mut field) = multipart
         .next_field()
@@ -190,6 +186,9 @@ pub async fn submit_report(
     {
         match field.name() {
             Some("report") => {
+                if report_json.is_some() {
+                    return Err(bad_request("only one report field is allowed".to_string()));
+                }
                 let bytes = field
                     .bytes()
                     .await
@@ -200,23 +199,10 @@ pub async fn submit_report(
                 );
             }
             Some("file") => {
-                let path = temp_dir.join(format!("report-{}.zip", uuid::Uuid::new_v4().simple()));
-                let mut file = tokio::fs::File::create(&path)
-                    .await
-                    .map_err(|e| internal_message(e.to_string()))?;
-                while let Some(chunk) = field
-                    .chunk()
-                    .await
-                    .map_err(|e| bad_request(e.to_string()))?
-                {
-                    file.write_all(&chunk)
-                        .await
-                        .map_err(|e| internal_message(e.to_string()))?;
+                if archive.is_some() {
+                    return Err(bad_request("only one file field is allowed".to_string()));
                 }
-                file.flush()
-                    .await
-                    .map_err(|e| internal_message(e.to_string()))?;
-                archive = Some(path);
+                archive = Some(receive_archive(&mut field).await?);
             }
             _ => {}
         }
@@ -265,9 +251,6 @@ pub async fn submit_report(
         )
     })?;
     if !verify_report_session(&target_iqn, &client.name, peer.ip()).await {
-        if let Some(path) = archive {
-            let _ = tokio::fs::remove_file(&path).await;
-        }
         return Err((
             StatusCode::FORBIDDEN,
             Json(NetworkDriverError {
@@ -280,9 +263,9 @@ pub async fn submit_report(
     // Harvested packages enter through the same safe ZIP extraction and INF
     // inspection path as administrator imports, before the report is stored,
     // so a rejected archive leaves both the report and the catalog unchanged.
-    let package_id = if let Some(path) = archive.clone() {
+    let package_id = if let Some(archive) = archive {
         let plugin = plugin(&state).await.map_err(internal_error)?;
-        let imported = tokio::task::spawn_blocking(move || plugin.import_zip(&path))
+        let imported = tokio::task::spawn_blocking(move || plugin.import_zip(archive.path()))
             .await
             .map_err(|e| internal_message(e.to_string()))?
             .map_err(internal_error)?;
@@ -290,9 +273,6 @@ pub async fn submit_report(
     } else {
         None
     };
-    if let Some(path) = archive {
-        let _ = tokio::fs::remove_file(&path).await;
-    }
 
     let reported_at = chrono::Utc::now().to_rfc3339();
     sqlx::query(
@@ -417,6 +397,136 @@ fn internal_error(error: anyhow::Error) -> (StatusCode, Json<NetworkDriverError>
 mod tests {
     use super::*;
 
+    async fn upload_with_files(
+        payload: &str,
+        ending: &str,
+        duplicate: bool,
+        admin_import: bool,
+    ) -> StatusCode {
+        use axum::{body::Body, http::Request};
+        use tower::ServiceExt as _;
+        let (state, app, admin, _) = crate::api::security_tests::setup().await;
+        let media = tempfile::tempdir().unwrap();
+        state.settings.write().await.http.root_dir = media.path().to_string_lossy().into_owned();
+        let boundary = "upload-regression";
+        let file = format!("--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"driver.zip\"\r\n\r\n{payload}\r\n");
+        let mut body = file.clone();
+        if duplicate {
+            body.push_str(&file);
+            body.push_str(&format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"report\"\r\n\r\n{}\r\n",
+                serde_json::json!({
+                    "client_id": "unknown", "windows_version": "11", "architecture": "x64",
+                    "boot_nic_ids": ["PCI\\VEN_8086&DEV_15F3"]
+                })
+            ));
+        }
+        body.push_str(ending);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(if admin_import {
+                        "/api/pxe/network-drivers"
+                    } else {
+                        "/api/pxe/network-drivers/reports"
+                    })
+                    .header("authorization", format!("Bearer {admin}"))
+                    .extension(ConnectInfo(
+                        "192.0.2.99:49152".parse::<SocketAddr>().unwrap(),
+                    ))
+                    .header(
+                        "content-type",
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        response.status()
+    }
+
+    fn assert_upload_removed(marker: &str) {
+        // Locate only this test's unique bytes; concurrent uploads are unrelated.
+        let directory = std::env::temp_dir().join("diskless-manager-driver-reports");
+        if let Ok(entries) = std::fs::read_dir(directory) {
+            for entry in entries {
+                let path = entry.unwrap().path();
+                if std::fs::read(&path).is_ok_and(|bytes| bytes.starts_with(marker.as_bytes())) {
+                    let _ = std::fs::remove_file(&path);
+                    panic!("rejected upload remained on disk");
+                }
+            }
+        }
+        if let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) {
+            for entry in entries {
+                let path = entry.unwrap().path();
+                if path
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("diskless-driver-upload-")
+                    && std::fs::read(&path).is_ok_and(|bytes| bytes.starts_with(marker.as_bytes()))
+                {
+                    let _ = std::fs::remove_file(&path);
+                    panic!("rejected upload remained on disk");
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn rejected_and_interrupted_report_uploads_are_removed() {
+        for ending in ["--upload-regression--\r\n", ""] {
+            let marker = uuid::Uuid::new_v4().to_string();
+            assert_eq!(
+                upload_with_files(&marker, ending, false, false).await,
+                StatusCode::BAD_REQUEST
+            );
+            assert_upload_removed(&marker);
+        }
+    }
+
+    #[tokio::test]
+    async fn duplicate_report_archives_are_rejected_without_leaking_files() {
+        let marker = uuid::Uuid::new_v4().to_string();
+        assert_eq!(
+            upload_with_files(&marker, "--upload-regression--\r\n", true, false).await,
+            StatusCode::BAD_REQUEST
+        );
+        assert_upload_removed(&marker);
+    }
+
+    #[tokio::test]
+    async fn malformed_and_unauthorized_reports_remove_their_archive() {
+        for (report, expected) in [
+            ("{", StatusCode::BAD_REQUEST),
+            (
+                r#"{"client_id":"unknown","windows_version":"11","architecture":"x64","boot_nic_ids":["PCI\\VEN_8086&DEV_15F3"]}"#,
+                StatusCode::NOT_FOUND,
+            ),
+        ] {
+            let marker = uuid::Uuid::new_v4().to_string();
+            let ending = format!("--upload-regression\r\nContent-Disposition: form-data; name=\"report\"\r\n\r\n{report}\r\n--upload-regression--\r\n");
+            assert_eq!(
+                upload_with_files(&marker, &ending, false, false).await,
+                expected
+            );
+            assert_upload_removed(&marker);
+        }
+    }
+
+    #[tokio::test]
+    async fn admin_import_rejects_duplicate_archives_without_leaking() {
+        let marker = uuid::Uuid::new_v4().to_string();
+        assert_eq!(
+            upload_with_files(&marker, "--upload-regression--\r\n", true, true).await,
+            StatusCode::BAD_REQUEST
+        );
+        assert_upload_removed(&marker);
+    }
+
     #[test]
     fn session_peer_match_accepts_exact_and_mapped_addresses() {
         let peers = vec!["192.0.2.10".parse().unwrap()];
@@ -479,6 +589,23 @@ mod tests {
         )
         .await
         .unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query("INSERT INTO images (id, name, kind, os_type, size_gb, path, format, status, created_at, updated_at) VALUES ('rev-image', 'tank/image/revision', 'master', 'windows', 50, '/dev/zvol/tank/image/revision', 'raw', 'ready', ?, ?)")
+            .bind(&now)
+            .bind(&now)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO images (id, name, kind, os_type, size_gb, path, format, status, parent_id, created_at, updated_at) VALUES ('rev-snapshot', 'serviced-claim', 'snapshot', 'windows', 50, '/dev/zvol/tank/image/revision', 'raw', 'ready', 'rev-image', ?, ?)")
+            .bind(&now)
+            .bind(&now)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE clients SET master = 'tank/image/revision', snapshot = 'tank/image/revision@serviced-claim' WHERE id = 'test-1'")
+            .execute(&pool)
+            .await
+            .unwrap();
         crate::application::windows_servicing::start_boot_test(
             &pool,
             &revision.id,

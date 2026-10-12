@@ -1,5 +1,8 @@
 use crate::{
-    domain::{storage::ClientStorageSpec, Client, CreateClient},
+    domain::{
+        storage::{ClientStorageSpec, StorageSource},
+        BootMode, Client, ClientId, CreateClient,
+    },
     infrastructure::dhcp::{BootReservation, BootReservationPublisher},
     persistence::ClientRepository,
 };
@@ -7,6 +10,61 @@ use anyhow::{bail, Context, Result};
 use std::sync::Arc;
 
 use super::StorageService;
+
+fn boot_reservation(
+    client: &Client,
+    server_ip: &str,
+    storage_spec: &ClientStorageSpec,
+) -> BootReservation {
+    BootReservation {
+        client_name: client.name.clone(),
+        mac: client.mac.to_string(),
+        ip: client.ip.to_string(),
+        target_iqn: client
+            .target_iqn
+            .clone()
+            .unwrap_or_else(|| storage_spec.target_iqn.clone()),
+        server_ip: server_ip.to_owned(),
+        chap: storage_spec.chap.clone(),
+    }
+}
+
+fn pending_test_client_is_unprovisioned(client: &Client) -> bool {
+    client.master == "pending"
+        && client.snapshot.is_none()
+        && client.block_store.is_none()
+        && client.block_device.is_none()
+        && client.target_iqn.is_none()
+        && client.writeback.is_none()
+        && client.mode == BootMode::Normal
+}
+
+/// Validate a designated test client before the API creates or reads CHAP
+/// credentials. The provisioning method repeats this check at the side-effect
+/// boundary.
+pub fn validate_pending_boot_test_client(
+    client: &Client,
+    candidate_master: &str,
+    candidate_snapshot: &str,
+) -> Result<()> {
+    let already_assigned = client.master == candidate_master
+        && client.snapshot.as_deref() == Some(candidate_snapshot)
+        && client.block_store.is_some()
+        && client.block_device.is_some()
+        && client.target_iqn.is_some()
+        && client.writeback.is_some();
+    if already_assigned || pending_test_client_is_unprovisioned(client) {
+        Ok(())
+    } else {
+        bail!("only an unprovisioned pending client can be designated for a Windows boot test");
+    }
+}
+
+fn private_candidate_source(spec: &ClientStorageSpec, client: &Client, snapshot: &str) -> bool {
+    matches!(&spec.source, StorageSource::Snapshot(source) if source == snapshot)
+        && spec.client_id == client.id.as_str()
+        && spec.client_name == client.name
+}
 
 /// Authoritative client creation transaction.
 ///
@@ -47,6 +105,115 @@ impl ProvisioningService {
         })
         .await
         .context("client provisioning worker failed")?
+    }
+
+    /// Assign only an empty enrollment placeholder to a disposable Windows
+    /// boot-test clone. Repeating the same assignment republishes its boot
+    /// reservation without creating another writable clone.
+    pub async fn assign_pending_boot_test_client(
+        &self,
+        client_id: &str,
+        candidate_master: &str,
+        candidate_snapshot: &str,
+        storage_spec: ClientStorageSpec,
+        server_ip: &str,
+    ) -> Result<Client> {
+        let service = self.clone();
+        let client_id = client_id.to_owned();
+        let candidate_master = candidate_master.to_owned();
+        let candidate_snapshot = candidate_snapshot.to_owned();
+        let server_ip = server_ip.to_owned();
+        let runtime = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || {
+            runtime.block_on(service.assign_pending_boot_test_client_blocking(
+                &client_id,
+                &candidate_master,
+                &candidate_snapshot,
+                storage_spec,
+                &server_ip,
+            ))
+        })
+        .await
+        .context("boot-test client provisioning worker failed")?
+    }
+
+    async fn assign_pending_boot_test_client_blocking(
+        &self,
+        client_id: &str,
+        candidate_master: &str,
+        candidate_snapshot: &str,
+        storage_spec: ClientStorageSpec,
+        server_ip: &str,
+    ) -> Result<Client> {
+        let id = ClientId::from_string(client_id.to_owned())?;
+        let mut client = self
+            .clients
+            .find_by_id(&id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("test client not found: {client_id}"))?;
+        if !private_candidate_source(&storage_spec, &client, candidate_snapshot) {
+            bail!("boot-test storage does not match the designated client and candidate snapshot");
+        }
+
+        validate_pending_boot_test_client(&client, candidate_master, candidate_snapshot)?;
+        let assigned = client.master == candidate_master
+            && client.snapshot.as_deref() == Some(candidate_snapshot)
+            && client.block_store.is_some()
+            && client.block_device.is_some()
+            && client.target_iqn.is_some()
+            && client.writeback.is_some();
+        if assigned {
+            let reservation = boot_reservation(&client, server_ip, &storage_spec);
+            self.boot.publish(&reservation).await?;
+            return Ok(client);
+        }
+        let storage = self
+            .storage
+            .create_client_storage(&storage_spec)
+            .with_context(|| {
+                format!(
+                    "failed to provision boot-test storage for '{}'",
+                    client.name
+                )
+            })?;
+        client.master = candidate_master.to_owned();
+        client.snapshot = Some(candidate_snapshot.to_owned());
+        client.block_store = Some(storage.backstore().to_owned());
+        client.block_device = Some(storage.block_device().display().to_string());
+        client.target_iqn = Some(storage.target_iqn().to_owned());
+        client.writeback = Some(storage.dataset().to_owned());
+        if let Some(chap) = &storage_spec.chap {
+            client.chap_user = Some(chap.username.clone());
+            client.chap_secret = Some(chap.password.clone());
+            client.chap_enabled = true;
+        }
+        client.mark_ready();
+
+        let reservation = boot_reservation(&client, server_ip, &storage_spec);
+        if let Err(error) = self.boot.publish(&reservation).await {
+            let rollback = self.storage.destroy_client_storage(&storage);
+            return match rollback {
+                Ok(()) => Err(error).context("failed to publish boot-test client reservation"),
+                Err(rollback_error) => Err(anyhow::anyhow!(
+                    "failed to publish boot-test client reservation: {error}; storage rollback also failed: {rollback_error}"
+                )),
+            };
+        }
+        if let Err(error) = self.clients.update(&client).await {
+            let boot_rollback = self.boot.remove(&reservation).await.err();
+            let storage_rollback = self.storage.destroy_client_storage(&storage).err();
+            let mut message = format!("failed to persist boot-test client assignment: {error}");
+            if let Some(error) = boot_rollback {
+                message.push_str(&format!(
+                    "; boot configuration rollback also failed: {error:#}"
+                ));
+            }
+            if let Some(error) = storage_rollback {
+                message.push_str(&format!("; storage rollback also failed: {error}"));
+            }
+            bail!(message);
+        }
+        Ok(client)
     }
 
     async fn create_client_blocking(
@@ -362,6 +529,7 @@ mod tests {
             },
             ClientStorageSpec {
                 client_id: "ignored".into(),
+                client_name: "PC01".into(),
                 source: StorageSource::ExistingVolume("tank/win11".into()),
                 dataset: "tank/win11".into(),
                 backstore: "block_pc01".into(),
@@ -372,6 +540,30 @@ mod tests {
                 chap: None,
             },
         )
+    }
+
+    #[test]
+    fn boot_test_assignment_requires_empty_pending_client_and_private_candidate_snapshot() {
+        let (mut request, mut spec) = request_and_spec();
+        request.master = "pending".into();
+        let mut client = Client::create(request).unwrap();
+        let snapshot = "tank/candidate@serviced-test";
+        spec.client_id = client.id.to_string();
+        spec.client_name = client.name.clone();
+        spec.source = StorageSource::Snapshot(snapshot.into());
+
+        assert!(pending_test_client_is_unprovisioned(&client));
+        assert!(private_candidate_source(&spec, &client, snapshot));
+        assert!(matches!(spec.source, StorageSource::Snapshot(_)));
+
+        client.master = "tank/live-image".into();
+        client.block_device = Some("/dev/zvol/tank/live-client".into());
+        assert!(!pending_test_client_is_unprovisioned(&client));
+        assert!(!private_candidate_source(
+            &spec,
+            &client,
+            "tank/other@serviced-test"
+        ));
     }
 
     #[tokio::test]
@@ -415,6 +607,7 @@ mod tests {
         };
         let spec = ClientStorageSpec {
             client_id: "ignored".into(),
+            client_name: "PC01".into(),
             source: StorageSource::ExistingVolume("tank/win11".into()),
             dataset: "tank/win11".into(),
             backstore: "block_pc01".into(),

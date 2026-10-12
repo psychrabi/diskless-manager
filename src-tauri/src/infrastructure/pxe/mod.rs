@@ -17,8 +17,9 @@ pub use driver_injection::{
 };
 pub use driver_manifest::{DriverManifest, DriverManifestEntry};
 pub use driver_selection::{
-    normalize_hardware_ids, select_compatible_for_image, select_drivers, ImageDriverTarget,
-    NetworkDriverSelectorInput, SelectedNetworkDriver,
+    normalize_hardware_ids, pnp_id_matches, select_compatible_for_image, select_drivers,
+    select_managed_image_driver_ids, ImageDriverTarget, NetworkDriverSelectorInput,
+    SelectedNetworkDriver,
 };
 pub use driver_validation::{validate_package, DriverInfInspection, DriverPackageValidation};
 pub use ipxe::*;

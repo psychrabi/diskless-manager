@@ -113,3 +113,17 @@
 - Python, WASM, and terminal UI tooling requirements apply only if a requested
   change actually introduces those technologies. Do not add them to this stack
   or rebuild nonexistent packages.
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked in GitHub Issues with `gh`; PRs are not a triage surface. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the default labels: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, and `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Use the single-context layout: root `GLOSSARY.md` and `docs/adr/`. See `docs/agents/domain.md`.

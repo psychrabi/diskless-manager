@@ -52,7 +52,10 @@ $config = @{
 if (-not [string]::IsNullOrWhiteSpace($ImageRevision)) {
     $config["image_revision"] = $ImageRevision
 }
-$config | ConvertTo-Json -Depth 2 | Set-Content -LiteralPath $configPath -Encoding UTF8
+[IO.File]::WriteAllText(
+    $configPath,
+    ($config | ConvertTo-Json -Depth 2),
+    [Text.UTF8Encoding]::new($false))
 
 $acl = Get-Acl -LiteralPath $configPath
 $acl.SetAccessRuleProtection($true, $false)

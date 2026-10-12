@@ -81,6 +81,16 @@ impl Default for SafeIscsiProvisioner {
 }
 
 impl IscsiProvisioner for SafeIscsiProvisioner {
+    fn active_session_peer_ips(
+        &self,
+        target_iqn: &str,
+        client_name: &str,
+    ) -> Result<Vec<std::net::IpAddr>> {
+        self.inner.active_session_peer_ips(target_iqn, client_name)
+    }
+    fn ensure_initiator_acl(&self, spec: &IscsiTargetSpec) -> Result<()> {
+        self.inner.ensure_initiator_acl(spec)
+    }
     fn create_target(&self, spec: &IscsiTargetSpec) -> Result<()> {
         self.inner.create_target(spec)
     }
@@ -129,6 +139,64 @@ impl IscsiProvisioner for SafeIscsiProvisioner {
 mod tests {
     use super::select_backend;
     use crate::core::config::IscsiBackend;
+    use crate::infrastructure::iscsi::{
+        ChapCredentials, IscsiLunState, IscsiProvisioner, IscsiTargetSpec, IscsiTargetState,
+    };
+    use anyhow::Result;
+    use std::{net::IpAddr, sync::Arc};
+
+    struct FakePeerProvisioner;
+
+    impl IscsiProvisioner for FakePeerProvisioner {
+        fn create_target(&self, _: &IscsiTargetSpec) -> Result<()> {
+            unreachable!()
+        }
+        fn remove_target(&self, _: &str) -> Result<()> {
+            unreachable!()
+        }
+        fn remove_target_with_backstores(&self, _: &str, _: &[String]) -> Result<()> {
+            unreachable!()
+        }
+        fn target_exists(&self, _: &str) -> Result<bool> {
+            unreachable!()
+        }
+        fn set_chap_auth(&self, _: &str, _: Option<&ChapCredentials>) -> Result<()> {
+            unreachable!()
+        }
+        fn list_target_luns(&self, _: &str) -> Result<Vec<IscsiLunState>> {
+            unreachable!()
+        }
+        fn inspect_target(&self, _: &IscsiTargetSpec) -> Result<IscsiTargetState> {
+            unreachable!()
+        }
+        fn reconcile(&self, _: &IscsiTargetSpec) -> Result<()> {
+            unreachable!()
+        }
+        fn active_session_peer_ips(&self, target: &str, client: &str) -> Result<Vec<IpAddr>> {
+            assert_eq!((target, client), ("iqn.custom:target", "PC001"));
+            Ok(vec![
+                "192.0.2.10".parse().unwrap(),
+                "2001:db8::1".parse().unwrap(),
+            ])
+        }
+    }
+
+    #[test]
+    fn shared_peer_lookup_returns_backend_result_unchanged() {
+        let backend = super::SafeIscsiProvisioner {
+            inner: Arc::new(FakePeerProvisioner),
+            backend: IscsiBackend::Targetcli,
+        };
+        assert_eq!(
+            backend
+                .active_session_peer_ips("iqn.custom:target", "PC001")
+                .unwrap(),
+            [
+                "192.0.2.10".parse::<IpAddr>().unwrap(),
+                "2001:db8::1".parse().unwrap()
+            ]
+        );
+    }
 
     #[test]
     fn native_backend_falls_back_to_targetcli_only_when_preflight_fails() {
