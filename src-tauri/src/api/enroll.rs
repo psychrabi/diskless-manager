@@ -1,9 +1,9 @@
 use axum::{
     extract::{ConnectInfo, Path, State},
-    http::header,
+    http::{header, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
-    Router,
+    Json, Router,
 };
 use log::info;
 use std::{net::SocketAddr, path::PathBuf};
@@ -42,6 +42,7 @@ fn client_name_from_mac(mac: &MacAddress) -> String {
 pub fn enroll_router(state: AppState) -> Router {
     Router::new()
         .route("/enroll/{mac}", get(enroll_client))
+        .route("/inventory/{mac}", axum::routing::post(submit_inventory))
         .with_state(state)
 }
 
@@ -298,6 +299,13 @@ async fn enroll_client(
                     let settings = state.settings.read().await;
                     ensure_client_menu(&client, &settings).await;
                     crate::infrastructure::pxe::render_enrollment_redirect()
+                } else if inventory_boot_requested(&state, &parsed).await {
+                    tracing::info!(
+                        client = %client.name,
+                        mac = %parsed.as_str(),
+                        "directing client to WinPE for NIC inventory"
+                    );
+                    crate::infrastructure::pxe::render_inventory_boot()
                 } else {
                     tracing::info!(
                         client = %client.name,
@@ -344,9 +352,268 @@ async fn enroll_client(
     ipxe_response(script)
 }
 
+/// Inventory submitted from WinPE, keyed by the observed MAC.
+///
+/// The record stays pending until the client is assigned: the MAC is only the
+/// lookup key and matching always uses hardware IDs. Malformed payloads are
+/// rejected without touching stored inventory.
+async fn submit_inventory(
+    State(state): State<AppState>,
+    Path(mac): Path<String>,
+    Json(payload): Json<crate::infrastructure::pxe::NicInventoryPayload>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let parsed = match MacAddress::parse(&mac) {
+        Ok(parsed) => parsed,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"ok": false, "error": "invalid MAC address"})),
+            )
+        }
+    };
+    let validated = match crate::infrastructure::pxe::parse_inventory_payload(&payload) {
+        Ok(validated) => validated,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"ok": false, "error": error.to_string()})),
+            )
+        }
+    };
+    let observed_at = chrono::Utc::now().to_rfc3339();
+    let stored = sqlx::query(
+        r#"INSERT INTO windows_nic_inventory
+        (mac, client_id, boot_nic_ids, secondary_ids, architecture, firmware, observed_at)
+        VALUES (?, (SELECT id FROM clients WHERE mac = ?), ?, ?, ?, ?, ?)
+        ON CONFLICT(mac) DO UPDATE SET
+            client_id = excluded.client_id,
+            boot_nic_ids = excluded.boot_nic_ids,
+            secondary_ids = excluded.secondary_ids,
+            architecture = excluded.architecture,
+            firmware = excluded.firmware,
+            observed_at = excluded.observed_at"#,
+    )
+    .bind(parsed.as_str())
+    .bind(parsed.as_str())
+    .bind(serde_json::to_string(&validated.boot_nic_ids).unwrap_or_default())
+    .bind(serde_json::to_string(&validated.secondary_ids).unwrap_or_default())
+    .bind(&validated.architecture)
+    .bind(validated.firmware.to_string())
+    .bind(&observed_at)
+    .execute(&state.db_pool)
+    .await;
+    if let Err(error) = stored {
+        error!("failed to store NIC inventory: {error:#}");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"ok": false, "error": "failed to store inventory"})),
+        );
+    }
+    // A delivered inventory satisfies the boot request; the next boot returns
+    // to the normal dispatch path.
+    if let Err(error) = sqlx::query("UPDATE clients SET inventory_boot_requested = 0 WHERE mac = ?")
+        .bind(parsed.as_str())
+        .execute(&state.db_pool)
+        .await
+    {
+        error!("failed to clear inventory request flag: {error:#}");
+    }
+    tracing::info!(
+        mac = %parsed.as_str(),
+        boot_nics = validated.boot_nic_ids.len(),
+        "stored preboot NIC inventory"
+    );
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({"ok": true, "mac": parsed.as_str()})),
+    )
+}
+
+/// Whether an unprovisioned client was asked to boot WinPE for inventory.
+async fn inventory_boot_requested(state: &AppState, mac: &MacAddress) -> bool {
+    sqlx::query_scalar::<_, i64>("SELECT inventory_boot_requested FROM clients WHERE mac = ?")
+        .bind(mac.as_str())
+        .fetch_optional(&state.db_pool)
+        .await
+        .ok()
+        .flatten()
+        .is_some_and(|flag| flag != 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    async fn test_state() -> AppState {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        AppState {
+            config: crate::config::RuntimeConfig::default(),
+            client_mutations: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+            settings: std::sync::Arc::new(tokio::sync::RwLock::new(
+                crate::core::config::Settings::default(),
+            )),
+            db_pool: pool.clone(),
+            config_path: PathBuf::new(),
+            client_ips: std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new())),
+            metrics_collector: std::sync::Arc::new(crate::metrics::MetricsCollector::default()),
+            ssh_executor: std::sync::Arc::new(crate::ssh_executor::SshExecutor::new()),
+            application: std::sync::Arc::new(crate::application::ApplicationServices::new(pool)),
+        }
+    }
+
+    async fn post_inventory(
+        state: &AppState,
+        mac: &str,
+        body: serde_json::Value,
+    ) -> (StatusCode, serde_json::Value) {
+        let app = enroll_router(state.clone());
+        let peer: ConnectInfo<SocketAddr> =
+            ConnectInfo("192.0.2.50:68".parse().expect("test peer must parse"));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/inventory/{mac}"))
+                    .extension(peer)
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap_or_default();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::json!(null)),
+        )
+    }
+
+    fn inventory_body() -> serde_json::Value {
+        serde_json::json!({
+            "boot_nic_ids": ["PCI\\VEN_8086&DEV_15F3"],
+            "secondary_ids": ["PCI\\VEN_10EC&DEV_8168"],
+            "architecture": "AMD64",
+            "firmware": "uefi",
+        })
+    }
+
+    async fn get_enroll(state: &AppState, mac: &str) -> (StatusCode, String) {
+        let app = enroll_router(state.clone());
+        let peer: ConnectInfo<SocketAddr> =
+            ConnectInfo("192.0.2.50:68".parse().expect("test peer must parse"));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/enroll/{mac}"))
+                    .extension(peer)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap_or_default();
+        (status, String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    #[tokio::test]
+    async fn enroll_directs_flagged_client_to_inventory_then_pending() {
+        let state = test_state().await;
+        sqlx::query("INSERT INTO clients (id, name, mac, ip, master, enabled, created_at, updated_at) VALUES ('c2', 'client-c2', '02:00:00:00:00:0c', '192.0.2.12', 'pending', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+            .execute(&state.db_pool)
+            .await
+            .unwrap();
+        let (_, plain) = get_enroll(&state, "02:00:00:00:00:0c").await;
+        assert!(plain.contains("No master image has been assigned yet"));
+        sqlx::query("UPDATE clients SET inventory_boot_requested = 1 WHERE id = 'c2'")
+            .execute(&state.db_pool)
+            .await
+            .unwrap();
+        let (_, script) = get_enroll(&state, "02:00:00:00:00:0c").await;
+        assert!(script.contains("boot-inventory.wim"));
+        assert!(script.contains("clients/${client-mac}.ipxe"));
+    }
+
+    #[tokio::test]
+    async fn inventory_submit_stores_pending_record_by_mac() {
+        let state = test_state().await;
+        let (status, body) = post_inventory(&state, "02:00:00:00:00:09", inventory_body()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], true);
+        let row: (String, Option<String>) = sqlx::query_as(
+            "SELECT boot_nic_ids, client_id FROM windows_nic_inventory WHERE mac = ?",
+        )
+        .bind("02:00:00:00:00:09")
+        .fetch_one(&state.db_pool)
+        .await
+        .unwrap();
+        assert!(row.0.contains("VEN_8086"));
+        // Unassigned: the MAC is only the lookup key until provisioning pins it.
+        assert!(row.1.is_none());
+    }
+
+    #[tokio::test]
+    async fn inventory_submit_rejects_invalid_mac_and_ids() {
+        let state = test_state().await;
+        let (status, _) = post_inventory(&state, "not-a-mac", inventory_body()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = post_inventory(
+            &state,
+            "02:00:00:00:00:0a",
+            serde_json::json!({"boot_nic_ids": [], "secondary_ids": []}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM windows_nic_inventory")
+            .fetch_one(&state.db_pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn inventory_submit_clears_the_boot_request_flag() {
+        let state = test_state().await;
+        sqlx::query("INSERT INTO clients (id, name, mac, ip, master, created_at, updated_at) VALUES ('c1', 'client-c1', '02:00:00:00:00:0b', '192.0.2.11', 'pending', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+            .execute(&state.db_pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE clients SET inventory_boot_requested = 1 WHERE id = 'c1'")
+            .execute(&state.db_pool)
+            .await
+            .unwrap();
+        assert!(
+            inventory_boot_requested(&state, &MacAddress::parse("02:00:00:00:00:0b").unwrap())
+                .await
+        );
+        let (status, _) = post_inventory(&state, "02:00:00:00:00:0b", inventory_body()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            !inventory_boot_requested(&state, &MacAddress::parse("02:00:00:00:00:0b").unwrap())
+                .await
+        );
+        let client_id: Option<String> = sqlx::query_scalar(
+            "SELECT client_id FROM windows_nic_inventory WHERE mac = '02:00:00:00:00:0b'",
+        )
+        .fetch_one(&state.db_pool)
+        .await
+        .unwrap();
+        assert_eq!(client_id.as_deref(), Some("c1"));
+    }
 
     #[test]
     fn enroll_address_defaults_to_the_dedicated_listener() {

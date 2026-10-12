@@ -1,5 +1,6 @@
 use crate::infrastructure::pxe::{
-    DriverInjectionStatus, NetworkDriverInjectionPlugin, NetworkDriverPackage,
+    normalize_hardware_ids as normalize_report_ids, DriverInjectionStatus,
+    NetworkDriverInjectionPlugin, NetworkDriverPackage,
 };
 use crate::state::AppState;
 use axum::{
@@ -315,31 +316,6 @@ pub async fn submit_report(
         package_id,
         reported_at,
     }))
-}
-
-/// Normalize reported hardware IDs: trimmed, `/` treated as `\`, bounded
-/// length and charset. Malformed IDs are rejected, never stored.
-fn normalize_report_ids(ids: &[String]) -> Result<Vec<String>, String> {
-    let mut normalized = Vec::new();
-    for id in ids {
-        let clean = id.trim().trim_matches('"').replace('/', "\\");
-        if clean.is_empty() || clean.len() > 128 {
-            return Err(format!("invalid hardware ID: '{id}'"));
-        }
-        if !clean.chars().all(|c| {
-            c.is_ascii_alphanumeric()
-                || matches!(
-                    c,
-                    '\\' | '&' | '_' | '-' | '.' | '+' | '(' | ')' | '{' | '}' | ','
-                )
-        }) {
-            return Err(format!("invalid hardware ID: '{id}'"));
-        }
-        if !normalized.contains(&clean) {
-            normalized.push(clean);
-        }
-    }
-    Ok(normalized)
 }
 
 /// True when the reporting address holds an active session on the client's

@@ -3,6 +3,7 @@ pub mod driver_manifest;
 pub mod driver_selection;
 pub mod driver_validation;
 mod ipxe;
+pub mod nic_inventory;
 pub mod nvmeof;
 pub mod windows_boot_arming;
 pub mod windows_driver_injection;
@@ -15,9 +16,15 @@ pub use driver_injection::{
     DriverInjectionStatus, NetworkDriverInjectionPlugin, NetworkDriverPackage,
 };
 pub use driver_manifest::{DriverManifest, DriverManifestEntry};
-pub use driver_selection::{select_drivers, NetworkDriverSelectorInput, SelectedNetworkDriver};
+pub use driver_selection::{
+    normalize_hardware_ids, select_compatible_for_image, select_drivers, ImageDriverTarget,
+    NetworkDriverSelectorInput, SelectedNetworkDriver,
+};
 pub use driver_validation::{validate_package, DriverInfInspection, DriverPackageValidation};
 pub use ipxe::*;
+pub use nic_inventory::{
+    parse_inventory_payload, FirmwareInterface, NicInventoryPayload, ValidatedNicInventory,
+};
 pub use nvmeof::*;
 pub use windows_boot_arming::{
     build_plan as build_windows_boot_arm_plan, hive_is_dirty, RegistryArmChange, RegistryArmValue,

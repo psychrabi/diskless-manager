@@ -29,6 +29,14 @@ pub fn client_script_slug(client_name: &str) -> String {
     }
 }
 
+/// Initiator identity sent by this client's iPXE boot script.
+pub fn client_initiator_iqn(client_name: &str) -> String {
+    format!(
+        "iqn.2026-01.client:client.{}",
+        client_script_slug(client_name)
+    )
+}
+
 #[must_use]
 pub fn client_mac_slug(mac: &str) -> String {
     let slug: String = mac
@@ -121,6 +129,32 @@ echo # Booting is not permitted.                             #
 echo ##########################################################
 sleep 60
 reboot
+"##
+    .to_string()
+}
+
+/// iPXE response that boots WinPE to collect the preboot NIC inventory.
+/// The WinPE image reports Boot NIC hardware IDs and reboots; whether the
+/// inventory upload succeeds or fails, the client returns to the normal
+/// dispatch path instead of hanging in WinPE.
+#[must_use]
+pub fn render_inventory_boot() -> String {
+    r##"#!ipxe
+echo ##########################################################
+echo # Diskless Manager - network inventory                  #
+echo #                                                        #
+echo # Booting WinPE to record this machine's Boot NIC.      #
+echo # The machine returns to the normal boot menu after.    #
+echo ##########################################################
+kernel ${boot-url}/boot/winpe/wimboot || goto inventory_failed
+initrd ${boot-url}/boot/winpe/BCD BCD || goto inventory_failed
+initrd ${boot-url}/boot/winpe/boot.sdi boot.sdi || goto inventory_failed
+initrd ${boot-url}/boot/winpe/boot-inventory.wim boot.wim || goto inventory_failed
+boot || goto inventory_failed
+
+:inventory_failed
+echo Inventory boot failed; returning to the normal client menu...
+chain ${boot-url}/clients/${client-mac}.ipxe || shell
 "##
     .to_string()
 }
@@ -226,7 +260,7 @@ shell
     }
 
     let root = format!("/dev/disk/by-path/ip-${{next-server}}:3260-iscsi-{target_iqn}-lun-0");
-    let initiator_iqn = format!("iqn.2026-01.client:client.{slug}");
+    let initiator_iqn = client_initiator_iqn(client_name);
     let nvme_nqn = format!("nqn.2026-09.local.diskless:client.{slug}");
 
     format!(
@@ -399,6 +433,14 @@ mod tests {
     }
 
     #[test]
+    fn initiator_iqn_matches_rendered_ipxe_script() {
+        let iqn = client_initiator_iqn("PC 001/West");
+        assert_eq!(iqn, "iqn.2026-01.client:client.pc_001_west");
+        let script = render_client_script("PC 001/West", "iqn.custom:target", 8080);
+        assert!(script.contains(&format!("set initiator-iqn {iqn}")));
+    }
+
+    #[test]
     fn deny_scripts_reboot_loop_without_booting() {
         for script in [render_enrollment_disabled(), render_enrollment_closed()] {
             assert!(script.starts_with("#!ipxe"), "must be an iPXE script");
@@ -527,6 +569,18 @@ mod tests {
     fn autoexec_supports_non_default_http_port() {
         let script = render_autoexec_ipxe(4433);
         assert!(script.contains("set boot-url http://${next-server}:4433"));
+    }
+
+    #[test]
+    fn inventory_boot_starts_winpe_and_returns_to_client_menu() {
+        let script = render_inventory_boot();
+        assert!(script.contains("/boot/winpe/wimboot"));
+        assert!(script.contains("boot-inventory.wim boot.wim"));
+        // Completion and failure both return to the normal dispatch path.
+        assert!(script.contains("chain ${boot-url}/clients/${client-mac}.ipxe"));
+        // Inventory never attaches the Windows disk.
+        assert!(!script.contains("sanboot"));
+        assert!(!script.contains("sanhook"));
     }
 
     #[test]

@@ -20,7 +20,7 @@ use crate::api::handlers::{
     client_chap::rotate_client_chap,
     client_delete::delete_client,
     client_update::update_client,
-    clients::create_client,
+    clients::{create_client, request_inventory_boot},
     clients_v2::{get_client, get_client_boot_history, list_clients},
     config::get_config,
     control::{
@@ -221,6 +221,10 @@ pub fn create_app(state: crate::state::AppState) -> Router {
             post(prepare_nvmeof_boot),
         )
         .route("/api/clients/{id}/shutdown", post(shutdown_client))
+        .route(
+            "/api/clients/{id}/inventory-boot",
+            post(request_inventory_boot),
+        )
         .route("/api/clients/{id}/chap/rotate", post(rotate_client_chap))
         .route("/api/clients/{id}/reboot", post(reboot_client))
         .route(

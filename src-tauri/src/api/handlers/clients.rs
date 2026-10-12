@@ -120,6 +120,7 @@ fn build_storage_spec(
 
             Ok(ClientStorageSpec {
                 client_id: client_id.to_string(),
+                client_name: client_name.to_string(),
                 source: StorageSource::Snapshot(snapshot.to_string()),
                 dataset,
                 backstore,
@@ -143,6 +144,7 @@ fn build_storage_spec(
 
             Ok(ClientStorageSpec {
                 client_id: client_id.to_string(),
+                client_name: client_name.to_string(),
                 source: StorageSource::ExistingVolume(master.to_string()),
                 dataset: master.to_string(),
                 backstore,
@@ -201,6 +203,15 @@ fn storage_configuration_changed(client: &Client, request: &UpdateClientRequest)
             .as_deref()
             .is_some_and(|master| master != client.master)
         || request.snapshot != client.snapshot
+}
+
+fn is_unprovisioned_enrollment(client: &Client) -> bool {
+    client.master == "pending"
+        && client.snapshot.is_none()
+        && client.target_iqn.is_none()
+        && client.block_store.is_none()
+        && client.block_device.is_none()
+        && client.writeback.is_none()
 }
 
 /// Whether the game-disk configuration changed.
@@ -973,6 +984,7 @@ pub async fn update_client(
 
                     let mut spec = ClientStorageSpec {
                         client_id: existing_client.id.clone(),
+                        client_name: existing_client.name.clone(),
                         source: StorageSource::ExistingVolume(master.clone()),
                         dataset: master.clone(),
                         backstore: format!("block_{}", existing_client.name.to_lowercase()),
@@ -1564,7 +1576,13 @@ pub async fn update_client(
         state
             .application
             .storage
-            .sync_game_storage(&id, &target_iqn, &resolved, chap_creds.as_ref())
+            .sync_game_storage(
+                &id,
+                &existing_client.name,
+                &target_iqn,
+                &resolved,
+                chap_creds.as_ref(),
+            )
             .map_err(|error| {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -1611,20 +1629,19 @@ pub async fn update_client(
     //     master volume
     // ------------------------------------------------------------------------
 
-    let current_storage =
-        storage_from_client(&state.config, &settings, &existing_client).map_err(|error| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                    error,
-                }),
-            )
-        })?;
+    if !is_unprovisioned_enrollment(&existing_client) {
+        let current_storage = storage_from_client(&state.config, &settings, &existing_client)
+            .map_err(|error| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                        error,
+                    }),
+                )
+            })?;
 
-    // Refuse to rebuild storage under an active session, mirroring the
-    // repair guard: tearing down LUNs under a booted client corrupts it.
-    {
+        // Refuse to rebuild storage under an active session; tearing down its LUN corrupts it.
         let sessions =
             crate::infrastructure::iscsi::target_has_active_sessions(current_storage.target_iqn())
                 .map_err(|error| {
@@ -1649,26 +1666,26 @@ pub async fn update_client(
                 }),
             )
         })?;
-    }
 
-    state
-        .application
-        .storage
-        .destroy_client_storage(&current_storage)
-        .map_err(|error| {
-            tracing::error!(
-                "Failed to remove existing storage for client '{}': {:#}",
-                existing_client.name,
-                error
-            );
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                    error: format!("Failed to remove existing storage: {error:#}"),
-                }),
-            )
-        })?;
+        state
+            .application
+            .storage
+            .destroy_client_storage(&current_storage)
+            .map_err(|error| {
+                tracing::error!(
+                    "Failed to remove existing storage for client '{}': {:#}",
+                    existing_client.name,
+                    error
+                );
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                        error: format!("Failed to remove existing storage: {error:#}"),
+                    }),
+                )
+            })?;
+    }
 
     // ------------------------------------------------------------------------
     // Create desired new storage.
@@ -1879,6 +1896,56 @@ pub async fn rotate_client_chap(
         "username": creds.username,
         "password": creds.password,
         "chap_enabled": true,
+    })))
+}
+
+/// Ask an unprovisioned client to boot WinPE for NIC inventory on its next
+/// enrollment. The flag is consumed when the inventory upload lands; the next
+/// boot after that returns to the normal dispatch path.
+pub async fn request_inventory_boot(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    let manager = ClientManager::new(state.db_pool.clone());
+    let existing = manager.get(&id).await.map_err(|_| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                status: 404,
+                error: format!("Client not found: {}", id),
+            }),
+        )
+    })?;
+    if existing
+        .target_iqn
+        .as_deref()
+        .is_some_and(|iqn| !iqn.trim().is_empty())
+    {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(ErrorResponse {
+                status: 409,
+                error: "client is already provisioned; inventory boot is for unprovisioned clients"
+                    .to_string(),
+            }),
+        ));
+    }
+    sqlx::query("UPDATE clients SET inventory_boot_requested = 1 WHERE id = ?")
+        .bind(&id)
+        .execute(&state.db_pool)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    status: 500,
+                    error: format!("Failed to request inventory boot: {error}"),
+                }),
+            )
+        })?;
+    tracing::info!(client_id = %id, "requested WinPE NIC inventory boot");
+    Ok(Json(serde_json::json!({
+        "message": format!("Inventory boot requested for '{}'", existing.name),
     })))
 }
 

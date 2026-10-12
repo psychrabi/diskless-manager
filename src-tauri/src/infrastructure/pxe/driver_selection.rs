@@ -40,6 +40,31 @@ pub struct ImageDriverTarget {
     pub boot_nic_ids: Vec<String>,
 }
 
+/// Normalize caller-supplied PnP hardware IDs: trimmed, `/` treated as `\\`,
+/// bounded length and charset. Malformed IDs are rejected, never stored.
+pub fn normalize_hardware_ids(ids: &[String]) -> Result<Vec<String>, String> {
+    let mut normalized = Vec::new();
+    for id in ids {
+        let clean = id.trim().trim_matches('"').replace('/', "\\");
+        if clean.is_empty() || clean.len() > 128 {
+            return Err(format!("invalid hardware ID: '{id}'"));
+        }
+        if !clean.chars().all(|c| {
+            c.is_ascii_alphanumeric()
+                || matches!(
+                    c,
+                    '\\' | '&' | '_' | '-' | '.' | '+' | '(' | ')' | '{' | '}' | ','
+                )
+        }) {
+            return Err(format!("invalid hardware ID: '{id}'"));
+        }
+        if !normalized.contains(&clean) {
+            normalized.push(clean);
+        }
+    }
+    Ok(normalized)
+}
+
 /// Select the compatible signed driver set for a Windows image revision.
 ///
 /// Deterministic: exact hardware-ID matches first, then compatible IDs, with
