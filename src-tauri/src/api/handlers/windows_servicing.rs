@@ -196,6 +196,7 @@ pub async fn prepare_image_remote_catalog(
         commit: request.commit,
         boot_arm: request.boot_arm,
         iscsi: None,
+        reporter: None,
     };
 
     RemoteWindowsServicer::new()

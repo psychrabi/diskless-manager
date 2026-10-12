@@ -110,18 +110,53 @@ fn main() {
                 }
             }
         }
+        Some("report-service") => {
+            let args = std::env::args().skip(2).collect::<Vec<_>>();
+            match parse_report_service_config(&args).and_then(start_report_service) {
+                Ok(()) => 0,
+                Err(error) => {
+                    eprintln!("report service failed: {error:#}");
+                    1
+                }
+            }
+        }
         Some(other) => {
             eprintln!("unknown command: {other}");
-            eprintln!("usage: diskless-windows-servicer <capabilities|prepare>");
+            eprintln!("usage: diskless-windows-servicer <capabilities|prepare|report-client|report-service>");
             2
         }
         None => {
-            eprintln!("usage: diskless-windows-servicer <capabilities|prepare>");
+            eprintln!("usage: diskless-windows-servicer <capabilities|prepare|report-client|report-service>");
             2
         }
     };
 
     std::process::exit(exit_code);
+}
+
+const DEFAULT_REPORT_CONFIG: &str = r"C:\ProgramData\Diskless Manager\client-report.json";
+
+fn parse_report_service_config(args: &[String]) -> anyhow::Result<std::path::PathBuf> {
+    anyhow::ensure!(
+        args.len() <= 1,
+        "report-service accepts at most one config path"
+    );
+    Ok(args
+        .first()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(DEFAULT_REPORT_CONFIG)))
+}
+
+fn start_report_service(config_path: std::path::PathBuf) -> anyhow::Result<()> {
+    #[cfg(windows)]
+    {
+        windows_report_service::run(config_path)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = config_path;
+        anyhow::bail!("report-service requires Windows")
+    }
 }
 
 fn read_request() -> anyhow::Result<Vec<u8>> {
@@ -216,5 +251,30 @@ fn is_elevated() -> bool {
     #[cfg(not(windows))]
     {
         false
+    }
+}
+
+#[cfg(windows)]
+mod windows_report_service;
+
+#[cfg(test)]
+mod report_service_tests {
+    use super::*;
+
+    #[test]
+    fn report_service_accepts_zero_or_one_config_path() {
+        assert_eq!(
+            parse_report_service_config(&[]).unwrap(),
+            std::path::PathBuf::from(DEFAULT_REPORT_CONFIG)
+        );
+        assert_eq!(
+            parse_report_service_config(&["custom.json".to_string()]).unwrap(),
+            std::path::PathBuf::from("custom.json")
+        );
+    }
+
+    #[test]
+    fn report_service_rejects_extra_arguments() {
+        assert!(parse_report_service_config(&["a".into(), "b".into()]).is_err());
     }
 }

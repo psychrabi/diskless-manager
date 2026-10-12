@@ -41,6 +41,8 @@ pub struct ManagedWindowsPreparationRequest {
     #[serde(default)]
     pub commit: bool,
     #[serde(default)]
+    pub report_server_url: Option<String>,
+    #[serde(default)]
     pub boot_arm: WindowsBootArmConfig,
 }
 
@@ -72,8 +74,22 @@ impl ManagedWindowsPreparationRequest {
         if folder && self.commit {
             bail!("managed commits require imported catalog packages so the tested revision records its drivers; the existing worker-folder path is available for dry runs only");
         }
+        if self.commit && self.report_server_url.is_none() {
+            bail!("a report server URL is required for managed commits");
+        }
+        if self.commit {
+            validate_report_server_url(
+                self.report_server_url
+                    .as_deref()
+                    .context("a report server URL is required for managed commits")?,
+            )?;
+        }
         Ok(())
     }
+}
+
+fn validate_report_server_url(value: &str) -> Result<()> {
+    crate::infrastructure::pxe::windows_image_preparation::validate_report_origin(value)
 }
 
 #[derive(Serialize)]
@@ -241,6 +257,22 @@ pub async fn prepare_managed(
         }
         let size = images.get_info(&clone.id).await?.virtual_size;
         iscsi.create_target_transaction(&spec)?;
+        let reporter = if request.commit {
+            Some(crate::infrastructure::pxe::windows_image_preparation::WindowsReporterInstallConfig {
+                server_url: request
+                    .report_server_url
+                    .clone()
+                    .context("a report server URL is required for managed commits")?,
+                export_package: true,
+                image_revision: revision
+                    .as_ref()
+                    .context("committed preparation has no candidate revision")?
+                    .id
+                    .clone(),
+            })
+        } else {
+            None
+        };
         let preparation = WindowsImagePreparationRequest {
             image_path: PathBuf::new(),
             driver_root: request.driver_root.clone().unwrap_or_default(),
@@ -256,6 +288,7 @@ pub async fn prepare_managed(
                 chap_password: chap.password,
                 expected_size_bytes: size,
             }),
+            reporter,
         };
         let (preparation, count, bytes, cleaned) = if packages.is_empty() {
             let prepared = worker
@@ -723,6 +756,27 @@ mod tests {
         request.new_name = "new-image".into();
         request.portal = "0.0.0.0".into();
         assert!(request.validate().is_err());
+    }
+
+    #[test]
+    fn managed_commits_require_a_valid_report_origin_but_dry_runs_do_not() {
+        let mut request: ManagedWindowsPreparationRequest = serde_json::from_value(serde_json::json!({
+            "host":"worker", "username":"admin", "image_id":"image", "source_snapshot":"installed",
+            "new_name":"windows-serviced", "portal":"192.168.123.1", "driver_ids":["netkvm"]
+        })).unwrap();
+        request.commit = true;
+        assert!(request
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("report server URL"));
+        request.report_server_url = Some("https://manager.example".into());
+        assert!(request.validate().is_ok());
+        request.report_server_url = Some("https://user:secret@manager.example".into());
+        assert!(request.validate().is_err());
+        request.report_server_url = None;
+        request.commit = false;
+        assert!(request.validate().is_ok());
     }
     #[tokio::test]
     async fn windows_publication_requires_a_completed_clone_and_preserves_source() {

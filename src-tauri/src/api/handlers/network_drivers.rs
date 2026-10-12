@@ -1,3 +1,4 @@
+use crate::domain::Client;
 use crate::infrastructure::pxe::{
     normalize_hardware_ids as normalize_report_ids, DriverInjectionStatus,
     NetworkDriverInjectionPlugin, NetworkDriverPackage,
@@ -140,7 +141,13 @@ fn bad_request(message: String) -> (StatusCode, Json<NetworkDriverError>) {
 /// hardware IDs plus an optional `pnputil`-exported driver archive.
 #[derive(Debug, Deserialize)]
 pub struct WindowsDriverReportRequest {
-    pub client_id: String,
+    /// Legacy reporter identity. Shared images should identify the client by
+    /// their per-client iSCSI target instead.
+    #[serde(default)]
+    pub client_id: Option<String>,
+    /// Target IQN uniquely assigned to the reporting client.
+    #[serde(default)]
+    pub target_iqn: Option<String>,
     pub windows_version: String,
     pub architecture: String,
     #[serde(default)]
@@ -219,29 +226,18 @@ pub async fn submit_report(
             "at least one Boot NIC hardware ID is required".to_string(),
         ));
     }
-    if report.client_id.trim().is_empty()
-        || report.windows_version.trim().is_empty()
-        || report.architecture.trim().is_empty()
-    {
+    if report.windows_version.trim().is_empty() || report.architecture.trim().is_empty() {
         return Err(bad_request(
-            "client_id, windows_version, and architecture are required".to_string(),
+            "windows_version and architecture are required".to_string(),
         ));
     }
 
-    let client = state
-        .application
-        .clients
-        .get_by_string(report.client_id.trim())
-        .await
-        .map_err(|e| internal_message(e.to_string()))?
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(NetworkDriverError {
-                    error: "unknown client".to_string(),
-                }),
-            )
-        })?;
+    let client = resolve_report_client(
+        &state,
+        report.client_id.as_deref(),
+        report.target_iqn.as_deref(),
+    )
+    .await?;
     let target_iqn = client.target_iqn.clone().ok_or_else(|| {
         (
             StatusCode::FORBIDDEN,
@@ -348,6 +344,92 @@ async fn verify_report_session(target_iqn: &str, client_name: &str, peer: IpAddr
     peer_authorized(&peers, peer)
 }
 
+async fn resolve_report_client(
+    state: &AppState,
+    client_id: Option<&str>,
+    target_iqn: Option<&str>,
+) -> Result<Client, (StatusCode, Json<NetworkDriverError>)> {
+    let client_id = client_id.map(str::trim).filter(|value| !value.is_empty());
+    let target_iqn = target_iqn.map(str::trim).filter(|value| !value.is_empty());
+    if client_id.is_none() && target_iqn.is_none() {
+        return Err(bad_request(
+            "client_id or target_iqn is required".to_string(),
+        ));
+    }
+
+    let by_id = if let Some(client_id) = client_id {
+        Some(
+            state
+                .application
+                .clients
+                .get_by_string(client_id)
+                .await
+                .map_err(|e| internal_message(e.to_string()))?
+                .ok_or_else(|| {
+                    (
+                        StatusCode::NOT_FOUND,
+                        Json(NetworkDriverError {
+                            error: "unknown client".to_string(),
+                        }),
+                    )
+                })?,
+        )
+    } else {
+        None
+    };
+
+    let by_target = if let Some(target_iqn) = target_iqn {
+        let client_ids: Vec<String> =
+            sqlx::query_scalar("SELECT id FROM clients WHERE target_iqn = ?")
+                .bind(target_iqn)
+                .fetch_all(&state.db_pool)
+                .await
+                .map_err(|e| internal_message(e.to_string()))?;
+        match client_ids.as_slice() {
+            [] => {
+                return Err((
+                    StatusCode::NOT_FOUND,
+                    Json(NetworkDriverError {
+                        error: "unknown target_iqn".to_string(),
+                    }),
+                ));
+            }
+            [client_id] => Some(
+                state
+                    .application
+                    .clients
+                    .get_by_string(client_id)
+                    .await
+                    .map_err(|e| internal_message(e.to_string()))?
+                    .ok_or_else(|| {
+                        internal_message("target IQN references a missing client".to_string())
+                    })?,
+            ),
+            _ => {
+                return Err((
+                    StatusCode::CONFLICT,
+                    Json(NetworkDriverError {
+                        error: "target_iqn does not identify exactly one client".to_string(),
+                    }),
+                ));
+            }
+        }
+    } else {
+        None
+    };
+
+    match (by_id, by_target) {
+        (Some(client), Some(target_client)) if client.id != target_client.id => Err(bad_request(
+            "client_id and target_iqn identify different clients".to_string(),
+        )),
+        (Some(client), _) => Ok(client),
+        (None, Some(client)) => Ok(client),
+        (None, None) => Err(bad_request(
+            "client_id or target_iqn is required".to_string(),
+        )),
+    }
+}
+
 /// Evaluate a test claim carried by an already session-authorized report.
 /// Returns the outcome string for the response, or `None` for plain driver
 /// reports and reports with no open candidate.
@@ -396,6 +478,76 @@ fn internal_error(error: anyhow::Error) -> (StatusCode, Json<NetworkDriverError>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn report_identity_state() -> AppState {
+        let (state, _, _, _) = crate::api::security_tests::setup().await;
+        sqlx::query("INSERT INTO clients (id, name, mac, ip, master, target_iqn, created_at, updated_at) VALUES ('report-a', 'report-a', '02:00:00:00:00:81', '192.0.2.81', 'pending', 'iqn.test:report-a', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'), ('report-b', 'report-b', '02:00:00:00:00:82', '192.0.2.82', 'pending', 'iqn.test:report-b', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+            .execute(&state.db_pool)
+            .await
+            .unwrap();
+        state
+    }
+
+    #[tokio::test]
+    async fn report_can_resolve_client_from_target_iqn_without_client_id() {
+        let state = report_identity_state().await;
+        let report: WindowsDriverReportRequest = serde_json::from_value(serde_json::json!({
+            "target_iqn": "iqn.test:report-a",
+            "windows_version": "11",
+            "architecture": "x64"
+        }))
+        .unwrap();
+
+        let client = resolve_report_client(
+            &state,
+            report.client_id.as_deref(),
+            report.target_iqn.as_deref(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(client.id.to_string(), "report-a");
+    }
+
+    #[tokio::test]
+    async fn conflicting_report_identities_are_rejected_without_mutation() {
+        let state = report_identity_state().await;
+        let before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM windows_driver_reports")
+            .fetch_one(&state.db_pool)
+            .await
+            .unwrap();
+
+        let error = resolve_report_client(&state, Some("report-a"), Some("iqn.test:report-b"))
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.0, StatusCode::BAD_REQUEST);
+        let after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM windows_driver_reports")
+            .fetch_one(&state.db_pool)
+            .await
+            .unwrap();
+        assert_eq!(after, before);
+    }
+
+    #[tokio::test]
+    async fn unknown_target_iqn_is_rejected_without_mutation() {
+        let state = report_identity_state().await;
+        let before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM windows_driver_reports")
+            .fetch_one(&state.db_pool)
+            .await
+            .unwrap();
+
+        let error = resolve_report_client(&state, None, Some("iqn.test:unknown"))
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.0, StatusCode::NOT_FOUND);
+        let after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM windows_driver_reports")
+            .fetch_one(&state.db_pool)
+            .await
+            .unwrap();
+        assert_eq!(after, before);
+    }
 
     async fn upload_with_files(
         payload: &str,

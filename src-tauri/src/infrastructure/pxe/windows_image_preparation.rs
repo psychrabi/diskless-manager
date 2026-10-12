@@ -13,6 +13,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WindowsReporterInstallConfig {
+    pub server_url: String,
+    pub export_package: bool,
+    pub image_revision: String,
+}
+
 fn default_image_index() -> u32 {
     1
 }
@@ -38,6 +45,8 @@ pub struct WindowsImagePreparationRequest {
     pub boot_arm: WindowsBootArmConfig,
     #[serde(default)]
     pub iscsi: Option<super::windows_iscsi_servicing::WindowsIscsiConnection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reporter: Option<WindowsReporterInstallConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -176,6 +185,11 @@ impl WindowsImagePreparer {
         if fs::canonicalize(&system_hive)? == fs::canonicalize(&live_hive)? {
             bail!("refusing to service the running Windows installation");
         }
+        if request.commit {
+            if let Some(reporter) = &request.reporter {
+                validate_reporter_config(reporter)?;
+            }
+        }
         let selected = selected_driver_services(&request.driver_root, request.recursive)?;
         let drivers_added = self.driver_injector.add_drivers(
             &request.image_path,
@@ -198,6 +212,11 @@ impl WindowsImagePreparer {
             &selected,
             &profiles,
         )?;
+        if request.commit {
+            if let Some(reporter) = &request.reporter {
+                install_reporter(&request.image_path, &system_hive, reporter)?;
+            }
+        }
         Ok(WindowsImagePreparationResult {
             image_path: request.image_path.display().to_string(),
             image_index: 0,
@@ -209,6 +228,205 @@ impl WindowsImagePreparer {
             committed: request.commit,
         })
     }
+}
+
+const REPORTER_SERVICE: &str = "DisklessManagerReporter";
+const REPORTER_IMAGE_PATH: &str = r#""%ProgramFiles%\Diskless Manager\diskless-windows-servicer.exe" report-service "%ProgramData%\Diskless Manager\client-report.json""#;
+
+fn install_reporter(
+    image_root: &Path,
+    system_hive: &Path,
+    config: &WindowsReporterInstallConfig,
+) -> Result<()> {
+    let source =
+        std::env::current_exe().context("failed to locate the Windows reporter executable")?;
+    let install_dir = image_root.join("Program Files/Diskless Manager");
+    let data_dir = image_root.join("ProgramData/Diskless Manager");
+    let executable = install_dir.join("diskless-windows-servicer.exe");
+    let config_path = data_dir.join("client-report.json");
+    fs::create_dir_all(&install_dir).context("failed to create offline reporter directory")?;
+    fs::create_dir_all(&data_dir).context("failed to create offline reporter config directory")?;
+    fs::copy(source, &executable).context("failed to copy reporter into offline Windows image")?;
+    fs::write(&config_path, serde_json::to_vec(config)?)
+        .context("failed to write offline reporter config")?;
+
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .context("system clock is before Unix epoch")?
+        .as_nanos();
+    let mount = format!(
+        "HKLM\\DISKLESS_MANAGER_REPORTER_{}_{}",
+        std::process::id(),
+        nonce
+    );
+    let load = run_reg(&["load", &mount, &system_hive.display().to_string()]);
+    if let Err(error) = load {
+        let _ = fs::remove_file(executable);
+        let _ = fs::remove_file(config_path);
+        return Err(error).context("failed to load offline SYSTEM hive for reporter service");
+    }
+    let operation = (|| -> Result<()> {
+        let select = format!("{mount}\\Select");
+        let mut control_sets = Vec::new();
+        for name in ["Current", "Default", "LastKnownGood"] {
+            let output = run_reg(&["query", &select, "/v", name])?;
+            if output.status.success() {
+                let value = parse_select_value(&String::from_utf8_lossy(&output.stdout), name)?;
+                if value == 0 && name != "LastKnownGood" {
+                    bail!("offline SYSTEM Select\\{name} must identify an existing control set");
+                }
+                if value != 0 && !control_sets.contains(&value) {
+                    control_sets.push(value);
+                }
+            } else if name != "LastKnownGood" {
+                bail!(
+                    "failed to read offline SYSTEM Select\\{name}: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                );
+            }
+        }
+        for control_set in control_sets {
+            let key = format!("{mount}\\ControlSet{control_set:03}\\Services\\{REPORTER_SERVICE}");
+            for (name, kind, value) in [
+                (
+                    "ImagePath",
+                    "REG_EXPAND_SZ",
+                    REPORTER_IMAGE_PATH.to_string(),
+                ),
+                ("ObjectName", "REG_SZ", "LocalSystem".to_string()),
+                ("Start", "REG_DWORD", "2".to_string()),
+                ("Type", "REG_DWORD", "16".to_string()),
+                ("ErrorControl", "REG_DWORD", "1".to_string()),
+                (
+                    "DisplayName",
+                    "REG_SZ",
+                    "Diskless Manager Reporter".to_string(),
+                ),
+            ] {
+                let args = registry_add_args(&key, name, kind, &value);
+                let output = run_reg(&args.iter().map(String::as_str).collect::<Vec<_>>())?;
+                if !output.status.success() {
+                    bail!(
+                        "failed to configure offline reporter service {name}: {}",
+                        String::from_utf8_lossy(&output.stderr).trim()
+                    );
+                }
+            }
+        }
+        Ok(())
+    })();
+    let unload = run_reg(&["unload", &mount]).and_then(|output| {
+        if output.status.success() {
+            Ok(())
+        } else {
+            bail!(
+                "failed to unload offline SYSTEM hive: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )
+        }
+    });
+    match (operation, unload) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Err(error)) => Err(error),
+        (Err(error), Err(unload_error)) => Err(error.context(format!(
+            "additionally failed to unload offline SYSTEM hive: {unload_error:#}"
+        ))),
+    }
+}
+
+fn validate_reporter_config(config: &WindowsReporterInstallConfig) -> Result<()> {
+    validate_report_origin(&config.server_url)?;
+    if !config.export_package
+        || config.image_revision.trim().is_empty()
+        || config.image_revision.len() > 128
+    {
+        bail!("offline reporter configuration must contain an HTTP(S) origin, package export, and valid image revision");
+    }
+    Ok(())
+}
+
+pub fn validate_report_origin(value: &str) -> Result<()> {
+    let authority = value
+        .strip_prefix("https://")
+        .or_else(|| value.strip_prefix("http://"))
+        .context("report server URL must be an HTTP(S) origin")?;
+    if authority.is_empty() || authority.contains(['/', '?', '#', '@', ' ', '\\']) {
+        bail!("report server URL must be an HTTP(S) origin without credentials, path, query, or fragment");
+    }
+    let (host, port) = if authority.starts_with('[') {
+        let end = authority
+            .find(']')
+            .context("invalid IPv6 report server host")?;
+        authority[1..end].parse::<std::net::Ipv6Addr>()?;
+        let suffix = &authority[end + 1..];
+        let port = if suffix.is_empty() {
+            None
+        } else {
+            Some(
+                suffix
+                    .strip_prefix(':')
+                    .context("invalid report server port")?,
+            )
+        };
+        ("ipv6", port)
+    } else {
+        let (host, port) = authority
+            .split_once(':')
+            .map_or((authority, None), |(host, port)| (host, Some(port)));
+        if host.contains(':') {
+            bail!("IPv6 report server hosts must use brackets");
+        }
+        (host, port)
+    };
+    if host.is_empty()
+        || (!host.eq("ipv6")
+            && (!host
+                .bytes()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == b'.' || ch == b'-')
+                || host.starts_with('.')
+                || host.ends_with('.')
+                || host.contains("..")))
+        || port.is_some_and(|value| value.is_empty() || value.parse::<u16>().is_err())
+    {
+        bail!("report server URL has an invalid host or port");
+    }
+    Ok(())
+}
+
+fn run_reg(args: &[&str]) -> Result<std::process::Output> {
+    std::process::Command::new("reg.exe")
+        .args(args)
+        .output()
+        .context("failed to execute reg.exe")
+}
+
+fn parse_select_value(output: &str, name: &str) -> Result<u32> {
+    let current = output
+        .lines()
+        .filter_map(|line| {
+            let words = line.split_whitespace().collect::<Vec<_>>();
+            if !words.first()?.eq_ignore_ascii_case(name) {
+                return None;
+            }
+            let index = words.iter().position(|word| *word == "REG_DWORD")?;
+            words
+                .get(index + 1)?
+                .strip_prefix("0x")?
+                .parse::<u32>()
+                .ok()
+        })
+        .next()
+        .filter(|value| *value <= 999)
+        .with_context(|| format!("offline SYSTEM hive has no valid Select\\{name} DWORD"))?;
+    Ok(current)
+}
+
+fn registry_add_args(key: &str, name: &str, kind: &str, value: &str) -> Vec<String> {
+    ["add", key, "/v", name, "/t", kind, "/d", value, "/f"]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
 }
 
 fn missing_service_profiles(
@@ -463,6 +681,58 @@ mod tests {
     }
 
     #[test]
+    fn reporter_config_round_trips_without_a_client_identity() {
+        let request: WindowsImagePreparationRequest = serde_json::from_value(serde_json::json!({
+            "image_path":"C:/offline",
+            "driver_root":"C:/drivers",
+            "commit":true,
+            "reporter":{"server_url":"https://manager.example","export_package":true,"image_revision":"rev-1"}
+        })).unwrap();
+        let encoded = serde_json::to_value(request).unwrap();
+        assert_eq!(encoded["reporter"]["server_url"], "https://manager.example");
+        assert_eq!(encoded["reporter"]["export_package"], true);
+        assert_eq!(encoded["reporter"]["image_revision"], "rev-1");
+        assert!(encoded["reporter"].get("client_id").is_none());
+    }
+
+    #[test]
+    fn registry_service_values_use_current_control_set_and_expected_command_line() {
+        assert_eq!(
+            parse_select_value(
+                "HKEY_LOCAL_MACHINE\\TEMP\\Select\n    Current    REG_DWORD    0x2\n",
+                "Current",
+            )
+            .unwrap(),
+            2
+        );
+        assert_eq!(
+            parse_select_value("    Default REG_DWORD 0x3", "Default").unwrap(),
+            3
+        );
+        assert!(parse_select_value("Current REG_SZ 2", "Current").is_err());
+        assert_eq!(
+            registry_add_args(
+                "HKLM\\TEMP\\ControlSet002\\Services\\DisklessManagerReporter",
+                "ImagePath",
+                "REG_EXPAND_SZ",
+                REPORTER_IMAGE_PATH
+            ),
+            [
+                "add",
+                "HKLM\\TEMP\\ControlSet002\\Services\\DisklessManagerReporter",
+                "/v",
+                "ImagePath",
+                "/t",
+                "REG_EXPAND_SZ",
+                "/d",
+                REPORTER_IMAGE_PATH,
+                "/f"
+            ]
+            .map(str::to_string)
+        );
+    }
+
+    #[test]
     fn finds_system_hive_case_insensitively() {
         let root = tempfile::tempdir().unwrap();
         let config = root.path().join("Windows").join("System32").join("config");
@@ -484,6 +754,7 @@ mod tests {
             commit: false,
             boot_arm: WindowsBootArmConfig::default(),
             iscsi: None,
+            reporter: None,
         };
 
         assert!(validate_request(&request)

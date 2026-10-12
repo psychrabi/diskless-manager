@@ -297,6 +297,7 @@ export default function WindowsServicingModal({ isOpen, onClose, onPrepared }) {
         response = await prepareWindowsImageManaged({
           ...remoteIdentity(), image_id: form.imageId, source_snapshot: form.snapshot,
           new_name: form.newName.trim(), portal: form.portal.trim(), commit, boot_arm: bootArm(),
+          ...(commit ? { report_server_url: window.location.origin } : {}),
           ...(driverSource === "catalog" ? { driver_ids: selectedDriverIds } : { driver_root: form.driverRoot.trim() }),
         });
         if (commit) onPrepared?.();

@@ -17,11 +17,17 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
+#[cfg(windows)]
+const SERVICE_REPORT_ATTEMPTS: usize = 6;
+#[cfg(windows)]
+const SERVICE_REPORT_RETRY_DELAY: Duration = Duration::from_secs(10);
 
 /// Identity and inventory posted to `/api/pxe/network-drivers/reports`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ClientReport {
-    pub client_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
+    pub target_iqn: String,
     pub windows_version: String,
     pub architecture: String,
     pub boot_nic_ids: Vec<String>,
@@ -36,11 +42,15 @@ pub struct ClientReport {
 
 impl ClientReport {
     pub fn validate(&self) -> Result<()> {
-        if self.client_id.trim().is_empty()
+        if self
+            .client_id
+            .as_deref()
+            .is_some_and(|client_id| client_id.trim().is_empty())
+            || self.target_iqn.trim().is_empty()
             || self.windows_version.trim().is_empty()
             || self.architecture.trim().is_empty()
         {
-            bail!("client_id, windows_version, and architecture are required");
+            bail!("target_iqn, windows_version, and architecture are required");
         }
         if self.boot_nic_ids.is_empty() {
             bail!("at least one Boot NIC hardware ID is required");
@@ -54,7 +64,8 @@ impl ClientReport {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReporterConfig {
     pub server_url: String,
-    pub client_id: String,
+    #[serde(default)]
+    pub client_id: Option<String>,
     #[serde(default)]
     pub export_package: bool,
     /// Candidate revision this client is designated to test. Only set on the
@@ -70,8 +81,13 @@ impl ReporterConfig {
             .with_context(|| format!("failed to read reporter config {}", path.display()))?;
         let config: Self =
             serde_json::from_str(&content).context("invalid reporter configuration JSON")?;
-        if config.server_url.trim().is_empty() || config.client_id.trim().is_empty() {
-            bail!("reporter configuration requires server_url and client_id");
+        if config.server_url.trim().is_empty()
+            || config
+                .client_id
+                .as_deref()
+                .is_some_and(|client_id| client_id.trim().is_empty())
+        {
+            bail!("reporter configuration requires server_url and a non-empty optional client_id");
         }
         Ok(config)
     }
@@ -122,6 +138,8 @@ pub struct NetAdapter {
     pub hardware_ids: Vec<String>,
     #[serde(rename = "PublishedInf", default)]
     pub published_inf: String,
+    #[serde(rename = "TargetIqn")]
+    pub target_iqn: String,
 }
 
 fn run_bounded(program: &str, args: &[&str]) -> Result<String> {
@@ -226,7 +244,7 @@ pub fn run_report_client(config_path: &Path) -> Result<()> {
             "-NoProfile",
             "-NonInteractive",
             "-Command",
-            "$sessions = @(Get-IscsiConnection | Select-Object -ExpandProperty InitiatorAddress -Unique); if ($sessions.Count -ne 1) { throw 'Expected one iSCSI boot source address' }; $ips = @(Get-NetIPAddress -IPAddress $sessions[0] -ErrorAction Stop); if ($ips.Count -ne 1) { throw 'Could not uniquely resolve iSCSI boot interface' }; $a = @(Get-NetAdapter -InterfaceIndex $ips[0].InterfaceIndex -Physical); if ($a.Count -ne 1) { throw 'Could not uniquely resolve iSCSI boot adapter' }; $d = Get-PnpDevice -InstanceId $a[0].PnPDeviceID -ErrorAction Stop; $ids = @((Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_HardwareIds' -ErrorAction Stop).Data); $signed = @(Get-CimInstance Win32_PnPSignedDriver | Where-Object { $_.DeviceID -eq $d.InstanceId } | Select-Object -ExpandProperty InfName -Unique); if ($signed.Count -gt 1) { throw 'Could not uniquely resolve Boot NIC published INF' }; $inf = if ($signed.Count -eq 1) { $signed[0] } else { '' }; $o = [pscustomobject]@{Name=$a[0].Name;MacAddress=$a[0].MacAddress;InterfaceDescription=$a[0].InterfaceDescription;Status=$a[0].Status;ServiceName=$a[0].ServiceName;PnPDeviceID=$d.InstanceId;HardwareIds=[string[]]$ids;PublishedInf=$inf}; $o | ConvertTo-Json -Depth 3 -Compress",
+            "$connections = @(Get-IscsiConnection); $sessions = @($connections | Select-Object -ExpandProperty InitiatorAddress -Unique); if ($sessions.Count -ne 1) { throw 'Expected one iSCSI boot source address' }; $targets = @(Get-IscsiSession | Where-Object { $_.IsConnected } | Select-Object -ExpandProperty TargetNodeAddress -Unique); if ($targets.Count -ne 1) { throw 'Expected one connected iSCSI target IQN' }; $ips = @(Get-NetIPAddress -IPAddress $sessions[0] -ErrorAction Stop); if ($ips.Count -ne 1) { throw 'Could not uniquely resolve iSCSI boot interface' }; $a = @(Get-NetAdapter -InterfaceIndex $ips[0].InterfaceIndex -Physical); if ($a.Count -ne 1) { throw 'Could not uniquely resolve iSCSI boot adapter' }; $d = Get-PnpDevice -InstanceId $a[0].PnPDeviceID -ErrorAction Stop; $ids = @((Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_HardwareIds' -ErrorAction Stop).Data); $signed = @(Get-CimInstance Win32_PnPSignedDriver | Where-Object { $_.DeviceID -eq $d.InstanceId } | Select-Object -ExpandProperty InfName -Unique); if ($signed.Count -gt 1) { throw 'Could not uniquely resolve Boot NIC published INF' }; $inf = if ($signed.Count -eq 1) { $signed[0] } else { '' }; $o = [pscustomobject]@{Name=$a[0].Name;MacAddress=$a[0].MacAddress;InterfaceDescription=$a[0].InterfaceDescription;Status=$a[0].Status;ServiceName=$a[0].ServiceName;PnPDeviceID=$d.InstanceId;HardwareIds=[string[]]$ids;PublishedInf=$inf;TargetIqn=$targets[0]}; $o | ConvertTo-Json -Depth 3 -Compress",
         ],
     )?;
     let mut adapters = parse_net_adapters(&inventory_json)?;
@@ -254,6 +272,7 @@ pub fn run_report_client(config_path: &Path) -> Result<()> {
 
     let report = ClientReport {
         client_id: config.client_id.clone(),
+        target_iqn: boot.target_iqn.clone(),
         windows_version,
         architecture,
         boot_nic_ids: boot.hardware_ids.clone(),
@@ -277,6 +296,36 @@ pub fn run_report_client(config_path: &Path) -> Result<()> {
         exported.as_ref().map(|(_, path)| path.as_path()),
     )?;
     Ok(())
+}
+
+#[cfg(windows)]
+pub fn run_report_service_once(config_path: &Path) -> Result<()> {
+    anyhow::ensure!(
+        cfg!(windows),
+        "client reporting runs on a managed Windows client"
+    );
+    retry_report(SERVICE_REPORT_ATTEMPTS, SERVICE_REPORT_RETRY_DELAY, || {
+        run_report_client(config_path)
+    })
+}
+
+#[cfg(any(test, windows))]
+fn retry_report<F>(attempts: usize, delay: Duration, mut report: F) -> Result<()>
+where
+    F: FnMut() -> Result<()>,
+{
+    anyhow::ensure!(attempts > 0, "at least one report attempt is required");
+    let mut last_error = None;
+    for attempt in 0..attempts {
+        match report() {
+            Ok(()) => return Ok(()),
+            Err(error) => last_error = Some(error),
+        }
+        if attempt + 1 < attempts {
+            thread::sleep(delay);
+        }
+    }
+    Err(last_error.expect("one attempt always records an error"))
 }
 
 /// Parse `Get-ComputerInfo` JSON into `(windows_version, architecture)`.
@@ -403,7 +452,7 @@ mod tests {
 
     #[test]
     fn adapter_and_pnp_inventory_parse_single_and_multiple() {
-        let single = r#"{"Name":"Ethernet","MacAddress":"02-00-00-00-00-01","InterfaceDescription":"Intel NIC","Status":"Up","ServiceName":"e1dexpress","PnPDeviceID":"PCI\\VEN_8086&DEV_15F3","HardwareIds":["PCI\\VEN_8086&DEV_15F3","PCI\\VEN_8086"],"PublishedInf":"oem10.inf"}"#;
+        let single = r#"{"Name":"Ethernet","MacAddress":"02-00-00-00-00-01","InterfaceDescription":"Intel NIC","Status":"Up","ServiceName":"e1dexpress","PnPDeviceID":"PCI\\VEN_8086&DEV_15F3","HardwareIds":["PCI\\VEN_8086&DEV_15F3","PCI\\VEN_8086"],"PublishedInf":"oem10.inf","TargetIqn":"iqn.2026-01.example:client-1"}"#;
         assert_eq!(parse_net_adapters(single).unwrap().len(), 1);
         let array = format!("[{single},{single}]");
         assert_eq!(parse_net_adapters(&array).unwrap().len(), 2);
@@ -428,9 +477,10 @@ mod tests {
     #[test]
     fn report_contract_round_trips_and_validates() {
         let report = ClientReport {
+            target_iqn: "iqn.2026-01.example:client-1".into(),
             image_revision: Some("rev-9".into()),
             boot_nic_id: Some("PCI\\VEN_8086&DEV_15F3".into()),
-            client_id: "client-1".into(),
+            client_id: Some("client-1".into()),
             windows_version: "Windows 11 23H2".into(),
             architecture: "x64".into(),
             boot_nic_ids: vec!["PCI\\VEN_8086&DEV_15F3".into()],
@@ -462,10 +512,65 @@ mod tests {
     }
 
     #[test]
+    fn common_image_config_can_omit_client_id_and_keeps_report_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("report.json");
+        std::fs::write(
+            &path,
+            r#"{"server_url":"https://manager.example","image_revision":"rev-9"}"#,
+        )
+        .unwrap();
+        let config = ReporterConfig::load(&path).unwrap();
+        assert_eq!(config.client_id, None);
+        assert_eq!(config.image_revision.as_deref(), Some("rev-9"));
+    }
+
+    #[test]
+    fn report_retry_count_is_bounded_and_stops_after_success() {
+        let mut calls = 0;
+        let result = retry_report(3, Duration::ZERO, || {
+            calls += 1;
+            if calls == 2 {
+                Ok(())
+            } else {
+                bail!("iSCSI not ready")
+            }
+        });
+        assert!(result.is_ok());
+        assert_eq!(calls, 2);
+
+        let mut calls = 0;
+        assert!(retry_report(3, Duration::ZERO, || {
+            calls += 1;
+            bail!("still unavailable")
+        })
+        .is_err());
+        assert_eq!(calls, 3);
+    }
+
+    #[test]
+    fn report_json_contains_live_target_iqn_and_optional_client_id() {
+        let report = ClientReport {
+            client_id: None,
+            target_iqn: "iqn.2026-01.example:client-1".into(),
+            windows_version: "Windows 11 23H2".into(),
+            architecture: "x64".into(),
+            boot_nic_ids: vec!["PCI\\VEN_8086&DEV_15F3".into()],
+            image_revision: Some("rev-9".into()),
+            boot_nic_id: Some("PCI\\VEN_8086&DEV_15F3".into()),
+        };
+        let json = serde_json::to_value(report).unwrap();
+        assert_eq!(json["target_iqn"], "iqn.2026-01.example:client-1");
+        assert!(json.get("client_id").is_none());
+        assert_eq!(json["image_revision"], "rev-9");
+        assert_eq!(json["boot_nic_id"], "PCI\\VEN_8086&DEV_15F3");
+    }
+
+    #[test]
     fn reporter_rejects_credentials_and_non_base_urls() {
         let config = |server_url: &str| ReporterConfig {
             server_url: server_url.into(),
-            client_id: "client-1".into(),
+            client_id: Some("client-1".into()),
             export_package: true,
             image_revision: None,
         };
@@ -489,7 +594,8 @@ mod tests {
         let archive = dir.path().join("driver.zip");
         std::fs::write(&archive, b"zip-data").unwrap();
         let report = ClientReport {
-            client_id: "client-1".into(),
+            client_id: Some("client-1".into()),
+            target_iqn: "iqn.2026-01.example:client-1".into(),
             windows_version: "Windows 11 23H2".into(),
             architecture: "x64".into(),
             boot_nic_ids: vec!["PCI\\VEN_8086&DEV_15F3".into()],

@@ -30,7 +30,7 @@ it("services a selected managed snapshot and refreshes images after saving",asyn
   render(<WindowsServicingModal isOpen onPrepared={onPrepared}/>);
   await fillForm();
   fireEvent.click(screen.getByRole("button",{name:"Prepare and Commit"}));
-  await waitFor(() => expect(mocks.prepare).toHaveBeenCalledWith(expect.objectContaining({host:"192.168.123.10",image_id:"win",source_snapshot:"installed",new_name:"windows11-serviced",portal:"192.168.123.1",driver_ids:["netkvm"],commit:true})));
+  await waitFor(() => expect(mocks.prepare).toHaveBeenCalledWith(expect.objectContaining({host:"192.168.123.10",image_id:"win",source_snapshot:"installed",new_name:"windows11-serviced",portal:"192.168.123.1",driver_ids:["netkvm"],commit:true,report_server_url:window.location.origin})));
   expect(await screen.findByText(/Saved windows11-serviced@serviced-test/)).toBeInTheDocument();
   expect(onPrepared).toHaveBeenCalledOnce();
 });
@@ -41,6 +41,13 @@ it("allows managed catalog builds without manual driver selections",async () => 
   expect(screen.getByRole("button",{name:"Prepare and Commit"})).toBeEnabled();
   fireEvent.click(screen.getByRole("button",{name:"Prepare and Commit"}));
   await waitFor(() => expect(mocks.prepare).toHaveBeenCalledWith(expect.objectContaining({driver_ids:[]})));
+});
+it("keeps the reporter URL out of managed dry-run requests",async () => {
+  render(<WindowsServicingModal isOpen/>);
+  await fillForm();
+  fireEvent.click(screen.getByRole("button",{name:"Dry Run"}));
+  await waitFor(() => expect(mocks.prepare).toHaveBeenCalledWith(expect.objectContaining({commit:false})));
+  expect(mocks.prepare.mock.calls[0][0]).not.toHaveProperty("report_server_url");
 });
 it("requires a helper that supports managed volumes",async () => {
   mocks.capabilities.mockResolvedValue({available:true,elevated:true,platform:"windows",protocol_version:2});
