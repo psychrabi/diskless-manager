@@ -190,10 +190,7 @@ impl RemoteWindowsServicer {
         let remote_driver_root_sftp = remote_driver_root.replace('\\', "/");
 
         let executor = self.executor(username.clone(), password.clone());
-        let create_command = powershell_statement(&format!(
-            "[void](New-Item -ItemType Directory -Force -LiteralPath {})",
-            powershell_literal(&remote_driver_root)
-        ));
+        let create_command = powershell_create_directory_command(&remote_driver_root);
         let created = executor
             .execute_command(&host, &create_command)
             .await
@@ -327,6 +324,13 @@ fn powershell_literal(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
+fn powershell_create_directory_command(path: &str) -> String {
+    powershell_statement(&format!(
+        "[void](New-Item -ItemType Directory -Force -Path {})",
+        powershell_literal(path)
+    ))
+}
+
 fn powershell_statement(statement: &str) -> String {
     debug_assert!(!statement
         .chars()
@@ -340,6 +344,17 @@ fn powershell_statement(statement: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn staging_directory_uses_supported_powershell_parameters_and_quoted_paths() {
+        let command = powershell_create_directory_command(
+            r"C:\ProgramData\Diskless Manager\staging\job's\drivers",
+        );
+        assert_eq!(
+            command,
+            r#"powershell.exe -NoProfile -NonInteractive -Command "[void](New-Item -ItemType Directory -Force -Path 'C:\ProgramData\Diskless Manager\staging\job''s\drivers')""#
+        );
+    }
 
     #[test]
     fn helper_path_is_safely_single_quoted_for_powershell() {

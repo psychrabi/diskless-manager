@@ -137,6 +137,7 @@ reboot
 /// The WinPE image reports Boot NIC hardware IDs and reboots; whether the
 /// inventory upload succeeds or fails, the client returns to the normal
 /// dispatch path instead of hanging in WinPE.
+/// Both UEFI image naming and BIOS CPIO naming must match the BCD's boot.wim.
 #[must_use]
 pub fn render_inventory_boot() -> String {
     r##"#!ipxe
@@ -149,7 +150,7 @@ echo ##########################################################
 kernel ${boot-url}/boot/winpe/wimboot || goto inventory_failed
 initrd ${boot-url}/boot/winpe/BCD BCD || goto inventory_failed
 initrd ${boot-url}/boot/winpe/boot.sdi boot.sdi || goto inventory_failed
-initrd ${boot-url}/boot/winpe/boot-inventory.wim boot.wim || goto inventory_failed
+initrd --name boot.wim ${boot-url}/boot/winpe/boot-inventory.wim boot.wim || goto inventory_failed
 boot || goto inventory_failed
 
 :inventory_failed
@@ -581,6 +582,13 @@ mod tests {
         // Inventory never attaches the Windows disk.
         assert!(!script.contains("sanboot"));
         assert!(!script.contains("sanhook"));
+    }
+
+    #[test]
+    fn inventory_wim_uses_the_bcd_filename_for_uefi_and_bios() {
+        let script = render_inventory_boot();
+        assert!(script
+            .contains("initrd --name boot.wim ${boot-url}/boot/winpe/boot-inventory.wim boot.wim"));
     }
 
     #[test]

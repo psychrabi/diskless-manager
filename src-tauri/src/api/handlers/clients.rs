@@ -2085,6 +2085,21 @@ pub async fn update_client(
         )
     })?;
 
+    // Renaming rebuilds the initiator ACL, so the menu must use the saved identity.
+    if client.enabled {
+        if let Some(target_iqn) = client.target_iqn.as_deref() {
+            publish_boot_menu(
+                &settings,
+                &client.name,
+                &client.mac,
+                &client.ip,
+                target_iqn,
+                chap_creds.as_ref(),
+            )
+            .await;
+        }
+    }
+
     // Persist the effective selection and destroy clone datasets that are
     // no longer selected (their LUNs were already pruned by provisioning).
     // Clone cleanup is best-effort: the boot storage above is healthy, and

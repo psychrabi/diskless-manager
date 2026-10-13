@@ -561,6 +561,30 @@ mod tests {
         assert!(build.contains("Windows\\System32\\startnet.cmd"));
     }
 
+    #[test]
+    fn winpe_inventory_requires_only_the_documented_wmi_components() {
+        let inventory =
+            include_str!("../../../tools/windows-servicer/client-report/winpe-inventory.ps1");
+        for unsupported in [
+            "Get-NetIPAddress",
+            "Get-NetAdapter",
+            "Get-PnpDevice",
+            "Get-ComputerInfo",
+        ] {
+            assert!(
+                !inventory.contains(unsupported),
+                "WinPE lacks {unsupported}"
+            );
+        }
+        for class in [
+            "Win32_NetworkAdapterConfiguration",
+            "Win32_NetworkAdapter",
+            "Win32_PnPEntity",
+        ] {
+            assert!(inventory.contains(class), "inventory requires WMI {class}");
+        }
+    }
+
     #[tokio::test]
     async fn inventory_submit_stores_pending_record_by_mac() {
         let state = test_state().await;

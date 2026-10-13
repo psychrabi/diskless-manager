@@ -34,35 +34,50 @@ if (-not $serverAddresses) {
     Write-Host "The inventory server has no reachable IPv4 address."
     exit 1
 }
-$udp = New-Object System.Net.Sockets.UdpClient
-try {
-    $udp.Connect($serverAddresses[0], $serverUri.Port)
-    $sourceAddress = $udp.Client.LocalEndPoint.Address.IPAddressToString
-} catch {
-    Write-Host "Could not resolve the route to the inventory server: $($_.Exception.Message)"
-    exit 1
-} finally {
-    $udp.Dispose()
+# DHCP may finish after wpeinit returns; wait at most one minute for the route.
+$sourceAddress = $null
+for ($attempt = 1; $attempt -le 30; $attempt++) {
+    $udp = New-Object System.Net.Sockets.UdpClient
+    try {
+        $udp.Connect($serverAddresses[0], $serverUri.Port)
+        $sourceAddress = $udp.Client.LocalEndPoint.Address.IPAddressToString
+        if ($sourceAddress -eq "0.0.0.0") { throw "No IPv4 source address is ready." }
+        break
+    } catch {
+        if ($attempt -eq 30) {
+            Write-Host "Could not resolve the route to the inventory server after waiting for DHCP: $($_.Exception.Message)"
+            exit 1
+        }
+    } finally {
+        $udp.Dispose()
+    }
+    Start-Sleep -Seconds 2
 }
-$sourceInterfaces = @(Get-NetIPAddress -IPAddress $sourceAddress -ErrorAction Stop)
+$sourceInterfaces = @(Get-CimInstance -ClassName Win32_NetworkAdapterConfiguration -ErrorAction Stop |
+    Where-Object { $_.IPEnabled -and $_.IPAddress -contains $sourceAddress })
 if ($sourceInterfaces.Count -ne 1) {
     Write-Host "The route to the inventory server does not identify one network interface."
     exit 1
 }
-$adapters = @(Get-NetAdapter -InterfaceIndex $sourceInterfaces[0].InterfaceIndex -Physical -ErrorAction Stop)
-if ($adapters.Count -ne 1 -or $adapters[0].Status -ne "Up" -or [string]::IsNullOrWhiteSpace($adapters[0].PnPDeviceID)) {
-    Write-Host "The inventory server route does not map to one active physical PnP adapter."
+$adapters = @(Get-CimInstance -ClassName Win32_NetworkAdapter -ErrorAction Stop |
+    Where-Object { $_.Index -eq $sourceInterfaces[0].Index -and $_.PhysicalAdapter })
+if ($adapters.Count -ne 1 -or [string]::IsNullOrWhiteSpace($adapters[0].PNPDeviceID)) {
+    Write-Host "The inventory server route does not map to one physical PnP adapter."
     exit 1
 }
 $boot = $adapters[0]
-$mac = ($boot.MacAddress -replace "[-:]", "").ToLowerInvariant()
+$mac = ($boot.MACAddress -replace "[-:]", "").ToLowerInvariant()
+if ($mac -notmatch '^[0-9a-f]{12}$') {
+    Write-Host "The routed adapter has no valid MAC address."
+    exit 1
+}
 
-$devices = Get-PnpDevice -Class Net -PresentOnly -ErrorAction SilentlyContinue
-$bootDevices = @($devices | Where-Object { $_.InstanceId -eq $boot.PnPDeviceID })
+$devices = @(Get-CimInstance -ClassName Win32_PnPEntity -Filter "ClassGuid='{4d36e972-e325-11ce-bfc1-08002be10318}'" -ErrorAction Stop |
+    Where-Object { $_.ConfigManagerErrorCode -eq 0 })
+$bootDevices = @($devices | Where-Object { $_.PNPDeviceID -eq $boot.PNPDeviceID })
 function Get-DeviceNicIds($device) {
-    $keys = @("DEVPKEY_Device_HardwareIds", "DEVPKEY_Device_CompatibleIds")
-    $properties = Get-PnpDeviceProperty -InstanceId $device.InstanceId -KeyName $keys -ErrorAction Stop
-    @($properties | Where-Object { $_.KeyName -in $keys } | ForEach-Object { $_.Data } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+    @((@($device.HardwareID) + @($device.CompatibleID)) |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
 }
 if ($bootDevices.Count -ne 1) {
     Write-Host "The routed adapter does not map to one present PnP network device."
@@ -76,12 +91,12 @@ try {
     exit 1
 }
 if (-not $bootIds) {
-    Write-Host "Boot NIC '$($boot.InterfaceDescription)' has no PnP hardware or compatible IDs."
+    Write-Host "Boot NIC '$($boot.Description)' has no PnP hardware or compatible IDs."
     exit 1
 }
 $secondaryIds = @()
-foreach ($device in $devices | Where-Object { $_.InstanceId -ne $bootDevice.InstanceId }) {
-    try { $secondaryIds += Get-DeviceNicIds $device } catch { Write-Host "Could not read secondary NIC IDs for '$($device.FriendlyName)'." }
+foreach ($device in $devices | Where-Object { $_.PNPDeviceID -ne $bootDevice.PNPDeviceID }) {
+    try { $secondaryIds += Get-DeviceNicIds $device } catch { Write-Host "Could not read secondary NIC IDs for '$($device.Name)'." }
 }
 $secondaryIds = @($secondaryIds | Select-Object -Unique)
 
@@ -89,9 +104,10 @@ $arch = $env:PROCESSOR_ARCHITECTURE
 if ([string]::IsNullOrWhiteSpace($arch)) { $arch = "AMD64" }
 $firmware = "unknown"
 try {
-    $firmwareType = (Get-ComputerInfo -Property BiosFirmwareType -ErrorAction Stop).BiosFirmwareType
-    if ($firmwareType -eq "Uefi") { $firmware = "uefi" }
-    elseif ($firmwareType -eq "Bios") { $firmware = "bios" }
+    & wpeutil.exe UpdateBootInfo | Out-Null
+    $firmwareType = (Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control' -Name PEFirmwareType -ErrorAction Stop).PEFirmwareType
+    if ($firmwareType -eq 2) { $firmware = "uefi" }
+    elseif ($firmwareType -eq 1) { $firmware = "bios" }
 } catch {
     Write-Host "Firmware type detection failed; reporting as unknown."
 }

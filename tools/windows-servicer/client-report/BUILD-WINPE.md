@@ -14,27 +14,27 @@ the Windows ADK. No generated WinPE image is committed to this repository.
 
 ```powershell
 # 1. Stage a WinPE working set (amd64 example).
-copype amd64 C:\winpe-inventory
+copype amd64 C:\WinPE_amd64
 
 # 2. Mount the image.
-Dism /Mount-Image /ImageFile:C:\winpe-inventory\media\sources\boot.wim /Index:1 /MountDir:C:\winpe-inventory\mount
+Dism /Mount-Image /ImageFile:C:\WinPE_amd64\media\sources\boot.wim /Index:1 /MountDir:C:\WinPE_amd64\mount
 
 # 3. Add networking + PowerShell + secure boot support.
-Dism /Add-Package /Image:C:\winpe-inventory\mount /PackagePath:"C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Windows Preinstallation Environment\amd64\WinPE_OCs\WinPE-WMI.cab"
-Dism /Add-Package /Image:C:\winpe-inventory\mount /PackagePath:".../WinPE_OCs\WinPE-NetFX.cab"
-Dism /Add-Package /Image:C:\winpe-inventory\mount /PackagePath:".../WinPE_OCs\WinPE-PowerShell.cab"
-Dism /Add-Package /Image:C:\winpe-inventory\mount /PackagePath:".../WinPE_OCs\WinPE-SecureBootCmdlets.cab"
+Dism /Add-Package /Image:C:\WinPE_amd64\mount /PackagePath:"C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Windows Preinstallation Environment\amd64\WinPE_OCs\WinPE-WMI.cab"
+Dism /Add-Package /Image:C:\WinPE_amd64\mount /PackagePath:"C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Windows Preinstallation Environment\amd64\WinPE_OCs\WinPE-NetFX.cab"
+Dism /Add-Package /Image:C:\WinPE_amd64\mount /PackagePath:"C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Windows Preinstallation Environment\amd64\WinPE_OCs\WinPE-PowerShell.cab"
+Dism /Add-Package /Image:C:\WinPE_amd64\mount /PackagePath:"C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Windows Preinstallation Environment\amd64\WinPE_OCs\WinPE-SecureBootCmdlets.cab"
 
 # 4. Stage the inventory payload (this directory).
-Copy-Item .\winpe-inventory.ps1 C:\winpe-inventory\mount\Windows\System32\
-Copy-Item .\winpe-startnet.cmd C:\winpe-inventory\mount\Windows\System32\startnet.cmd
+Copy-Item D:\winpe-inventory.ps1 C:\WinPE_amd64\mount\Windows\System32\
+Copy-Item D:\winpe-startnet.cmd C:\WinPE_amd64\mount\Windows\System32\startnet.cmd
 
 # 5. Bake the server address as host:port of the enrollment listener.
-"192.0.2.1:4237" | Set-Content C:\winpe-inventory\mount\Windows\System32\diskless-server.txt -NoNewline
+"192.168.1.250:4237" | Set-Content C:\WinPE_amd64\mount\Windows\System32\diskless-server.txt -NoNewline
 
 # 6. Commit and serve as boot-inventory.wim next to the install boot.wim.
-Dism /Unmount-Image /MountDir:C:\winpe-inventory\mount /Commit
-Copy-Item C:\winpe-inventory\media\sources\boot.wim <boot-root>\boot\winpe\boot-inventory.wim
+Dism /Unmount-Image /MountDir:C:\WinPE_amd64\mount /Commit
+Copy-Item C:\WinPE_amd64\media\sources\boot.wim D:\boot-inventory.wim
 ```
 
 Notes:
