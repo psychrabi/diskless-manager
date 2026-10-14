@@ -1,4 +1,5 @@
 pub mod boot_history_service;
+pub mod client_boot;
 pub mod client_lifecycle;
 pub mod client_service;
 pub mod client_storage_mapping;

@@ -195,8 +195,8 @@ export const useSettings = () => {
 
   return {
     updateClientLifecycle: (config) => updateSettingsSection({
-      section: "client_lifecycle", config, toastTitle: "Client Reset Settings",
-      successMessage: "Offline reset delay saved",
+      section: "client_lifecycle", config, toastTitle: "Client Storage Lifecycle",
+      successMessage: "Offline deletion delay saved",
     }),
     updateEnrollment: (config) => updateSettingsSection({
       section: "enrollment", config, toastTitle: "Enrollment Settings",

@@ -209,6 +209,9 @@ pub(crate) async fn resolved_game_selection(
     client_id: &str,
     use_game_disk: bool,
 ) -> anyhow::Result<Vec<String>> {
+    if !use_game_disk {
+        return Ok(Vec::new());
+    }
     let stored = stored_game_selection(pool, client_id).await?;
     let storage = storage.clone();
     let discovered = tokio::task::spawn_blocking(move || storage.discover_game_masters())
@@ -279,7 +282,7 @@ pub(crate) async fn ensure_chap_credentials(
     Ok(Some(creds))
 }
 
-async fn storage_spec_for_client(
+pub(crate) async fn storage_spec_for_client(
     config: &crate::config::RuntimeConfig,
     storage: &StorageService,
     pool: &sqlx::SqlitePool,

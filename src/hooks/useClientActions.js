@@ -4,6 +4,7 @@ import { useCallback } from "react";
 import { updateClient, deleteClient } from "../api/modules/clients";
 import { requestInventoryBoot } from "../api/modules/networkDrivers";
 import { createSnapshot } from "../api/modules/images";
+import { isSuperClient } from "../lib/clientMode";
 
 export const useClientActions = (
   fetchData,
@@ -278,7 +279,7 @@ export const useClientActions = (
 
   const handleDisableSuper = useCallback(
     (client) => {
-      if (client.mode !== "super") {
+      if (!isSuperClient(client)) {
         showError("Client Management", "Client is not in Super mode.");
         return;
       }
@@ -299,7 +300,7 @@ export const useClientActions = (
   const handleSaveSuper = useCallback(
     async (client) => {
       if (!client) return;
-      if (client.mode !== "super") {
+      if (!isSuperClient(client)) {
         showError("Client Management", "Client is not in Super mode.");
         return;
       }
@@ -338,7 +339,7 @@ export const useClientActions = (
 
       try {
         const response = await createSnapshot(client.master, snapshotName);
-        await updateClient(client.id, { action: "super", make_super: false });
+        await updateClient(client.id, { action: "super", make_super: false, snapshot: `${client.master.trim()}@${snapshotName}` });
         success(
           "Client Management",
           response.message

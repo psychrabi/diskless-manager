@@ -265,6 +265,8 @@ impl Client {
         self.status == ClientStatus::Ready
     }
 
+    /// The stored super-mode flag. Prefer [`Self::is_super_client`]: the
+    /// assignment, not the flag, decides whether a client is the super client.
     pub fn is_super_mode(&self) -> bool {
         self.mode == BootMode::Super
     }
@@ -274,6 +276,24 @@ impl Client {
             .as_deref()
             .map(|value| !value.trim().is_empty())
             .unwrap_or(false)
+    }
+
+    /// Whether this client's storage points at an image directly, with no
+    /// clone of a snapshot. Such a client writes into the image itself.
+    pub fn is_direct_image_assignment(&self) -> bool {
+        let master = self.master.trim();
+        !master.is_empty() && !master.eq_ignore_ascii_case("pending") && !self.has_snapshot()
+    }
+
+    /// Whether this client is the super client: the machine that boots an
+    /// image directly so driver installation and adaptation can be captured
+    /// for every other client.
+    ///
+    /// The assignment decides, not the stored flag, so a legacy or imported
+    /// row that never set `mode = super` is still recognized while its storage
+    /// points at an image directly. A cloned snapshot is never super.
+    pub fn is_super_client(&self) -> bool {
+        self.is_super_mode() || self.is_direct_image_assignment()
     }
 
     pub fn mark_ready(&mut self) {
@@ -369,5 +389,74 @@ impl std::fmt::Debug for Client {
             .field("name", &self.name)
             .field("chap_enabled", &self.chap_enabled)
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod super_client_tests {
+    use super::*;
+
+    fn request(master: &str, snapshot: Option<&str>) -> CreateClient {
+        CreateClient {
+            name: "PC001".to_string(),
+            mac: "02:00:00:00:00:01".to_string(),
+            ip: "192.0.2.1".to_string(),
+            master: master.to_string(),
+            snapshot: snapshot.map(str::to_string),
+            block_store: None,
+            block_device: None,
+            target_iqn: None,
+            pxe_mode: PxeMode::Uefi,
+            keep_writeback: true,
+            use_game_disk: false,
+            game_disks: Vec::new(),
+            chap_enabled: true,
+        }
+    }
+
+    #[test]
+    fn direct_image_assignment_is_the_super_client_without_the_stored_flag() {
+        let client = Client::create(request("tank/image/windows", None)).unwrap();
+        assert!(client.is_direct_image_assignment());
+        assert!(client.is_super_client());
+        assert!(!client.is_super_mode());
+    }
+
+    #[test]
+    fn a_snapshot_clone_is_never_the_super_client() {
+        let client = Client::create(request(
+            "tank/image/windows",
+            Some("tank/image/windows@clean"),
+        ))
+        .unwrap();
+        assert!(!client.is_direct_image_assignment());
+        assert!(!client.is_super_client());
+        // An empty snapshot string is an absent assignment, not a clone.
+        let blank = Client::create(request("tank/image/windows", Some("  "))).unwrap();
+        assert!(blank.is_super_client());
+    }
+
+    #[test]
+    fn an_unprovisioned_client_is_not_a_super_client() {
+        for master in ["pending", "  PENDING  "] {
+            let client = Client::create(request(master, None)).unwrap();
+            assert!(!client.is_super_client(), "master {master:?}");
+        }
+        // A row read back without an image is unprovisioned, not super.
+        let mut client = Client::create(request("tank/image/windows", None)).unwrap();
+        client.master = String::new();
+        assert!(!client.is_super_client());
+        assert!(!client.is_direct_image_assignment());
+    }
+
+    #[test]
+    fn the_stored_flag_alone_still_marks_the_super_client() {
+        let mut client = Client::create(request(
+            "tank/image/windows",
+            Some("tank/image/windows@clean"),
+        ))
+        .unwrap();
+        client.mode = BootMode::Super;
+        assert!(client.is_super_client());
     }
 }

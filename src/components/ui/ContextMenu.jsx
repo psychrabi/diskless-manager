@@ -10,6 +10,7 @@ import {
 import { useLayoutEffect, useRef, useState } from "react";
 import { useOnClickOutside } from "../../hooks/useOnClickOutside";
 import { cn } from "@/lib/utils";
+import { isSuperClient } from "@/lib/clientMode";
 
 const MenuItem = ({
   icon: Icon,
@@ -86,7 +87,7 @@ export const ContextMenu = ({
   if (!isOpen || !targetClient) return null;
 
   const isOnline = targetClient?.status === "Online";
-  const isSuper = targetClient?.mode === "super";
+  const isSuper = isSuperClient(targetClient);
   const isUnprovisioned = targetClient?.master === "pending";
   const isPersistent =
     targetClient?.snapshot && targetClient?.keep_writeback && !isSuper;

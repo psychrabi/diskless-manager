@@ -144,7 +144,22 @@ impl Client {
 
     /// Check if client has a snapshot assigned
     pub fn has_snapshot(&self) -> bool {
-        self.snapshot.is_some() && !self.snapshot.as_ref().is_some_and(|s| s.is_empty())
+        self.snapshot
+            .as_deref()
+            .is_some_and(|s| !s.trim().is_empty())
+    }
+
+    /// Whether this client's storage points at an image directly, with no
+    /// clone of a snapshot.
+    pub fn is_direct_image_assignment(&self) -> bool {
+        let master = self.master.trim();
+        !master.is_empty() && !master.eq_ignore_ascii_case("pending") && !self.has_snapshot()
+    }
+
+    /// Whether this client is the super client. The assignment decides, not
+    /// only the stored mode flag.
+    pub fn is_super_client(&self) -> bool {
+        self.is_super_mode() || self.is_direct_image_assignment()
     }
 }
 
@@ -543,6 +558,21 @@ impl std::fmt::Debug for Client {
 mod response_tests {
     use super::Client;
     use chrono::Utc;
+
+    #[test]
+    fn super_detection_normalizes_snapshot_and_pending() {
+        let mut client = Client::new(
+            serde_json::from_value(serde_json::json!({
+                "name": "PC001", "mac": "00:11:22:33:44:55", "ip": "192.0.2.1",
+                "master": "tank/windows", "snapshot": "  "
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(client.is_super_client());
+        client.master = "  PENDING  ".into();
+        assert!(!client.is_super_client());
+    }
 
     #[test]
     fn serialized_clients_do_not_include_chap_credentials() {

@@ -59,7 +59,7 @@ export default function PendingRecovery() {
     <div className="flex flex-col gap-4">
       <PageHeader
         title="Pending Recovery"
-        description="Retry interrupted client image and storage recovery. Clients must be disconnected before recovery can run."
+        description="Review boot provisioning failures and retry interrupted client storage recovery."
         actions={(
           <Button variant="outline" size="sm" onClick={refresh} disabled={loading}>
             <RefreshCw data-icon="inline-start" /> Refresh
@@ -68,9 +68,9 @@ export default function PendingRecovery() {
       />
       <Alert>
         <AlertCircle />
-        <AlertTitle>Recovery keeps a journal until it finishes</AlertTitle>
+            <AlertTitle>Failures stay visible until resolved</AlertTitle>
         <AlertDescription>
-          A failed retry stays pending and will continue to be retried automatically by the server.
+              Storage recovery retries automatically. Boot provisioning retries on the client's next PXE boot.
         </AlertDescription>
       </Alert>
 
@@ -79,8 +79,8 @@ export default function PendingRecovery() {
         <div className="flex justify-center py-12"><Spinner className="size-8" /></div>
       ) : recoveries.length === 0 ? (
         <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground">
-          <p className="font-medium text-foreground">No pending client recoveries</p>
-          <p className="mt-1 text-sm">Interrupted client storage operations will appear here.</p>
+          <p className="font-medium text-foreground">No pending recovery or boot failures</p>
+          <p className="mt-1 text-sm">Interrupted storage operations and boot provisioning failures will appear here.</p>
         </div>
       ) : (
         <div className="overflow-hidden rounded-lg border border-border">
@@ -88,7 +88,7 @@ export default function PendingRecovery() {
             <TableHeader>
               <TableRow className="bg-muted/50">
                 <TableHead>Client</TableHead>
-                <TableHead>Retry status</TableHead>
+                <TableHead>Status</TableHead>
                 <TableHead>Last error</TableHead>
                 <TableHead className="text-right">Action</TableHead>
               </TableRow>
@@ -99,25 +99,32 @@ export default function PendingRecovery() {
                   <TableCell className="font-medium">{recovery.client_name}</TableCell>
                   <TableCell>
                     <div className="flex flex-col items-start gap-1">
+                      <Badge variant="outline">
+                        {recovery.kind === "boot_failure" ? "Boot provisioning" : "Storage recovery"}
+                      </Badge>
                       <Badge variant="secondary">
                         {recovery.failures} failed attempt{recovery.failures === 1 ? "" : "s"}
                       </Badge>
-                      <span className="text-xs text-muted-foreground">{formatRetryTime(recovery.retry_after)}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {recovery.kind === "boot_failure" ? "Next PXE boot retries provisioning" : formatRetryTime(recovery.retry_after)}
+                      </span>
                     </div>
                   </TableCell>
                   <TableCell className="max-w-lg whitespace-normal break-words text-sm text-muted-foreground">
                     {recovery.last_error || "No error recorded"}
                   </TableCell>
                   <TableCell className="text-right">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleRetry(recovery.client_id)}
-                      disabled={retryingId !== null}
-                    >
-                      <RotateCw data-icon="inline-start" />
-                      {retryingId === recovery.client_id ? "Retrying…" : "Retry now"}
-                    </Button>
+                    {recovery.kind !== "boot_failure" && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleRetry(recovery.client_id)}
+                        disabled={retryingId !== null}
+                      >
+                        <RotateCw data-icon="inline-start" />
+                        {retryingId === recovery.client_id ? "Retrying…" : "Retry now"}
+                      </Button>
+                    )}
                   </TableCell>
                 </TableRow>
               ))}

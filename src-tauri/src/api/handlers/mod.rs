@@ -4,6 +4,7 @@ pub mod client_chap;
 pub mod client_delete;
 #[path = "client_update_entry.rs"]
 pub mod client_game_update;
+pub mod client_storage;
 #[path = "client_enabled_update.rs"]
 pub mod client_update;
 #[path = "client_update.rs"]

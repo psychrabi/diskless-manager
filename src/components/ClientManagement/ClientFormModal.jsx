@@ -1,6 +1,7 @@
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import {
   addClient,
+  deleteClientWriteback,
   getClientNvmeOfStatus,
   prepareClientNvmeOf,
   removeClientNvmeOf,
@@ -37,6 +38,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Spinner } from "@/components/ui/spinner";
+import { useConfirm } from "@/contexts/confirmDialog";
 
 // Each opened client owns its form and asynchronous status state. Responses
 // belonging to an unmounted client cannot overwrite another client's dialog.
@@ -51,12 +53,14 @@ const formDefaults = { enabled: true, chap_enabled: true, use_game_disk: false, 
 const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) => {
   const { success, error } = useToastStore();
   const { user } = useAuth();
+  const confirm = useConfirm();
   const [nvmeStatus, setNvmeStatus] = useState(null);
   const [nvmeLoading, setNvmeLoading] = useState(Boolean(isOpen && client?.id));
   const [nvmeAction, setNvmeAction] = useState(null);
   const [nvmeError, setNvmeError] = useState("");
   // `null` means not fetched yet (loading); an array may be empty.
   const [gameDisks, setGameDisks] = useState(null);
+  const [deletingWriteback, setDeletingWriteback] = useState(false);
 
   const {
     register,
@@ -285,6 +289,28 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
     }
   };
 
+  const handleDeleteWriteback = async () => {
+    const ok = await confirm({
+      title: "Delete Writeback",
+      description: "All changes in this client's boot and game clones will be lost. Storage will be recreated from its configured sources on the next PXE boot.",
+      confirmText: "Delete Writeback",
+      cancelText: "Cancel",
+      confirmVariant: "destructive",
+      size: "2xl",
+    });
+    if (!ok || deletingWriteback) return;
+    setDeletingWriteback(true);
+    try {
+      const result = await deleteClientWriteback(client.id);
+      success("Client Management", result?.message || "Writeback storage deleted.");
+      await refresh?.();
+    } catch (e) {
+      error("Client Management", e);
+    } finally {
+      setDeletingWriteback(false);
+    }
+  };
+
   const useGameDisk = useWatch({
     control,
     name: "use_game_disk",
@@ -344,7 +370,7 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
     <Dialog
       open={isOpen}
       onOpenChange={(open) => {
-        if (!open) onClose();
+        if (!open && !deletingWriteback) onClose();
       }}
     >
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
@@ -720,12 +746,23 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
           )}
 
           <DialogFooter className="pt-2">
-            <Button type="button" variant="ghost" onClick={() => onClose()}>
+            {user?.role === "admin" && client?.id && client?.snapshot && client?.writeback && (
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={deletingWriteback || client.status?.toLowerCase() === "online"}
+                onClick={handleDeleteWriteback}
+              >
+                {deletingWriteback ? <Spinner data-icon="inline-start" /> : <Trash2 data-icon="inline-start" />}
+                {deletingWriteback ? "Deleting..." : "Delete Writeback"}
+              </Button>
+            )}
+            <Button type="button" variant="ghost" disabled={deletingWriteback} onClick={() => onClose()}>
               Cancel
             </Button>
             <Button
               type="submit"
-              disabled={isSubmitting || !isDirty || !isValid}
+              disabled={deletingWriteback || isSubmitting || !isDirty || !isValid}
             >
               {isSubmitting ? (
                 <Spinner data-icon="inline-start" />

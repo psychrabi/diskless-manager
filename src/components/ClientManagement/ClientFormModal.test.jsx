@@ -1,10 +1,15 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import { useAuth } from "@/contexts/auth";
-import { getClientNvmeOfStatus, rotateChapSecret } from "@/api/modules/clients";
+import { deleteClientWriteback, getClientNvmeOfStatus, rotateChapSecret } from "@/api/modules/clients";
 import { listGameDisks } from "@/api/modules/zfs";
 import ClientFormModal from "./ClientFormModal";
+
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+
+const toast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }));
+vi.mock("@/store/useToastStore", () => ({ useToastStore: () => toast }));
 
 vi.mock("@/contexts/auth", () => ({ useAuth: vi.fn(() => ({ user: { role: "admin" } })) }));
 
@@ -12,11 +17,23 @@ vi.mock("@/api/modules/clients", async (original) => ({
   ...await original(),
   getClientNvmeOfStatus: vi.fn(),
   rotateChapSecret: vi.fn(),
+  deleteClientWriteback: vi.fn(),
 }));
+
+const confirm = vi.fn();
+vi.mock("@/contexts/confirmDialog", () => ({ useConfirm: () => confirm }));
 
 vi.mock("@/api/modules/zfs", () => ({
   listGameDisks: vi.fn().mockResolvedValue({ disks: [] }),
 }));
+
+beforeEach(() => {
+  useAuth.mockReturnValue({ user: { role: "admin" } });
+  confirm.mockReset();
+  deleteClientWriteback.mockReset();
+  toast.error.mockReset();
+  toast.success.mockReset();
+});
 
 it("ignores an earlier client's status response after switching clients", async () => {
   let finishFirst;
@@ -103,4 +120,81 @@ it("explains the inventory requirement for a new Windows client", async () => {
   expect(await screen.findByTestId("windows-driver-hint")).toHaveTextContent(/preboot NIC inventory/);
   fireEvent.change(screen.getByLabelText("Select Image"), { target: { value: "linux" } });
   expect(screen.queryByTestId("windows-driver-hint")).not.toBeInTheDocument();
+});
+
+const deletableClient = { id: "writeback-1", name: "PC010", mac: "00:11:22:33:44:70", ip: "192.168.1.110", master: "windows", snapshot: "windows@ready", writeback: "diskless/clients/PC010/writeback", status: "Offline" };
+
+it("confirms Delete Writeback and leaves storage alone when cancelled", async () => {
+  confirm.mockResolvedValueOnce(false);
+  getClientNvmeOfStatus.mockResolvedValue(null);
+  render(<ClientFormModal client={deletableClient} masters={[]} isOpen onClose={() => {}} refresh={() => {}} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Delete Writeback" }));
+  expect(confirm).toHaveBeenCalledWith(expect.objectContaining({
+    title: "Delete Writeback",
+    description: expect.stringMatching(/boot and game clones.*next PXE boot/),
+    confirmVariant: "destructive",
+  }));
+  expect(deleteClientWriteback).not.toHaveBeenCalled();
+});
+
+it("deletes writeback, reports success, and refreshes clients", async () => {
+  confirm.mockResolvedValueOnce(true);
+  deleteClientWriteback.mockResolvedValueOnce({ message: "Deleted" });
+  getClientNvmeOfStatus.mockResolvedValue(null);
+  const refresh = vi.fn();
+  render(<ClientFormModal client={deletableClient} masters={[]} isOpen onClose={() => {}} refresh={refresh} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Delete Writeback" }));
+  await screen.findByRole("button", { name: "Delete Writeback" });
+  expect(screen.getByRole("button", { name: "Delete Writeback" })).toBeInTheDocument();
+  expect(deleteClientWriteback).toHaveBeenCalledWith("writeback-1");
+  expect(refresh).toHaveBeenCalledOnce();
+});
+
+it("shows a server error without refreshing after deletion fails", async () => {
+  const failure = new Error("Client is online");
+  confirm.mockResolvedValueOnce(true);
+  deleteClientWriteback.mockRejectedValueOnce(failure);
+  getClientNvmeOfStatus.mockResolvedValue(null);
+  const refresh = vi.fn();
+  render(<ClientFormModal client={deletableClient} masters={[]} isOpen onClose={() => {}} refresh={refresh} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Delete Writeback" }));
+  await screen.findByRole("button", { name: "Delete Writeback" });
+  expect(refresh).not.toHaveBeenCalled();
+  expect(toast.error).toHaveBeenCalledWith("Client Management", failure);
+});
+
+it("keeps the dialog open when Escape is pressed during deletion", async () => {
+  let finishDeletion;
+  confirm.mockResolvedValueOnce(true);
+  deleteClientWriteback.mockReturnValueOnce(new Promise((resolve) => { finishDeletion = resolve; }));
+  getClientNvmeOfStatus.mockResolvedValue(null);
+  const onClose = vi.fn();
+  render(<ClientFormModal client={deletableClient} masters={[]} isOpen onClose={onClose} refresh={() => {}} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Delete Writeback" }));
+  await vi.waitFor(() => expect(deleteClientWriteback).toHaveBeenCalledWith("writeback-1"));
+
+  fireEvent.keyDown(document, { key: "Escape" });
+  expect(screen.getByRole("dialog")).toBeInTheDocument();
+  expect(onClose).not.toHaveBeenCalled();
+  fireEvent.click(document.querySelector('[data-slot="dialog-overlay"]'));
+  expect(screen.getByRole("dialog")).toBeInTheDocument();
+  expect(onClose).not.toHaveBeenCalled();
+
+  await act(async () => finishDeletion({ message: "Deleted" }));
+});
+
+it("limits Delete Writeback to admins and configured offline clients", async () => {
+  getClientNvmeOfStatus.mockResolvedValue(null);
+  const { rerender } = render(<ClientFormModal client={deletableClient} masters={[]} isOpen onClose={() => {}} refresh={() => {}} />);
+  expect(await screen.findByRole("button", { name: "Delete Writeback" })).toBeEnabled();
+  rerender(<ClientFormModal client={{ ...deletableClient, status: "Online" }} masters={[]} isOpen onClose={() => {}} refresh={() => {}} />);
+  expect(screen.getByRole("button", { name: "Delete Writeback" })).toBeDisabled();
+  useAuth.mockReturnValue({ user: { role: "user" } });
+  rerender(<ClientFormModal client={deletableClient} masters={[]} isOpen onClose={() => {}} refresh={() => {}} />);
+  expect(screen.queryByRole("button", { name: "Delete Writeback" })).not.toBeInTheDocument();
+  useAuth.mockReturnValue({ user: { role: "admin" } });
+  rerender(<ClientFormModal client={{ ...deletableClient, writeback: null }} masters={[]} isOpen onClose={() => {}} refresh={() => {}} />);
+  expect(screen.queryByRole("button", { name: "Delete Writeback" })).not.toBeInTheDocument();
+  rerender(<ClientFormModal client={null} masters={[]} isOpen onClose={() => {}} refresh={() => {}} />);
+  expect(screen.queryByRole("button", { name: "Delete Writeback" })).not.toBeInTheDocument();
 });

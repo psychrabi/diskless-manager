@@ -141,6 +141,9 @@ mod tests {
         volumes: Mutex<HashMap<String, String>>,
     }
     impl ImageBackend for FakeDisks {
+        fn validate_unmounted(&self, _: &str) -> Result<()> {
+            Ok(())
+        }
         fn settle_device_changes(&self) -> Result<()> {
             Ok(())
         }
@@ -213,6 +216,7 @@ mod tests {
         fail_next: Mutex<bool>,
         connected: Mutex<bool>,
         attached: Mutex<bool>,
+        report_absent: Mutex<bool>,
     }
     impl IscsiProvisioner for FakeTarget {
         fn create_target(&self, spec: &IscsiTargetSpec) -> Result<()> {
@@ -235,7 +239,7 @@ mod tests {
             Ok(())
         }
         fn target_exists(&self, _: &str) -> Result<bool> {
-            Ok(true)
+            Ok(!*self.report_absent.lock().unwrap())
         }
         fn set_chap_auth(&self, _: &str, _: Option<&ChapCredentials>) -> Result<()> {
             Ok(())
@@ -247,7 +251,7 @@ mod tests {
             let attached = *self.attached.lock().unwrap();
             Ok(IscsiTargetState {
                 target_iqn: spec.target_iqn.clone(),
-                exists: true,
+                exists: !*self.report_absent.lock().unwrap(),
                 backstore_exists: attached,
                 lun_exists: attached,
                 luns: vec![],
@@ -287,6 +291,21 @@ mod tests {
         });
         (service, disks, target, operation)
     }
+
+    #[test]
+    fn boot_target_failure_preserves_existing_client_clone() {
+        let (service, disks, target, op) = fixture();
+        *target.report_absent.lock().unwrap() = true;
+        *target.fail_next.lock().unwrap() = true;
+
+        assert!(service.ensure_client_storage_for_boot(&op.spec).is_err());
+
+        assert_eq!(
+            disks.volumes.lock().unwrap().get(&op.spec.dataset).unwrap(),
+            "user changes"
+        );
+    }
+
     #[test]
     fn cleanup_can_be_retried_after_client_clone_is_already_absent() {
         let (service, disks, target, op) = fixture();

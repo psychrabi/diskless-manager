@@ -99,6 +99,17 @@ chain ${boot-url}/clients/${client-mac}.ipxe || shell
     .to_string()
 }
 
+/// iPXE response used when assigned storage could not be made ready.
+#[must_use]
+pub fn render_enrollment_retry() -> String {
+    r##"#!ipxe
+echo Diskless Manager: storage is not ready yet; retrying shortly.
+sleep 10
+reboot
+"##
+    .to_string()
+}
+
 /// iPXE response served when the enrollment request itself could not be
 /// understood. Retries are deferred so clients poll rather than hammer the
 /// server on a broken configuration.
@@ -452,6 +463,15 @@ mod tests {
             assert!(!script.contains("sanboot"), "deny scripts must not boot");
             assert!(!script.contains("chain "), "deny scripts must not chain");
         }
+    }
+
+    #[test]
+    fn enrollment_retry_sleeps_and_reboots_without_redirecting() {
+        let script = render_enrollment_retry();
+        assert!(script.contains("sleep 10"));
+        assert!(script.contains("reboot"));
+        assert!(!script.contains("chain "));
+        assert!(!script.contains("sanboot "));
     }
 
     #[test]

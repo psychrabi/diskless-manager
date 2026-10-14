@@ -1,3 +1,4 @@
+use crate::api::util::spawn_locked;
 use axum::{
     extract::{ConnectInfo, Path, State},
     http::{header, StatusCode},
@@ -6,12 +7,11 @@ use axum::{
     Json, Router,
 };
 use log::info;
-use std::{net::SocketAddr, path::PathBuf};
+use std::net::SocketAddr;
 use tracing::{error, warn};
 
 use crate::{
     domain::{CreateClient, MacAddress, PxeMode},
-    infrastructure::dhcp::BootReservation,
     persistence::ClientRepository,
     state::AppState,
 };
@@ -99,80 +99,6 @@ fn ipxe_response(script: String) -> Response {
         script,
     )
         .into_response()
-}
-
-/// Build the DHCP/server context needed to regenerate a per-client menu.
-fn boot_server_ip(settings: &crate::core::config::Settings) -> String {
-    let next = settings.dhcp.next_server_ip.trim();
-    if next.is_empty() {
-        settings.server.ip_address.trim().to_string()
-    } else {
-        next.to_string()
-    }
-}
-
-/// Ensure the per-client iPXE menu for a provisioned client exists on disk,
-/// regenerating it from the reserved iSCSI target if missing.
-async fn ensure_client_menu(
-    client: &crate::domain::Client,
-    settings: &crate::core::config::Settings,
-) {
-    let root = PathBuf::from(&settings.http.root_dir);
-    let relative = crate::infrastructure::pxe::client_mac_script_path(client.mac.as_str());
-
-    if !crate::infrastructure::pxe::is_managed_script_path(&root, &relative) {
-        warn!(
-            client = %client.name,
-            "refusing to regenerate unsafe iPXE menu path: {relative}"
-        );
-        return;
-    }
-
-    let path = root.join(&relative);
-    if path.exists() {
-        return;
-    }
-
-    let Some(target_iqn) = client
-        .target_iqn
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return;
-    };
-
-    let chap = match (
-        client.chap_enabled,
-        client.chap_user.as_deref(),
-        client.chap_secret.as_deref(),
-    ) {
-        (true, Some(username), Some(password))
-            if !username.trim().is_empty() && !password.is_empty() =>
-        {
-            Some(crate::infrastructure::iscsi::ChapCredentials {
-                username: username.to_string(),
-                password: password.to_string(),
-            })
-        }
-        _ => None,
-    };
-    let reservation = BootReservation {
-        client_name: client.name.clone(),
-        mac: client.mac.to_string(),
-        ip: client.ip.to_string(),
-        target_iqn: target_iqn.to_string(),
-        server_ip: boot_server_ip(settings),
-        chap,
-    };
-    if let Err(error) =
-        crate::infrastructure::dhcp::publish_client_ipxe(settings, &reservation).await
-    {
-        warn!(
-            client = %client.name,
-            "failed to regenerate missing iPXE menu during enrollment: {error:#}"
-        );
-    }
 }
 
 /// Whether unknown MACs may currently self-register.
@@ -290,22 +216,57 @@ async fn enroll_client(
                     "disabled client attempted to boot; denying"
                 );
                 crate::infrastructure::pxe::render_enrollment_disabled()
+            } else if consume_inventory_boot_request(&state, &parsed).await {
+                crate::infrastructure::pxe::render_inventory_boot()
             } else {
-                let provisioning = client
-                    .target_iqn
-                    .as_deref()
-                    .is_some_and(|iqn| !iqn.trim().is_empty());
+                let provisioning = !client.master.trim().is_empty() && client.master != "pending";
                 if provisioning {
-                    let settings = state.settings.read().await;
-                    ensure_client_menu(&client, &settings).await;
-                    crate::infrastructure::pxe::render_enrollment_redirect()
-                } else if consume_inventory_boot_request(&state, &parsed).await {
-                    tracing::info!(
-                        client = %client.name,
-                        mac = %parsed.as_str(),
-                        "directing client to WinPE for NIC inventory"
+                    let client_id = client.id.to_string();
+                    let requesting_mac = parsed.to_string();
+                    let task_state = state.clone();
+                    let receive = spawn_locked(
+                        task_state.client_mutations.clone(),
+                        Some(std::time::Duration::from_secs(2)),
+                        async move {
+                            let result = crate::application::client_boot::ensure_client_boot_ready(
+                                &task_state,
+                                &client_id,
+                                &requesting_mac,
+                            )
+                            .await;
+                            if let Err(error) = &result {
+                                if let Err(record_error) =
+                                    crate::application::client_boot::record_boot_failure(
+                                        &task_state,
+                                        &client_id,
+                                        &format!("{error:#}"),
+                                    )
+                                    .await
+                                {
+                                    error!(
+                                    client_id,
+                                    "failed to persist PXE readiness diagnostics: {record_error:#}"
+                                );
+                                }
+                            }
+                            result.map_err(|error| format!("{error:#}"))
+                        },
                     );
-                    crate::infrastructure::pxe::render_inventory_boot()
+                    match receive.await {
+                        Ok(Ok(Ok(()))) => crate::infrastructure::pxe::render_enrollment_redirect(),
+                        Ok(Ok(Err(error))) => {
+                            warn!(client = %client.name, "PXE storage readiness deferred: {error}");
+                            crate::infrastructure::pxe::render_enrollment_retry()
+                        }
+                        Ok(Err(error)) => {
+                            warn!(client = %client.name, "PXE storage readiness busy: {error}");
+                            crate::infrastructure::pxe::render_enrollment_retry()
+                        }
+                        Err(error) => {
+                            warn!(client = %client.name, "PXE storage readiness task stopped: {error}");
+                            crate::infrastructure::pxe::render_enrollment_retry()
+                        }
+                    }
                 } else {
                     tracing::info!(
                         client = %client.name,
@@ -436,7 +397,154 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
+    use std::path::PathBuf;
+    use std::{collections::HashMap, path::Path, sync::Mutex};
     use tower::ServiceExt;
+
+    use crate::{
+        application::storage_service::{GameMaster, StorageService},
+        infrastructure::{
+            image::{ImageBackend, ImageBackendInfo},
+            iscsi::{
+                ChapCredentials, IscsiLunState, IscsiProvisioner, IscsiTargetSpec, IscsiTargetState,
+            },
+        },
+    };
+
+    #[derive(Default)]
+    struct FakeImage(Mutex<HashMap<String, String>>);
+
+    impl ImageBackend for FakeImage {
+        fn validate_unmounted(&self, _: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn settle_device_changes(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn clone_origin(&self, name: &str) -> anyhow::Result<Option<String>> {
+            Ok(self.0.lock().unwrap().get(name).cloned())
+        }
+        fn exists(&self, name: &str) -> anyhow::Result<bool> {
+            Ok(self.0.lock().unwrap().contains_key(name))
+        }
+        fn create_volume(&self, _: &str, _: u64) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn destroy(&self, name: &str) -> anyhow::Result<()> {
+            self.0.lock().unwrap().remove(name);
+            Ok(())
+        }
+        fn rename(&self, _: &str, _: &str) -> anyhow::Result<()> {
+            anyhow::bail!("unused")
+        }
+        fn clone_image(&self, source: &str, destination: &str) -> anyhow::Result<()> {
+            self.0
+                .lock()
+                .unwrap()
+                .insert(destination.into(), source.into());
+            Ok(())
+        }
+        fn create_snapshot(&self, _: &str, _: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn destroy_snapshot(&self, _: &str, _: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn rollback_snapshot(&self, _: &str, _: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn resize(&self, _: &str, _: u64) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn import_raw(&self, _: &Path, _: &str, _: u64) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn verify(&self, name: &str) -> anyhow::Result<bool> {
+            self.exists(name)
+        }
+        fn info(&self, _: &str) -> anyhow::Result<ImageBackendInfo> {
+            anyhow::bail!("unused")
+        }
+        fn set_os_type(&self, _: &str, _: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn image_parent(&self) -> anyhow::Result<String> {
+            Ok("pool".into())
+        }
+    }
+
+    #[derive(Default)]
+    struct FakeIscsi {
+        luns: Mutex<Vec<IscsiLunState>>,
+        creates: Mutex<usize>,
+        acl: Mutex<Option<String>>,
+        chap_updates: Mutex<usize>,
+    }
+
+    impl IscsiProvisioner for FakeIscsi {
+        fn create_target(&self, spec: &IscsiTargetSpec) -> anyhow::Result<()> {
+            *self.creates.lock().unwrap() += 1;
+            *self.luns.lock().unwrap() = spec
+                .luns
+                .iter()
+                .map(|lun| IscsiLunState {
+                    lun: lun.lun,
+                    backstore: lun.backstore.clone(),
+                    exists: true,
+                    backstore_exists: true,
+                    block_device_matches: true,
+                })
+                .collect();
+            Ok(())
+        }
+        fn ensure_initiator_acl(&self, spec: &IscsiTargetSpec) -> anyhow::Result<()> {
+            *self.acl.lock().unwrap() = spec.initiator_iqn.clone();
+            Ok(())
+        }
+        fn remove_target(&self, _: &str) -> anyhow::Result<()> {
+            anyhow::bail!("unexpected removal")
+        }
+        fn remove_target_with_backstores(&self, _: &str, _: &[String]) -> anyhow::Result<()> {
+            anyhow::bail!("unexpected removal")
+        }
+        fn target_exists(&self, _: &str) -> anyhow::Result<bool> {
+            Ok(!self.luns.lock().unwrap().is_empty())
+        }
+        fn set_chap_auth(&self, _: &str, _: Option<&ChapCredentials>) -> anyhow::Result<()> {
+            *self.chap_updates.lock().unwrap() += 1;
+            Ok(())
+        }
+        fn list_target_luns(&self, _: &str) -> anyhow::Result<Vec<IscsiLunState>> {
+            Ok(self.luns.lock().unwrap().clone())
+        }
+        fn inspect_target(&self, spec: &IscsiTargetSpec) -> anyhow::Result<IscsiTargetState> {
+            let attached = self.luns.lock().unwrap().clone();
+            let exists = !attached.is_empty();
+            let luns = if exists {
+                attached
+            } else {
+                spec.luns
+                    .iter()
+                    .map(|lun| IscsiLunState {
+                        lun: lun.lun,
+                        backstore: lun.backstore.clone(),
+                        exists: false,
+                        backstore_exists: false,
+                        block_device_matches: false,
+                    })
+                    .collect()
+            };
+            Ok(IscsiTargetState::from_luns(
+                spec.target_iqn.clone(),
+                exists,
+                luns,
+                exists,
+            ))
+        }
+        fn reconcile(&self, spec: &IscsiTargetSpec) -> anyhow::Result<()> {
+            self.create_target(spec)
+        }
+    }
 
     async fn test_state() -> AppState {
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
@@ -522,6 +630,132 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn assigned_boot_creates_boot_and_selected_game_luns_before_redirect() {
+        let mut state = test_state().await;
+        let image = std::sync::Arc::new(FakeImage::default());
+        let iscsi = std::sync::Arc::new(FakeIscsi::default());
+        let storage =
+            StorageService::new(image.clone(), iscsi.clone()).with_test_game_masters(vec![
+                GameMaster {
+                    dataset: "pool/games/game".into(),
+                    disk_type: "game".into(),
+                    size_bytes: Some(1024),
+                },
+            ]);
+        std::sync::Arc::get_mut(&mut state.application)
+            .expect("test application has one owner")
+            .storage = std::sync::Arc::new(storage);
+        let root = tempfile::tempdir().unwrap();
+        let menu = root.path().join("clients/02000000000d.ipxe");
+        std::fs::create_dir_all(menu.parent().unwrap()).unwrap();
+        std::fs::write(&menu, "#!ipxe\necho custom menu\n").unwrap();
+        state.settings.write().await.http.root_dir = root.path().display().to_string();
+        sqlx::query("INSERT INTO clients (id, name, mac, ip, master, snapshot, writeback, block_device, block_store, target_iqn, keep_writeback, use_game_disk, enabled, created_at, updated_at) VALUES ('boot-game', 'client-boot-game', '02:00:00:00:00:0d', '192.0.2.13', 'pool/master', 'pool/master@ready', 'pool/clients/boot-game', '/dev/zvol/pool/clients/boot-game', 'block_boot_game', 'iqn.test:boot-game', 1, 1, 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+            .execute(&state.db_pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO client_game_disks(client_id, master_dataset) VALUES ('boot-game', 'pool/games/game')")
+            .execute(&state.db_pool)
+            .await
+            .unwrap();
+
+        let ((_, first), (_, second)) = tokio::join!(
+            get_enroll(&state, "02:00:00:00:00:0d"),
+            get_enroll(&state, "02:00:00:00:00:0d"),
+        );
+
+        assert!(
+            first.contains("Re-entering the normal boot menu")
+                || second.contains("Re-entering the normal boot menu")
+        );
+        for response in [&first, &second] {
+            if !response.contains("Re-entering the normal boot menu") {
+                assert!(response.contains("storage is not ready yet"));
+            }
+        }
+        let (_, retry) = get_enroll(&state, "02:00:00:00:00:0d").await;
+        assert!(retry.contains("Re-entering the normal boot menu"));
+        assert!(image.exists("pool/clients/boot-game").unwrap());
+        assert!(image.exists("pool/games/boot-game-game-games").unwrap());
+        assert_eq!(*iscsi.creates.lock().unwrap(), 1);
+        assert_eq!(iscsi.luns.lock().unwrap().len(), 2);
+        assert_eq!(
+            iscsi.acl.lock().unwrap().as_deref(),
+            Some("iqn.2026-01.client:client.client-boot-game")
+        );
+        let reset: (Option<i64>, i64, i64, Option<String>) = sqlx::query_as(
+            "SELECT offline_since, completed, failures, last_error FROM client_offline_resets WHERE client_id = 'boot-game'",
+        )
+        .fetch_one(&state.db_pool)
+        .await
+        .unwrap();
+        assert_eq!(reset, (None, 0, 0, None));
+    }
+
+    #[tokio::test]
+    async fn boot_readiness_rejects_mac_rebound_before_storage_mutation() {
+        let state = test_state().await;
+        sqlx::query("INSERT INTO clients (id, name, mac, ip, master, snapshot, writeback, block_device, block_store, target_iqn, keep_writeback, use_game_disk, enabled, created_at, updated_at) VALUES ('boot-rebound', 'client-rebound', '02:00:00:00:00:0d', '192.0.2.13', 'pool/master', 'pool/master@ready', 'pool/clients/rebound', '/dev/zvol/pool/clients/rebound', 'block_rebound', 'iqn.test:rebound', 1, 0, 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+            .execute(&state.db_pool)
+            .await
+            .unwrap();
+
+        let error = crate::application::client_boot::ensure_client_boot_ready(
+            &state,
+            "boot-rebound",
+            "02:00:00:00:00:fe",
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.to_string().contains("reassigned"));
+        let reset_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM client_offline_resets")
+            .fetch_one(&state.db_pool)
+            .await
+            .unwrap();
+        assert_eq!(reset_rows, 0);
+    }
+
+    #[tokio::test]
+    async fn busy_boot_returns_retry_without_late_provisioning() {
+        let state = test_state().await;
+        sqlx::query("INSERT INTO clients (id, name, mac, ip, master, enabled, created_at, updated_at) VALUES ('busy-boot', 'busy-boot', '02:00:00:00:00:ee', '192.0.2.16', 'pool/master', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+            .execute(&state.db_pool).await.unwrap();
+        let guard = state.client_mutations.lock().await;
+        let (_, script) = tokio::time::timeout(
+            std::time::Duration::from_secs(4),
+            get_enroll(&state, "02:00:00:00:00:ee"),
+        )
+        .await
+        .unwrap();
+        assert!(!script.contains("chain --replace"));
+        assert!(script.contains("sleep 10"));
+        drop(guard);
+        tokio::task::yield_now().await;
+        let failures: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM client_boot_failures")
+            .fetch_one(&state.db_pool)
+            .await
+            .unwrap();
+        assert_eq!(failures, 0);
+    }
+
+    #[tokio::test]
+    async fn assigned_client_without_target_can_take_inventory_boot() {
+        let state = test_state().await;
+        sqlx::query("INSERT INTO clients (id, name, mac, ip, master, inventory_boot_requested, enabled, created_at, updated_at) VALUES ('inventory-assigned', 'inventory-assigned', '02:00:00:00:00:ef', '192.0.2.15', 'pool/master', 1, 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+            .execute(&state.db_pool).await.unwrap();
+        let (_, script) = get_enroll(&state, "02:00:00:00:00:ef").await;
+        assert!(script.contains("boot-inventory.wim"));
+        let requested: i64 = sqlx::query_scalar(
+            "SELECT inventory_boot_requested FROM clients WHERE id = 'inventory-assigned'",
+        )
+        .fetch_one(&state.db_pool)
+        .await
+        .unwrap();
+        assert_eq!(requested, 0);
+    }
+
+    #[tokio::test]
     async fn enroll_directs_flagged_client_to_inventory_then_pending() {
         let state = test_state().await;
         sqlx::query("INSERT INTO clients (id, name, mac, ip, master, enabled, created_at, updated_at) VALUES ('c2', 'client-c2', '02:00:00:00:00:0c', '192.0.2.12', 'pending', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
@@ -544,6 +778,206 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(inventory_count, 0);
+    }
+
+    #[tokio::test]
+    async fn boot_failure_diagnostics_preserve_client_assignments_and_credentials() {
+        let state = test_state().await;
+        sqlx::query("INSERT INTO clients (id, name, mac, ip, master, snapshot, writeback, block_device, block_store, target_iqn, keep_writeback, use_game_disk, chap_enabled, chap_user, chap_secret, created_at, updated_at) VALUES ('ready', 'client-ready', '02:00:00:00:00:0d', '192.0.2.13', 'pool/master', 'pool/master@ready', 'pool/clients/ready', '/dev/zvol/pool/clients/ready', 'block_ready', 'iqn.test:ready', 1, 1, 1, 'synthetic-user', 'synthetic-password', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+            .execute(&state.db_pool)
+            .await
+            .unwrap();
+
+        crate::application::client_boot::record_boot_failure(
+            &state,
+            "ready",
+            "synthetic target failure",
+        )
+        .await
+        .unwrap();
+        crate::application::client_boot::record_boot_failure(
+            &state,
+            "ready",
+            "synthetic target failure",
+        )
+        .await
+        .unwrap();
+
+        let diagnostic: (i64, String) = sqlx::query_as(
+            "SELECT failures, last_error FROM client_boot_failures WHERE client_id = 'ready'",
+        )
+        .fetch_one(&state.db_pool)
+        .await
+        .unwrap();
+        let assignment: (String, String, String, String, String) = sqlx::query_as(
+            "SELECT snapshot, writeback, block_device, target_iqn, chap_secret FROM clients WHERE id = 'ready'",
+        )
+        .fetch_one(&state.db_pool)
+        .await
+        .unwrap();
+        assert_eq!(diagnostic.0, 2);
+        assert_eq!(diagnostic.1, "synthetic target failure");
+        let reset_rows: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM client_offline_resets WHERE client_id = 'ready'",
+        )
+        .fetch_one(&state.db_pool)
+        .await
+        .unwrap();
+        assert_eq!(reset_rows, 0);
+        assert_eq!(
+            assignment,
+            (
+                "pool/master@ready".into(),
+                "pool/clients/ready".into(),
+                "/dev/zvol/pool/clients/ready".into(),
+                "iqn.test:ready".into(),
+                "synthetic-password".into(),
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn assigned_client_with_unrecoverable_pending_work_gets_retry_not_redirect() {
+        let state = test_state().await;
+        sqlx::query("INSERT INTO clients (id, name, mac, ip, master, snapshot, writeback, block_device, block_store, target_iqn, created_at, updated_at) VALUES ('retry', 'client-retry', '02:00:00:00:00:0e', '192.0.2.14', 'pool/master', 'pool/master@ready', 'pool/clients/retry', '/dev/zvol/pool/clients/retry', 'block_retry', 'iqn.test:retry', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+            .execute(&state.db_pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO client_offline_resets(client_id, fingerprint, operation) VALUES ('retry', 'old', '{}')")
+            .execute(&state.db_pool)
+            .await
+            .unwrap();
+
+        let (_, script) = get_enroll(&state, "02:00:00:00:00:0e").await;
+
+        assert!(script.contains("storage is not ready yet"));
+        assert!(script.contains("sleep 10"));
+        assert!(!script.contains("Re-entering the normal boot menu"));
+        let error: String = sqlx::query_scalar(
+            "SELECT last_error FROM client_boot_failures WHERE client_id = 'retry'",
+        )
+        .fetch_one(&state.db_pool)
+        .await
+        .unwrap();
+        assert!(error.contains("missing field"));
+    }
+
+    #[tokio::test]
+    async fn disabled_and_unknown_clients_do_not_start_storage_readiness() {
+        let state = test_state().await;
+        sqlx::query("INSERT INTO clients (id, name, mac, ip, master, enabled, created_at, updated_at) VALUES ('disabled', 'client-disabled', '02:00:00:00:00:0f', '192.0.2.15', 'pool/master', 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+            .execute(&state.db_pool)
+            .await
+            .unwrap();
+
+        let (_, disabled) = get_enroll(&state, "02:00:00:00:00:0f").await;
+        let (_, unknown) = get_enroll(&state, "02:00:00:00:00:10").await;
+
+        assert!(disabled.contains("client disabled"));
+        assert!(unknown.contains("enrollment closed"));
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM client_offline_resets")
+            .fetch_one(&state.db_pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn boot_readiness_rejects_shared_target_but_allows_shared_master_volume() {
+        let state = test_state().await;
+        for (index, (id, target, backstore, snapshot, writeback, device)) in [
+            (
+                "a",
+                "iqn.test:shared",
+                "block_shared",
+                Some("pool/master@ready"),
+                Some("pool/clients/a"),
+                "/dev/zvol/pool/clients/a",
+            ),
+            (
+                "b",
+                "iqn.test:shared",
+                "block_other",
+                Some("pool/other@ready"),
+                Some("pool/clients/b"),
+                "/dev/zvol/pool/clients/b",
+            ),
+            (
+                "master-a",
+                "iqn.test:master-a",
+                "block_master_a",
+                None,
+                None,
+                "/dev/zvol/pool/shared",
+            ),
+            (
+                "master-b",
+                "iqn.test:master-b",
+                "block_master_b",
+                None,
+                None,
+                "/dev/zvol/pool/shared",
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            sqlx::query("INSERT INTO clients (id, name, mac, ip, master, snapshot, writeback, block_device, block_store, target_iqn, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+                .bind(id)
+                .bind(format!("client-{id}"))
+                .bind(format!("02:00:00:00:00:{:02x}", index + 20))
+                .bind(format!("192.0.2.{}", index + 20))
+                .bind(if snapshot.is_some() { "pool/master" } else { "pool/shared" })
+                .bind(snapshot)
+                .bind(writeback)
+                .bind(device)
+                .bind(backstore)
+                .bind(target)
+                .execute(&state.db_pool)
+                .await
+                .unwrap();
+        }
+        let clients = ClientRepository::new(state.db_pool.clone());
+        let a = clients
+            .find_by_id(&crate::domain::ClientId::from_string("a").unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        let master_a = clients
+            .find_by_id(&crate::domain::ClientId::from_string("master-a").unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+
+        let shared_target =
+            crate::application::client_lifecycle::validate_boot_storage_owner(&state, &a).await;
+        assert!(shared_target.is_err());
+        crate::application::client_lifecycle::validate_boot_storage_owner(&state, &master_a)
+            .await
+            .expect("clients may share a configured master volume");
+    }
+
+    #[tokio::test]
+    async fn cancelled_enrollment_waiter_does_not_release_worker_mutation_lock() {
+        let lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+        let started = std::sync::Arc::new(tokio::sync::Notify::new());
+        let release = std::sync::Arc::new(tokio::sync::Notify::new());
+        let (done, finished) = tokio::sync::oneshot::channel();
+        let worker_started = started.clone();
+        let worker_release = release.clone();
+        let waiter = spawn_locked(lock.clone(), None, async move {
+            worker_started.notify_one();
+            worker_release.notified().await;
+            let _ = done.send(());
+        });
+        started.notified().await;
+        drop(waiter);
+        assert!(lock.try_lock().is_err());
+
+        release.notify_one();
+        finished.await.unwrap();
+        tokio::task::yield_now().await;
+        assert!(lock.try_lock().is_ok());
     }
 
     #[test]

@@ -31,9 +31,35 @@ it("snapshots Super changes then switches the client back to its clone", async (
   }));
 
   expect(mocks.createSnapshot).toHaveBeenCalledWith("diskless/image-disk/windows11", "save-now");
-  expect(mocks.updateClient).toHaveBeenCalledWith("client-1", { action: "super", make_super: false });
+  expect(mocks.updateClient).toHaveBeenCalledWith("client-1", { action: "super", make_super: false, snapshot: "diskless/image-disk/windows11@save-now" });
   expect(fetchData).toHaveBeenCalledOnce();
   expect(closeContextMenu).toHaveBeenCalledOnce();
+});
+
+it("treats a client booting an image directly as Super even without the stored flag", async () => {
+  const fetchData = vi.fn();
+  const closeContextMenu = vi.fn();
+  const { result } = renderHook(() => useClientActions(fetchData, closeContextMenu));
+
+  await act(() => result.current.saveSuper({
+    id: "client-1", name: "PC001", master: "diskless/image-disk/windows11",
+    snapshot: null, status: "Offline",
+  }));
+
+  expect(mocks.createSnapshot).toHaveBeenCalledWith("diskless/image-disk/windows11", "save-now");
+  expect(mocks.updateClient).toHaveBeenCalledWith("client-1", { action: "super", make_super: false, snapshot: "diskless/image-disk/windows11@save-now" });
+});
+
+it("refuses Super actions for a client booting a snapshot clone", async () => {
+  const { result } = renderHook(() => useClientActions());
+
+  await act(() => result.current.disableSuper({
+    id: "client-1", name: "PC001", master: "diskless/image-disk/windows11",
+    snapshot: "diskless/image-disk/windows11@clean", status: "Offline",
+  }));
+
+  expect(mocks.updateClient).not.toHaveBeenCalled();
+  expect(mocks.error).toHaveBeenCalledWith("Client Management", "Client is not in Super mode.");
 });
 
 it("leaves Super enabled when saving the snapshot fails", async () => {

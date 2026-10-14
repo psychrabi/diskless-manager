@@ -19,6 +19,7 @@ use crate::api::handlers::{
     backup::{create_backup, restore_backup},
     client_chap::rotate_client_chap,
     client_delete::delete_client,
+    client_storage::delete_client_writeback,
     client_update::update_client,
     clients::{create_client, request_inventory_boot},
     clients_v2::{get_client, get_client_boot_history, list_clients},
@@ -226,6 +227,10 @@ pub fn create_app(state: crate::state::AppState) -> Router {
             post(request_inventory_boot),
         )
         .route("/api/clients/{id}/chap/rotate", post(rotate_client_chap))
+        .route(
+            "/api/clients/{id}/writeback/delete",
+            post(delete_client_writeback),
+        )
         .route("/api/clients/{id}/reboot", post(reboot_client))
         .route(
             "/api/clients/{id}/remote-desktop",

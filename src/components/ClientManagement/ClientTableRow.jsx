@@ -6,6 +6,7 @@ import { formatUptime } from "@/utils/formatUptime";
 import { Clock, Gamepad2, Monitor, MoveDown, MoveUp, MoreHorizontal } from "lucide-react";
 import ControlActionButtons from "./ControlActionButtons";
 import { formatDiskBytes } from "@/utils/formatDiskBytes";
+import { isSuperClient } from "@/lib/clientMode";
 
 const ClientStatusIcon = memo(({ status }) => {
   const currentStatus = status || "Offline";
@@ -30,9 +31,7 @@ const ClientStatusIcon = memo(({ status }) => {
 });
 
 const ClientModeBadge = memo(({ client }) => {
-  const isUsingMasterDirectly = !client.snapshot;
-
-  if (isUsingMasterDirectly) {
+  if (isSuperClient(client)) {
     return (
       <Badge variant="outline" title={`Super Client : ${client.master}`}>
         Super

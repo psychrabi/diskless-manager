@@ -24,6 +24,10 @@ export async function deleteClient(id) {
   });
 }
 
+export async function deleteClientWriteback(id) {
+  return apiRequest(`/api/clients/${id}/writeback/delete`, { method: "POST" });
+}
+
 export async function rotateChapSecret(id) {
   return apiRequest(`/api/clients/${id}/chap/rotate`, {
     method: "POST",

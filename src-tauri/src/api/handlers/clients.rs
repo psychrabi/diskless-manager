@@ -18,6 +18,28 @@ use crate::{
     validation::{validate_ip_address, validate_mac_address},
 };
 
+/// An explicit saved snapshot must belong to this master and never fall back.
+fn select_super_snapshot<'a>(
+    snapshots: &'a [crate::core::image::Image],
+    master: &str,
+    requested: Option<&str>,
+) -> Result<Option<&'a crate::core::image::Image>, String> {
+    if let Some(requested) = requested {
+        return snapshots
+            .iter()
+            .find(|snapshot| format!("{master}@{}", snapshot.name) == requested)
+            .map(Some)
+            .ok_or_else(|| {
+                "Requested Super snapshot does not belong to the assigned image or no longer exists"
+                    .into()
+            });
+    }
+    Ok(snapshots
+        .iter()
+        .find(|snapshot| snapshot.is_default)
+        .or_else(|| snapshots.iter().max_by_key(|snapshot| snapshot.created_at)))
+}
+
 fn image_service(state: &AppState) -> ImageService {
     ImageService::with_backend(
         ImageRepository::new(state.db_pool.clone()),
@@ -1124,6 +1146,23 @@ pub async fn update_client(
                     ));
                 }
 
+                // The assignment decides what "currently super" means. A
+                // client that boots a snapshot clone has no direct image
+                // writes to return, and rebuilding its storage anyway would
+                // discard the clone it is meant to keep.
+                if !make_super && !existing_client.is_super_client() {
+                    return Err((
+                        StatusCode::CONFLICT,
+                        Json(ErrorResponse {
+                            status: StatusCode::CONFLICT.as_u16(),
+                            error: format!(
+                                "Cannot disable Super mode for '{}': it boots a snapshot clone, not an image directly. Nothing was changed.",
+                                existing_client.name
+                            ),
+                        }),
+                    ));
+                }
+
                 if make_super {
                     let revision: Option<(String,)> = sqlx::query_as("SELECT id FROM windows_image_driver_revisions WHERE revision_image_id = (SELECT id FROM images WHERE name = ? OR id = ? LIMIT 1) LIMIT 1")
                         .bind(&master).bind(&master).fetch_optional(&state.db_pool).await.map_err(|error| {
@@ -1300,16 +1339,14 @@ pub async fn update_client(
                                 )
                             })?;
 
-                    let snapshot_image = snapshots
-                        .iter()
-                        .find(|snapshot| snapshot.is_default)
-                        .cloned()
-                        .or_else(|| {
-                            snapshots
-                                .iter()
-                                .max_by_key(|snapshot| snapshot.created_at)
-                                .cloned()
-                        });
+                    let snapshot_image =
+                        select_super_snapshot(&snapshots, &master, request.snapshot.as_deref())
+                            .map_err(|error| {
+                                (
+                                    StatusCode::BAD_REQUEST,
+                                    Json(ErrorResponse { status: 400, error }),
+                                )
+                            })?;
 
                     let Some(snapshot_image) = snapshot_image else {
                         return Err((
@@ -2276,6 +2313,50 @@ mod error_contract_tests {
     use axum::{body::to_bytes, http::StatusCode, response::IntoResponse};
 
     #[test]
+    fn super_save_selects_exact_snapshot_instead_of_default() {
+        let snapshot = |name: &str, is_default| crate::core::image::Image {
+            id: name.into(),
+            name: name.into(),
+            kind: crate::core::image::ImageKind::Snapshot,
+            os_type: crate::core::image::OsType::Windows,
+            size_gb: 1,
+            path: "/tmp/unused".into(),
+            format: crate::core::image::ImageFormat::Raw,
+            status: "ready".into(),
+            description: None,
+            parent_id: Some("master-id".into()),
+            source_snapshot: None,
+            checksum: None,
+            is_default,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        let snapshots = vec![snapshot("old", true), snapshot("saved", false)];
+        let selected =
+            super::select_super_snapshot(&snapshots, "tank/windows", Some("tank/windows@saved"))
+                .unwrap()
+                .unwrap();
+        assert_eq!(selected.name, "saved");
+        assert!(
+            super::select_super_snapshot(&snapshots, "tank/windows", Some("tank/other@saved"))
+                .is_err()
+        );
+        assert!(super::select_super_snapshot(
+            &snapshots,
+            "tank/windows",
+            Some("tank/windows@missing")
+        )
+        .is_err());
+        assert_eq!(
+            super::select_super_snapshot(&snapshots, "tank/windows", None)
+                .unwrap()
+                .unwrap()
+                .name,
+            "old"
+        );
+    }
+
+    #[test]
     fn persistence_change_does_not_request_storage_recreation() {
         let client = super::Client::new(serde_json::from_value(serde_json::json!({
             "name": "PC001", "mac": "00:11:22:33:44:55", "ip": "192.168.1.101", "master": "pool/master", "snapshot": "pool/master@ready", "keep_writeback": false
@@ -2594,6 +2675,51 @@ mod error_contract_tests {
         .unwrap();
         assert_eq!(status, StatusCode::CONFLICT);
         assert!(error.0.error.contains("immutable"));
+    }
+
+    #[tokio::test]
+    async fn disabling_super_is_refused_for_a_client_booting_a_snapshot_clone() {
+        let (state, _) = gate_state(None).await;
+        let mut request = gate_request("tank/image/windows");
+        request.snapshot = Some("tank/image/windows@clean".into());
+        let existing = super::ClientManager::new(state.db_pool.clone())
+            .create(request)
+            .await
+            .unwrap();
+        assert!(!existing.is_super_client());
+
+        let request =
+            serde_json::from_value(serde_json::json!({"action": "super", "make_super": false}))
+                .unwrap();
+        let (status, error) = super::update_client(
+            axum::extract::State(state),
+            axum::extract::Path(existing.id),
+            axum::Json(request),
+        )
+        .await
+        .err()
+        .unwrap();
+
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert!(
+            error.0.error.contains("snapshot clone"),
+            "{:?}",
+            error.0.error
+        );
+    }
+
+    #[tokio::test]
+    async fn a_direct_image_assignment_is_the_super_client() {
+        let (state, _) = gate_state(None).await;
+        let mut request = gate_request("tank/image/windows");
+        request.snapshot = None;
+        let existing = super::ClientManager::new(state.db_pool.clone())
+            .create(request)
+            .await
+            .unwrap();
+        assert!(existing.is_super_client());
+        assert!(existing.is_direct_image_assignment());
+        assert!(!existing.is_super_mode());
     }
 
     #[tokio::test]
