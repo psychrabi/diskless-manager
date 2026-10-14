@@ -34,3 +34,4 @@ gha-creds-*.json
 .agents/
 skills-lock.json
 docs/
+tools/windows-servicer/target/
