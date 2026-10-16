@@ -4,10 +4,12 @@ pub mod client_lifecycle;
 pub mod client_service;
 pub mod client_storage_mapping;
 pub mod image_service;
+pub mod installer_media_service;
 pub mod nvmeof_boot_service;
 pub mod provisioning_service;
 pub mod services;
 pub mod storage_service;
+pub mod super_client_service;
 
 pub use boot_history_service::BootHistoryService;
 pub use client_service::ClientService;

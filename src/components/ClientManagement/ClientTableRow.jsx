@@ -7,10 +7,11 @@ import { Clock, Gamepad2, Monitor, MoveDown, MoveUp, MoreHorizontal } from "luci
 import ControlActionButtons from "./ControlActionButtons";
 import { formatDiskBytes } from "@/utils/formatDiskBytes";
 import { isSuperClient } from "@/lib/clientMode";
+import { isOnlineStatus } from "@/lib/clientStatus";
 
 const ClientStatusIcon = memo(({ status }) => {
   const currentStatus = status || "Offline";
-  const isOnline = currentStatus === "Online";
+  const isOnline = isOnlineStatus(currentStatus);
   const isLeased = currentStatus === "Leased";
   const color = isOnline
     ? "text-emerald-500"
@@ -31,6 +32,12 @@ const ClientStatusIcon = memo(({ status }) => {
 });
 
 const ClientModeBadge = memo(({ client }) => {
+  if (client.legacy_super_state === "recovery_required") {
+    return <Badge variant="destructive" title="Legacy Super state needs recovery">Legacy Super recovery required</Badge>;
+  }
+  if (client.legacy_super_state === "legacy") {
+    return <Badge variant="secondary" title={`Legacy direct-master mapping: ${client.master}`}>Legacy Super</Badge>;
+  }
   if (isSuperClient(client)) {
     return (
       <Badge variant="outline" title={`Super Client : ${client.master}`}>

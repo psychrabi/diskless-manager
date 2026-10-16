@@ -181,6 +181,7 @@ pub async fn detect_server_network(
 pub async fn apply_network_settings(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    let _client_guard = state.client_mutations.lock().await;
     let mut settings = state.settings.read().await.clone();
     let server = &settings.server;
 

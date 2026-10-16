@@ -130,6 +130,10 @@ impl IscsiProvisioner for SafeIscsiProvisioner {
         self.inner.inspect_target(spec)
     }
 
+    fn verify_named_file_lun_mappings(&self, spec: &IscsiTargetSpec) -> Result<()> {
+        self.inner.verify_named_file_lun_mappings(spec)
+    }
+
     fn reconcile(&self, spec: &IscsiTargetSpec) -> Result<()> {
         self.inner.reconcile(spec)
     }

@@ -7,7 +7,7 @@ use crate::{
         },
         pxe::{nvme_tcp_uri, render_windows_nvmeof_boot},
     },
-    persistence::ClientRepository,
+    persistence::{ClientRepository, SuperSessionRepository},
 };
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
@@ -26,12 +26,21 @@ pub struct NvmeOfBootPreparation {
 #[derive(Clone)]
 pub struct NvmeOfBootService {
     clients: ClientRepository,
+    sessions: SuperSessionRepository,
     config: crate::config::RuntimeConfig,
 }
 
 impl NvmeOfBootService {
-    pub fn new(clients: ClientRepository, config: crate::config::RuntimeConfig) -> Self {
-        Self { clients, config }
+    pub fn new(
+        clients: ClientRepository,
+        sessions: SuperSessionRepository,
+        config: crate::config::RuntimeConfig,
+    ) -> Self {
+        Self {
+            clients,
+            sessions,
+            config,
+        }
     }
 
     /// Prepare an existing client for an experimental Windows NVMe/TCP boot.
@@ -49,6 +58,14 @@ impl NvmeOfBootService {
 
         if !client.enabled {
             bail!("client is disabled: {}", client.name);
+        }
+
+        let session = self.sessions.get_for_client(client.id.as_str()).await?;
+        if session.as_ref().is_some_and(|session| {
+            session.state != crate::persistence::SuperSessionState::Completed
+        }) || (session.is_none() && client.is_super_mode())
+        {
+            bail!("cannot regenerate an ordinary NVMe boot menu while client '{}' has an active or legacy Super session", client.name);
         }
 
         let block_device = client
@@ -79,6 +96,7 @@ impl NvmeOfBootService {
             server_ip: server_ip.to_string(),
             // NVMe path keeps the legacy open menu; CHAP is an iSCSI-plane concern.
             chap: None,
+            super_boot: None,
         };
         let settings = serde_json::from_value(crate::config::get_config(&self.config).settings)?;
         publish_client_ipxe(&settings, &reservation)

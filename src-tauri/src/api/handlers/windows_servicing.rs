@@ -25,6 +25,8 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+const WINDOWS_IMAGE_WORKFLOW_RESOURCE: &str = "windows-image-revisions";
+
 #[derive(Debug, Serialize)]
 pub struct WindowsServicingCapabilities {
     pub available: bool,
@@ -225,7 +227,10 @@ pub async fn prepare_image_managed(
     require_admin(&claims)?;
     request.validate().map_err(operation_error)?;
     let result = tokio::spawn(async move {
-        let _guard = state.client_mutations.lock().await;
+        let _guard = state
+            .client_mutations
+            .lock_resource(WINDOWS_IMAGE_WORKFLOW_RESOURCE)
+            .await;
         let settings = state.settings.read().await;
         let root = settings.http.root_dir.clone();
         drop(settings);
@@ -318,7 +323,10 @@ pub async fn start_boot_test(
     Json(request): Json<StartBootTestRequest>,
 ) -> Result<Json<crate::core::image::RevisionBootTest>, (StatusCode, Json<WindowsServicingError>)> {
     require_admin(&claims)?;
-    let _guard = state.client_mutations.lock().await;
+    let _guard = state
+        .client_mutations
+        .lock_client_and_resource(&request.test_client_id, WINDOWS_IMAGE_WORKFLOW_RESOURCE)
+        .await;
     let candidates: Vec<(String, String)> = sqlx::query_as(
         "SELECT image.name, snapshot.name FROM windows_image_driver_revisions AS revision JOIN images AS image ON image.id = revision.revision_image_id JOIN images AS snapshot ON snapshot.parent_id = image.id AND snapshot.kind = 'snapshot' AND snapshot.name LIKE 'serviced-%' AND snapshot.status = 'ready' WHERE revision.id = ? AND revision.status = 'awaiting-test' AND image.status = 'ready' LIMIT 2",
     )

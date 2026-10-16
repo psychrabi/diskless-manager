@@ -150,6 +150,15 @@ fn is_public_endpoint(method: &Method, path: &str) -> bool {
 }
 
 fn user_request_is_allowed(method: &Method, path: &str) -> bool {
+    if (path.starts_with("/api/installer-media/") && method != Method::GET)
+        || (path.starts_with("/api/clients/")
+            && (path.contains("/super/enter")
+                || path.contains("/super/save")
+                || path.contains("/super/discard")
+                || path.ends_with("/legacy-super/exit")))
+    {
+        return false;
+    }
     if matches!(method, &Method::GET | &Method::OPTIONS) {
         return true;
     }
@@ -256,6 +265,14 @@ mod tests {
         assert!(!user_request_is_allowed(
             &Method::PATCH,
             "/api/system/settings"
+        ));
+    }
+
+    #[test]
+    fn legacy_super_exit_is_admin_only() {
+        assert!(!user_request_is_allowed(
+            &Method::POST,
+            "/api/clients/client-1/legacy-super/exit"
         ));
     }
 

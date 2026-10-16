@@ -1,7 +1,7 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    Json,
+    Extension, Json,
 };
 
 use super::clients::ErrorResponse;
@@ -119,58 +119,29 @@ fn resolve_effective_game_selection(
     ))
 }
 
-async fn publish_boot_menu(
-    settings: &crate::core::config::Settings,
-    client: &crate::domain::Client,
-    chap: Option<&crate::infrastructure::iscsi::ChapCredentials>,
-) {
-    if !client.enabled {
-        return;
-    }
-
-    let Some(target_iqn) = client
-        .target_iqn
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return;
-    };
-
-    let next_server = settings.dhcp.next_server_ip.trim();
-    let server_ip = if next_server.is_empty() {
-        settings.server.ip_address.trim()
-    } else {
-        next_server
-    };
-
-    let reservation = crate::infrastructure::dhcp::BootReservation {
-        client_name: client.name.clone(),
-        mac: client.mac.to_string(),
-        ip: client.ip.to_string(),
-        target_iqn: target_iqn.to_string(),
-        server_ip: server_ip.to_string(),
-        chap: chap.cloned(),
-    };
-
-    if let Err(error) =
-        crate::infrastructure::dhcp::publish_client_ipxe(settings, &reservation).await
-    {
-        tracing::warn!(client_id = %client.id, %error, "failed to regenerate boot menu during game-disk update");
+async fn publish_boot_menu(state: &AppState, client_id: &str) {
+    if let Err(error) = state.refresh_client_boot_menu(client_id).await {
+        tracing::warn!(client_id, %error, "failed to refresh client boot menu during game-disk update");
     }
 }
 
 pub async fn update_client(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Extension(claims): Extension<crate::types::Claims>,
     Json(request): Json<UpdateClientRequest>,
 ) -> Result<Json<Client>, (StatusCode, Json<ErrorResponse>)> {
     if !is_game_only_candidate(&request) {
-        return super::client_update_base::update_client(State(state), Path(id), Json(request))
-            .await;
+        return super::client_update_base::update_client(
+            State(state),
+            Path(id),
+            Extension(claims),
+            Json(request),
+        )
+        .await;
     }
 
-    let client_guard = state.client_mutations.lock().await;
+    let client_guard = state.client_mutations.lock_client(&id).await;
 
     let existing = state
         .application
@@ -198,8 +169,13 @@ pub async fn update_client(
 
     if !is_actual_game_only_update(&request, &existing) {
         drop(client_guard);
-        return super::client_update_base::update_client(State(state), Path(id), Json(request))
-            .await;
+        return super::client_update_base::update_client(
+            State(state),
+            Path(id),
+            Extension(claims),
+            Json(request),
+        )
+        .await;
     }
 
     let recovering: i64 = sqlx::query_scalar(
@@ -265,7 +241,7 @@ pub async fn update_client(
         None
     };
 
-    publish_boot_menu(&settings, &existing, chap.as_ref()).await;
+    publish_boot_menu(&state, &id).await;
 
     let target_iqn = existing.target_iqn.clone().unwrap_or_else(|| {
         format!(

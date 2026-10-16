@@ -54,6 +54,7 @@ enum Operation {
         target: String,
     },
     Inspect(IscsiTargetSpec),
+    VerifyFileMappings(IscsiTargetSpec),
     SetChap {
         target: String,
         chap: Option<ChapCredentials>,
@@ -107,19 +108,23 @@ fn validate_spec(spec: &IscsiTargetSpec) -> Result<()> {
     let mut names = std::collections::HashSet::new();
     for lun in &spec.luns {
         identifier(&lun.backstore)?;
+        lun.validate()?;
         ensure!(
             lun.lun <= 65535 && numbers.insert(lun.lun) && names.insert(&lun.backstore),
             "invalid or duplicate LUN/backstore"
         );
         let path = lun.block_device.to_str().context("invalid device path")?;
         ensure!(
-            path.starts_with("/dev/zvol/")
-                && !path.split('/').any(|p| p == "." || p == "..")
-                && path
-                    .bytes()
-                    .all(|c| c.is_ascii_alphanumeric() || b"/_-.:".contains(&c)),
-            "device must be a ZFS block volume"
+            path.bytes()
+                .all(|c| c.is_ascii_alphanumeric() || b"/_-.:".contains(&c)),
+            "invalid backing path"
         );
+        if lun.backing == super::model::IscsiLunBacking::BlockDevice {
+            ensure!(
+                path.starts_with("/dev/zvol/"),
+                "device must be a ZFS block volume"
+            );
+        }
     }
     validate_chap(spec.chap.as_ref())
 }

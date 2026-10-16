@@ -1,11 +1,15 @@
 use std::sync::Arc;
 
+use super::image_service::ImageService;
 use super::BootHistoryService;
 use super::ClientService;
 use super::NvmeOfBootService;
 use super::ProvisioningService;
 use super::StorageService;
-use crate::persistence::{BootLogRepository, ClientRepository};
+use crate::persistence::repositories::image::ImageRepository;
+use crate::persistence::{
+    BootLogRepository, ClientRepository, InstallerMediaRepository, SuperSessionRepository,
+};
 use sqlx::SqlitePool;
 
 use crate::core::config::IscsiBackend;
@@ -23,6 +27,10 @@ pub struct ApplicationServices {
     pub iscsi_backend: IscsiBackend,
     pub iscsi: Arc<dyn IscsiProvisioner>,
     pub clients: ClientService,
+    pub client_repository: ClientRepository,
+    pub images: ImageService,
+    pub installer_media: InstallerMediaRepository,
+    pub super_sessions: SuperSessionRepository,
     pub boot_history: BootHistoryService,
     pub storage: Arc<StorageService>,
     pub provisioning: ProvisioningService,
@@ -51,11 +59,14 @@ impl ApplicationServices {
         let iscsi: Arc<dyn IscsiProvisioner> = safe_iscsi;
 
         let storage = Arc::new(StorageService::with_config(
-            image_backend,
+            image_backend.clone(),
             Arc::clone(&iscsi),
             config.clone(),
         ));
         let boot_history = BootHistoryService::new(BootLogRepository::new(pool.clone()));
+        let installer_media = InstallerMediaRepository::new(pool.clone());
+        let super_sessions = SuperSessionRepository::new(pool.clone());
+        let images = ImageService::with_backend(ImageRepository::new(pool.clone()), image_backend);
         let clients = ClientRepository::new(pool);
         let client_service = ClientService::new(clients.clone());
         let provisioning = ProvisioningService::new(
@@ -65,12 +76,16 @@ impl ApplicationServices {
                 config: config.clone(),
             }),
         );
-        let nvmeof_boot = NvmeOfBootService::new(clients, config);
+        let nvmeof_boot = NvmeOfBootService::new(clients.clone(), super_sessions.clone(), config);
 
         Self {
             iscsi_backend,
             iscsi,
             clients: client_service,
+            client_repository: clients,
+            images,
+            installer_media,
+            super_sessions,
             boot_history,
             storage,
             provisioning,

@@ -39,7 +39,7 @@ pub async fn prepare_nvmeof_boot(
     Path(id): Path<String>,
     Json(request): Json<PrepareNvmeOfBootRequest>,
 ) -> Result<Json<crate::application::NvmeOfBootPreparation>, NvmeOfApiError> {
-    let _client_guard = state.client_mutations.lock().await;
+    let _client_guard = state.client_mutations.lock_client(&id).await;
     let id = client_id(id)?;
     let server_ip = request.server_ip.trim();
     if server_ip.is_empty() {

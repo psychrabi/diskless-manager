@@ -2,10 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::core::config::Settings;
-use crate::infrastructure::{
-    dhcp::{publish_client_ipxe, BootReservation},
-    pxe::render_client_dispatcher_autoexec_with_scheme,
-};
+use crate::infrastructure::pxe::render_client_dispatcher_autoexec_with_scheme;
 use crate::services::{
     get_service_pid, is_systemd_service_running, run_sudo_command, write_with_sudo_tee,
     ServiceStatus,
@@ -112,6 +109,21 @@ impl HttpService {
                 continue;
             }
 
+            let session = crate::persistence::SuperSessionRepository::new(self.db_pool.clone())
+                .get_for_client(&client.id)
+                .await?;
+            let session_state = session.as_ref().map(|session| session.state);
+            if preserve_cached_client_menu(session_state, client.is_super_mode()) {
+                if session_state
+                    .is_some_and(|state| state != crate::persistence::SuperSessionState::Completed)
+                {
+                    tracing::debug!(client = %client.name, "preserving Super-session menu during cached menu regeneration");
+                } else {
+                    tracing::warn!(client = %client.name, "preserving menu for unmanaged Super-mode client during cached menu regeneration");
+                }
+                continue;
+            }
+
             let Some(target_iqn) = client
                 .target_iqn
                 .as_deref()
@@ -141,24 +153,26 @@ impl HttpService {
                 _ => None,
             };
 
-            let reservation = BootReservation {
-                client_name: client.name.clone(),
-                mac: client.mac.clone(),
-                ip: client.ip.clone(),
-                target_iqn: target_iqn.to_string(),
-                server_ip: server_ip.to_string(),
-                chap,
-            };
-
-            publish_client_ipxe(&self.settings, &reservation)
-                .await
-                .map_err(|error| {
-                    anyhow::anyhow!(
-                        "failed to regenerate iPXE menu for client '{}': {}",
-                        client.name,
-                        error
-                    )
-                })?;
+            crate::infrastructure::dhcp::publish_client_ipxe(
+                &self.settings,
+                &crate::infrastructure::dhcp::BootReservation {
+                    client_name: client.name.clone(),
+                    mac: client.mac.clone(),
+                    ip: client.ip.clone(),
+                    target_iqn: target_iqn.to_string(),
+                    server_ip: server_ip.to_string(),
+                    chap,
+                    super_boot: None,
+                },
+            )
+            .await
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "failed to regenerate iPXE menu for client '{}': {}",
+                    client.name,
+                    error
+                )
+            })?;
             published += 1;
         }
 
@@ -223,10 +237,41 @@ impl HttpService {
     }
 }
 
+fn preserve_cached_client_menu(
+    session_state: Option<crate::persistence::SuperSessionState>,
+    client_is_super: bool,
+) -> bool {
+    client_is_super
+        || session_state
+            .is_some_and(|state| state != crate::persistence::SuperSessionState::Completed)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::render_apache_config;
-    use crate::core::config::Settings;
+    use super::{preserve_cached_client_menu, render_apache_config};
+    use crate::{core::config::Settings, persistence::SuperSessionState};
+
+    #[test]
+    fn cached_menu_regeneration_preserves_incomplete_and_super_mode_mismatch() {
+        assert!(preserve_cached_client_menu(
+            Some(SuperSessionState::Active),
+            false
+        ));
+        assert!(preserve_cached_client_menu(
+            Some(SuperSessionState::RecoveryRequired),
+            false
+        ));
+        assert!(preserve_cached_client_menu(
+            Some(SuperSessionState::Completed),
+            true
+        ));
+        assert!(preserve_cached_client_menu(None, true));
+        assert!(!preserve_cached_client_menu(
+            Some(SuperSessionState::Completed),
+            false
+        ));
+        assert!(!preserve_cached_client_menu(None, false));
+    }
 
     #[test]
     fn default_http_settings_do_not_require_tls_certificates() {

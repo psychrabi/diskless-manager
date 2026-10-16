@@ -1,3 +1,4 @@
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -10,12 +11,24 @@ pub struct IscsiLunSpec {
     /// targetcli/LIO block backstore name.
     pub backstore: String,
 
-    /// Linux block device exposed through the LIO backstore.
+    /// Device or regular-file path exposed through the LIO backstore.
     pub block_device: PathBuf,
+
+    /// Storage object type. Missing values deserialize as legacy block LUNs.
+    #[serde(default)]
+    pub backing: IscsiLunBacking,
 
     /// Whether this LUN should be exposed read-only.
     #[serde(default)]
     pub readonly: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum IscsiLunBacking {
+    #[default]
+    BlockDevice,
+    File,
 }
 
 impl IscsiLunSpec {
@@ -24,6 +37,7 @@ impl IscsiLunSpec {
             lun,
             backstore: backstore.into(),
             block_device: block_device.into(),
+            backing: IscsiLunBacking::BlockDevice,
             readonly: false,
         }
     }
@@ -37,8 +51,42 @@ impl IscsiLunSpec {
             lun,
             backstore: backstore.into(),
             block_device: block_device.into(),
+            backing: IscsiLunBacking::BlockDevice,
             readonly: true,
         }
+    }
+
+    pub fn readonly_file(lun: u32, backstore: impl Into<String>, path: impl Into<PathBuf>) -> Self {
+        Self {
+            lun,
+            backstore: backstore.into(),
+            block_device: path.into(),
+            backing: IscsiLunBacking::File,
+            readonly: true,
+        }
+    }
+
+    /// Validate LUN and backing intent before either backend mutates state.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(self.lun <= 65535, "invalid LUN number");
+        anyhow::ensure!(
+            !self.backstore.trim().is_empty(),
+            "iSCSI backstore cannot be empty"
+        );
+        let path = self.block_device.to_str().context("invalid backing path")?;
+        anyhow::ensure!(
+            self.block_device.is_absolute()
+                && !path.split('/').any(|part| matches!(part, "." | "..")),
+            "iSCSI backing path must be absolute and cannot traverse parents"
+        );
+        match self.backing {
+            IscsiLunBacking::BlockDevice => anyhow::ensure!(
+                self.block_device.is_absolute(),
+                "block LUN must use an absolute device path"
+            ),
+            IscsiLunBacking::File => anyhow::ensure!(self.readonly, "file LUN must be read-only"),
+        }
+        Ok(())
     }
 }
 
@@ -341,6 +389,27 @@ impl IscsiProvisionResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_luns_are_readonly_and_validate_as_managed_iso_paths() {
+        let lun = IscsiLunSpec::readonly_file(1, "installer_iso", "/srv/isos/installer.iso");
+        assert_eq!(lun.backing, IscsiLunBacking::File);
+        assert!(lun.validate().is_ok());
+        assert!(
+            IscsiLunSpec::readonly_file(1, "installer_iso", "/srv/isos/../other.iso")
+                .validate()
+                .is_err()
+        );
+        let mut writable = lun;
+        writable.readonly = false;
+        assert!(writable.validate().is_err());
+        assert!(IscsiLunSpec::new(0, "block", "/dev/zvol/pool/client")
+            .validate()
+            .is_ok());
+        assert!(IscsiLunSpec::new(65536, "block", "/dev/zvol/pool/client")
+            .validate()
+            .is_err());
+    }
 
     #[test]
     fn provision_result_starts_empty() {

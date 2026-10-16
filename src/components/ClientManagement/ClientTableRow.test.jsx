@@ -45,6 +45,13 @@ it("keeps write and uptime icons visible and centers the uptime content", () => 
   expect(cells[7].firstElementChild.className).toContain("justify-center");
 });
 
+it("distinguishes legacy Super and recovery-required clients from managed Super", () => {
+  const client = { id: "c1", name: "PC001", mac: "00:11:22:33:44:55", ip: "192.168.1.101", status: "Offline", master: "Windows", mode: "super", legacy_super_state: "recovery_required" };
+  render(<table><tbody><tr><ClientTableRow client={client} /></tr></tbody></table>);
+  expect(screen.getAllByText("Legacy Super recovery required")).toHaveLength(2);
+  expect(screen.queryByText("Super")).not.toBeInTheDocument();
+});
+
 it("renders key client details and actions in the narrow-screen card", () => {
   const client = { id: "c1", name: "PC001", mac: "00:11:22:33:44:55", ip: "192.168.1.101", status: "Offline", master: "Ubuntu", snapshot: "pool/ubuntu@ready", keep_writeback: false };
   const onMoreActions = vi.fn();

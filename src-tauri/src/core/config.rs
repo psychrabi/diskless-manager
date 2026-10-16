@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+const INSTALLER_MEDIA_MULTIPART_OVERHEAD_BYTES: usize = 1024 * 1024;
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Settings {
     #[serde(default)]
@@ -23,6 +25,8 @@ pub struct Settings {
     pub samba: SambaConfig,
     #[serde(default)]
     pub storage: StorageConfig,
+    #[serde(default)]
+    pub installer_media: InstallerMediaConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -308,6 +312,31 @@ pub struct StorageConfig {
     pub snapshots_dir: PathBuf,
 }
 
+/// Upload limits for managed installer ISO media.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct InstallerMediaConfig {
+    /// Maximum ISO payload size (default 8 GiB); request limits may include multipart overhead.
+    pub max_upload_bytes: usize,
+}
+
+impl Default for InstallerMediaConfig {
+    fn default() -> Self {
+        Self {
+            max_upload_bytes: 8 * 1024 * 1024 * 1024,
+        }
+    }
+}
+
+impl InstallerMediaConfig {
+    /// Route body limit includes room for multipart headers and boundaries;
+    /// upload handlers must still enforce `max_upload_bytes` on file chunks.
+    pub fn request_body_limit(&self) -> usize {
+        self.max_upload_bytes
+            .saturating_add(INSTALLER_MEDIA_MULTIPART_OVERHEAD_BYTES)
+    }
+}
+
 impl Default for StorageConfig {
     fn default() -> Self {
         Self {
@@ -319,6 +348,14 @@ impl Default for StorageConfig {
 
 impl Settings {
     pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.installer_media.max_upload_bytes > 0,
+            "installer media upload maximum must be greater than zero"
+        );
+        anyhow::ensure!(
+            self.installer_media.request_body_limit() > self.installer_media.max_upload_bytes,
+            "installer media upload maximum leaves no room for multipart overhead"
+        );
         crate::validation::validate_boot_root(&self.http.root_dir)?;
         crate::validation::validate_boot_root(&self.tftp.root_dir)?;
         if self.http.tls_enabled {
@@ -405,5 +442,30 @@ mod compatibility_tests {
         let mut settings = Settings::default();
         settings.http.root_dir = "/etc".to_string();
         assert!(settings.validate().is_err());
+    }
+
+    #[test]
+    fn installer_media_upload_limit_defaults_and_rejects_zero() {
+        let settings: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(
+            settings.installer_media.max_upload_bytes,
+            8 * 1024 * 1024 * 1024
+        );
+        assert!(
+            settings.installer_media.request_body_limit()
+                > settings.installer_media.max_upload_bytes
+        );
+
+        let invalid: Settings = serde_json::from_value(serde_json::json!({
+            "installer_media": { "max_upload_bytes": 0 }
+        }))
+        .unwrap();
+        assert!(invalid.validate().is_err());
+
+        let oversized: Settings = serde_json::from_value(serde_json::json!({
+            "installer_media": { "max_upload_bytes": usize::MAX }
+        }))
+        .unwrap();
+        assert!(oversized.validate().is_err());
     }
 }

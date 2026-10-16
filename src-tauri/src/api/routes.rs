@@ -21,7 +21,7 @@ use crate::api::handlers::{
     client_delete::delete_client,
     client_storage::delete_client_writeback,
     client_update::update_client,
-    clients::{create_client, request_inventory_boot},
+    clients::{create_client, exit_legacy_super, request_inventory_boot},
     clients_v2::{get_client, get_client_boot_history, list_clients},
     config::get_config,
     control::{
@@ -57,6 +57,10 @@ use crate::api::handlers::{
     },
     setup::{complete_setup, get_setup_status},
     ssh::{execute_ssh_command, get_windows_system_info, test_ssh_connection},
+    super_client::{
+        delete_media, discard_super, enter_super, list_media, record_verification, save_super,
+        set_media_default, super_status, upload_media,
+    },
     system::{
         apply_network_settings, check_dependencies, check_privileged_access, clear_cache,
         close_enrollment, detect_server_network, get_firewall_status, get_interface_ip,
@@ -96,6 +100,13 @@ fn request_timeout_for(path: &str) -> Duration {
         | "/api/pxe/windows/prepare-image/remote"
         | "/api/pxe/windows/prepare-image/remote/catalog"
         | "/api/pxe/windows/prepare-image/managed" => Duration::from_secs(3900),
+        "/api/installer-media/upload" => Duration::from_secs(900),
+        path if path.starts_with("/api/clients/") && path.ends_with("/legacy-super/exit") => {
+            Duration::from_secs(900)
+        }
+        path if path.starts_with("/api/clients/") && path.contains("/super/") => {
+            Duration::from_secs(900)
+        }
         _ => Duration::from_secs(300),
     }
 }
@@ -144,6 +155,12 @@ async fn apply_request_timeout(request: Request<Body>, next: Next) -> Response {
 pub fn create_app(state: crate::state::AppState) -> Router {
     let cors = cors_layer();
     let rate_limiter = AuthRateLimiter::new();
+    let media_body_limit = state
+        .settings
+        .try_read()
+        .expect("settings are available while constructing the API router")
+        .installer_media
+        .request_body_limit();
 
     // Periodically purge stale rate-limit entries.
     {
@@ -213,6 +230,21 @@ pub fn create_app(state: crate::state::AppState) -> Router {
             "/api/clients/{id}/boot-history",
             get(get_client_boot_history),
         )
+        .route("/api/clients/{id}/super/status", get(super_status))
+        .route("/api/clients/{id}/super/enter", post(enter_super))
+        .route("/api/clients/{id}/super/save", post(save_super))
+        .route("/api/clients/{id}/super/discard", post(discard_super))
+        .route("/api/installer-media", get(list_media))
+        .route(
+            "/api/installer-media/upload",
+            post(upload_media).layer(DefaultBodyLimit::max(media_body_limit)),
+        )
+        .route("/api/installer-media/{id}/default", post(set_media_default))
+        .route(
+            "/api/installer-media/{id}/verification",
+            post(record_verification),
+        )
+        .route("/api/installer-media/{id}", delete(delete_media))
         .route(
             "/api/clients/{id}/nvmeof",
             get(inspect_nvmeof_boot).delete(remove_nvmeof_boot),
@@ -220,6 +252,10 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route(
             "/api/clients/{id}/nvmeof/prepare",
             post(prepare_nvmeof_boot),
+        )
+        .route(
+            "/api/clients/{id}/legacy-super/exit",
+            post(exit_legacy_super),
         )
         .route("/api/clients/{id}/shutdown", post(shutdown_client))
         .route(
@@ -521,6 +557,10 @@ mod tests {
         assert_eq!(
             request_timeout_for("/api/clients"),
             Duration::from_secs(300)
+        );
+        assert_eq!(
+            request_timeout_for("/api/clients/client-1/legacy-super/exit"),
+            Duration::from_secs(900)
         );
     }
     #[tokio::test]

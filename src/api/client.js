@@ -22,7 +22,7 @@ export async function apiRequest(endpoint, options = {}) {
   const { authToken, ...fetchOptions } = options;
   const url = `${API_BASE_URL}${endpoint}`;
   const headers = {
-    "Content-Type": "application/json",
+    ...(options.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
     ...options.headers,
   };
 

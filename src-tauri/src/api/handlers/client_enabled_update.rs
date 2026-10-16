@@ -1,7 +1,7 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    Json,
+    Extension, Json,
 };
 
 use super::clients::ErrorResponse;
@@ -81,58 +81,29 @@ fn domain_to_legacy(client: crate::domain::Client) -> Client {
     }
 }
 
-async fn publish_boot_menu(
-    settings: &crate::core::config::Settings,
-    client: &crate::domain::Client,
-    chap: Option<&crate::infrastructure::iscsi::ChapCredentials>,
-) {
-    let Some(target_iqn) = client
-        .target_iqn
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return;
-    };
-
-    let next_server = settings.dhcp.next_server_ip.trim();
-    let server_ip = if next_server.is_empty() {
-        settings.server.ip_address.trim()
-    } else {
-        next_server
-    };
-
-    let reservation = crate::infrastructure::dhcp::BootReservation {
-        client_name: client.name.clone(),
-        mac: client.mac.to_string(),
-        ip: client.ip.to_string(),
-        target_iqn: target_iqn.to_string(),
-        server_ip: server_ip.to_string(),
-        chap: chap.cloned(),
-    };
-
-    if let Err(error) =
-        crate::infrastructure::dhcp::publish_client_ipxe(settings, &reservation).await
-    {
-        tracing::warn!(
-            client_id = %client.id,
-            %error,
-            "failed to regenerate boot menu while enabling client"
-        );
+async fn publish_boot_menu(state: &AppState, client_id: &str) {
+    if let Err(error) = state.refresh_client_boot_menu(client_id).await {
+        tracing::warn!(client_id, %error, "failed to regenerate boot menu while enabling client");
     }
 }
 
 pub async fn update_client(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Extension(claims): Extension<crate::types::Claims>,
     Json(request): Json<UpdateClientRequest>,
 ) -> Result<Json<Client>, (StatusCode, Json<ErrorResponse>)> {
     if !is_enabled_only_update(&request) {
-        return super::client_game_update::update_client(State(state), Path(id), Json(request))
-            .await;
+        return super::client_game_update::update_client(
+            State(state),
+            Path(id),
+            Extension(claims),
+            Json(request),
+        )
+        .await;
     }
 
-    let _client_guard = state.client_mutations.lock().await;
+    let _client_guard = state.client_mutations.lock_client(&id).await;
 
     let existing = state
         .application
@@ -188,28 +159,27 @@ pub async fn update_client(
         .expect("enabled-only request has enabled value");
     let settings = state.settings.read().await.clone();
 
-    let chap = if existing.chap_enabled {
-        crate::core::reconciliation::ensure_chap_credentials(
-            &state.db_pool,
-            &id,
-            &existing.name,
-            true,
-        )
+    let super_session = state
+        .application
+        .super_sessions
+        .get_for_client(&id)
         .await
         .map_err(|error| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
                     status: 500,
-                    error: format!("Failed to ensure CHAP credentials: {error}"),
+                    error: format!(
+                        "Failed to inspect Super-session before disabling client: {error}"
+                    ),
                 }),
             )
-        })?
-    } else {
-        None
-    };
+        })?;
+    let has_incomplete_super_session = super_session
+        .as_ref()
+        .is_some_and(|session| session.state != crate::persistence::SuperSessionState::Completed);
 
-    if existing.enabled && !enabled {
+    if existing.enabled && !enabled && !has_incomplete_super_session {
         crate::infrastructure::dhcp::remove_client_ipxe_menu(
             &state.settings.read().await.clone(),
             existing.mac.as_str(),
@@ -227,8 +197,6 @@ pub async fn update_client(
                 }),
             )
         })?;
-    } else if enabled {
-        publish_boot_menu(&settings, &existing, chap.as_ref()).await;
     }
 
     let client = state
@@ -245,6 +213,10 @@ pub async fn update_client(
                 }),
             )
         })?;
+
+    if enabled || has_incomplete_super_session {
+        publish_boot_menu(&state, &id).await;
+    }
 
     if let Err(error) = state.refresh_client_ips().await {
         tracing::warn!(%error, "failed to refresh client IP cache after enabled-state update");

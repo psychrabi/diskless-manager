@@ -142,6 +142,12 @@ impl IscsiProvisioner for ConfigfsProvisioner {
             _ => bail!("unexpected native iSCSI response"),
         }
     }
+    fn verify_named_file_lun_mappings(&self, spec: &IscsiTargetSpec) -> Result<()> {
+        match Self::request(Operation::VerifyFileMappings(spec.clone()))? {
+            Reply::Unit => Ok(()),
+            _ => bail!("unexpected native iSCSI response"),
+        }
+    }
     fn reconcile(&self, spec: &IscsiTargetSpec) -> Result<()> {
         if !self.inspect_target(spec)?.is_ready() {
             self.create_target(spec)?;

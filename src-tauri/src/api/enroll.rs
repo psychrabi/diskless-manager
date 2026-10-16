@@ -1,4 +1,4 @@
-use crate::api::util::spawn_locked;
+use crate::api::util::spawn_client_locked;
 use axum::{
     extract::{ConnectInfo, Path, State},
     http::{header, StatusCode},
@@ -222,10 +222,12 @@ async fn enroll_client(
                 let provisioning = !client.master.trim().is_empty() && client.master != "pending";
                 if provisioning {
                     let client_id = client.id.to_string();
+                    let lock_client_id = client_id.clone();
                     let requesting_mac = parsed.to_string();
                     let task_state = state.clone();
-                    let receive = spawn_locked(
+                    let receive = spawn_client_locked(
                         task_state.client_mutations.clone(),
+                        lock_client_id,
                         Some(std::time::Duration::from_secs(2)),
                         async move {
                             let result = crate::application::client_boot::ensure_client_boot_ready(
@@ -395,6 +397,7 @@ async fn consume_inventory_boot_request(state: &AppState, mac: &MacAddress) -> b
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::util::spawn_locked;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use std::path::PathBuf;
@@ -555,7 +558,7 @@ mod tests {
         sqlx::migrate!("./migrations").run(&pool).await.unwrap();
         AppState {
             config: crate::config::RuntimeConfig::default(),
-            client_mutations: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+            client_mutations: crate::state::ClientMutationLocks::default(),
             settings: std::sync::Arc::new(tokio::sync::RwLock::new(
                 crate::core::config::Settings::default(),
             )),

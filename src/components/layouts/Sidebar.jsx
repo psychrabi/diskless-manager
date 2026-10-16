@@ -18,7 +18,7 @@ export default function Sidebar() {
     .map((section) => ({
       ...section,
       items: section.items.filter(
-        (item) => user?.role === "admin" || !["users", "license"].includes(item.id),
+        (item) => user?.role === "admin" || !item.adminOnly,
       ),
     }))
     .filter((section) => section.items.length > 0);

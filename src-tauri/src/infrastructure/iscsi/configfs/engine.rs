@@ -1,7 +1,7 @@
 use super::{fs::ConfigFs, identifier, validate_chap, validate_spec, Operation, Reply};
 use crate::infrastructure::iscsi::{
-    ChapCredentials, IscsiLunSpec, IscsiLunState, IscsiProvisionResult, IscsiTargetSpec,
-    IscsiTargetState,
+    ChapCredentials, IscsiLunBacking, IscsiLunSpec, IscsiLunState, IscsiProvisionResult,
+    IscsiTargetSpec, IscsiTargetState,
 };
 use anyhow::{bail, ensure, Context, Result};
 use std::{
@@ -44,7 +44,9 @@ impl<F: ConfigFs> Engine<F> {
             Operation::EnsureAcl(spec) => {
                 validate_spec(&spec)?;
                 let mut undo = Vec::new();
-                let operation = self.ensure_acl(&spec, &mut undo);
+                let operation = self
+                    .ensure_acl(&spec, &mut undo)
+                    .and_then(|_| self.ensure_fileio_acl_mappings_readonly(&spec.target_iqn));
                 // A new directory may have promoted a live dynamic ACL; removing it would end its session.
                 Self::combine(operation, save())?;
                 Ok(Reply::Unit)
@@ -52,6 +54,11 @@ impl<F: ConfigFs> Engine<F> {
             Operation::Inspect(spec) => {
                 validate_spec(&spec)?;
                 Ok(Reply::State(self.inspect(&spec)?))
+            }
+            Operation::VerifyFileMappings(spec) => {
+                validate_spec(&spec)?;
+                self.verify_named_file_lun_mappings(&spec)?;
+                Ok(Reply::Unit)
             }
             Operation::Exists { target } => {
                 identifier(&target)?;
@@ -143,12 +150,12 @@ impl<F: ConfigFs> Engine<F> {
     fn backstores(&self) -> Result<BTreeMap<String, PathBuf>> {
         let mut result = BTreeMap::new();
         for hba in self.fs.entries(&self.root.join("core"))? {
-            if !hba
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .starts_with("iblock_")
-            {
+            if !["iblock_", "fileio_"].iter().any(|prefix| {
+                hba.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .starts_with(prefix)
+            }) {
                 continue;
             }
             for path in self.fs.entries(&hba)? {
@@ -206,6 +213,14 @@ impl<F: ConfigFs> Engine<F> {
     }
 
     fn matches(&self, path: &Path, lun: &IscsiLunSpec) -> Result<bool> {
+        if lun.backing == IscsiLunBacking::File {
+            let device = lun.block_device.to_str().context("invalid file path")?;
+            let size = std::fs::metadata(&lun.block_device)?.len();
+            return Ok(self
+                .fs
+                .read(&path.join("info"))?
+                .contains(&format!("File: {device} Size: {size}")));
+        }
         let device = self.fs.read(&path.join("udev_path"))?;
         let info = self.fs.read(&path.join("info"))?;
         let readonly = info
@@ -278,6 +293,56 @@ impl<F: ConfigFs> Engine<F> {
             states,
             portal,
         ))
+    }
+
+    fn verify_named_file_lun_mappings(&self, spec: &IscsiTargetSpec) -> Result<()> {
+        let files: Vec<_> = spec
+            .luns
+            .iter()
+            .filter(|lun| lun.backing == IscsiLunBacking::File)
+            .collect();
+        if files.is_empty() {
+            return Ok(());
+        }
+        let initiator = spec
+            .initiator_iqn
+            .as_deref()
+            .context("file LUN mapping verification requires a named initiator")?;
+        let acl = self.tpg(&spec.target_iqn).join("acls").join(initiator);
+        ensure!(self.fs.exists(&acl)?, "named initiator ACL is missing");
+        let luns = self.luns(&spec.target_iqn)?;
+        let backstores = self.backstores()?;
+        for lun in files {
+            let (_, actual_storage) = luns
+                .get(&lun.lun)
+                .context("expected target LUN is missing")?;
+            let expected_storage = backstores
+                .get(&lun.backstore)
+                .context("expected file backstore is missing")?;
+            ensure!(
+                actual_storage == expected_storage && self.matches(expected_storage, lun)?,
+                "target LUN does not map the expected file backstore"
+            );
+            let target_lun = self
+                .tpg(&spec.target_iqn)
+                .join("lun")
+                .join(format!("lun_{}", lun.lun));
+            let mapping = acl.join(format!("lun_{}", lun.lun));
+            ensure!(
+                self.fs.exists(&mapping)?,
+                "named initiator file LUN mapping is missing"
+            );
+            let links = self.links(&mapping)?;
+            ensure!(
+                links.len() == 1 && links[0].1 == target_lun,
+                "named initiator mapping points at a different target LUN"
+            );
+            ensure!(
+                self.fs.read(&mapping.join("write_protect"))?.trim() == "1",
+                "named initiator file LUN mapping is writable"
+            );
+        }
+        Ok(())
     }
 
     fn mkdir(&self, path: &Path, undo: &mut Vec<Undo>) -> Result<()> {
@@ -365,6 +430,29 @@ impl<F: ConfigFs> Engine<F> {
         Ok(())
     }
 
+    fn ensure_fileio_acl_mappings_readonly(&self, target: &str) -> Result<()> {
+        let tpg = self.tpg(target);
+        for (number, (_, storage)) in self.luns(target)? {
+            if !storage
+                .parent()
+                .and_then(Path::file_name)
+                .is_some_and(|name| name.to_string_lossy().starts_with("fileio_"))
+            {
+                continue;
+            }
+            for acl in self.fs.entries(&tpg.join("acls"))? {
+                let mapped = acl.join(format!("lun_{number}"));
+                if self.fs.exists(&mapped)? {
+                    ensure!(
+                        self.fs.read(&mapped.join("write_protect"))?.trim() == "1",
+                        "existing ACL mapping for file LUN is writable"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn create(
         &self,
         spec: &IscsiTargetSpec,
@@ -372,14 +460,23 @@ impl<F: ConfigFs> Engine<F> {
     ) -> Result<IscsiProvisionResult> {
         // Validate devices before modifying kernel state; udev may lag ZFS clone.
         for lun in &spec.luns {
-            let deadline = Instant::now() + Duration::from_secs(5);
-            while !self.fs.exists(&lun.block_device)? && Instant::now() < deadline {
-                std::thread::sleep(Duration::from_millis(50));
+            if lun.backing == IscsiLunBacking::File {
+                ensure!(
+                    std::fs::symlink_metadata(&lun.block_device)?
+                        .file_type()
+                        .is_file(),
+                    "file LUN backing is not a regular file"
+                );
+            } else {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while !self.fs.exists(&lun.block_device)? && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                ensure!(
+                    self.fs.is_block(&lun.block_device)?,
+                    "device is not a block device"
+                );
             }
-            ensure!(
-                self.fs.is_block(&lun.block_device)?,
-                "device is not a block device"
-            );
         }
         self.disconnected(&spec.target_iqn)?;
         let mut undo = Vec::new();
@@ -396,10 +493,24 @@ impl<F: ConfigFs> Engine<F> {
             }
             // Enable authentication first; never expose a CHAP target unauthenticated.
             self.chap(&spec.target_iqn, spec.chap.as_ref())?;
+            let existing = self.luns(&spec.target_iqn)?;
+            let has_fileio_lun = spec
+                .luns
+                .iter()
+                .any(|lun| lun.backing == IscsiLunBacking::File)
+                || existing.values().any(|(_, storage)| {
+                    storage
+                        .parent()
+                        .and_then(Path::file_name)
+                        .is_some_and(|name| name.to_string_lossy().starts_with("fileio_"))
+                });
             for (attribute, value) in [
                 ("generate_node_acls", "1"),
                 ("cache_dynamic_acls", "1"),
-                ("demo_mode_write_protect", "0"),
+                (
+                    "demo_mode_write_protect",
+                    if has_fileio_lun { "1" } else { "0" },
+                ),
             ] {
                 self.fs.write(&tpg.join("attrib").join(attribute), value)?;
             }
@@ -412,8 +523,13 @@ impl<F: ConfigFs> Engine<F> {
                     );
                     continue;
                 }
+                let transport = if lun.backing == IscsiLunBacking::File {
+                    "fileio"
+                } else {
+                    "iblock"
+                };
                 let hba = (0..1_048_576)
-                    .map(|i| self.root.join("core").join(format!("iblock_{i}")))
+                    .map(|i| self.root.join("core").join(format!("{transport}_{i}")))
                     .find_map(|p| match self.fs.exists(&p) {
                         Ok(false) => Some(Ok(p)),
                         Ok(true) => None,
@@ -423,14 +539,26 @@ impl<F: ConfigFs> Engine<F> {
                 self.mkdir(&hba, &mut undo)?;
                 let path = hba.join(&lun.backstore);
                 self.mkdir(&path, &mut undo)?;
-                let device = lun.block_device.to_str().context("invalid block device")?;
-                self.fs.write(&path.join("udev_path"), device)?;
-                self.fs
-                    .write(&path.join("control"), &format!("udev_path={device}"))?;
-                self.fs.write(
-                    &path.join("control"),
-                    &format!("readonly={}", u8::from(lun.readonly)),
-                )?;
+                let device = lun.block_device.to_str().context("invalid backing path")?;
+                if lun.backing == IscsiLunBacking::File {
+                    self.fs
+                        .write(&path.join("control"), &format!("fd_dev_name={device}"))?;
+                    self.fs.write(
+                        &path.join("control"),
+                        &format!(
+                            "fd_dev_size={}",
+                            std::fs::metadata(&lun.block_device)?.len()
+                        ),
+                    )?;
+                } else {
+                    self.fs.write(&path.join("udev_path"), device)?;
+                    self.fs
+                        .write(&path.join("control"), &format!("udev_path={device}"))?;
+                    self.fs.write(
+                        &path.join("control"),
+                        &format!("readonly={}", u8::from(lun.readonly)),
+                    )?;
+                }
                 self.fs.write(&path.join("enable"), "1")?;
                 self.fs.write(
                     &path.join("wwn/vpd_unit_serial"),
@@ -439,7 +567,6 @@ impl<F: ConfigFs> Engine<F> {
                 backstores.insert(lun.backstore.clone(), path);
                 created.backstores_created.push(lun.backstore.clone());
             }
-            let existing = self.luns(&spec.target_iqn)?;
             for lun in &spec.luns {
                 let storage = backstores
                     .get(&lun.backstore)
@@ -464,6 +591,12 @@ impl<F: ConfigFs> Engine<F> {
                             links.len() == 1 && links[0].1 == directory,
                             "existing ACL mapping conflicts with desired LUN"
                         );
+                        if lun.backing == IscsiLunBacking::File {
+                            ensure!(
+                                self.fs.read(&mapped.join("write_protect"))?.trim() == "1",
+                                "existing ACL mapping for file LUN is writable"
+                            );
+                        }
                     } else {
                         self.mkdir(&mapped, &mut undo)?;
                         self.link(&directory, &mapped.join("diskless"), &mut undo)?;
@@ -474,6 +607,7 @@ impl<F: ConfigFs> Engine<F> {
                     }
                 }
             }
+            self.ensure_fileio_acl_mappings_readonly(&spec.target_iqn)?;
             self.ensure_acl(spec, &mut undo)?;
             if !self.portal_satisfied(spec)? {
                 self.mkdir(&tpg.join("np").join(Self::portal(spec)), &mut undo)?;

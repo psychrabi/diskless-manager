@@ -230,6 +230,16 @@ impl StorageService {
         Arc::clone(&self.iscsi)
     }
 
+    pub fn validate_unmounted(&self, dataset: &str) -> Result<()> {
+        self.image_backend
+            .validate_unmounted(dataset)
+            .with_context(|| format!("storage volume '{dataset}' must be unmounted"))
+    }
+
+    pub fn clone_origin(&self, dataset: &str) -> Result<Option<String>> {
+        self.image_backend.clone_origin(dataset)
+    }
+
     /// Validate a Super-mode master before removing any existing client storage.
     ///
     /// `dataset` must be an existing managed volume with no local mounts.
@@ -411,6 +421,162 @@ impl StorageService {
                 )
             })
             .collect()
+    }
+
+    /// Build the temporary Super target: writable working image at LUN 0 and
+    /// a read-only installer ISO at LUN 1, with game disks omitted.
+    pub fn build_super_session_iscsi_spec(
+        spec: &ClientStorageSpec,
+        installer_iso: impl Into<PathBuf>,
+    ) -> Result<IscsiTargetSpec> {
+        let mut target = IscsiTargetSpec::with_luns(
+            &spec.target_iqn,
+            vec![
+                IscsiLunSpec::new(0, &spec.backstore, spec.block_device()),
+                IscsiLunSpec::readonly_file(
+                    1,
+                    format!("installer_{}", sanitize_client_id(&spec.client_id)),
+                    installer_iso,
+                ),
+            ],
+        )?;
+        target.initiator_iqn = Some(spec.initiator_iqn());
+        target.chap = spec.chap.clone();
+        Ok(target)
+    }
+
+    pub fn super_session_working_backstore(working_clone: &str) -> String {
+        let working_name = working_clone.rsplit('/').next().unwrap_or(working_clone);
+        format!("super_{working_name}")
+    }
+
+    pub fn super_session_backstores(client_id: &str, working_clone: &str) -> Vec<String> {
+        vec![
+            Self::super_session_working_backstore(working_clone),
+            format!("installer_{}", sanitize_client_id(client_id)),
+        ]
+    }
+
+    pub fn verify_super_session_target(&self, desired: &IscsiTargetSpec) -> Result<()> {
+        self.iscsi.verify_named_file_lun_mappings(desired)?;
+        let actual = self.iscsi.list_target_luns(&desired.target_iqn)?;
+        anyhow::ensure!(
+            actual.len() == desired.luns.len()
+                && desired.luns.iter().all(|expected| {
+                    actual
+                        .iter()
+                        .any(|lun| lun.lun == expected.lun && lun.backstore == expected.backstore)
+                }),
+            "Super-session target must expose exactly the working disk and installer LUNs"
+        );
+        anyhow::ensure!(
+            self.iscsi.inspect_target(desired)?.is_ready(),
+            "Super-session target is incomplete"
+        );
+        Ok(())
+    }
+
+    /// Replace the client's current target with an isolated Super-session target.
+    /// The old target object is removed while its normal and game backstores remain owned by the client.
+    pub fn create_super_session_target(
+        &self,
+        spec: &ClientStorageSpec,
+        installer_iso: impl Into<PathBuf>,
+    ) -> Result<()> {
+        self.image_backend
+            .validate_unmounted(&spec.dataset)
+            .context("Super working image must be unmounted before export")?;
+        self.iscsi
+            .remove_target(&spec.target_iqn)
+            .context("failed to remove the prior client target")?;
+        let target = Self::build_super_session_iscsi_spec(spec, installer_iso)?;
+        self.iscsi
+            .create_target_transaction(&target)
+            .context("failed to create the Super-session target")?;
+        self.verify_super_session_target(&target)
+            .context("Super-session target did not reach the requested LUN state")
+    }
+
+    /// Refuse to replace a target unless every current LUN matches this client's normal storage.
+    pub fn validate_client_target_for_replacement(&self, spec: &ClientStorageSpec) -> Result<()> {
+        self.validate_spec(spec)?;
+        if !self.iscsi.target_exists(&spec.target_iqn)? {
+            return Ok(());
+        }
+        let desired = self.desired_iscsi_spec(spec)?;
+        let actual = self.iscsi.list_target_luns(&spec.target_iqn)?;
+        anyhow::ensure!(
+            actual.len() == desired.luns.len()
+                && desired.luns.iter().all(|expected| {
+                    actual
+                        .iter()
+                        .any(|lun| lun.lun == expected.lun && lun.backstore == expected.backstore)
+                }),
+            "existing client target contains unexpected or missing LUN mappings"
+        );
+        self.iscsi.verify_named_file_lun_mappings(&desired)?;
+        anyhow::ensure!(
+            self.iscsi.inspect_target(&desired)?.is_ready(),
+            "existing client target does not match its assigned storage"
+        );
+        Ok(())
+    }
+
+    /// Accept only the expected LUN subset left by an interrupted Super target creation.
+    pub fn validate_super_session_target_for_replacement(
+        &self,
+        desired: &IscsiTargetSpec,
+    ) -> Result<()> {
+        if !self.iscsi.target_exists(&desired.target_iqn)? {
+            return Ok(());
+        }
+        let actual = self.iscsi.list_target_luns(&desired.target_iqn)?;
+        anyhow::ensure!(
+            actual.len() <= desired.luns.len(),
+            "existing Super-session target contains unexpected LUN mappings"
+        );
+        let mut present = desired.clone();
+        present.luns.clear();
+        for lun in actual {
+            let expected = desired
+                .lun(lun.lun)
+                .filter(|expected| expected.backstore == lun.backstore)
+                .context("existing Super-session target contains unexpected LUN mappings")?;
+            anyhow::ensure!(
+                lun.exists && lun.backstore_exists,
+                "existing Super-session target contains an invalid LUN mapping"
+            );
+            anyhow::ensure!(
+                !present.luns.iter().any(|mapped| mapped.lun == lun.lun),
+                "existing Super-session target contains duplicate LUN mappings"
+            );
+            present.luns.push(expected.clone());
+        }
+        if present.luns.is_empty() {
+            // The target may have been created immediately before an interrupted LUN transaction.
+            return Ok(());
+        }
+        self.iscsi.verify_named_file_lun_mappings(&present)?;
+        let state = self.iscsi.inspect_target(&present)?;
+        anyhow::ensure!(
+            state.exists
+                && state.luns.len() == present.luns.len()
+                && state.luns.iter().all(|lun| lun.is_ready()),
+            "existing Super-session target contains an invalid LUN mapping"
+        );
+        Ok(())
+    }
+
+    /// Remove the target and backstores uniquely owned by one Super session.
+    /// Normal client and game backstores are intentionally left untouched.
+    pub fn remove_super_session_target(
+        &self,
+        target_iqn: &str,
+        owned_backstores: &[String],
+    ) -> Result<()> {
+        self.iscsi
+            .remove_target_with_backstores(target_iqn, owned_backstores)
+            .context("failed to remove session-owned target resources")
     }
 
     fn set_game_clone_props(client_id: &str, master: &str, clone: &str) -> Result<()> {
@@ -1264,6 +1430,39 @@ impl StorageService {
         }
     }
 
+    /// Replace a legacy direct-master mapping with the selected client-owned clone.
+    /// The old assignment is only an iSCSI mapping; this never destroys its ZVOL.
+    pub fn exit_legacy_super(
+        &self,
+        target_iqn: &str,
+        old_backstore: &str,
+        spec: &ClientStorageSpec,
+        selected_snapshot: &str,
+    ) -> Result<ClientStorage> {
+        let StorageSource::Snapshot(snapshot) = &spec.source else {
+            bail!("legacy Super exit requires a snapshot-backed assignment");
+        };
+        anyhow::ensure!(
+            snapshot == selected_snapshot
+                && snapshot.split('@').next() != Some(spec.dataset.as_str()),
+            "selected snapshot does not match the client clone assignment"
+        );
+        self.remove_client_target(target_iqn, &[old_backstore.to_owned()])?;
+        let mut desired = spec.clone();
+        if self.image_backend.exists(&desired.dataset)? {
+            self.image_backend.validate_unmounted(&desired.dataset)?;
+            anyhow::ensure!(
+                self.image_backend
+                    .clone_origin(&desired.dataset)?
+                    .as_deref()
+                    == Some(selected_snapshot),
+                "existing recovery clone has unexpected snapshot origin"
+            );
+            desired.source = StorageSource::ExistingClientVolume(desired.dataset.clone());
+        }
+        self.create_client_storage(&desired)
+    }
+
     // ====================================================================
     // RECONCILIATION
     // ====================================================================
@@ -1487,7 +1686,10 @@ impl StorageService {
 
 #[cfg(test)]
 mod game_storage_tests {
-    use super::{game_clone_dataset, game_disks_from_zfs_list, parse_game_master_datasets};
+    use super::{
+        game_clone_dataset, game_disks_from_zfs_list, parse_game_master_datasets, StorageService,
+    };
+    use crate::domain::storage::StorageSource;
     use std::path::PathBuf;
 
     #[test]
@@ -1544,5 +1746,39 @@ mod game_storage_tests {
             PathBuf::from("/dev/zvol/diskless/games/client-01-steam-games")
         );
         assert!(disks[0].writable);
+    }
+
+    #[test]
+    fn super_session_target_uses_lun_zero_and_readonly_iso_lun_one_without_games() {
+        let spec = crate::domain::storage::ClientStorageSpec {
+            client_id: "pc001".into(),
+            client_name: "pc001".into(),
+            source: StorageSource::ExistingClientVolume("pool/pc001".into()),
+            dataset: "pool/pc001".into(),
+            backstore: "block_pc001".into(),
+            target_iqn: "iqn.test:pc001".into(),
+            lun: 0,
+            use_game_disk: true,
+            game_disks: vec!["pool/game".into()],
+            chap: None,
+        };
+        let target =
+            StorageService::build_super_session_iscsi_spec(&spec, "/srv/iso/install.iso").unwrap();
+        assert_eq!(target.luns.len(), 2);
+        assert_eq!(target.luns[0].lun, 0);
+        assert_eq!(target.luns[1].lun, 1);
+        assert_eq!(
+            target.luns[1].backing,
+            crate::infrastructure::iscsi::IscsiLunBacking::File
+        );
+        assert!(target.luns[1].readonly);
+    }
+
+    #[test]
+    fn super_session_cleanup_names_only_session_owned_luns() {
+        assert_eq!(
+            StorageService::super_session_backstores("PC 001", "pool/super-session-123"),
+            vec!["super_super-session-123", "installer_pc_001"]
+        );
     }
 }

@@ -1,4 +1,4 @@
-use crate::api::util::spawn_locked;
+use crate::api::util::spawn_client_locked;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -46,7 +46,7 @@ pub async fn repair_storage_reconciliation(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<ReconciliationEntry>, ReconciliationApiError> {
-    let _client_guard = state.client_mutations.lock().await;
+    let _client_guard = state.client_mutations.lock_client(&id).await;
     let pending: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM client_offline_resets WHERE client_id = ? AND operation IS NOT NULL",
     )
@@ -117,9 +117,14 @@ pub async fn retry_pending_client_recovery(
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, Json<ReconciliationApiError>)> {
     let recovery_id = id.clone();
-    let recovery = spawn_locked(state.client_mutations.clone(), None, async move {
-        crate::application::client_lifecycle::retry_pending_recovery(&state, &recovery_id).await
-    });
+    let recovery = spawn_client_locked(
+        state.client_mutations.clone(),
+        id.clone(),
+        None,
+        async move {
+            crate::application::client_lifecycle::retry_pending_recovery(&state, &recovery_id).await
+        },
+    );
     match recovery
         .await
         .map(|result| result.and_then(std::convert::identity))
@@ -159,7 +164,8 @@ pub async fn retry_pending_client_recovery(
 
 #[cfg(test)]
 mod tests {
-    use super::{load_pending_client_recoveries, spawn_locked};
+    use super::load_pending_client_recoveries;
+    use crate::api::util::spawn_locked;
     use std::sync::Arc;
     use tokio::sync::{oneshot, Mutex};
 

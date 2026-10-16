@@ -293,6 +293,66 @@ mod tests {
     }
 
     #[test]
+    fn legacy_exit_failure_is_retryable_without_destroying_the_shared_master() {
+        let (service, disks, target, operation) = fixture();
+        disks.volumes.lock().unwrap().remove("pool/pc001");
+        disks
+            .volumes
+            .lock()
+            .unwrap()
+            .insert("pool/master".into(), "shared master".into());
+        *target.fail_next.lock().unwrap() = true;
+
+        assert!(service
+            .exit_legacy_super(
+                "iqn.test:pc001",
+                "block_pc001",
+                &operation.spec,
+                "pool/master@ready"
+            )
+            .is_err());
+        assert!(!disks.volumes.lock().unwrap().contains_key("pool/pc001"));
+        assert_eq!(
+            disks
+                .volumes
+                .lock()
+                .unwrap()
+                .get("pool/master")
+                .map(String::as_str),
+            Some("shared master")
+        );
+
+        service
+            .exit_legacy_super(
+                "iqn.test:pc001",
+                "block_pc001",
+                &operation.spec,
+                "pool/master@ready",
+            )
+            .unwrap();
+        // A restarted retry can safely rebuild the target from the existing clone.
+        service
+            .exit_legacy_super(
+                "iqn.test:pc001",
+                "block_pc001",
+                &operation.spec,
+                "pool/master@ready",
+            )
+            .unwrap();
+        assert!(disks.volumes.lock().unwrap().contains_key("pool/pc001"));
+        assert!(*target.attached.lock().unwrap());
+        assert_eq!(
+            disks
+                .volumes
+                .lock()
+                .unwrap()
+                .get("pool/master")
+                .map(String::as_str),
+            Some("shared master")
+        );
+    }
+
+    #[test]
     fn boot_target_failure_preserves_existing_client_clone() {
         let (service, disks, target, op) = fixture();
         *target.report_absent.lock().unwrap() = true;

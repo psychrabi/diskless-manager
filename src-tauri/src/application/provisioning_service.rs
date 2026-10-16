@@ -26,6 +26,7 @@ fn boot_reservation(
             .unwrap_or_else(|| storage_spec.target_iqn.clone()),
         server_ip: server_ip.to_owned(),
         chap: storage_spec.chap.clone(),
+        super_boot: None,
     }
 }
 
@@ -270,6 +271,7 @@ impl ProvisioningService {
             // The provisioned menu must carry the same credentials the
             // target enforces, or the first boot cannot log in.
             chap: storage_spec.chap.clone(),
+            super_boot: None,
         };
         if let Err(error) = self.boot.publish(&reservation).await {
             let rollback = self.storage.destroy_client_storage(&storage);

@@ -14,6 +14,7 @@ struct ApiErrorBody<'a> {
 fn error_code(status: StatusCode) -> &'static str {
     match status {
         StatusCode::BAD_REQUEST => "invalid_request",
+        StatusCode::PAYLOAD_TOO_LARGE => "invalid_request",
         StatusCode::UNAUTHORIZED => "unauthorized",
         StatusCode::FORBIDDEN => "forbidden",
         StatusCode::NOT_FOUND => "not_found",
@@ -122,6 +123,28 @@ mod tests {
         let body: serde_json::Value =
             serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
         assert_eq!(body["code"], "forbidden");
+        assert!(body["operation_id"].as_str().is_some());
+        assert!(body.get("details").is_some());
+    }
+
+    #[tokio::test]
+    async fn oversized_request_errors_have_the_shared_contract() {
+        let app = Router::new()
+            .route("/api/test", get(|| async { StatusCode::PAYLOAD_TOO_LARGE }))
+            .layer(axum::middleware::from_fn(super::normalize_api_errors));
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/test")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        let body: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+        assert_eq!(body["code"], "invalid_request");
         assert!(body["operation_id"].as_str().is_some());
         assert!(body.get("details").is_some());
     }

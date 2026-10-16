@@ -1,10 +1,9 @@
 import { useConfirm } from "@/contexts/confirmDialog";
 import { useToastStore } from "@/store/useToastStore";
 import { useCallback } from "react";
-import { updateClient, deleteClient } from "../api/modules/clients";
+import { updateClient, deleteClient, enterSuper, saveSuper as saveSuperSession, discardSuper as discardSuperSession } from "../api/modules/clients";
 import { requestInventoryBoot } from "../api/modules/networkDrivers";
-import { createSnapshot } from "../api/modules/images";
-import { isSuperClient } from "../lib/clientMode";
+import { isOnlineStatus } from "../lib/clientStatus";
 
 export const useClientActions = (
   fetchData,
@@ -33,7 +32,7 @@ export const useClientActions = (
       // Pre-checks
       if (
         ["reboot", "shutdown", "remote"].includes(action) &&
-        client.status !== "Online"
+        !isOnlineStatus(client.status)
       ) {
         showError("Client Management", `Client must be online to ${action}.`);
         return;
@@ -48,7 +47,7 @@ export const useClientActions = (
           "disableSuper",
           "saveSuper",
         ].includes(action) &&
-        client.status === "Online"
+        isOnlineStatus(client.status)
       ) {
         showError(
           "Client Management",
@@ -106,7 +105,7 @@ export const useClientActions = (
 
   const handleReboot = useCallback(
     (client) => {
-      if (!client || client.status !== "Online") {
+      if (!client || !isOnlineStatus(client.status)) {
         showError("Client Management", "Client must be online to reboot.");
         return;
       }
@@ -123,7 +122,7 @@ export const useClientActions = (
 
   const handleShutdown = useCallback(
     (client) => {
-      if (!client || client.status !== "Online") {
+      if (!client || !isOnlineStatus(client.status)) {
         showError("Client Management", "Client must be online to shutdown.");
         return;
       }
@@ -157,7 +156,7 @@ export const useClientActions = (
     (client) => {
       if (!client) return;
 
-      if (client.status !== "Online") {
+      if (!isOnlineStatus(client.status)) {
         showError("Client Management", "Client must be online to remote.");
         return;
       }
@@ -262,101 +261,88 @@ export const useClientActions = (
     [confirm, showError, closeContextMenu, fetchData, success, info]
   );
 
-  const handleEnableSuper = useCallback(
-    (client) =>
-      handleAction(
-        client,
-        "enableSuper",
-        "Enable Super Client",
-        `Client "${client.name}" will boot directly from master image. This skips clone / writeback. Continue?`,
-        "Enable Super",
-        () => updateClient(client.id, { action: "super", make_super: true }),
-        "Client Enabled Super successfully",
-        "Enable Super cancelled."
-      ),
-    [handleAction]
-  );
+  const handleEnableSuper = useCallback(async (client, verificationOnly = false, status) => {
+    if (!client) return;
+    if (isOnlineStatus(client.status) || client.mutation_state || client.recovery_required || status?.storage_recovery) {
+      showError("Client Management", "Client must be offline with no pending mutation or recovery to start Super mode.");
+      return;
+    }
+    const ok = await confirm({
+      title: verificationOnly ? "Start Verification Session" : "Start Super Session",
+      description: verificationOnly
+        ? `Start a disposable installer boot test for ${client.name}. Its working changes will be discarded and cannot be saved.`
+        : `Start a clone-backed installer session for ${client.name}. Save publishes changes as a new image revision; Discard restores the current assignment.`,
+      confirmText: verificationOnly ? "Start Test Session" : "Start Super Session",
+      cancelText: "Cancel",
+      confirmVariant: "primary",
+      size: "2xl",
+    });
+    if (!ok) return;
+    try {
+      await enterSuper(client.id, { verification_only: verificationOnly, confirmed: verificationOnly });
+      success("Client Management", verificationOnly ? "Disposable verification session started." : "Super session started.");
+      fetchData?.();
+      closeContextMenu?.();
+    } catch (error) {
+      showError("Client Management", `Failed to start Super session: ${error.message || String(error)}`);
+    }
+  }, [confirm, showError, success, fetchData, closeContextMenu]);
 
-  const handleDisableSuper = useCallback(
-    (client) => {
-      if (!isSuperClient(client)) {
-        showError("Client Management", "Client is not in Super mode.");
-        return;
-      }
-      handleAction(
-        client,
-        "disableSuper",
-        "Disable Super Client",
-        `This will point ${client.name} back to its writeback clone. Continue?`,
-        "Disable Super",
-        () => updateClient(client.id, { action: "super", make_super: false }),
-        "Client Disabled Super successfully",
-        "Disable Super cancelled."
-      );
-    },
-    [handleAction, showError]
-  );
+  const handleSaveSuper = useCallback(async (client, status) => {
+    const session = status?.session;
+    if (!client) return;
+    if (session?.verification_only) {
+      showError("Client Management", "Verification-only sessions cannot be saved.");
+      return;
+    }
+    if (isOnlineStatus(client.status) || client.mutation_state || client.recovery_required || status?.storage_recovery || session?.state !== "active") {
+      showError("Client Management", "Save is available only for an offline active Super session with no pending mutation or recovery.");
+      return;
+    }
+    const ok = await confirm({
+      title: "Save Super Changes",
+      description: `Publish ${client.name}'s installer changes as a new image revision and return the client to normal mode?`,
+      confirmText: "Save Changes",
+      cancelText: "Cancel",
+      confirmVariant: "primary",
+      size: "2xl",
+    });
+    if (!ok) return;
+    try {
+      await saveSuperSession(client.id);
+      success("Client Management", "Super changes saved as a new image revision.");
+      fetchData?.();
+      closeContextMenu?.();
+    } catch (error) {
+      showError("Client Management", `Failed to save Super changes: ${error.message || String(error)}`);
+    }
+  }, [confirm, showError, success, fetchData, closeContextMenu]);
 
-  const handleSaveSuper = useCallback(
-    async (client) => {
-      if (!client) return;
-      if (!isSuperClient(client)) {
-        showError("Client Management", "Client is not in Super mode.");
-        return;
-      }
-      if (client.status !== "Offline") {
-        showError("Client Management", "Client must be offline to save Super.");
-        return;
-      }
-
-      const defaultSuffix = `${client.name}-super-${Date.now()}`;
-      const suffix = await confirm({
-        title: "Save Super Client",
-        description: `This will save the current state of ${client.name} to a snapshot. Please enter a name for the new snapshot:`,
-        confirmText: "Save Snapshot",
-        confirmVariant: "success",
-        showInput: true,
-        inputLabel: "Snapshot Name Suffix",
-        inputPlaceholder: "e.g. updated-drivers",
-        defaultValue: defaultSuffix,
-        size: "lg",
-      });
-
-      if (!suffix) {
-        info("Save Super cancelled.");
-        return;
-      }
-
-      if (typeof suffix === "string" && !/^[-\w\s]+$/.test(suffix)) {
-        showError(
-          "Client Management",
-          "Invalid snapshot name suffix. Use alphanumeric characters, spaces, dashes or underscores."
-        );
-        return;
-      }
-
-      const snapshotName = suffix.trim().replace(/\s+/g, "-");
-
-      try {
-        const response = await createSnapshot(client.master, snapshotName);
-        await updateClient(client.id, { action: "super", make_super: false, snapshot: `${client.master.trim()}@${snapshotName}` });
-        success(
-          "Client Management",
-          response.message
-            ? `${response.message} Client returned to writeback mode.`
-            : "Super changes saved and client returned to writeback mode."
-        );
-        fetchData();
-        closeContextMenu();
-      } catch (error) {
-        showError(
-          "Client Management",
-          `Failed to save Super changes or return to writeback mode: ${error.message || String(error)}`
-        );
-      }
-    },
-    [confirm, showError, info, success, fetchData, closeContextMenu]
-  );
+  const handleDiscardSuper = useCallback(async (client, status) => {
+    const session = status?.session;
+    if (!client) return;
+    if (isOnlineStatus(client.status) || client.mutation_state || client.recovery_required || status?.storage_recovery || session?.state !== "active") {
+      showError("Client Management", "Discard is available only for an offline active Super session with no pending mutation or recovery.");
+      return;
+    }
+    const ok = await confirm({
+      title: "Discard Super Changes",
+      description: `Permanently remove ${client.name}'s Super-session changes and restore its prior image assignment?`,
+      confirmText: "Discard Changes",
+      cancelText: "Cancel",
+      confirmVariant: "destructive",
+      size: "2xl",
+    });
+    if (!ok) return;
+    try {
+      await discardSuperSession(client.id);
+      success("Client Management", "Super changes discarded; the prior assignment was restored.");
+      fetchData?.();
+      closeContextMenu?.();
+    } catch (error) {
+      showError("Client Management", `Failed to discard Super changes: ${error.message || String(error)}`);
+    }
+  }, [confirm, showError, success, fetchData, closeContextMenu]);
 
   return {
     edit: handleEdit,
@@ -368,8 +354,8 @@ export const useClientActions = (
     resetToClean: handleResetToClean,
     inventoryBoot: handleInventoryBoot,
     delete: handleDelete,
-    enableSuper: handleEnableSuper,
-    disableSuper: handleDisableSuper,
+    startSuper: handleEnableSuper,
+    discardSuper: handleDiscardSuper,
     saveSuper: handleSaveSuper,
   };
 };

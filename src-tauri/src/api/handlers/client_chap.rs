@@ -12,7 +12,7 @@ pub async fn rotate_client_chap(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
-    let _client_guard = state.client_mutations.lock().await;
+    let _client_guard = state.client_mutations.lock_client(&id).await;
 
     let (client, credentials) =
         state
@@ -60,28 +60,7 @@ pub async fn rotate_client_chap(
                 )
             })?;
 
-        let settings = state.settings.read().await;
-        let next_server = settings.dhcp.next_server_ip.trim();
-        let server_ip = if next_server.is_empty() {
-            settings.server.ip_address.trim()
-        } else {
-            next_server
-        };
-        let reservation = crate::infrastructure::dhcp::BootReservation {
-            client_name: client.name.clone(),
-            mac: client.mac.to_string(),
-            ip: client.ip.to_string(),
-            target_iqn: target_iqn.to_string(),
-            server_ip: server_ip.to_string(),
-            chap: Some(credentials.clone()),
-        };
-
-        if let Err(error) = crate::infrastructure::dhcp::publish_client_ipxe(
-            &state.settings.read().await.clone(),
-            &reservation,
-        )
-        .await
-        {
+        if let Err(error) = state.refresh_client_boot_menu(&id).await {
             tracing::warn!(client_id = %id, %error, "failed to republish boot menu after CHAP rotation");
         }
     }

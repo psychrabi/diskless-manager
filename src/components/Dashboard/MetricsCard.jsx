@@ -1,6 +1,7 @@
 import { Card, CardContent } from "@/components/ui/card";
 import { useAppStore } from "@/store/useAppStore";
 import { useMetrics } from "@/contexts/useMetrics";
+import { isOnlineStatus } from "@/lib/clientStatus";
 import { useShallow } from "zustand/react/shallow";
 
 import { Disc, Laptop, MemoryStick } from "lucide-react";
@@ -31,7 +32,7 @@ export default function MetricsCard() {
   const { metrics } = useMetrics();
   const liveClients = metrics?.clients;
   const onlineClients = liveClients
-    ? liveClients.filter((client) => client.status === "Online").length
+    ? liveClients.filter((client) => isOnlineStatus(client.status)).length
     : null;
   const totalClients = serverStatusData?.clients_count ?? liveClients?.length ?? 0;
 

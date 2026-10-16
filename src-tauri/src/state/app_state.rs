@@ -1,3 +1,4 @@
+use super::ClientMutationLocks;
 use crate::application::ApplicationServices;
 use crate::core::config::Settings;
 use crate::metrics::MetricsCollector;
@@ -11,8 +12,8 @@ use tokio::sync::RwLock;
 #[derive(Clone)]
 pub struct AppState {
     pub config: crate::config::RuntimeConfig,
-    /// Serializes client configuration writes and automatic storage resets.
-    pub client_mutations: Arc<tokio::sync::Mutex<()>>,
+    /// Serializes mutations per client and provides a barrier for fleet-wide operations.
+    pub client_mutations: ClientMutationLocks,
     pub settings: Arc<RwLock<Settings>>,
     pub db_pool: SqlitePool,
     pub config_path: PathBuf,
@@ -24,6 +25,45 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Regenerate a client's menu from its durable Super-session state.
+    pub async fn refresh_client_boot_menu(&self, client_id: &str) -> anyhow::Result<()> {
+        self.super_client_service()
+            .await
+            .refresh_client_menu(client_id)
+            .await
+    }
+
+    /// Builds the installer-media service from the current configured boot root and upload cap.
+    pub async fn installer_media_service(
+        &self,
+    ) -> crate::application::installer_media_service::InstallerMediaService {
+        let settings = self.settings.read().await;
+        crate::application::installer_media_service::InstallerMediaService::new(
+            &settings.http.root_dir,
+            settings.installer_media.max_upload_bytes as u64,
+            self.application.installer_media.clone(),
+            self.application.super_sessions.clone(),
+        )
+    }
+
+    pub async fn super_client_service(
+        &self,
+    ) -> crate::application::super_client_service::SuperClientService {
+        let settings = self.settings.read().await.clone();
+        crate::application::super_client_service::SuperClientService::new(
+            self.application.client_repository.clone(),
+            self.application.installer_media.clone(),
+            self.application.super_sessions.clone(),
+            self.application.images.clone(),
+            self.application.storage.clone(),
+            self.application.iscsi.clone(),
+            self.config.clone(),
+            settings,
+            self.installer_media_service().await,
+            self.client_mutations.clone(),
+        )
+    }
+
     pub async fn new() -> anyhow::Result<Self> {
         // Determine config directory - use same as existing diskless-manager
         let config_dir = dirs::config_dir()
@@ -87,6 +127,14 @@ impl AppState {
             settings.iscsi.backend,
             runtime_config.clone(),
         ));
+        crate::application::installer_media_service::InstallerMediaService::new(
+            &settings.http.root_dir,
+            settings.installer_media.max_upload_bytes as u64,
+            application.installer_media.clone(),
+            application.super_sessions.clone(),
+        )
+        .reconcile_storage()
+        .await?;
 
         info!("Database initialized at {}", db_path.display());
 
@@ -94,9 +142,9 @@ impl AppState {
         let client_ips = Self::load_client_ips(&pool).await?;
         info!("Loaded {} client IPs from database", client_ips.len());
 
-        Ok(Self {
+        let state = Self {
             config: runtime_config,
-            client_mutations: Arc::new(tokio::sync::Mutex::new(())),
+            client_mutations: ClientMutationLocks::default(),
             settings: Arc::new(RwLock::new(settings)),
             db_pool: pool,
             config_path,
@@ -104,7 +152,13 @@ impl AppState {
             metrics_collector: Arc::new(MetricsCollector::default()),
             ssh_executor: Arc::new(SshExecutor::new()),
             application,
-        })
+        };
+        state
+            .super_client_service()
+            .await
+            .recover_incomplete()
+            .await?;
+        Ok(state)
     }
 
     /// Load all client IPs from the database

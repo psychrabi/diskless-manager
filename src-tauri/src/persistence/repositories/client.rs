@@ -83,6 +83,61 @@ impl ClientRepository {
         row.map(Self::row_to_domain).transpose()
     }
 
+    pub async fn has_other_storage_owner(&self, client: &Client) -> Result<bool> {
+        let snapshot_backed = client
+            .snapshot
+            .as_deref()
+            .is_some_and(|snapshot| !snapshot.trim().is_empty());
+        let writeback = if snapshot_backed {
+            client.writeback.as_deref().unwrap_or_default()
+        } else {
+            ""
+        };
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM clients WHERE id <> ? AND (target_iqn = ? OR block_store = ? OR (? = 1 AND (block_device = ? OR writeback = ? OR master = ?)))",
+        )
+        .bind(client.id.as_str())
+        .bind(client.target_iqn.as_deref().unwrap_or_default())
+        .bind(client.block_store.as_deref().unwrap_or_default())
+        .bind(i64::from(snapshot_backed))
+        .bind(client.block_device.as_deref().unwrap_or_default())
+        .bind(writeback)
+        .bind(writeback)
+        .fetch_one(&self.pool)
+        .await
+        .context("failed to check client storage ownership")?;
+        Ok(count != 0)
+    }
+
+    pub async fn save_boot_menu_backup(&self, client_id: &str, contents: &str) -> Result<()> {
+        sqlx::query(
+            "INSERT OR IGNORE INTO client_boot_menu_backups (client_id, contents) VALUES (?, ?)",
+        )
+        .bind(client_id)
+        .bind(contents)
+        .execute(&self.pool)
+        .await
+        .context("failed to save client boot menu backup")?;
+        Ok(())
+    }
+
+    pub async fn boot_menu_backup(&self, client_id: &str) -> Result<Option<String>> {
+        sqlx::query_scalar("SELECT contents FROM client_boot_menu_backups WHERE client_id = ?")
+            .bind(client_id)
+            .fetch_optional(&self.pool)
+            .await
+            .context("failed to read client boot menu backup")
+    }
+
+    pub async fn delete_boot_menu_backup(&self, client_id: &str) -> Result<()> {
+        sqlx::query("DELETE FROM client_boot_menu_backups WHERE client_id = ?")
+            .bind(client_id)
+            .execute(&self.pool)
+            .await
+            .context("failed to remove client boot menu backup")?;
+        Ok(())
+    }
+
     pub async fn find_by_name(&self, name: &str) -> Result<Option<Client>> {
         let row = sqlx::query_as::<_, ClientRow>(
             r#"

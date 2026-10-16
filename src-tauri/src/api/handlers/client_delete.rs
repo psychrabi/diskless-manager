@@ -10,7 +10,7 @@ pub async fn delete_client(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<(), StatusCode> {
-    let _client_guard = state.client_mutations.lock().await;
+    let _client_guard = state.client_mutations.lock_client(&id).await;
 
     let recovering: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM client_offline_resets WHERE client_id = ? AND operation IS NOT NULL",

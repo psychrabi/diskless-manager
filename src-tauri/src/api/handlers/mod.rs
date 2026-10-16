@@ -26,6 +26,7 @@ pub mod reconciliation;
 pub mod services;
 pub mod setup;
 pub mod ssh;
+pub mod super_client;
 pub mod system;
 pub mod system_reconciliation;
 pub mod users;

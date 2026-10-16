@@ -63,6 +63,10 @@ pub trait ImageBackend: Send + Sync {
     /// `source` must identify an immutable snapshot.
     /// `destination` must identify the new writable image.
     fn clone_image(&self, source: &str, destination: &str) -> Result<()>;
+    /// Promote a clone so its data no longer depends on its original dataset.
+    fn promote_clone(&self, _name: &str) -> Result<()> {
+        anyhow::bail!("clone promotion is unavailable")
+    }
     fn create_snapshot(&self, dataset: &str, snapshot: &str) -> Result<()>;
 
     fn destroy_snapshot(&self, dataset: &str, snapshot: &str) -> Result<()>;

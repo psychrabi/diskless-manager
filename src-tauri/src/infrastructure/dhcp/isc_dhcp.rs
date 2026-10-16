@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::{
     future::Future,
     path::{Path, PathBuf},
@@ -15,6 +15,17 @@ pub struct BootReservation {
     /// One-way iSCSI CHAP credentials embedded in the menu. `None`
     /// preserves the legacy open attach.
     pub chap: Option<crate::infrastructure::iscsi::ChapCredentials>,
+    /// Durable Super-session choice, resolved by server-side boot readiness.
+    pub super_boot: Option<SuperBootReservation>,
+}
+
+#[derive(Debug, Clone)]
+pub enum SuperBootReservation {
+    Installer {
+        media_type: crate::persistence::InstallerMediaType,
+        firmware: crate::domain::PxeMode,
+    },
+    Deny,
 }
 
 pub trait BootReservationPublisher: Send + Sync {
@@ -64,25 +75,71 @@ pub(crate) async fn publish_client_ipxe(
     }
 
     let path = root.join(&relative);
-    let script = crate::infrastructure::pxe::render_client_script_with_scheme(
-        &reservation.client_name,
-        &reservation.target_iqn,
-        80,
-        true,
-        false,
-        reservation.chap.as_ref(),
+    let script = match reservation.super_boot.as_ref() {
+        Some(SuperBootReservation::Installer {
+            media_type,
+            firmware,
+        }) => crate::infrastructure::pxe::render_super_client_script(
+            &reservation.client_name,
+            &reservation.target_iqn,
+            &reservation.server_ip,
+            *media_type,
+            firmware.clone(),
+            reservation.chap.as_ref(),
+        ),
+        Some(SuperBootReservation::Deny) => crate::infrastructure::pxe::render_super_boot_denied(),
+        None => crate::infrastructure::pxe::render_client_script_with_scheme(
+            &reservation.client_name,
+            &reservation.target_iqn,
+            80,
+            true,
+            false,
+            reservation.chap.as_ref(),
+        ),
+    };
+    write_client_ipxe_script(&path, &script).await?;
+    tracing::info!(
+        client = %reservation.client_name,
+        mac = %reservation.mac,
+        path = %path.display(),
+        "published per-client iPXE menu"
     );
+    Ok(path)
+}
+
+pub(crate) async fn restore_client_ipxe_menu(
+    settings: &crate::core::config::Settings,
+    mac: &str,
+    script: &str,
+) -> Result<()> {
+    let root = PathBuf::from(&settings.http.root_dir);
+    let relative = crate::infrastructure::pxe::client_mac_script_path(mac);
+    anyhow::ensure!(
+        crate::infrastructure::pxe::is_managed_script_path(&root, &relative),
+        "refusing unsafe generated iPXE path: {relative}"
+    );
+    let path = root.join(relative);
+    write_client_ipxe_script(&path, script).await
+}
+
+async fn write_client_ipxe_script(path: &Path, script: &str) -> Result<()> {
     // Image/snapshot updates leave the menu byte-identical; skip the
     // privileged rewrite when the installed file already matches.
-    let installed = crate::infrastructure::command::read_file_with_sudo(&path)
-        .map_err(|error| anyhow::anyhow!("cannot read installed iPXE menu: {error}"))?;
-    if installed.as_deref() == Some(script.as_str()) {
+    let installed = match tokio::fs::read_to_string(path).await {
+        Ok(contents) => Some(contents),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            crate::infrastructure::command::read_file_with_sudo(path)
+                .map_err(|error| anyhow::anyhow!("cannot read installed iPXE menu: {error}"))?
+        }
+        Err(error) => return Err(error.into()),
+    };
+    if installed.as_deref() == Some(script) {
         tracing::debug!(
-            client = %reservation.client_name,
             path = %path.display(),
             "per-client iPXE menu unchanged; skipping rewrite"
         );
-        return Ok(path);
+        return Ok(());
     }
     let parent = path
         .parent()
@@ -94,18 +151,47 @@ pub(crate) async fn publish_client_ipxe(
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("generated iPXE path is not valid UTF-8"))?;
 
-    crate::services::run_sudo_command(["mkdir", "-p", parent]).await?;
-
-    crate::services::write_with_sudo_tee(path_str, &script).await?;
-
-    tracing::info!(
-        client = %reservation.client_name,
-        mac = %reservation.mac,
-        path = %path.display(),
-        "published per-client iPXE menu"
-    );
-
-    Ok(path)
+    let temporary_path = path.with_file_name(format!(
+        ".{}.{}.tmp",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("client.ipxe"),
+        uuid::Uuid::new_v4()
+    ));
+    let local_write = async {
+        tokio::fs::create_dir_all(parent).await?;
+        tokio::fs::write(&temporary_path, script).await?;
+        tokio::fs::rename(&temporary_path, path).await?;
+        Ok::<_, std::io::Error>(())
+    }
+    .await;
+    if local_write.is_err() {
+        let _ = tokio::fs::remove_file(&temporary_path).await;
+        crate::services::run_sudo_command(["mkdir", "-p", parent]).await?;
+        let temporary_path_str = temporary_path
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("temporary iPXE path is not valid UTF-8"))?;
+        if let Err(error) = crate::services::write_with_sudo_tee(temporary_path_str, script).await {
+            return match crate::services::run_sudo_command(["rm", "-f", "--", temporary_path_str]).await {
+                Ok(()) => Err(error).context("failed to stage generated iPXE menu"),
+                Err(cleanup_error) => Err(error).context(format!(
+                    "failed to stage generated iPXE menu and remove its temporary file: {cleanup_error:#}"
+                )),
+            };
+        }
+        if let Err(error) =
+            crate::services::run_sudo_command(["mv", "-f", "--", temporary_path_str, path_str])
+                .await
+        {
+            return match crate::services::run_sudo_command(["rm", "-f", "--", temporary_path_str]).await {
+                Ok(()) => Err(error).context("failed to atomically publish generated iPXE menu"),
+                Err(cleanup_error) => Err(error).context(format!(
+                    "failed to publish generated iPXE menu and remove its temporary file: {cleanup_error:#}"
+                )),
+            };
+        }
+    }
+    Ok(())
 }
 
 async fn remove_generated_ipxe(path: &Path) -> Result<()> {

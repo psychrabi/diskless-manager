@@ -77,6 +77,10 @@ impl ImageService {
             .ok_or_else(|| anyhow::anyhow!("Image not found: {}", id_or_name))
     }
 
+    pub async fn get_optional(&self, id_or_name: &str) -> Result<Option<Image>> {
+        self.repository.get(id_or_name).await
+    }
+
     pub async fn create(&self, request: CreateImageRequest) -> Result<Image> {
         let service = self.clone();
 
@@ -401,6 +405,21 @@ impl ImageService {
         image.updated_at = Utc::now();
         self.repository.update(&image).await?;
         Ok(image)
+    }
+
+    /// Remove the source dependency from a serviced clone before deleting its temporary origin.
+    /// Repeated calls are safe after a successful promotion.
+    pub async fn promote_clone(&self, name: &str) -> Result<()> {
+        let backend = self.backend.clone();
+        let name = name.to_owned();
+        tokio::task::spawn_blocking(move || {
+            if backend.clone_origin(&name)?.is_some() {
+                backend.promote_clone(&name)?;
+            }
+            Ok(())
+        })
+        .await
+        .context("image worker failed")?
     }
 
     pub async fn rollback_snapshot(
@@ -1081,8 +1100,18 @@ mod storage_presence_tests {
     struct FakeStorage {
         present: HashSet<String>,
         fail: bool,
+        promoted: Arc<std::sync::atomic::AtomicBool>,
     }
     impl ImageBackend for FakeStorage {
+        fn clone_origin(&self, _: &str) -> Result<Option<String>> {
+            Ok((!self.promoted.load(std::sync::atomic::Ordering::SeqCst))
+                .then(|| "pool/origin@snapshot".to_owned()))
+        }
+        fn promote_clone(&self, _: &str) -> Result<()> {
+            self.promoted
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
         fn exists(&self, name: &str) -> Result<bool> {
             if self.fail {
                 bail!("storage query failed");
@@ -1137,6 +1166,7 @@ mod storage_presence_tests {
             Arc::new(FakeStorage {
                 present: present.iter().map(|name| name.to_string()).collect(),
                 fail,
+                promoted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             }),
         )
     }
@@ -1203,6 +1233,14 @@ mod storage_presence_tests {
         service.delete("snap").await.unwrap();
         service.delete("master").await.unwrap();
         assert!(service.repository.list().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn promoting_serviced_clone_severs_its_origin_and_is_retry_safe() {
+        let service = service(&["pool/clone"], false).await;
+        service.promote_clone("pool/clone").await.unwrap();
+        service.promote_clone("pool/clone").await.unwrap();
+        assert_eq!(service.backend.clone_origin("pool/clone").unwrap(), None);
     }
     #[tokio::test]
     async fn failed_query_never_allows_metadata_deletion() {
@@ -1282,6 +1320,7 @@ mod storage_presence_tests {
             Arc::new(FakeStorage {
                 present: HashSet::new(),
                 fail: false,
+                promoted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             }),
         );
         let mut current = image("current", "pool/current", None);

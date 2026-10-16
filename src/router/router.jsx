@@ -10,6 +10,7 @@ const Adminlayout = lazy(() => import("@/components/layouts/AdminLayout"));
 const ClientManagement = lazy(() => import("@/components/ClientManagement"));
 const PendingRecovery = lazy(() => import("@/components/PendingRecovery"));
 const ImageManagement = lazy(() => import("@/components/ImageManagement"));
+const InstallerMedia = lazy(() => import("@/components/InstallerMedia"));
 const Dashboard = lazy(() => import("@/components/Dashboard"));
 const Setup = lazy(() => import("@/components/Setup"));
 const SettingManagement = lazy(() => import("@/components/SettingsManagement"));
@@ -85,6 +86,10 @@ export const router = createBrowserRouter([
       {
         path: "/images",
         element: <ImageManagement />,
+      },
+      {
+        path: "/installer-media",
+        element: <InstallerMedia />,
       },
       {
         path: "/services",

@@ -1,4 +1,4 @@
-import { File, FilesIcon, HardDrive, KeyRound, Laptop2, LayoutDashboard, RotateCw, Server, Settings, SlidersHorizontal, SquareLibrary, Terminal, Users2 } from "lucide-react";
+import { Disc3, File, FilesIcon, HardDrive, KeyRound, Laptop2, LayoutDashboard, RotateCw, Server, Settings, SlidersHorizontal, SquareLibrary, Terminal, Users2 } from "lucide-react";
 
 export const navSections = [
   {
@@ -14,6 +14,7 @@ export const navSections = [
       { id: "pending-recovery", to: "/pending-recovery", label: "Pending Recovery", icon: RotateCw },
       { id: "disks", to: "/disks", label: "Disks", icon: HardDrive },
       { id: "images", to: "/images", label: "Images", icon: FilesIcon },
+      { id: "installer-media", to: "/installer-media", label: "Installer Media", icon: Disc3, adminOnly: true },
       { id: "services", to: "/services", label: "Services", icon: Server },
     ],
   },
@@ -38,7 +39,7 @@ export const navSections = [
   {
     label: "Management",
     items: [
-      { id: "users", to: "/users", label: "Users", icon: Users2 },
+      { id: "users", to: "/users", label: "Users", icon: Users2, adminOnly: true },
       {
         id: "ssh-tester",
         to: "/ssh-tester",
@@ -46,7 +47,7 @@ export const navSections = [
         icon: Terminal,
       },
       { id: "logs", to: "/logs", label: "Logs", icon: File },
-      { id: "license", to: "/license", label: "License", icon: KeyRound },
+      { id: "license", to: "/license", label: "License", icon: KeyRound, adminOnly: true },
     ],
   },
 ];

@@ -7,10 +7,12 @@ const ProtectedRoute = ({ children }) => {
   const { user, token, loading } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const adminOnlyPaths = ["/users", "/license", "/installer-media"];
+  const isAdminOnlyPath = adminOnlyPaths.includes(location.pathname.replace(/\/+$/, "") || "/");
 
   useEffect(() => {
     if (loading) return;
-    if (user && token && user.role !== "admin" && ["/users", "/license"].includes(location.pathname)) {
+    if (user && token && user.role !== "admin" && isAdminOnlyPath) {
       navigate("/", { replace: true });
       return;
     }
@@ -40,10 +42,10 @@ const ProtectedRoute = ({ children }) => {
     return () => {
       cancelled = true;
     };
-  }, [user, token, loading, navigate, location.pathname]);
+  }, [user, token, loading, navigate, isAdminOnlyPath]);
 
   if (!loading && user && token) {
-    if (user.role !== "admin" && ["/users", "/license"].includes(location.pathname)) return null;
+    if (user.role !== "admin" && isAdminOnlyPath) return null;
     return children;
   }
 

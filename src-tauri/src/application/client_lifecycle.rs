@@ -192,28 +192,12 @@ pub async fn delete_writeback_locked(state: &AppState, client: &Client) -> Resul
 /// Reject boot-time repair when persisted resource identities are shared.
 /// Direct master volumes are intentionally shared; their target and backstore are not.
 pub(crate) async fn validate_boot_storage_owner(state: &AppState, client: &Client) -> Result<()> {
-    let snapshot_backed = client
-        .snapshot
-        .as_deref()
-        .is_some_and(|snapshot| !snapshot.trim().is_empty());
-    let dataset = if snapshot_backed {
-        client.writeback.as_deref().unwrap_or_default()
-    } else {
-        ""
-    };
-    let other: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM clients WHERE id <> ? AND (target_iqn = ? OR block_store = ? OR (? = 1 AND (block_device = ? OR writeback = ? OR master = ?)))",
-    )
-    .bind(client.id.as_str())
-    .bind(client.target_iqn.as_deref().unwrap_or_default())
-    .bind(client.block_store.as_deref().unwrap_or_default())
-    .bind(i64::from(snapshot_backed))
-    .bind(client.block_device.as_deref().unwrap_or_default())
-    .bind(dataset)
-    .bind(dataset)
-    .fetch_one(&state.db_pool)
-    .await?;
-    if other != 0 {
+    if state
+        .application
+        .client_repository
+        .has_other_storage_owner(client)
+        .await?
+    {
         return Err(PendingRecoverySafetyError::SharedStorage.into());
     }
     Ok(())
@@ -423,7 +407,7 @@ async fn tick(state: &AppState) -> Result<()> {
 async fn process_locked(state: AppState, client_id: String) -> Result<()> {
     // The detached child owns this guard through any spawn_blocking storage work.
     // Background polling must not queue behind user mutations or boot readiness.
-    let Ok(_guard) = state.client_mutations.try_lock() else {
+    let Some(_guard) = state.client_mutations.try_lock_client(&client_id).await else {
         return Ok(());
     };
     let id = crate::domain::ClientId::from_string(client_id.clone())?;
@@ -777,7 +761,7 @@ mod tests {
     #[tokio::test]
     async fn background_processing_skips_busy_mutation_lock() {
         let (state, _, _, _) = crate::api::security_tests::setup().await;
-        let guard = state.client_mutations.clone().lock_owned().await;
+        let guard = state.client_mutations.lock().await;
         // No client lookup or system inspection should run while mutations are busy.
         tokio::time::timeout(
             std::time::Duration::from_secs(1),

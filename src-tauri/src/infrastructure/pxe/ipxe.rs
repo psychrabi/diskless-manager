@@ -67,6 +67,41 @@ pub fn render_client_script(client_name: &str, target_iqn: &str, http_port: u16)
     render_client_script_with_mode(client_name, target_iqn, http_port, true, None)
 }
 
+/// Boot the installer recorded by an active Super session from the client's
+/// existing target, with the working disk exposed as the secondary drive.
+#[must_use]
+pub fn render_super_client_script(
+    client_name: &str,
+    target_iqn: &str,
+    server_ip: &str,
+    media_type: crate::persistence::InstallerMediaType,
+    firmware: crate::domain::PxeMode,
+    chap: Option<&crate::infrastructure::iscsi::ChapCredentials>,
+) -> String {
+    let slug = client_script_slug(client_name);
+    let initiator_iqn = client_initiator_iqn(client_name);
+    let chap_settings = match chap {
+        Some(credentials) => format!(
+            "set username {}\nset password {}\n",
+            credentials.username, credentials.password
+        ),
+        None => String::new(),
+    };
+    let label = match media_type {
+        crate::persistence::InstallerMediaType::WinPe => "Windows WinPE installer",
+        crate::persistence::InstallerMediaType::LinuxLive => "Linux live installer",
+    };
+    format!(
+        "#!ipxe\ndhcp\n# Super installer boot for {slug} ({}, {label})\nset initiator-iqn {initiator_iqn}\nset target-iqn {target_iqn}\nset keep-san 1\n{chap_settings}sanhook --drive 0x81 iscsi:{server_ip}:::0:{target_iqn} || goto failed\nsanboot --no-describe iscsi:{server_ip}:::1:{target_iqn} || goto failed\n:failed\necho Super installer boot failed.\nshell\n",
+        firmware.as_str(),
+    )
+}
+
+#[must_use]
+pub fn render_super_boot_denied() -> String {
+    "#!ipxe\n# Super-session boot denied until server-side state is repaired.\necho Diskless Manager: installer boot is unavailable; retrying shortly.\nsleep 10\nreboot\n".to_owned()
+}
+
 /// iPXE response served to a client that is not yet registered.
 ///
 /// Reuses the session variables set by `autoexec.ipxe` (`boot-url`,
@@ -437,6 +472,43 @@ pub fn is_managed_script_path(root: &Path, relative_path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn super_installer_boot_attaches_working_disk_before_verified_iso_for_each_media_and_firmware()
+    {
+        use crate::persistence::InstallerMediaType::{LinuxLive, WinPe};
+        use crate::{domain::PxeMode, infrastructure::iscsi::ChapCredentials};
+
+        let chap = ChapCredentials {
+            username: "chap-pc001".into(),
+            password: "Secret123".into(),
+        };
+        for (media, firmware) in [
+            (WinPe, PxeMode::Uefi),
+            (WinPe, PxeMode::Bios),
+            (LinuxLive, PxeMode::Uefi),
+            (LinuxLive, PxeMode::Bios),
+        ] {
+            let script = render_super_client_script(
+                "PC001",
+                "iqn.example:client.pc001",
+                "192.0.2.10",
+                media,
+                firmware,
+                Some(&chap),
+            );
+            let working = "sanhook --drive 0x81 iscsi:192.0.2.10:::0:iqn.example:client.pc001";
+            let installer = "sanboot --no-describe iscsi:192.0.2.10:::1:iqn.example:client.pc001";
+            assert!(script.contains("set username chap-pc001"));
+            assert!(script.contains("set password Secret123"));
+            assert!(script.find(working).unwrap() < script.find(installer).unwrap());
+            assert!(script.contains("set keep-san 1"));
+            assert!(script.contains(match media {
+                WinPe => "Windows WinPE installer",
+                LinuxLive => "Linux live installer",
+            }));
+        }
+    }
 
     #[test]
     fn slug_is_deterministic_and_safe() {

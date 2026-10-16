@@ -56,27 +56,33 @@ pub async fn delete_client_writeback(
     }
     let task_state = state.clone();
     let task_id = id.clone();
-    let result = crate::api::util::spawn_locked(state.client_mutations.clone(), None, async move {
-        let client = task_state
-            .application
-            .clients
-            .get_by_string(&task_id)
-            .await?
-            .ok_or(ClientWritebackError::MissingClient)?;
-        if client
-            .snapshot
-            .as_deref()
-            .map_or(true, |value| value.trim().is_empty())
-            || client
-                .writeback
+    let result = crate::api::util::spawn_client_locked(
+        state.client_mutations.clone(),
+        id.clone(),
+        None,
+        async move {
+            let client = task_state
+                .application
+                .clients
+                .get_by_string(&task_id)
+                .await?
+                .ok_or(ClientWritebackError::MissingClient)?;
+            if client
+                .snapshot
                 .as_deref()
                 .map_or(true, |value| value.trim().is_empty())
-        {
-            return Err(ClientWritebackError::UnsupportedWriteback.into());
-        }
-        crate::application::client_lifecycle::delete_writeback_locked(&task_state, &client).await?;
-        Ok(client.name)
-    })
+                || client
+                    .writeback
+                    .as_deref()
+                    .map_or(true, |value| value.trim().is_empty())
+            {
+                return Err(ClientWritebackError::UnsupportedWriteback.into());
+            }
+            crate::application::client_lifecycle::delete_writeback_locked(&task_state, &client)
+                .await?;
+            Ok(client.name)
+        },
+    )
     .await
     .map_err(anyhow::Error::from)
     .and_then(|result| result);

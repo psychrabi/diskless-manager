@@ -222,6 +222,12 @@ impl ImageBackend for ZfsImageBackend {
         })
     }
 
+    fn promote_clone(&self, name: &str) -> Result<()> {
+        self.command
+            .execute(["zfs", "promote", name])
+            .with_context(|| format!("failed to promote ZFS clone '{name}'"))
+    }
+
     fn create_snapshot(&self, dataset: &str, snapshot: &str) -> Result<()> {
         self.snapshots.create(dataset, snapshot)
     }

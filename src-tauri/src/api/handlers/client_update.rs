@@ -1,7 +1,7 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    Json,
+    Extension, Json,
 };
 
 use super::clients::ErrorResponse;
@@ -87,13 +87,20 @@ fn domain_to_legacy(client: crate::domain::Client) -> Client {
 pub async fn update_client(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Extension(claims): Extension<crate::types::Claims>,
     Json(request): Json<UpdateClientRequest>,
 ) -> Result<Json<Client>, (StatusCode, Json<ErrorResponse>)> {
     if !can_use_typed_update(&request) {
-        return super::clients::update_client(State(state), Path(id), Json(request)).await;
+        return super::clients::update_client(
+            State(state),
+            Path(id),
+            Extension(claims),
+            Json(request),
+        )
+        .await;
     }
 
-    let _client_guard = state.client_mutations.lock().await;
+    let _client_guard = state.client_mutations.lock_client(&id).await;
 
     if let Some(ip) = &request.ip {
         if validate_ip_address(ip).is_err() {
@@ -169,60 +176,6 @@ pub async fn update_client(
 
     let settings = state.settings.read().await.clone();
 
-    // Preserve the existing menu refresh behavior for persistence-only saves.
-    if existing.enabled {
-        if let Some(target_iqn) = existing
-            .target_iqn
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            let chap = if existing.chap_enabled {
-                crate::core::reconciliation::ensure_chap_credentials(
-                    &state.db_pool,
-                    &id,
-                    &existing.name,
-                    true,
-                )
-                .await
-                .map_err(|error| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(ErrorResponse {
-                            status: 500,
-                            error: format!("Failed to ensure CHAP credentials: {error}"),
-                        }),
-                    )
-                })?
-            } else {
-                None
-            };
-
-            let next = settings.dhcp.next_server_ip.trim();
-            let server_ip = if next.is_empty() {
-                settings.server.ip_address.trim()
-            } else {
-                next
-            };
-            let reservation = crate::infrastructure::dhcp::BootReservation {
-                client_name: existing.name.clone(),
-                mac: existing.mac.to_string(),
-                ip: existing.ip.to_string(),
-                target_iqn: target_iqn.to_string(),
-                server_ip: server_ip.to_string(),
-                chap,
-            };
-            if let Err(error) = crate::infrastructure::dhcp::publish_client_ipxe(
-                &state.settings.read().await.clone(),
-                &reservation,
-            )
-            .await
-            {
-                tracing::warn!(client_id = %id, %error, "failed to regenerate boot menu while updating client");
-            }
-        }
-    }
-
     let update = UpdateClient {
         mac: request.mac,
         ip: request.ip,
@@ -244,6 +197,12 @@ pub async fn update_client(
                 }),
             )
         })?;
+
+    if existing.enabled {
+        if let Err(error) = state.refresh_client_boot_menu(&id).await {
+            tracing::warn!(client_id = %id, %error, "failed to refresh client boot menu while updating client");
+        }
+    }
 
     sqlx::query(
         "DELETE FROM client_offline_resets WHERE client_id = ? AND operation IS NULL AND ? <> ?",

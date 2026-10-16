@@ -2,7 +2,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    Json,
+    Extension, Json,
 };
 use chrono::Utc;
 use log::{error, info};
@@ -280,38 +280,9 @@ fn resolve_effective_game_selection(
 /// (Re)publish a provisioned client's static boot menu, embedding CHAP
 /// credentials when enforced. Best-effort: menus self-heal on the next
 /// boot through the enrollment redirect path.
-async fn publish_boot_menu(
-    settings: &crate::core::config::Settings,
-    client_name: &str,
-    mac: &str,
-    ip: &str,
-    target_iqn: &str,
-    chap: Option<&crate::infrastructure::iscsi::ChapCredentials>,
-) {
-    let server_ip = {
-        let next = settings.dhcp.next_server_ip.trim();
-        if next.is_empty() {
-            settings.server.ip_address.trim().to_string()
-        } else {
-            next.to_string()
-        }
-    };
-    let reservation = crate::infrastructure::dhcp::BootReservation {
-        client_name: client_name.to_string(),
-        mac: mac.to_string(),
-        ip: ip.to_string(),
-        target_iqn: target_iqn.to_string(),
-        server_ip,
-        chap: chap.cloned(),
-    };
-    if let Err(error) =
-        crate::infrastructure::dhcp::publish_client_ipxe(settings, &reservation).await
-    {
-        tracing::warn!(
-            "Failed to regenerate boot menu for client '{}': {}",
-            client_name,
-            error
-        );
+async fn publish_boot_menu(state: &AppState, client_id: &str) {
+    if let Err(error) = state.refresh_client_boot_menu(client_id).await {
+        tracing::warn!(client_id, %error, "failed to refresh client boot menu");
     }
 }
 
@@ -653,7 +624,11 @@ pub async fn create_client(
     State(state): State<AppState>,
     Json(request): Json<CreateClientRequest>,
 ) -> Result<Json<crate::domain::Client>, (StatusCode, Json<ErrorResponse>)> {
-    let _client_guard = state.client_mutations.lock().await;
+    // Serialize uniqueness checks and same-name storage provisioning without pausing existing clients.
+    let _client_guard = state
+        .client_mutations
+        .lock_resource("client-creation")
+        .await;
     if validate_ip_address(&request.ip).is_err() || validate_mac_address(&request.mac).is_err() {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -818,10 +793,11 @@ pub async fn create_client(
 pub async fn update_client(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Extension(claims): Extension<crate::types::Claims>,
     Json(mut request): Json<UpdateClientRequest>,
 ) -> Result<Json<Client>, (StatusCode, Json<ErrorResponse>)> {
     info!("Updating client: {:?}", request);
-    let _client_guard = state.client_mutations.lock().await;
+    let _client_guard = state.client_mutations.lock_client(&id).await;
 
     // ------------------------------------------------------------------------
     // Validate request.
@@ -1129,6 +1105,33 @@ pub async fn update_client(
                     return Ok(Json(existing_client));
                 };
 
+                if claims.role != "admin" {
+                    return Err((
+                        StatusCode::FORBIDDEN,
+                        Json(ErrorResponse {
+                            status: 403,
+                            error: "Only administrators can change Super mode".into(),
+                        }),
+                    ));
+                }
+                if make_super {
+                    return Err((
+                        StatusCode::CONFLICT,
+                        Json(ErrorResponse {
+                            status: StatusCode::CONFLICT.as_u16(),
+                            error: "Use the managed Super session API; the legacy toggle can export a shared image as writable storage".into(),
+                        }),
+                    ));
+                }
+                if existing_client.is_super_mode() {
+                    return Err((
+                        StatusCode::CONFLICT,
+                        Json(ErrorResponse {
+                            status: 409,
+                            error: "Use the administrator-only legacy Super exit operation and select a snapshot".into(),
+                        }),
+                    ));
+                }
                 let settings = state.settings.read().await;
 
                 let master = existing_client.master.trim().to_string();
@@ -1150,7 +1153,7 @@ pub async fn update_client(
                 // client that boots a snapshot clone has no direct image
                 // writes to return, and rebuilding its storage anyway would
                 // discard the clone it is meant to keep.
-                if !make_super && !existing_client.is_super_client() {
+                if !existing_client.is_super_client() {
                     return Err((
                         StatusCode::CONFLICT,
                         Json(ErrorResponse {
@@ -1161,16 +1164,6 @@ pub async fn update_client(
                             ),
                         }),
                     ));
-                }
-
-                if make_super {
-                    let revision: Option<(String,)> = sqlx::query_as("SELECT id FROM windows_image_driver_revisions WHERE revision_image_id = (SELECT id FROM images WHERE name = ? OR id = ? LIMIT 1) LIMIT 1")
-                        .bind(&master).bind(&master).fetch_optional(&state.db_pool).await.map_err(|error| {
-                            (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { status: 500, error: error.to_string() }))
-                        })?;
-                    if revision.is_some() {
-                        return Err((StatusCode::CONFLICT, Json(ErrorResponse { status: 409, error: "Windows revisions are immutable; build a new revision to change the image".into() })));
-                    }
                 }
 
                 let client_status =
@@ -1191,115 +1184,7 @@ pub async fn update_client(
 
                 let mut client = existing_client.clone();
 
-                if make_super {
-                    // -------------------------------------------------------
-                    // Enable Super mode: point the client's iSCSI target
-                    // directly at the (shared) master ZVOL.
-                    // -------------------------------------------------------
-                    info!(
-                        "Enabling Super mode for client '{}' using master '{}'",
-                        existing_client.name, master
-                    );
-
-                    state
-                        .application
-                        .storage
-                        .validate_existing_dataset(&master)
-                        .map_err(|error| {
-                            (
-                                StatusCode::BAD_REQUEST,
-                                Json(ErrorResponse {
-                                    status: StatusCode::BAD_REQUEST.as_u16(),
-                                    error: error.to_string(),
-                                }),
-                            )
-                        })?;
-
-                    let current_storage =
-                        storage_from_client(&state.config, &settings, &existing_client).map_err(
-                            |error| {
-                                (
-                                    StatusCode::INTERNAL_SERVER_ERROR,
-                                    Json(ErrorResponse {
-                                        status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                                        error,
-                                    }),
-                                )
-                            },
-                        )?;
-
-                    if let Err(error) = state
-                        .application
-                        .storage
-                        .destroy_client_storage(&current_storage)
-                    {
-                        tracing::warn!(
-                            "Failed to remove existing storage before enabling Super mode for '{}': {}",
-                            existing_client.name,
-                            error
-                        );
-                    }
-
-                    let mut spec = ClientStorageSpec {
-                        client_id: existing_client.id.clone(),
-                        client_name: existing_client.name.clone(),
-                        source: StorageSource::ExistingVolume(master.clone()),
-                        dataset: master.clone(),
-                        backstore: format!("block_{}", existing_client.name.to_lowercase()),
-                        target_iqn: format!(
-                            "{}:client.{}",
-                            settings.iscsi.target_prefix,
-                            existing_client.name.to_lowercase()
-                        ),
-                        lun: 0,
-                        use_game_disk: existing_client.use_game_disk.unwrap_or(false),
-                        game_disks: Vec::new(),
-                        // A super-mode rebuild must not silently drop target
-                        // authentication.
-                        chap: crate::core::reconciliation::ensure_chap_credentials(
-                            &state.db_pool,
-                            &existing_client.id,
-                            &existing_client.name,
-                            existing_client.chap_enabled.unwrap_or(false),
-                        )
-                        .await
-                        .map_err(|error| {
-                            (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                Json(ErrorResponse {
-                                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                                    error: format!("Failed to resolve CHAP credentials: {}", error),
-                                }),
-                            )
-                        })?,
-                    };
-
-                    preserve_persisted_target_iqn(&mut spec, &existing_client);
-
-                    let storage = state
-                        .application
-                        .storage
-                        .create_client_storage(&spec)
-                        .map_err(|error| {
-                            (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                Json(ErrorResponse {
-                                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                                    error: format!(
-                                        "Failed to activate Super client storage: {:#}",
-                                        error
-                                    ),
-                                }),
-                            )
-                        })?;
-
-                    client.mode = Some("super".to_string());
-                    client.master = master;
-                    client.snapshot = None;
-                    client.block_device = Some(format!("/dev/zvol/{}", storage.dataset()));
-                    client.block_store = Some(format!("/dev/zvol/{}", storage.dataset()));
-                    client.target_iqn = Some(storage.target_iqn().to_string());
-                } else {
+                {
                     // -------------------------------------------------------
                     // Disable Super mode: revert the client to a snapshot
                     // clone of the master.
@@ -1817,21 +1702,14 @@ pub async fn update_client(
         // enrollment redirect path, so regeneration must not fail saves.
         // Runs on enable transitions AND auth changes so the embedded
         // CHAP credentials never go stale.
-        if let Some(target_iqn) = existing_client
+        if existing_client
             .target_iqn
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
+            .is_some()
         {
-            publish_boot_menu(
-                &settings,
-                &existing_client.name,
-                &existing_client.mac,
-                &existing_client.ip,
-                target_iqn,
-                chap_creds.as_ref(),
-            )
-            .await;
+            publish_boot_menu(&state, &existing_client.id).await;
         }
     }
 
@@ -2123,18 +2001,8 @@ pub async fn update_client(
     })?;
 
     // Renaming rebuilds the initiator ACL, so the menu must use the saved identity.
-    if client.enabled {
-        if let Some(target_iqn) = client.target_iqn.as_deref() {
-            publish_boot_menu(
-                &settings,
-                &client.name,
-                &client.mac,
-                &client.ip,
-                target_iqn,
-                chap_creds.as_ref(),
-            )
-            .await;
-        }
+    if client.enabled && client.target_iqn.as_deref().is_some() {
+        publish_boot_menu(&state, &client.id).await;
     }
 
     // Persist the effective selection and destroy clone datasets that are
@@ -2167,6 +2035,82 @@ pub async fn update_client(
     Ok(Json(client))
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub struct LegacySuperExitRequest {
+    /// Fully qualified selected assignment, such as `pool/windows@ready`.
+    pub snapshot: String,
+}
+
+/// Explicitly move an unmanaged legacy Super client to a selected image snapshot.
+pub async fn exit_legacy_super(
+    State(state): State<AppState>,
+    Extension(claims): Extension<crate::types::Claims>,
+    Path(id): Path<String>,
+    Json(request): Json<LegacySuperExitRequest>,
+) -> Result<Json<crate::domain::Client>, (StatusCode, Json<ErrorResponse>)> {
+    if claims.role != "admin" {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                status: 403,
+                error: "Only administrators can exit legacy Super mode".into(),
+            }),
+        ));
+    }
+    let current = ClientManager::new(state.db_pool.clone())
+        .get(&id)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    status: 404,
+                    error: "Client not found".into(),
+                }),
+            )
+        })?;
+    if crate::utils::network::get_client_status_realtime(current.ip.clone()) != "Offline" {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(ErrorResponse {
+                status: 409,
+                error: "Legacy Super exit requires the client to be offline".into(),
+            }),
+        ));
+    }
+    state
+        .super_client_service()
+        .await
+        .exit_legacy(&id, &request.snapshot)
+        .await
+        .map(Json)
+        .map_err(|error| {
+            let detail = format!("{error:#}");
+            let conflict = detail.contains("offline")
+                || detail.contains("active iSCSI")
+                || detail.contains("mounted")
+                || detail.contains("pending")
+                || detail.contains("legacy Super")
+                || detail.contains("snapshot");
+            let status = if conflict {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            (
+                status,
+                Json(ErrorResponse {
+                    status: status.as_u16(),
+                    error: if conflict {
+                        "Legacy Super exit conflicts with the client's current state".into()
+                    } else {
+                        "Legacy Super exit could not be completed".into()
+                    },
+                }),
+            )
+        })
+}
+
 // ============================================================================
 // Delete client
 // ============================================================================
@@ -2182,7 +2126,7 @@ pub async fn rotate_client_chap(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
-    let _client_guard = state.client_mutations.lock().await;
+    let _client_guard = state.client_mutations.lock_client(&id).await;
     let err = |error: String| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -2232,16 +2176,7 @@ pub async fn rotate_client_chap(
             .set_target_chap(target_iqn, Some(&creds))
             .map_err(|error| err(format!("Failed to apply CHAP secret: {}", error)))?;
 
-        let settings = state.settings.read().await;
-        publish_boot_menu(
-            &settings,
-            &existing.name,
-            &existing.mac,
-            &existing.ip,
-            target_iqn,
-            Some(&creds),
-        )
-        .await;
+        publish_boot_menu(&state, &existing.id).await;
     }
 
     tracing::info!(
@@ -2311,6 +2246,17 @@ pub async fn request_inventory_boot(
 mod error_contract_tests {
     use super::ErrorResponse;
     use axum::{body::to_bytes, http::StatusCode, response::IntoResponse};
+
+    fn admin_claims() -> crate::types::Claims {
+        crate::types::Claims {
+            sub: "admin".into(),
+            username: "admin".into(),
+            role: "admin".into(),
+            exp: i64::MAX,
+            iat: 0,
+            session_version: 0,
+        }
+    }
 
     #[test]
     fn super_save_selects_exact_snapshot_instead_of_default() {
@@ -2421,7 +2367,7 @@ mod error_contract_tests {
         settings.http.root_dir = root.to_string_lossy().into_owned();
         let state = super::AppState {
             config: crate::config::RuntimeConfig::default(),
-            client_mutations: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+            client_mutations: crate::state::ClientMutationLocks::default(),
             settings: std::sync::Arc::new(tokio::sync::RwLock::new(settings.clone())),
             db_pool: pool.clone(),
             config_path: std::path::PathBuf::new(),
@@ -2644,6 +2590,7 @@ mod error_contract_tests {
         let (status, _) = super::update_client(
             axum::extract::State(state),
             axum::extract::Path(existing.id),
+            axum::Extension(admin_claims()),
             axum::Json(request),
         )
         .await
@@ -2653,7 +2600,7 @@ mod error_contract_tests {
     }
 
     #[tokio::test]
-    async fn revision_cannot_become_a_shared_writable_super_image() {
+    async fn generic_toggle_cannot_enable_super_for_a_revision_image() {
         let (state, _) = gate_state(None).await;
         ready_revision(&state.db_pool, &["pkg-1"]).await;
         let mut request = gate_request("tank/image/windows-rev");
@@ -2668,13 +2615,45 @@ mod error_contract_tests {
         let (status, error) = super::update_client(
             axum::extract::State(state),
             axum::extract::Path(existing.id),
+            axum::Extension(admin_claims()),
             axum::Json(request),
         )
         .await
         .err()
         .unwrap();
         assert_eq!(status, StatusCode::CONFLICT);
-        assert!(error.0.error.contains("immutable"));
+        assert!(error.0.error.contains("managed Super session"));
+    }
+
+    #[tokio::test]
+    async fn generic_client_update_cannot_enable_legacy_shared_master_super_mode() {
+        let (state, _) = gate_state(None).await;
+        let mut request = gate_request("tank/image/linux");
+        request.snapshot = Some("tank/image/linux@ready".into());
+        let existing = super::ClientManager::new(state.db_pool.clone())
+            .create(request)
+            .await
+            .unwrap();
+        let request =
+            serde_json::from_value(serde_json::json!({"action": "super", "make_super": true}))
+                .unwrap();
+
+        let (status, error) = super::update_client(
+            axum::extract::State(state.clone()),
+            axum::extract::Path(existing.id.clone()),
+            axum::Extension(admin_claims()),
+            axum::Json(request),
+        )
+        .await
+        .expect_err("generic update must refuse the unsafe legacy Super toggle");
+
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert!(error.0.error.contains("managed Super session"));
+        let unchanged = super::ClientManager::new(state.db_pool.clone())
+            .get(&existing.id)
+            .await
+            .unwrap();
+        assert!(!unchanged.is_super_mode());
     }
 
     #[tokio::test]
@@ -2694,6 +2673,7 @@ mod error_contract_tests {
         let (status, error) = super::update_client(
             axum::extract::State(state),
             axum::extract::Path(existing.id),
+            axum::Extension(admin_claims()),
             axum::Json(request),
         )
         .await

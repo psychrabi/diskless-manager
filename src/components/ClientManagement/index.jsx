@@ -9,9 +9,10 @@ import { PageHeader } from "@/components/ui";
 import { LoadingSkeleton } from "@/components/ui/LoadingSkeleton";
 import { ContextMenu } from "../ui/ContextMenu";
 import { PlusCircle, Users, Wifi, WifiOff, History, Clock } from "lucide-react";
-import { memo, useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "../../store/useAppStore";
+import { isOnlineStatus } from "@/lib/clientStatus";
 import ClientFormModal from "./ClientFormModal";
 import ClientTable from "./ClientTable";
 import ClientHero from "./ClientHero";
@@ -19,11 +20,17 @@ import RemoteDesktopModal from "./RemoteDesktopModal";
 import PowerActionModal from "./PowerActionModal";
 import AuditLogViewer from "./AuditLogViewer";
 import ScheduledOperationsList from "./ScheduledOperationsList";
+import LegacySuperExitDialog from "./LegacySuperExitDialog";
+import { getSuperStatus } from "@/api/modules/clients";
+import { listInstallerMedia } from "@/api/modules/installerMedia";
+import { getPendingClientRecoveries } from "@/api/modules/reconciliation";
+import { useAuth } from "@/contexts/auth";
 
 const MemoizedClientTable = memo(ClientTable);
 const MemoizedContextMenu = memo(ContextMenu);
 
 const ClientManagement = () => {
+  const { user } = useAuth();
   const {
     clients,
     fetchClients,
@@ -45,6 +52,7 @@ const ClientManagement = () => {
   const [powerAction, setPowerAction] = useState(null);
   const [isAuditLogViewerOpen, setIsAuditLogViewerOpen] = useState(false);
   const [isScheduledOperationsOpen, setIsScheduledOperationsOpen] = useState(false);
+  const [legacySuperClient, setLegacySuperClient] = useState(null);
   const [client, setClient] = useState({
     name: "",
     mac: "",
@@ -59,6 +67,29 @@ const ClientManagement = () => {
     y: 0,
     client: null,
   });
+  const contextMenuRequestId = useRef(0);
+  const [superData, setSuperData] = useState(null);
+
+  useEffect(() => {
+    const target = contextMenu.client;
+    if (!contextMenu.isOpen || !target || user?.role !== "admin") return;
+    let current = true;
+    Promise.all([getSuperStatus(target.id), listInstallerMedia(), getPendingClientRecoveries()])
+      .then(([status, media, recoveryResponse]) => {
+        if (!current) return;
+        const storageRecovery = (recoveryResponse.recoveries || []).some(
+          (recovery) => recovery.client_id === target.id && recovery.kind !== "boot_failure",
+        );
+        setSuperData({ requestId: contextMenu.requestId, status: { ...status, storage_recovery: storageRecovery }, media: media || [] });
+      })
+      .catch(() => {
+        if (!current) return;
+        setSuperData({ requestId: contextMenu.requestId, status: null, media: [], error: true });
+      });
+    return () => { current = false; };
+  }, [contextMenu.client, contextMenu.isOpen, contextMenu.requestId, user?.role]);
+
+  const currentSuperData = superData?.requestId === contextMenu.requestId ? superData : null;
 
   const handleClientContextMenu = useCallback((event, client) => {
     event.preventDefault();
@@ -67,6 +98,7 @@ const ClientManagement = () => {
       x: event.clientX,
       y: event.clientY,
       client: client,
+      requestId: ++contextMenuRequestId.current,
     });
   }, []);
 
@@ -129,7 +161,7 @@ const ClientManagement = () => {
   }, [clients, masters]);
 
   // Calculate statistics
-  const onlineClients = useMemo(() => clients.filter((c) => c.status === "Online").length, [clients]);
+  const onlineClients = useMemo(() => clients.filter((c) => isOnlineStatus(c.status)).length, [clients]);
   const offlineClients = clients.length - onlineClients;
 
   if (loading && clients.length === 0) {
@@ -247,7 +279,22 @@ const ClientManagement = () => {
         targetClient={contextMenu.client}
         onClose={closeContextMenu}
         actions={contextActions}
+        onExitLegacySuper={setLegacySuperClient}
+        superStatus={currentSuperData?.status}
+        superMedia={currentSuperData?.media || []}
+        superLoading={!currentSuperData}
+        superError={currentSuperData?.error}
+        targetImage={masters.find((image) => image.name === contextMenu.client?.master || image.id === contextMenu.client?.master)}
       />
+      {legacySuperClient && (
+        <LegacySuperExitDialog
+          client={clients.find((item) => item.id === legacySuperClient.id) || legacySuperClient}
+          masters={masters}
+          isOpen
+          onClose={() => setLegacySuperClient(null)}
+          refresh={refreshData}
+        />
+      )}
       <ClientFormModal
         client={client}
         setClient={setClient}
