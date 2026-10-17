@@ -10,7 +10,8 @@ use crate::{
             windows_iscsi_servicing::{WindowsIscsiConnection, SERVICING_IQN_PREFIX},
             NetworkDriverPackage, RemoteWindowsCapabilitiesRequest, RemoteWindowsServicer,
             RemoteWindowsServicingRequest, StagedDriverPackage, WindowsBootArmConfig,
-            WindowsImagePreparationRequest, WindowsImagePreparationResult,
+            WindowsDriverInstallStrategy, WindowsImagePreparationRequest,
+            WindowsImagePreparationResult,
         },
     },
     persistence::repositories::image::ImageRepository,
@@ -44,6 +45,8 @@ pub struct ManagedWindowsPreparationRequest {
     pub report_server_url: Option<String>,
     #[serde(default)]
     pub boot_arm: WindowsBootArmConfig,
+    #[serde(default)]
+    pub driver_install_strategy: WindowsDriverInstallStrategy,
 }
 
 impl ManagedWindowsPreparationRequest {
@@ -214,6 +217,7 @@ pub async fn prepare_managed(
                 expected_size_bytes: size,
             }),
             reporter,
+            driver_install_strategy: request.driver_install_strategy,
         };
         let (preparation, count, bytes, cleaned) = if packages.is_empty() {
             let prepared = worker

@@ -43,6 +43,7 @@ pub struct WindowsServicingConfig {
     pub helper_executable_path: String,
     pub iscsi_portal: String,
     pub report_server_url: String,
+    pub driver_install_strategy: String,
 }
 
 impl Default for WindowsServicingConfig {
@@ -54,6 +55,7 @@ impl Default for WindowsServicingConfig {
                 r"C:\Program Files\Diskless Manager\diskless-windows-servicer.exe".into(),
             iscsi_portal: String::new(),
             report_server_url: String::new(),
+            driver_install_strategy: "offline_dism".into(),
         }
     }
 }

@@ -15,6 +15,7 @@ export const windowsServicingSchema = z.object({
   helper_executable_path: z.string().default(""),
   iscsi_portal: z.string().default(""),
   report_server_url: z.string().default(""),
+  driver_install_strategy: z.enum(["offline_dism", "nexboot_boot_time"]).default("offline_dism"),
 });
 
 // Helper for IP address validation

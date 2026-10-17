@@ -30,6 +30,7 @@ const DEFAULT_VALUES = {
     helper_executable_path: String.raw`C:\Program Files\Diskless Manager\diskless-windows-servicer.exe`,
     iscsi_portal: "",
     report_server_url: "",
+    driver_install_strategy: "offline_dism",
   },
 };
 

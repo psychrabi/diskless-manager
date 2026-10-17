@@ -28,6 +28,14 @@ fn default_recursive() -> bool {
     true
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowsDriverInstallStrategy {
+    #[default]
+    OfflineDism,
+    NexbootBootTime,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WindowsImagePreparationRequest {
     #[serde(default)]
@@ -47,6 +55,8 @@ pub struct WindowsImagePreparationRequest {
     pub iscsi: Option<super::windows_iscsi_servicing::WindowsIscsiConnection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reporter: Option<WindowsReporterInstallConfig>,
+    #[serde(default)]
+    pub driver_install_strategy: WindowsDriverInstallStrategy,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -189,6 +199,34 @@ impl WindowsImagePreparer {
             if let Some(reporter) = &request.reporter {
                 validate_reporter_config(reporter)?;
             }
+        }
+        if request.driver_install_strategy == WindowsDriverInstallStrategy::NexbootBootTime {
+            let drivers_added = super::windows_nexboot_adaptation::stage(
+                &request.image_path,
+                &request.driver_root,
+                request.recursive,
+            )?;
+            return Ok(WindowsImagePreparationResult {
+                image_path: request.image_path.display().to_string(),
+                image_index: 0,
+                driver_root: request.driver_root.display().to_string(),
+                mount_path: request.image_path.display().to_string(),
+                system_hive_path: system_hive.display().to_string(),
+                drivers_added,
+                boot_arm: WindowsBootArmResult {
+                    system_hive: system_hive.display().to_string(),
+                    plan: super::windows_boot_arming::WindowsBootArmPlan {
+                        active_control_set: String::new(),
+                        native_nic_services: Vec::new(),
+                        selected_nic_services: Vec::new(),
+                        hive_dirty: false,
+                        changes: Vec::new(),
+                        warnings: vec!["NexBoot boot-time adaptation selected; DISM and offline hive arming were skipped".into()],
+                    },
+                    applied: false,
+                },
+                committed: request.commit,
+            });
         }
         let selected = selected_driver_services(&request.driver_root, request.recursive)?;
         let drivers_added = self.driver_injector.add_drivers(
@@ -755,6 +793,7 @@ mod tests {
             boot_arm: WindowsBootArmConfig::default(),
             iscsi: None,
             reporter: None,
+            driver_install_strategy: WindowsDriverInstallStrategy::OfflineDism,
         };
 
         assert!(validate_request(&request)

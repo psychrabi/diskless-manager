@@ -9,8 +9,8 @@ use crate::{
         select_managed_image_driver_ids, windows_servicing_available, NetworkDriverInjectionPlugin,
         RemoteWindowsCapabilitiesRequest, RemoteWindowsCatalogPreparationResult,
         RemoteWindowsServicer, RemoteWindowsServicingCapabilities, RemoteWindowsServicingRequest,
-        StagedDriverPackage, WindowsBootArmConfig, WindowsImagePreparationRequest,
-        WindowsImagePreparationResult, WindowsImagePreparer,
+        StagedDriverPackage, WindowsBootArmConfig, WindowsDriverInstallStrategy,
+        WindowsImagePreparationRequest, WindowsImagePreparationResult, WindowsImagePreparer,
     },
     state::AppState,
     types::Claims,
@@ -255,6 +255,7 @@ pub async fn prepare_image_remote_catalog(
         boot_arm: request.boot_arm,
         iscsi: None,
         reporter: None,
+        driver_install_strategy: WindowsDriverInstallStrategy::OfflineDism,
     };
 
     RemoteWindowsServicer::new()
@@ -548,6 +549,11 @@ pub async fn prepare_windows_assignment(
                 commit: true,
                 report_server_url: Some(profile.report_server_url),
                 boot_arm: WindowsBootArmConfig::default(),
+                driver_install_strategy: if profile.driver_install_strategy == "nexboot_boot_time" {
+                    WindowsDriverInstallStrategy::NexbootBootTime
+                } else {
+                    WindowsDriverInstallStrategy::OfflineDism
+                },
             };
         preparation.validate()?;
         let prepared = crate::application::windows_servicing::prepare_managed(

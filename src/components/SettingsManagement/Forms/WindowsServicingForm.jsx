@@ -36,6 +36,16 @@ const WindowsServicingForm = ({ register }) => (
       placeholder="http://192.168.1.250:8080"
       autoComplete="url"
     />
+    <label className="flex flex-col gap-1 text-sm">
+      <span className="font-medium">Windows NIC installation strategy</span>
+      <select className="rounded-md border bg-background px-3 py-2" {...register("driver_install_strategy")}>
+        <option value="offline_dism">Offline DISM (current)</option>
+        <option value="nexboot_boot_time">NexBoot boot-time adaptation (test)</option>
+      </select>
+      <span className="text-xs text-muted-foreground">
+        NexBoot stages the bundle and installs drivers with pnputil as SYSTEM on the next client boot.
+      </span>
+    </label>
   </div>
 );
 

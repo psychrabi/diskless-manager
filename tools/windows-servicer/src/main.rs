@@ -17,6 +17,8 @@ mod windows_gpt_identity;
 mod windows_inf;
 #[path = "../../../src-tauri/src/infrastructure/pxe/windows_iscsi_servicing.rs"]
 mod windows_iscsi_servicing;
+#[path = "../../../src-tauri/src/infrastructure/pxe/windows_nexboot_adaptation.rs"]
+mod windows_nexboot_adaptation;
 
 pub use windows_boot_arming::{WindowsBootArmConfig, WindowsBootArmResult, WindowsBootArmer};
 pub use windows_driver_injection::WindowsDriverInjector;

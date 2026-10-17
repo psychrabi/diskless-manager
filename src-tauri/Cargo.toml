@@ -45,6 +45,7 @@ tower-http = { version = "0.6", features = ["cors", "trace", "timeout", "fs"] }
 tower = { version = "0.5.2", features = ["limit", "util"] }
 ssh2 = "0.9"
 tempfile = "3"
+zip = "2.2"
 
 
 [profile.dev]

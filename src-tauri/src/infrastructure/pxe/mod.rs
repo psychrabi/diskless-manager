@@ -10,6 +10,7 @@ pub mod windows_driver_injection;
 pub mod windows_image_preparation;
 pub mod windows_inf;
 pub mod windows_iscsi_servicing;
+pub mod windows_nexboot_adaptation;
 pub mod windows_remote_servicing;
 
 pub use driver_injection::{
@@ -36,8 +37,8 @@ pub use windows_driver_injection::{
     WindowsDriverInjectionRequest, WindowsDriverInjectionResult, WindowsDriverInjector,
 };
 pub use windows_image_preparation::{
-    servicing_available as windows_servicing_available, WindowsImagePreparationRequest,
-    WindowsImagePreparationResult, WindowsImagePreparer,
+    servicing_available as windows_servicing_available, WindowsDriverInstallStrategy,
+    WindowsImagePreparationRequest, WindowsImagePreparationResult, WindowsImagePreparer,
 };
 pub use windows_inf::{inspect_inf_file, parse_inf, WindowsInfMetadata};
 
