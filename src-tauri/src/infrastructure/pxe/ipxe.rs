@@ -200,6 +200,35 @@ chain http://${next-server}:4237/enroll/${client-mac} || shell
     .to_string()
 }
 
+/// Render a diagnostic-only Auto PNP block using iPXE's PCI configuration
+/// space settings. The scan is intentionally limited to PCI class 02
+/// (network controllers); Windows remains the authority for signed INF
+/// selection and installation. If the deployed iPXE binary lacks `pciscan`,
+/// the block exits silently and the normal boot menu continues.
+#[must_use]
+pub fn render_auto_pnp_block() -> &'static str {
+    r##":auto_pnp_scan
+pciscan auto-pnp-addr || goto auto_pnp_done
+set auto-pnp-class ${pci/${auto-pnp-addr}.0x0b.1}
+iseq ${auto-pnp-class} 02 || goto auto_pnp_scan
+set auto-pnp-header ${pci/${auto-pnp-addr}.0x0e.1}
+set auto-pnp-ven ${pci/${auto-pnp-addr}.0x00.2}
+set auto-pnp-dev ${pci/${auto-pnp-addr}.0x02.2}
+iseq ${auto-pnp-header} 00 && goto auto_pnp_endpoint
+iseq ${auto-pnp-header} 80 && goto auto_pnp_endpoint
+echo Auto PNP NIC ${auto-pnp-addr:busdevfn}: VEN_${auto-pnp-ven}&DEV_${auto-pnp-dev} (PCI header ${auto-pnp-header}; no subsystem registers)
+goto auto_pnp_scan
+:auto_pnp_endpoint
+set auto-pnp-subven ${pci/${auto-pnp-addr}.0x2c.2}
+set auto-pnp-subdev ${pci/${auto-pnp-addr}.0x2e.2}
+set auto-pnp-rev ${pci/${auto-pnp-addr}.0x08.1}
+echo Auto PNP NIC ${auto-pnp-addr:busdevfn}: VEN_${auto-pnp-ven}&DEV_${auto-pnp-dev}&SUBSYS_${auto-pnp-subdev}${auto-pnp-subven}&REV_${auto-pnp-rev}
+echo   PCI vendor=${auto-pnp-ven} device=${auto-pnp-dev} subsystem_vendor=${auto-pnp-subven} subsystem_device=${auto-pnp-subdev}
+goto auto_pnp_scan
+:auto_pnp_done
+"##
+}
+
 /// iPXE response served to an unknown client while the registration
 /// window is closed.
 ///
@@ -261,6 +290,7 @@ pub fn render_client_script_with_scheme(
         ),
         None => String::new(),
     };
+    let auto_pnp = render_auto_pnp_block();
 
     if !ready {
         return format!(
@@ -273,6 +303,7 @@ set target-iqn {target_iqn}
 set boot-url {scheme}://${{next-server}}{port_suffix}
 set keep-san 1
 {chap_settings}
+{auto_pnp}
 isset ${{root-path}} || goto no_target
 echo Provisioning {slug}: attaching ${{root-path}}
 sanhook ${{root-path}} || goto failed
@@ -315,6 +346,7 @@ set nvme-nqn {nvme_nqn}
 set boot-url {scheme}://${{next-server}}{port_suffix}
 set keep-san 1
 {chap_settings}
+{auto_pnp}
 :start
 menu Diskless Boot Menu (Client: ${{client}} - Server IP: ${{next-server}})
 item --key b boot_ubuntu    Diskless boot Ubuntu 25.10
@@ -656,6 +688,21 @@ mod tests {
     fn autoexec_supports_non_default_http_port() {
         let script = render_autoexec_ipxe(4433);
         assert!(script.contains("set boot-url http://${next-server}:4433"));
+    }
+
+    #[test]
+    fn client_script_displays_auto_pnp_network_hardware_ids() {
+        let block = render_auto_pnp_block();
+        assert!(block.contains("pciscan auto-pnp-addr"));
+        assert!(block.contains("0x00.2"));
+        assert!(block.contains("0x02.2"));
+        assert!(block.contains("0x2c.2"));
+        assert!(block.contains("0x2e.2"));
+        assert!(block.contains("iseq ${auto-pnp-class} 02"));
+
+        let script = render_client_script("PC001", "iqn.example:pc001", 80);
+        assert!(script.contains(":auto_pnp_scan"));
+        assert!(script.contains("SUBSYS_${auto-pnp-subdev}${auto-pnp-subven}"));
     }
 
     #[test]
