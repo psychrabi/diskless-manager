@@ -46,6 +46,10 @@ pub struct RemoteWindowsServicingCapabilities {
     pub iscsi_volume_servicing: bool,
     #[serde(default)]
     pub nexboot_boot_time: bool,
+    #[serde(default)]
+    pub nic_collection: bool,
+    #[serde(default)]
+    pub local_nic_installation: bool,
 }
 
 #[derive(Debug, Clone)]

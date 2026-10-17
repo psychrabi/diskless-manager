@@ -3,6 +3,8 @@
 //! Protocol:
 //!   diskless-windows-servicer.exe capabilities
 //!   diskless-windows-servicer.exe prepare
+//!   diskless-windows-servicer.exe collect-nic <report-config>
+//!   diskless-windows-servicer.exe install-nic-drivers <driver-root>
 //!
 //! The prepare command reads WindowsImagePreparationRequest JSON from stdin and
 //! writes a versioned JSON response to stdout.
@@ -44,6 +46,8 @@ struct WindowsServicerCapabilities {
     elevated: bool,
     iscsi_volume_servicing: bool,
     nexboot_boot_time: bool,
+    nic_collection: bool,
+    local_nic_installation: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -65,6 +69,8 @@ fn main() {
             elevated: is_elevated(),
             iscsi_volume_servicing: cfg!(windows),
             nexboot_boot_time: true,
+            nic_collection: cfg!(windows),
+            local_nic_installation: cfg!(windows),
         })
         .map(|_| 0)
         .unwrap_or_else(report_output_error),
@@ -114,6 +120,42 @@ fn main() {
                 }
             }
         }
+        Some("collect-nic") => {
+            let config = std::env::args().nth(2).unwrap_or_else(|| {
+                r"C:\ProgramData\Diskless Manager\client-report.json".to_string()
+            });
+            match windows_client_report::run_collect_nic(std::path::Path::new(&config)) {
+                Ok(()) => write_json(&serde_json::json!({"ok": true, "operation": "collect-nic"}))
+                    .map(|_| 0)
+                    .unwrap_or_else(report_output_error),
+                Err(error) => {
+                    let _ = write_json(
+                        &serde_json::json!({"ok": false, "error": format!("{error:#}")}),
+                    );
+                    1
+                }
+            }
+        }
+        Some("install-nic-drivers") => {
+            let root = std::env::args()
+                .nth(2)
+                .unwrap_or_else(|| r"C:\ProgramData\Diskless Manager\Drivers".to_string());
+            match windows_client_report::install_nic_drivers(std::path::Path::new(&root)) {
+                Ok(inf_count) => write_json(&serde_json::json!({
+                    "ok": true,
+                    "operation": "install-nic-drivers",
+                    "inf_count": inf_count,
+                }))
+                .map(|_| 0)
+                .unwrap_or_else(report_output_error),
+                Err(error) => {
+                    let _ = write_json(
+                        &serde_json::json!({"ok": false, "error": format!("{error:#}")}),
+                    );
+                    1
+                }
+            }
+        }
         Some("report-service") => {
             let args = std::env::args().skip(2).collect::<Vec<_>>();
             match parse_report_service_config(&args).and_then(start_report_service) {
@@ -126,11 +168,11 @@ fn main() {
         }
         Some(other) => {
             eprintln!("unknown command: {other}");
-            eprintln!("usage: diskless-windows-servicer <capabilities|prepare|report-client|report-service>");
+            eprintln!("usage: diskless-windows-servicer <capabilities|prepare|report-client|collect-nic|install-nic-drivers|report-service>");
             2
         }
         None => {
-            eprintln!("usage: diskless-windows-servicer <capabilities|prepare|report-client|report-service>");
+            eprintln!("usage: diskless-windows-servicer <capabilities|prepare|report-client|collect-nic|install-nic-drivers|report-service>");
             2
         }
     };

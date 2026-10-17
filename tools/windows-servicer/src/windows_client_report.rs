@@ -237,6 +237,22 @@ pub fn run_report_client(config_path: &Path) -> Result<()> {
         "client reporting runs on a managed Windows client"
     );
     let config = ReporterConfig::load(config_path)?;
+    run_report_client_with_config(config)
+}
+
+/// Collect and upload all third-party NIC packages installed on this client.
+/// This is the explicit equivalent of a CCBoot "Collect Local NIC" operation.
+pub fn run_collect_nic(config_path: &Path) -> Result<()> {
+    anyhow::ensure!(
+        cfg!(windows),
+        "NIC collection runs on a managed Windows client"
+    );
+    let mut config = ReporterConfig::load(config_path)?;
+    config.export_package = true;
+    run_report_client_with_config(config)
+}
+
+fn run_report_client_with_config(config: ReporterConfig) -> Result<()> {
     let endpoint = config.report_endpoint()?;
     let inventory_json = run_bounded(
         "powershell",
@@ -285,8 +301,9 @@ pub fn run_report_client(config_path: &Path) -> Result<()> {
     };
     report.validate()?;
 
-    let exported = if config.export_package && is_exportable_published_inf(&boot.published_inf) {
-        Some(export_boot_driver(&boot.published_inf)?)
+    let exported = if config.export_package {
+        let infs = collect_published_nic_infs()?;
+        Some(export_driver_packages(&infs)?)
     } else {
         None
     };
@@ -351,28 +368,107 @@ pub fn parse_os_info(json: &str) -> Result<(String, String)> {
     Ok((version, normalize_architecture(&info.architecture)))
 }
 
-/// Export the Boot NIC's published driver package with pnputil. An export
-/// failure is fatal: it must never produce a successful report, so the caller
-/// fails before anything is posted.
-fn export_boot_driver(inf_name: &str) -> Result<(tempfile::TempDir, PathBuf)> {
+fn collect_published_nic_infs() -> Result<Vec<String>> {
+    let json = run_bounded(
+        "powershell",
+        &[
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$ids = @(Get-NetAdapter -Physical | ForEach-Object { $d = Get-PnpDevice -InstanceId $_.PnPDeviceID -ErrorAction SilentlyContinue; if ($d) { @(Get-CimInstance Win32_PnPSignedDriver | Where-Object { $_.DeviceID -eq $d.InstanceId } | Select-Object -ExpandProperty InfName) } } | Where-Object { $_ -match '^oem\\d+\\.inf$' } | Sort-Object -Unique); $ids | ConvertTo-Json -Compress",
+        ],
+    )?;
+    let mut infs: Vec<String> = if json.trim_start().starts_with('[') {
+        serde_json::from_str(&json).context("invalid NIC INF inventory JSON")?
+    } else if json.trim().is_empty() || json.trim() == "null" {
+        Vec::new()
+    } else {
+        vec![serde_json::from_str(json.trim()).context("invalid NIC INF inventory JSON")?]
+    };
+    infs.retain(|inf| is_exportable_published_inf(inf));
     anyhow::ensure!(
-        is_exportable_published_inf(inf_name),
-        "Boot NIC INF is not an exportable third-party package"
+        !infs.is_empty(),
+        "no exportable third-party NIC driver packages were found"
     );
+    Ok(infs)
+}
+
+/// Install collected or administrator-approved NIC packages into the local OS.
+pub fn install_nic_drivers(root: &Path) -> Result<usize> {
+    anyhow::ensure!(cfg!(windows), "NIC driver installation runs on Windows");
+    anyhow::ensure!(
+        root.is_dir(),
+        "NIC driver directory does not exist: {}",
+        root.display()
+    );
+    let mut infs = Vec::new();
+    collect_inf_files(root, &mut infs)?;
+    infs.sort();
+    infs.dedup();
+    anyhow::ensure!(
+        !infs.is_empty(),
+        "no INF files found under {}",
+        root.display()
+    );
+    for inf in &infs {
+        run_bounded(
+            "pnputil",
+            &[
+                "/add-driver",
+                inf.to_str()
+                    .context("NIC driver path is not valid Unicode")?,
+                "/install",
+            ],
+        )
+        .with_context(|| format!("failed to install NIC driver {}", inf.display()))?;
+    }
+    Ok(infs.len())
+}
+
+fn collect_inf_files(root: &Path, output: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in std::fs::read_dir(root)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            collect_inf_files(&path, output)?;
+        } else if path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("inf"))
+        {
+            output.push(path);
+        }
+    }
+    Ok(())
+}
+
+/// Export published third-party NIC packages with pnputil. Export failure is
+/// fatal: the caller must not report a successful collection with partial data.
+fn export_driver_packages(inf_names: &[String]) -> Result<(tempfile::TempDir, PathBuf)> {
+    anyhow::ensure!(
+        !inf_names.is_empty(),
+        "no NIC driver packages were selected for export"
+    );
+    for inf_name in inf_names {
+        anyhow::ensure!(
+            is_exportable_published_inf(inf_name),
+            "NIC INF is not an exportable third-party package: {inf_name}"
+        );
+    }
     let staging = tempfile::tempdir().context("failed to create driver export directory")?;
     let target = staging.path().join("export");
     std::fs::create_dir_all(&target)?;
-    run_bounded(
-        "pnputil",
-        &[
-            "/export-driver",
-            inf_name,
-            target
-                .to_str()
-                .context("driver export path is not valid Unicode")?,
-        ],
-    )
-    .with_context(|| format!("failed to export driver package {inf_name}"))?;
+    for inf_name in inf_names {
+        run_bounded(
+            "pnputil",
+            &[
+                "/export-driver",
+                inf_name,
+                target
+                    .to_str()
+                    .context("driver export path is not valid Unicode")?,
+            ],
+        )
+        .with_context(|| format!("failed to export driver package {inf_name}"))?;
+    }
     let archive = staging.path().join("driver.zip");
     run_bounded(
         "powershell",
@@ -472,6 +568,24 @@ mod tests {
         assert!(!is_exportable_published_inf("nete1.inf"));
         assert!(!is_exportable_published_inf(""));
         assert!(!is_exportable_published_inf("oem.inf"));
+    }
+
+    #[test]
+    fn collected_driver_directory_is_scanned_recursively() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("nested")).unwrap();
+        std::fs::write(dir.path().join("one.inf"), b"[Version]").unwrap();
+        std::fs::write(dir.path().join("nested/two.INF"), b"[Version]").unwrap();
+        std::fs::write(dir.path().join("nested/ignored.txt"), b"not a driver").unwrap();
+        let mut files = Vec::new();
+        collect_inf_files(dir.path(), &mut files).unwrap();
+        files.sort();
+        assert_eq!(files.len(), 2);
+        assert!(files.iter().all(|path| path
+            .extension()
+            .unwrap()
+            .to_string_lossy()
+            .eq_ignore_ascii_case("inf")));
     }
 
     #[test]
