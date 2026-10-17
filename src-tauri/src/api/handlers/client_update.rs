@@ -30,6 +30,7 @@ fn can_use_typed_update(request: &UpdateClientRequest) -> bool {
 
 fn domain_to_legacy(client: crate::domain::Client) -> Client {
     Client {
+        installer_media_id: client.installer_media_id,
         id: client.id.to_string(),
         name: client.name,
         mac: client.mac.to_string(),
@@ -198,12 +199,6 @@ pub async fn update_client(
             )
         })?;
 
-    if existing.enabled {
-        if let Err(error) = state.refresh_client_boot_menu(&id).await {
-            tracing::warn!(client_id = %id, %error, "failed to refresh client boot menu while updating client");
-        }
-    }
-
     sqlx::query(
         "DELETE FROM client_offline_resets WHERE client_id = ? AND operation IS NULL AND ? <> ?",
     )
@@ -236,6 +231,7 @@ mod tests {
 
     fn empty_request() -> UpdateClientRequest {
         UpdateClientRequest {
+            installer_media_id: None,
             name: None,
             mac: None,
             ip: None,

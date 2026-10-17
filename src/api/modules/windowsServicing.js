@@ -39,3 +39,10 @@ export async function prepareWindowsImageManaged(request) {
     body: JSON.stringify(request),
   });
 }
+
+export function prepareWindowsAssignment(request) {
+  return apiRequest("/api/pxe/windows/prepare-assignment", {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+}

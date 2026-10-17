@@ -12,7 +12,9 @@ Prepare Windows 10/11 images with the network drivers needed by every managed cl
 4. Require valid Windows package signatures and compatible INF metadata before a package is eligible for a test revision. Never use DISM's unsigned-driver override.
 5. Include the reporting component and all compatible catalog drivers in automatically prepared Windows image revisions. New image revisions are separate from existing assignments; do not rewrite the image a client is already using.
 6. A designated test client with matching NIC hardware must boot the exact candidate revision. The test passes only when the client component reports that revision and Boot NIC after Windows starts and the server confirms the client's iSCSI session is active.
-7. New clients use the newest tested driver revision. Preserve the last known-good revision for rollback. If no tested driver matches a client's Boot NIC, hold it before Windows boot and show the missing hardware ID.
+7. Boot tests report revision readiness but do not gate image assignment or default-image selection. Keep the administrator-selected image and snapshot. NIC inventory and catalog matching remain inputs to Windows servicing.
+8. When an administrator assigns a Windows image to an inventoried client, use the configured Windows servicing worker to prepare a managed revision with the compatible catalog drivers for all inventoried clients before saving the assignment. Reuse a matching managed revision when available. If inventory, packages, or the worker are unavailable, let the administrator explicitly continue with the original image.
+9. Store only the worker host, SSH username, helper path, iSCSI portal, and report URL in System Settings. Automatic servicing uses the Diskless Manager service account's SSH key and verified known-hosts entry; never persist the worker password in general settings.
 
 ## Client reporting trust
 
@@ -34,9 +36,10 @@ LIO's generated ACL session list exposes initiator IQNs but not peer addresses. 
 - A report from an unknown client, inactive iSCSI session, or mismatched session peer is rejected without catalog or test-state mutation.
 - A package harvested from a working client can enter the same catalog and selection flow as an imported package.
 - A new image revision contains the compatible catalog driver set and reporting component; the source image and existing clients remain unchanged.
-- A candidate revision cannot become the default for new clients until the matching-hardware boot result is recorded and iSCSI connectivity is confirmed.
-- Client provisioning refuses an untested or missing Boot NIC match with an actionable hardware-ID message.
-- Unit/integration tests cover catalog validation, report authorization, revision publication/rollback, and boot-test gating. Real hardware tests run only against a designated disposable test client.
+- A candidate revision may be assigned or selected as the default before a matching-hardware boot result is recorded; the result remains available as readiness diagnostics.
+- Client provisioning does not require a NIC inventory or passed boot test. Administrators must ensure the selected Windows image contains a driver for the client's Boot NIC.
+- Windows image assignment automatically prepares catalog-backed NIC drivers when the System Settings worker profile and matching client inventory are present. Preparation failure offers an explicit path to assign the selected source image.
+- Unit/integration tests cover catalog validation, report authorization, revision publication/rollback, and boot-test reporting. Real hardware tests run only against a designated disposable test client.
 
 ## References
 

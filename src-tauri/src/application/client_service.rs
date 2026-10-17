@@ -68,7 +68,7 @@ impl ClientService {
 
     /// Rotate the server-managed one-way CHAP credentials and persist the
     /// resulting enforcement state. Applying credentials to the live target
-    /// and boot menu remains orchestration owned by the caller.
+    /// remains orchestration owned by the caller.
     pub async fn rotate_chap(&self, id: &str) -> Result<(Client, ChapCredentials)> {
         let client_id = ClientId::from_string(id.to_owned())?;
         let mut client = self

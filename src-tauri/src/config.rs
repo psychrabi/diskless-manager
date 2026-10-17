@@ -102,6 +102,7 @@ fn legacy_client_to_domain(
         .transpose()?;
 
     Ok(crate::domain::Client {
+        installer_media_id: client.installer_media_id.clone(),
         id: ClientId::from_string(client.id.clone())?,
         name: client.name.clone(),
         mac: MacAddress::parse(&client.mac)?,
@@ -239,6 +240,7 @@ pub async fn read_config_db(pool: &sqlx::SqlitePool) -> anyhow::Result<AppConfig
         chap_user: Option<String>,
         chap_secret: Option<String>,
         chap_enabled: Option<bool>,
+        installer_media_id: Option<String>,
         created_at: Option<String>,
         last_modified: Option<String>,
     }
@@ -250,7 +252,7 @@ pub async fn read_config_db(pool: &sqlx::SqlitePool) -> anyhow::Result<AppConfig
         r#"
         SELECT id, name, mac, ip, master, enabled, snapshot, block_store, target_iqn,
                writeback, block_device, status, mode, pxe_mode, keep_writeback,
-               use_game_disk, chap_user, chap_secret, chap_enabled,
+               use_game_disk, chap_user, chap_secret, chap_enabled, installer_media_id,
                created_at, last_modified
         FROM clients
         "#,
@@ -291,6 +293,7 @@ pub async fn read_config_db(pool: &sqlx::SqlitePool) -> anyhow::Result<AppConfig
             chap_user: c.chap_user,
             chap_secret: c.chap_secret,
             chap_enabled: c.chap_enabled,
+            installer_media_id: c.installer_media_id,
         });
     }
 

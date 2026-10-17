@@ -25,14 +25,6 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Regenerate a client's menu from its durable Super-session state.
-    pub async fn refresh_client_boot_menu(&self, client_id: &str) -> anyhow::Result<()> {
-        self.super_client_service()
-            .await
-            .refresh_client_menu(client_id)
-            .await
-    }
-
     /// Builds the installer-media service from the current configured boot root and upload cap.
     pub async fn installer_media_service(
         &self,
@@ -219,6 +211,10 @@ impl AppState {
             ("chap_user", "TEXT"),
             ("chap_secret", "TEXT"),
             ("chap_enabled", "INTEGER NOT NULL DEFAULT 0"),
+            (
+                "installer_media_id",
+                "TEXT REFERENCES installer_media(id) ON DELETE RESTRICT",
+            ),
         ] {
             Self::ensure_column(pool, "clients", column, definition).await?;
         }
@@ -719,6 +715,7 @@ mod migration_tests {
             "chap_user",
             "chap_secret",
             "chap_enabled",
+            "installer_media_id",
         ] {
             let exists: i64 = sqlx::query_scalar(
                 "SELECT COUNT(*) FROM pragma_table_info('clients') WHERE name = ?",

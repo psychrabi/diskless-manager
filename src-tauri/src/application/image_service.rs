@@ -1256,7 +1256,7 @@ mod storage_presence_tests {
     }
 
     #[tokio::test]
-    async fn awaiting_windows_revision_cannot_replace_existing_default() {
+    async fn awaiting_windows_revision_can_replace_the_default() {
         let service = service(&[], false).await;
         let mut current = image("current", "pool/current", None);
         current.is_default = true;
@@ -1279,9 +1279,9 @@ mod storage_presence_tests {
             .await
             .unwrap();
 
-        assert!(service.set_default("candidate").await.is_err());
+        assert!(service.set_default("candidate").await.unwrap().is_default);
         assert!(
-            service
+            !service
                 .repository
                 .get("current")
                 .await
@@ -1290,7 +1290,7 @@ mod storage_presence_tests {
                 .is_default
         );
         assert!(
-            !service
+            service
                 .repository
                 .get("candidate")
                 .await
@@ -1303,7 +1303,7 @@ mod storage_presence_tests {
         assert!(
             service
                 .repository
-                .get("current")
+                .get("candidate")
                 .await
                 .unwrap()
                 .unwrap()
@@ -1312,7 +1312,7 @@ mod storage_presence_tests {
     }
 
     #[tokio::test]
-    async fn tested_revision_cannot_be_default_until_all_recorded_nics_pass() {
+    async fn revision_can_be_default_without_a_matching_test_for_every_recorded_nic() {
         let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
         sqlx::migrate!("./migrations").run(&pool).await.unwrap();
         let service = ImageService::with_backend(
@@ -1359,9 +1359,9 @@ mod storage_presence_tests {
             .await
             .unwrap();
 
-        assert!(service.set_default("candidate").await.is_err());
+        assert!(service.set_default("candidate").await.unwrap().is_default);
         assert!(
-            service
+            !service
                 .repository
                 .get("current")
                 .await

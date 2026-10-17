@@ -243,6 +243,7 @@ pub async fn add_client_provisioning(
         let now = chrono::Utc::now();
 
         let client_data = Client {
+            installer_media_id: None,
             id: name.clone(),
             name: name.to_uppercase(),
             mac: mac.clone(),
@@ -339,6 +340,7 @@ pub async fn add_client_provisioning(
     let block_device = format!("/dev/zvol/{}", paths.dataset);
 
     let storage_spec = ClientStorageSpec {
+        installer_iso: None,
         client_id: name.clone(),
         client_name: name.clone(),
 
@@ -412,6 +414,7 @@ pub async fn add_client_provisioning(
     let now = chrono::Utc::now();
 
     let client_data = Client {
+        installer_media_id: None,
         id: name.clone(),
 
         name: name.to_uppercase(),

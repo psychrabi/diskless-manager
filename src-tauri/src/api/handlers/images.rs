@@ -19,68 +19,6 @@ fn image_service(state: &AppState) -> ImageService {
     )
 }
 
-async fn ensure_default_revision_nic_coverage(
-    state: &AppState,
-    image_id: &str,
-) -> anyhow::Result<()> {
-    let revision: Option<(String, String)> = sqlx::query_as(
-        "SELECT id, driver_package_ids FROM windows_image_driver_revisions WHERE revision_image_id = ?",
-    )
-    .bind(image_id)
-    .fetch_optional(&state.db_pool)
-    .await?;
-    let Some((revision_id, package_ids)) = revision else {
-        return Ok(());
-    };
-    let package_ids: Vec<String> = serde_json::from_str(&package_ids)?;
-    let inventories: Vec<String> =
-        sqlx::query_scalar("SELECT boot_nic_ids FROM windows_nic_inventory ORDER BY mac")
-            .fetch_all(&state.db_pool)
-            .await?;
-    if inventories.is_empty() {
-        return Ok(());
-    }
-    let passed_tests: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT expected_nic_id, reported_revision, reported_nic_id FROM windows_revision_boot_tests WHERE revision_id = ? AND status = 'passed'",
-    )
-    .bind(&revision_id)
-    .fetch_all(&state.db_pool)
-    .await?;
-    let root = state.settings.read().await.http.root_dir.clone();
-    let catalog = tokio::task::spawn_blocking(move || {
-        crate::infrastructure::pxe::NetworkDriverInjectionPlugin::new(root).list()
-    })
-    .await??;
-    for inventory in inventories {
-        let boot_nic_ids: Vec<String> = serde_json::from_str(&inventory)?;
-        let covered = boot_nic_ids.iter().any(|boot_nic_id| {
-            passed_tests
-                .iter()
-                .any(|(expected, reported_revision, reported_nic)| {
-                    expected.eq_ignore_ascii_case(boot_nic_id)
-                        && reported_revision.as_deref() == Some(revision_id.as_str())
-                        && reported_nic
-                            .as_deref()
-                            .is_some_and(|reported| reported.eq_ignore_ascii_case(expected))
-                        && package_ids.iter().any(|package_id| {
-                            catalog
-                                .iter()
-                                .find(|package| package.id == *package_id)
-                                .is_some_and(|package| {
-                                    crate::application::windows_servicing::package_matches_boot_nic(
-                                        package, expected,
-                                    )
-                                })
-                        })
-                })
-        });
-        if !covered {
-            anyhow::bail!("Windows revision lacks a passed test with a matching driver package for a recorded client Boot NIC");
-        }
-    }
-    Ok(())
-}
-
 fn images_to_snapshots(images: &[Image], parent_id: &str) -> Vec<crate::types::image::Snapshot> {
     images
         .iter()
@@ -151,9 +89,9 @@ pub async fn list_masters(
     Ok(Json(masters_with_snapshots))
 }
 
-/// Driver readiness summary for one source image: the newest `ready`
-/// revision new Windows clients receive, plus candidate/failed counts for
-/// the servicing and boot-test workflow.
+/// Driver readiness summary for one source image, plus candidate/failed
+/// counts for the servicing and boot-test workflow. Readiness is diagnostic;
+/// it does not determine which image a client can be assigned.
 #[derive(Debug, Serialize)]
 pub struct DriverReadiness {
     pub image_id: String,
@@ -504,17 +442,6 @@ pub async fn set_default_image(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let service = image_service(&state);
-    let target = service.get(&id).await.map_err(|error| {
-        log::error!("Failed to inspect default image '{}': {}", id, error);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-    ensure_default_revision_nic_coverage(&state, &target.id)
-        .await
-        .map_err(|error| {
-            log::error!("Failed to set default image '{}': {}", id, error);
-            StatusCode::CONFLICT
-        })?;
-
     let image = service.set_default(&id).await.map_err(|error| {
         log::error!("Failed to set default image '{}': {}", id, error);
 

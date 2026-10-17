@@ -515,6 +515,8 @@ mod tests {
     fn request_and_spec() -> (CreateClient, ClientStorageSpec) {
         (
             CreateClient {
+                installer_media_id: None,
+                enabled: None,
                 name: "PC-01".into(),
                 mac: "00:11:22:33:44:66".into(),
                 ip: "192.168.1.101".into(),
@@ -530,6 +532,7 @@ mod tests {
                 chap_enabled: false,
             },
             ClientStorageSpec {
+                installer_iso: None,
                 client_id: "ignored".into(),
                 client_name: "PC01".into(),
                 source: StorageSource::ExistingVolume("tank/win11".into()),
@@ -593,6 +596,8 @@ mod tests {
             Arc::new(UnexpectedBootPublisher),
         );
         let request = CreateClient {
+            installer_media_id: None,
+            enabled: None,
             name: "PC-01".into(),
             mac: "00:11:22:33:44:66".into(),
             ip: "192.168.1.101".into(),
@@ -608,6 +613,7 @@ mod tests {
             chap_enabled: false,
         };
         let spec = ClientStorageSpec {
+            installer_iso: None,
             client_id: "ignored".into(),
             client_name: "PC01".into(),
             source: StorageSource::ExistingVolume("tank/win11".into()),

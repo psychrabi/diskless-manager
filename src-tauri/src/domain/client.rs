@@ -200,6 +200,10 @@ pub struct Client {
     /// Whether the target enforces CHAP. Existing rows default off.
     #[serde(default)]
     pub chap_enabled: bool,
+
+    /// Catalog installer selected while this client is in OS installation mode.
+    #[serde(default)]
+    pub installer_media_id: Option<String>,
 }
 
 impl Client {
@@ -227,7 +231,7 @@ impl Client {
             mac,
             ip,
             master: request.master,
-            enabled: true,
+            enabled: request.enabled.unwrap_or(true),
 
             created_at: now,
             updated_at: now,
@@ -250,6 +254,7 @@ impl Client {
             chap_user: None,
             chap_secret: None,
             chap_enabled: request.chap_enabled,
+            installer_media_id: request.installer_media_id,
         })
     }
 
@@ -334,6 +339,9 @@ pub struct CreateClient {
     pub ip: String,
     pub master: String,
 
+    #[serde(default)]
+    pub enabled: Option<bool>,
+
     pub snapshot: Option<String>,
     pub block_store: Option<String>,
     pub block_device: Option<String>,
@@ -356,6 +364,10 @@ pub struct CreateClient {
     /// server-generated at provision time, never supplied here.
     #[serde(default = "default_true")]
     pub chap_enabled: bool,
+
+    /// Keep this client in installer mode and attach the selected ISO at LUN 1.
+    #[serde(default)]
+    pub installer_media_id: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -398,6 +410,8 @@ mod super_client_tests {
 
     fn request(master: &str, snapshot: Option<&str>) -> CreateClient {
         CreateClient {
+            installer_media_id: None,
+            enabled: None,
             name: "PC001".to_string(),
             mac: "02:00:00:00:00:01".to_string(),
             ip: "192.0.2.1".to_string(),

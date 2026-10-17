@@ -194,9 +194,17 @@ export const useSettings = () => {
   );
 
   return {
+    updateClientFeatures: (config) => updateSettingsSection({
+      section: "client_features", config, toastTitle: "Client Features",
+      successMessage: "Client feature settings saved",
+    }),
     updateClientLifecycle: (config) => updateSettingsSection({
       section: "client_lifecycle", config, toastTitle: "Client Storage Lifecycle",
       successMessage: "Offline deletion delay saved",
+    }),
+    updateWindowsServicing: (config) => updateSettingsSection({
+      section: "windows_servicing", config, toastTitle: "Windows Servicing",
+      successMessage: "Windows servicing worker settings saved",
     }),
     updateEnrollment: (config) => updateSettingsSection({
       section: "enrollment", config, toastTitle: "Enrollment Settings",

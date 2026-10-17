@@ -69,14 +69,9 @@ impl ApplicationServices {
         let images = ImageService::with_backend(ImageRepository::new(pool.clone()), image_backend);
         let clients = ClientRepository::new(pool);
         let client_service = ClientService::new(clients.clone());
-        let provisioning = ProvisioningService::new(
-            storage.clone(),
-            clients.clone(),
-            Arc::new(IscDhcpPublisher {
-                config: config.clone(),
-            }),
-        );
-        let nvmeof_boot = NvmeOfBootService::new(clients.clone(), super_sessions.clone(), config);
+        let provisioning =
+            ProvisioningService::new(storage.clone(), clients.clone(), Arc::new(IscDhcpPublisher));
+        let nvmeof_boot = NvmeOfBootService::new(clients.clone(), super_sessions.clone());
 
         Self {
             iscsi_backend,

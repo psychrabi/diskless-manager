@@ -33,6 +33,7 @@ struct ClientRow {
     chap_user: Option<String>,
     chap_secret: Option<String>,
     chap_enabled: Option<i64>,
+    installer_media_id: Option<String>,
 }
 
 #[derive(Clone)]
@@ -70,7 +71,8 @@ impl ClientRepository {
                 use_game_disk,
                 chap_user,
                 chap_secret,
-                chap_enabled
+                chap_enabled,
+                installer_media_id
             FROM clients
             WHERE id = ?
             "#,
@@ -163,7 +165,8 @@ impl ClientRepository {
                 use_game_disk,
                 chap_user,
                 chap_secret,
-                chap_enabled
+                chap_enabled,
+                installer_media_id
             FROM clients
             WHERE name = ?
             "#,
@@ -201,7 +204,8 @@ impl ClientRepository {
                 use_game_disk,
                 chap_user,
                 chap_secret,
-                chap_enabled
+                chap_enabled,
+                installer_media_id
             FROM clients
             WHERE mac = ?
             "#,
@@ -239,7 +243,8 @@ impl ClientRepository {
                 use_game_disk,
                 chap_user,
                 chap_secret,
-                chap_enabled
+                chap_enabled,
+                installer_media_id
             FROM clients
             ORDER BY name ASC
             "#,
@@ -279,12 +284,13 @@ impl ClientRepository {
                 use_game_disk,
                 chap_user,
                 chap_secret,
-                chap_enabled
+                chap_enabled,
+                installer_media_id
             )
             VALUES (
                 ?, ?, ?, ?, ?, ?,
                 ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                ?, ?, ?
+                ?, ?, ?, ?
             )
             "#,
         )
@@ -310,6 +316,7 @@ impl ClientRepository {
         .bind(&client.chap_user)
         .bind(&client.chap_secret)
         .bind(if client.chap_enabled { 1 } else { 0 })
+        .bind(&client.installer_media_id)
         .execute(&mut *transaction)
         .await
         .context("failed to insert client")?;
@@ -426,7 +433,8 @@ impl ClientRepository {
                 use_game_disk = ?,
                 chap_user = ?,
                 chap_secret = ?,
-                chap_enabled = ?
+                chap_enabled = ?,
+                installer_media_id = ?
             WHERE id = ?
             "#,
         )
@@ -450,6 +458,7 @@ impl ClientRepository {
         .bind(&client.chap_user)
         .bind(&client.chap_secret)
         .bind(if client.chap_enabled { 1 } else { 0 })
+        .bind(&client.installer_media_id)
         .bind(client.id.as_str())
         .execute(&self.pool)
         .await
@@ -592,6 +601,7 @@ impl ClientRepository {
             chap_user: row.chap_user,
             chap_secret: row.chap_secret,
             chap_enabled: row.chap_enabled.unwrap_or(0) != 0,
+            installer_media_id: row.installer_media_id,
         })
     }
 }
@@ -674,6 +684,8 @@ mod tests {
     #[test]
     fn creates_valid_client_domain_object() {
         let client = Client::create(CreateClient {
+            installer_media_id: None,
+            enabled: None,
             name: "PC001".to_string(),
             mac: "AA:BB:CC:DD:EE:FF".to_string(),
             ip: "192.168.1.101".to_string(),
@@ -729,7 +741,8 @@ mod tests {
                 use_game_disk INTEGER,
                 chap_user TEXT,
                 chap_secret TEXT,
-                chap_enabled INTEGER NOT NULL DEFAULT 0
+                chap_enabled INTEGER NOT NULL DEFAULT 0,
+                installer_media_id TEXT
             )
             "#,
         )
@@ -739,6 +752,8 @@ mod tests {
 
         let repository = ClientRepository::new(pool.clone());
         let client = Client::create(CreateClient {
+            installer_media_id: None,
+            enabled: None,
             name: "client-001122334455".to_string(),
             mac: "00:11:22:33:44:55".to_string(),
             ip: "192.168.1.150".to_string(),

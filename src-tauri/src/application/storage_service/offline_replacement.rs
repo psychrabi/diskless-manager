@@ -278,6 +278,7 @@ mod tests {
         *target.attached.lock().unwrap() = true;
         let service = StorageService::new(disks.clone(), target.clone());
         let operation = OfflineReplacement::new(ClientStorageSpec {
+            installer_iso: None,
             client_id: "client-1".into(),
             client_name: "PC001".into(),
             source: StorageSource::Snapshot("pool/master@ready".into()),

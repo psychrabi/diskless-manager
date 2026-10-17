@@ -88,6 +88,7 @@ pub async fn add_client_impl(
         crate::infrastructure::zfs::legacy::get_writeback_or_default_dataset(&state.config, &name)
     };
     let storage_spec = ClientStorageSpec {
+        installer_iso: None,
         client_id: name.clone(),
         client_name: name.clone(),
         source,
@@ -109,6 +110,8 @@ pub async fn add_client_impl(
         .provisioning
         .create_client(
             crate::domain::CreateClient {
+                installer_media_id: None,
+                enabled: None,
                 name: name.clone(),
                 mac,
                 ip,

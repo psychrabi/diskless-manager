@@ -12,6 +12,21 @@ pub async fn rotate_client_chap(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    if !state
+        .settings
+        .read()
+        .await
+        .client_features
+        .enable_chap_authentication
+    {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                status: StatusCode::FORBIDDEN.as_u16(),
+                error: "CHAP authentication is disabled in System Settings".to_string(),
+            }),
+        ));
+    }
     let _client_guard = state.client_mutations.lock_client(&id).await;
 
     let (client, credentials) =
@@ -59,10 +74,6 @@ pub async fn rotate_client_chap(
                     }),
                 )
             })?;
-
-        if let Err(error) = state.refresh_client_boot_menu(&id).await {
-            tracing::warn!(client_id = %id, %error, "failed to republish boot menu after CHAP rotation");
-        }
     }
 
     tracing::info!(

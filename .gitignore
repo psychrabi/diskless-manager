@@ -44,10 +44,12 @@ docs/superpowers/*
 docs/superpowers/specs/*
 !docs/superpowers/specs/2026-10-12-managed-windows-network-drivers.md
 !docs/superpowers/specs/2026-10-14-super-client-iso-installation-design.md
+!docs/superpowers/specs/2026-10-17-shared-ipxe-dispatcher-design.md
 !docs/superpowers/plans/
 docs/superpowers/plans/*
 !docs/superpowers/plans/2026-10-12-managed-windows-driver-rollout.md
 !docs/superpowers/plans/2026-10-14-super-client-iso-installation-plan.md
+!docs/superpowers/plans/2026-10-17-shared-ipxe-dispatcher.md
 !docs/superpowers/plans/2026-10-12-windows-driver-reporting.md
 !docs/superpowers/plans/2026-10-12-windows-image-driver-revisions.md
 !docs/superpowers/plans/2026-10-12-windows-boot-test-gate.md

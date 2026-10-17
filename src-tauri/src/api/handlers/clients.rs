@@ -141,6 +141,7 @@ fn build_storage_spec(
             );
 
             Ok(ClientStorageSpec {
+                installer_iso: None,
                 client_id: client_id.to_string(),
                 client_name: client_name.to_string(),
                 source: StorageSource::Snapshot(snapshot.to_string()),
@@ -165,6 +166,7 @@ fn build_storage_spec(
             .map_err(|error| format!("Invalid master dataset: {error}"))?;
 
             Ok(ClientStorageSpec {
+                installer_iso: None,
                 client_id: client_id.to_string(),
                 client_name: client_name.to_string(),
                 source: StorageSource::ExistingVolume(master.to_string()),
@@ -225,6 +227,89 @@ fn storage_configuration_changed(client: &Client, request: &UpdateClientRequest)
             .as_deref()
             .is_some_and(|master| master != client.master)
         || request.snapshot != client.snapshot
+        || (request.master.is_some() && request.installer_media_id != client.installer_media_id)
+}
+
+async fn installer_media_for_assignment(
+    state: &AppState,
+    master: &str,
+    media_id: Option<&str>,
+    verify_checksum: bool,
+) -> anyhow::Result<Option<crate::persistence::InstallerMedia>> {
+    let Some(media_id) = media_id else {
+        return Ok(None);
+    };
+    let media = if verify_checksum {
+        state
+            .installer_media_service()
+            .await
+            .verify_integrity(media_id)
+            .await?
+    } else {
+        state
+            .application
+            .installer_media
+            .get(media_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("installer media '{media_id}' is not cataloged"))?
+    };
+    anyhow::ensure!(
+        media.validation_state == crate::persistence::StructuralValidationState::Valid,
+        "installer media has not passed structural validation"
+    );
+    let image = image_service(state).get(master).await?;
+    let expected_type = match image.os_type {
+        crate::core::image::OsType::Windows => crate::persistence::InstallerMediaType::WinPe,
+        crate::core::image::OsType::Linux => crate::persistence::InstallerMediaType::LinuxLive,
+    };
+    anyhow::ensure!(
+        media.media_type == expected_type,
+        "installer media type does not match the selected image OS"
+    );
+    Ok(Some(media))
+}
+
+async fn ensure_installation_master_is_exclusive(
+    state: &AppState,
+    master: &str,
+    client_id: Option<&str>,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    let assigned_client: Option<String> = if let Some(client_id) = client_id {
+        sqlx::query_scalar(
+            "SELECT name FROM clients WHERE master = ? AND id <> ? ORDER BY name LIMIT 1",
+        )
+        .bind(master)
+        .bind(client_id)
+        .fetch_optional(&state.db_pool)
+        .await
+    } else {
+        sqlx::query_scalar("SELECT name FROM clients WHERE master = ? ORDER BY name LIMIT 1")
+            .bind(master)
+            .fetch_optional(&state.db_pool)
+            .await
+    }
+    .map_err(|error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                status: 500,
+                error: format!("Failed to check installation image assignments: {error}"),
+            }),
+        )
+    })?;
+
+    if let Some(name) = assigned_client {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(ErrorResponse {
+                status: 409,
+                error: format!(
+                    "Installation image '{master}' is already assigned to client '{name}'"
+                ),
+            }),
+        ));
+    }
+    Ok(())
 }
 
 fn is_unprovisioned_enrollment(client: &Client) -> bool {
@@ -275,15 +360,6 @@ fn resolve_effective_game_selection(
         stored_or_requested,
         &discovered,
     ))
-}
-
-/// (Re)publish a provisioned client's static boot menu, embedding CHAP
-/// credentials when enforced. Best-effort: menus self-heal on the next
-/// boot through the enrollment redirect path.
-async fn publish_boot_menu(state: &AppState, client_id: &str) {
-    if let Err(error) = state.refresh_client_boot_menu(client_id).await {
-        tracing::warn!(client_id, %error, "failed to refresh client boot menu");
-    }
 }
 
 /// Replace a client's stored game master selection wholesale.
@@ -432,194 +508,6 @@ async fn persist_client_runtime_state(
 // Client CRUD
 // ============================================================================
 
-/// Enforce the Windows boot gate on client creation.
-///
-/// Resolves `request.master`/`request.snapshot` in place: a Windows master
-/// without a tested Boot NIC match refuses creation with an actionable
-/// hardware-ID message, while a covered client is assigned the newest `ready`
-/// revision. Explicit revisions still require matching inventory and always
-/// use their immutable servicing snapshot as the private clone source.
-/// Must run before any storage or iPXE side effect.
-async fn gate_windows_assignment(
-    state: &AppState,
-    settings: &crate::core::config::Settings,
-    request: &mut CreateClientRequest,
-) -> Result<(), (StatusCode, String)> {
-    let repository = ImageRepository::new(state.db_pool.clone());
-    let Ok(Some(master)) = repository.get(&request.master).await else {
-        return Ok(());
-    };
-    if master.os_type != crate::core::image::OsType::Windows {
-        return Ok(());
-    }
-    let pinned: Option<(String, String, String)> = sqlx::query_as(
-        "SELECT id, source_image_id, status FROM windows_image_driver_revisions WHERE revision_image_id = ? LIMIT 1",
-    )
-    .bind(&master.id)
-    .fetch_optional(&state.db_pool)
-    .await
-    .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, format!("failed to inspect driver revisions: {error}")))?;
-    if pinned
-        .as_ref()
-        .is_some_and(|(_, _, status)| status != "ready")
-    {
-        return Err((
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "Windows revision has not passed its boot test".into(),
-        ));
-    }
-    let mac = crate::domain::MacAddress::parse(&request.mac).map_err(|_| {
-        (
-            StatusCode::BAD_REQUEST,
-            "client MAC address is invalid".to_string(),
-        )
-    })?;
-    let inventory: Option<(String,)> =
-        sqlx::query_as("SELECT boot_nic_ids FROM windows_nic_inventory WHERE mac = ?")
-            .bind(mac.as_str())
-            .fetch_optional(&state.db_pool)
-            .await
-            .map_err(|error| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("failed to inspect NIC inventory: {error}"),
-                )
-            })?;
-    let boot_ids: Option<Vec<String>> = inventory
-        .map(|(raw,)| serde_json::from_str(&raw))
-        .transpose()
-        .map_err(|error| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("stored NIC inventory is invalid: {error}"),
-            )
-        })?;
-    let mut revisions = repository
-        .list_driver_revisions(
-            pinned
-                .as_ref()
-                .map_or(master.id.as_str(), |(_, source_id, _)| source_id.as_str()),
-        )
-        .await
-        .map_err(|error| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("failed to inspect driver revisions: {error:#}"),
-            )
-        })?;
-    revisions.retain(|revision| {
-        revision.status == crate::core::image::DriverRevisionStatus::Ready
-            && revision.revision_image_id.is_some()
-            && pinned
-                .as_ref()
-                .map_or(true, |(id, _, _)| &revision.id == id)
-    });
-    revisions.reverse();
-    let root = std::path::PathBuf::from(&settings.http.root_dir);
-    let catalog = tokio::task::spawn_blocking(move || {
-        crate::infrastructure::pxe::NetworkDriverInjectionPlugin::new(root).list()
-    })
-    .await
-    .map_err(|error| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("driver catalog check failed: {error}"),
-        )
-    })?
-    .map_err(|error| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("driver catalog check failed: {error:#}"),
-        )
-    })?;
-    let passed_rows: Vec<(String, String, String, String)> = sqlx::query_as(
-        "SELECT revision_id, expected_nic_id, reported_revision, reported_nic_id FROM windows_revision_boot_tests WHERE status = 'passed'",
-    )
-    .fetch_all(&state.db_pool)
-    .await
-    .map_err(|error| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to inspect passed Windows NIC tests: {error}"),
-        )
-    })?;
-    let mut passed_nic_tests = std::collections::HashMap::<String, Vec<String>>::new();
-    for (revision_id, expected_nic, reported_revision, reported_nic) in passed_rows {
-        if reported_revision == revision_id && reported_nic.eq_ignore_ascii_case(&expected_nic) {
-            passed_nic_tests
-                .entry(revision_id)
-                .or_default()
-                .push(expected_nic);
-        }
-    }
-    let assignment = crate::application::windows_servicing::select_windows_assignment(
-        mac.as_str(),
-        boot_ids.as_deref(),
-        &revisions,
-        &passed_nic_tests,
-        &catalog,
-    )
-    .map_err(|error| (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()))?;
-    if let Some(assignment) = assignment {
-        let Some(image) = repository
-            .get(&assignment.revision_image_id)
-            .await
-            .map_err(|error| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("tested revision image is missing: {error:#}"),
-                )
-            })?
-        else {
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "tested revision image is missing".to_string(),
-            ));
-        };
-        tracing::info!(
-            client = %request.name,
-            revision = %assignment.revision_id,
-            image = %image.name,
-            "assigning new Windows client to the newest tested revision"
-        );
-        request.snapshot = Some(revision_clone_snapshot(&repository, &image).await?);
-        request.master = image.name;
-    }
-    Ok(())
-}
-
-/// A serviced revision is never exposed as writable client storage.
-async fn revision_clone_snapshot(
-    repository: &ImageRepository,
-    image: &crate::core::image::Image,
-) -> Result<String, (StatusCode, String)> {
-    let snapshots = repository.list().await.map_err(|error| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to inspect revision snapshot: {error:#}"),
-        )
-    })?;
-    let mut serviced = snapshots.iter().filter(|snapshot| {
-        snapshot.kind == crate::core::image::ImageKind::Snapshot
-            && snapshot.parent_id.as_deref() == Some(image.id.as_str())
-            && snapshot.name.starts_with("serviced-")
-            && snapshot.status == "ready"
-    });
-    let Some(snapshot) = serviced.next() else {
-        return Err((
-            StatusCode::CONFLICT,
-            "Windows revision has no immutable servicing snapshot".into(),
-        ));
-    };
-    if serviced.next().is_some() {
-        return Err((
-            StatusCode::CONFLICT,
-            "Windows revision has ambiguous servicing snapshots".into(),
-        ));
-    }
-    Ok(format!("{}@{}", image.name, snapshot.name))
-}
-
 pub async fn create_client(
     State(state): State<AppState>,
     Json(request): Json<CreateClientRequest>,
@@ -643,26 +531,57 @@ pub async fn create_client(
 
     let settings = state.settings.read().await.clone();
 
-    // Windows boot gate: a new Windows client must match a preboot Boot NIC
-    // record against a boot-tested revision. This runs before any storage or
-    // iPXE side effect, so a refused client creates nothing. Existing
-    // clients stay pinned: update paths never re-resolve the image.
-    let mut request = request;
-    gate_windows_assignment(&state, &settings, &mut request)
-        .await
-        .map_err(|(status, error)| {
-            error!(
-                "Windows assignment gate refused client '{}': {}",
-                request.name, error
-            );
-            (
-                status,
-                Json(ErrorResponse {
-                    status: status.as_u16(),
-                    error,
-                }),
-            )
-        })?;
+    let installer_media = installer_media_for_assignment(
+        &state,
+        &request.master,
+        request.installer_media_id.as_deref(),
+        true,
+    )
+    .await
+    .map_err(|error| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                status: 400,
+                error: format!("Invalid installation media: {error:#}"),
+            }),
+        )
+    })?;
+    let _installation_master_guard = if installer_media.is_some() {
+        let resource = format!("installation-master:{}", request.master);
+        Some(state.client_mutations.lock_resource(&resource).await)
+    } else {
+        None
+    };
+    if installer_media.is_some()
+        && (request
+            .snapshot
+            .as_deref()
+            .is_some_and(|snapshot| !snapshot.trim().is_empty())
+            || request.use_game_disk.unwrap_or(false)
+            || request.keep_writeback.unwrap_or(false))
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                status: 400,
+                error: "OS installation requires the master directly with writeback and game disks disabled".into(),
+            }),
+        ));
+    }
+    if installer_media.is_some() {
+        ensure_installation_master_is_exclusive(&state, &request.master, None).await?;
+    }
+
+    if request.chap_enabled == Some(true) && !settings.client_features.enable_chap_authentication {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                status: StatusCode::FORBIDDEN.as_u16(),
+                error: "CHAP authentication is disabled in System Settings".to_string(),
+            }),
+        ));
+    }
 
     // ------------------------------------------------------------------------
     // Build desired storage state.
@@ -691,6 +610,7 @@ pub async fn create_client(
             }),
         )
     })?;
+    storage_spec.installer_iso = installer_media.map(|media| media.managed_path);
 
     // Resolve the game selection up front: empty + switch on means all
     // currently discovered masters.
@@ -714,11 +634,11 @@ pub async fn create_client(
         )
     })?;
 
-    // New clients enforce CHAP unless explicitly opted out. Credentials
-    // are generated up front (no client id exists yet), travel into the
-    // provisioned target and boot menu together, and are persisted after
-    // the insert succeeds.
-    let chap_enabled = request.chap_enabled.unwrap_or(true);
+    // New clients only use CHAP when explicitly selected. Credentials
+    // are generated up front (no client id exists yet), applied to the
+    // provisioned target, and persisted after the insert succeeds. The
+    // dispatcher reads the saved credentials when the client boots.
+    let chap_enabled = request.chap_enabled.unwrap_or(false);
     storage_spec.chap = if chap_enabled {
         Some(
             crate::infrastructure::iscsi::ChapCredentials::generate(&request.name).map_err(
@@ -748,6 +668,8 @@ pub async fn create_client(
     // ------------------------------------------------------------------------
 
     let create = crate::domain::CreateClient {
+        installer_media_id: request.installer_media_id.clone(),
+        enabled: request.enabled,
         name: request.name.clone(),
         mac: request.mac.clone(),
         ip: request.ip.clone(),
@@ -757,10 +679,10 @@ pub async fn create_client(
         block_device: None,
         target_iqn: None,
         pxe_mode: crate::domain::PxeMode::Uefi,
-        keep_writeback: request.keep_writeback.unwrap_or(true),
+        keep_writeback: request.keep_writeback.unwrap_or(false),
         use_game_disk: request.use_game_disk.unwrap_or(false),
         game_disks: request.game_disks.clone().unwrap_or_default(),
-        chap_enabled: request.chap_enabled.unwrap_or(true),
+        chap_enabled: request.chap_enabled.unwrap_or(false),
     };
 
     let client = state
@@ -839,6 +761,23 @@ pub async fn update_client(
         )
     })?;
 
+    if request.chap_enabled == Some(true)
+        && !state
+            .settings
+            .read()
+            .await
+            .client_features
+            .enable_chap_authentication
+    {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                status: StatusCode::FORBIDDEN.as_u16(),
+                error: "CHAP authentication is disabled in System Settings".to_string(),
+            }),
+        ));
+    }
+
     if request.action.as_deref().map_or(true, |action| {
         !matches!(action, "wake" | "reboot" | "shutdown")
     }) {
@@ -854,6 +793,149 @@ pub async fn update_client(
                 }),
             ));
         }
+    }
+
+    if request.action.as_deref() == Some("complete_installation") {
+        if claims.role != "admin" {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(ErrorResponse {
+                    status: 403,
+                    error: "Only administrators can complete OS installation".into(),
+                }),
+            ));
+        }
+        if existing_client.installer_media_id.is_none() || existing_client.snapshot.is_some() {
+            return Err((
+                StatusCode::CONFLICT,
+                Json(ErrorResponse {
+                    status: 409,
+                    error: "Client is not in direct-master OS installation mode".into(),
+                }),
+            ));
+        }
+        let target_iqn = existing_client
+            .target_iqn
+            .as_deref()
+            .filter(|target| !target.trim().is_empty())
+            .ok_or_else(|| {
+                (
+                    StatusCode::CONFLICT,
+                    Json(ErrorResponse {
+                        status: 409,
+                        error: "Client has no iSCSI target to verify".into(),
+                    }),
+                )
+            })?;
+        let active = crate::infrastructure::iscsi::target_has_active_sessions(target_iqn).map_err(
+            |error| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        status: 500,
+                        error: format!("Failed to check client iSCSI sessions: {error}"),
+                    }),
+                )
+            },
+        )?;
+        if active {
+            return Err((
+                StatusCode::CONFLICT,
+                Json(ErrorResponse {
+                    status: 409,
+                    error: "Client must be powered off with no active iSCSI session before completing installation".into(),
+                }),
+            ));
+        }
+        let images = image_service(&state);
+        let image = images.get(&existing_client.master).await.map_err(|error| {
+            (
+                StatusCode::CONFLICT,
+                Json(ErrorResponse {
+                    status: 409,
+                    error: format!("Installation master is unavailable: {error:#}"),
+                }),
+            )
+        })?;
+        let snapshot_name = format!("installed-{}", uuid::Uuid::new_v4().simple());
+        let snapshot = images
+            .create_snapshot(&image.id, &snapshot_name)
+            .await
+            .map_err(|error| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        status: 500,
+                        error: format!("Failed to snapshot installed OS: {error:#}"),
+                    }),
+                )
+            })?;
+        request.master = Some(image.name.clone());
+        request.snapshot = Some(format!("{}@{}", image.name, snapshot.name));
+        request.installer_media_id = None;
+        request.use_game_disk = Some(false);
+        request.action = None;
+    }
+
+    if request.installer_media_id.is_some() && request.master.is_none() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                status: 400,
+                error: "Installer mode changes require a full client update".into(),
+            }),
+        ));
+    }
+    let full_form_update = request.master.is_some();
+    let effective_master = request.master.as_deref().unwrap_or(&existing_client.master);
+    let effective_media_id = if full_form_update {
+        request.installer_media_id.as_deref()
+    } else {
+        existing_client.installer_media_id.as_deref()
+    };
+    let media_changed = effective_media_id != existing_client.installer_media_id.as_deref();
+    let installer_media =
+        installer_media_for_assignment(&state, effective_master, effective_media_id, media_changed)
+            .await
+            .map_err(|error| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        status: 400,
+                        error: format!("Invalid installation media: {error:#}"),
+                    }),
+                )
+            })?;
+    let _installation_master_guard = if installer_media.is_some() {
+        let resource = format!("installation-master:{effective_master}");
+        Some(state.client_mutations.lock_resource(&resource).await)
+    } else {
+        None
+    };
+    let effective_snapshot = if full_form_update {
+        request.snapshot.as_deref()
+    } else {
+        existing_client.snapshot.as_deref()
+    };
+    if installer_media.is_some()
+        && (effective_snapshot.is_some_and(|snapshot| !snapshot.trim().is_empty())
+            || request
+                .use_game_disk
+                .unwrap_or(existing_client.use_game_disk.unwrap_or(false))
+            || request
+                .keep_writeback
+                .unwrap_or(existing_client.keep_writeback.unwrap_or(false)))
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                status: 400,
+                error: "OS installation requires the master directly with writeback and game disks disabled".into(),
+            }),
+        ));
+    }
+    if installer_media.is_some() {
+        ensure_installation_master_is_exclusive(&state, effective_master, Some(&id)).await?;
     }
 
     // ========================================================================
@@ -1547,86 +1629,12 @@ pub async fn update_client(
             .as_ref()
             .is_some_and(|master| master != &existing_client.master)
     {
-        let mut assignment = CreateClientRequest {
-            name: request
-                .name
-                .clone()
-                .unwrap_or_else(|| existing_client.name.clone()),
-            mac: request
-                .mac
-                .clone()
-                .unwrap_or_else(|| existing_client.mac.clone()),
-            ip: request
-                .ip
-                .clone()
-                .unwrap_or_else(|| existing_client.ip.clone()),
-            master: request
+        request.master = Some(
+            request
                 .master
                 .clone()
                 .unwrap_or_else(|| existing_client.master.clone()),
-            snapshot: request.snapshot.clone(),
-            keep_writeback: request.keep_writeback,
-            use_game_disk: request.use_game_disk,
-            game_disks: request.game_disks.clone(),
-            chap_enabled: request.chap_enabled,
-            block_store: None,
-            block_device: None,
-            target_iqn: None,
-        };
-        gate_windows_assignment(&state, &settings, &mut assignment)
-            .await
-            .map_err(|(status, error)| {
-                (
-                    status,
-                    Json(ErrorResponse {
-                        status: status.as_u16(),
-                        error,
-                    }),
-                )
-            })?;
-        request.master = Some(assignment.master);
-        request.snapshot = assignment.snapshot;
-    } else {
-        // A full form may omit the snapshot; a pinned revision still owns a private clone.
-        let repository = ImageRepository::new(state.db_pool.clone());
-        let revision: Option<(String,)> = sqlx::query_as("SELECT id FROM windows_image_driver_revisions WHERE revision_image_id = (SELECT id FROM images WHERE name = ? OR id = ? LIMIT 1) LIMIT 1")
-            .bind(&existing_client.master).bind(&existing_client.master).fetch_optional(&state.db_pool).await.map_err(|error| {
-                (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { status: 500, error: error.to_string() }))
-            })?;
-        if revision.is_some() {
-            let image = repository
-                .get(&existing_client.master)
-                .await
-                .map_err(|error| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(ErrorResponse {
-                            status: 500,
-                            error: error.to_string(),
-                        }),
-                    )
-                })?
-                .ok_or_else(|| {
-                    (
-                        StatusCode::CONFLICT,
-                        Json(ErrorResponse {
-                            status: 409,
-                            error: "Windows revision image is missing".into(),
-                        }),
-                    )
-                })?;
-            request.snapshot = Some(revision_clone_snapshot(&repository, &image).await.map_err(
-                |(status, error)| {
-                    (
-                        status,
-                        Json(ErrorResponse {
-                            status: status.as_u16(),
-                            error,
-                        }),
-                    )
-                },
-            )?);
-        }
+        );
     }
     let stored_game_disks = crate::core::reconciliation::stored_game_selection(&state.db_pool, &id)
         .await
@@ -1667,51 +1675,6 @@ pub async fn update_client(
     } else {
         None
     };
-
-    // Boot-menu lifecycle for the enabled switch.
-    //
-    // Provisioned clients boot through their static per-client iPXE menu
-    // and never consult the enrollment endpoint, so flipping `enabled`
-    // must add/remove that file: removal denies the next boot (the
-    // dispatcher falls through to enrollment, which denies disabled
-    // machines), regeneration restores it.
-    let will_be_enabled = request.enabled.unwrap_or(existing_client.enabled);
-    if existing_client.enabled && !will_be_enabled {
-        // Remove BEFORE persisting: if the file cannot go, the record
-        // must stay enabled so disk and database cannot disagree about
-        // whether this machine boots.
-        crate::infrastructure::dhcp::remove_client_ipxe_menu(
-            &state.settings.read().await.clone(),
-            &existing_client.mac,
-        )
-        .await
-        .map_err(|error| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    status: 500,
-                    error: format!(
-                        "Failed to remove boot menu for '{}': {}",
-                        existing_client.name, error
-                    ),
-                }),
-            )
-        })?;
-    } else if will_be_enabled {
-        // Best-effort: a missing menu self-heals on the next boot via the
-        // enrollment redirect path, so regeneration must not fail saves.
-        // Runs on enable transitions AND auth changes so the embedded
-        // CHAP credentials never go stale.
-        if existing_client
-            .target_iqn
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .is_some()
-        {
-            publish_boot_menu(&state, &existing_client.id).await;
-        }
-    }
 
     // Live-apply an auth flip without a storage rebuild: existing sessions
     // persist (authentication happens at login), new logins follow the new
@@ -1933,6 +1896,9 @@ pub async fn update_client(
             }),
         )
     })?;
+    storage_spec.installer_iso = installer_media
+        .as_ref()
+        .map(|media| media.managed_path.clone());
 
     // Resolve the game selection for the rebuild: explicit request wins,
     // otherwise the stored selection (empty + switch on = all discovered).
@@ -2001,10 +1967,6 @@ pub async fn update_client(
     })?;
 
     // Renaming rebuilds the initiator ACL, so the menu must use the saved identity.
-    if client.enabled && client.target_iqn.as_deref().is_some() {
-        publish_boot_menu(&state, &client.id).await;
-    }
-
     // Persist the effective selection and destroy clone datasets that are
     // no longer selected (their LUNs were already pruned by provisioning).
     // Clone cleanup is best-effort: the boot storage above is healthy, and
@@ -2033,6 +1995,23 @@ pub async fn update_client(
     refresh_dhcp(&state, &settings, "updating client").await;
 
     Ok(Json(client))
+}
+
+pub async fn complete_client_installation(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Extension(claims): Extension<crate::types::Claims>,
+) -> Result<Json<Client>, (StatusCode, Json<ErrorResponse>)> {
+    update_client(
+        State(state),
+        Path(id),
+        Extension(claims),
+        Json(UpdateClientRequest {
+            action: Some("complete_installation".into()),
+            ..UpdateClientRequest::default()
+        }),
+    )
+    .await
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -2119,9 +2098,9 @@ pub async fn exit_legacy_super(
 ///
 /// The username is stable; only the secret changes. Enforcement turns on
 /// as a side effect (rotating for an open target would be pointless), the
-/// new credentials apply live to the target, and the boot menu is
-/// republished so the next boot carries them. Existing sessions persist;
-/// only new logins need the new secret.
+/// new credentials apply live to the target. The dispatcher reads the new
+/// secret for the next boot response. Existing sessions persist; only new
+/// logins need the new secret.
 pub async fn rotate_client_chap(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -2175,8 +2154,6 @@ pub async fn rotate_client_chap(
             .storage
             .set_target_chap(target_iqn, Some(&creds))
             .map_err(|error| err(format!("Failed to apply CHAP secret: {}", error)))?;
-
-        publish_boot_menu(&state, &existing.id).await;
     }
 
     tracing::info!(
@@ -2329,9 +2306,7 @@ mod error_contract_tests {
         assert_eq!(payload["details"], serde_json::json!({}));
         assert!(payload.get("error").is_none());
     }
-    async fn gate_state(
-        catalog_json: Option<&str>,
-    ) -> (super::AppState, crate::core::config::Settings) {
+    async fn test_state() -> super::AppState {
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
@@ -2354,33 +2329,25 @@ mod error_contract_tests {
                 .await
                 .unwrap();
         }
-        let mut settings = crate::core::config::Settings::default();
-        let root = tempfile::tempdir().unwrap();
-        if let Some(catalog) = catalog_json {
-            let dir = root.path().join("pxe/network-drivers");
-            std::fs::create_dir_all(&dir).unwrap();
-            std::fs::write(dir.join("index.json"), catalog).unwrap();
-        }
-        // Keep the tempdir alive via the settings path is impossible; leak it
-        // for the test lifetime instead.
-        let root = root.keep();
-        settings.http.root_dir = root.to_string_lossy().into_owned();
-        let state = super::AppState {
+        super::AppState {
             config: crate::config::RuntimeConfig::default(),
             client_mutations: crate::state::ClientMutationLocks::default(),
-            settings: std::sync::Arc::new(tokio::sync::RwLock::new(settings.clone())),
+            settings: std::sync::Arc::new(tokio::sync::RwLock::new(
+                crate::core::config::Settings::default(),
+            )),
             db_pool: pool.clone(),
             config_path: std::path::PathBuf::new(),
             client_ips: std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new())),
             metrics_collector: std::sync::Arc::new(crate::metrics::MetricsCollector::default()),
             ssh_executor: std::sync::Arc::new(crate::ssh_executor::SshExecutor::new()),
             application: std::sync::Arc::new(crate::application::ApplicationServices::new(pool)),
-        };
-        (state, settings)
+        }
     }
 
-    fn gate_request(master: &str) -> super::CreateClientRequest {
+    fn client_request(master: &str) -> super::CreateClientRequest {
         super::CreateClientRequest {
+            installer_media_id: None,
+            enabled: None,
             name: "PC001".to_string(),
             mac: "02:00:00:00:00:09".to_string(),
             ip: "192.0.2.9".to_string(),
@@ -2394,31 +2361,6 @@ mod error_contract_tests {
             block_device: None,
             target_iqn: None,
         }
-    }
-
-    fn catalog_with(package_id: &str, hardware_id: &str) -> String {
-        serde_json::json!({
-            "version": 2,
-            "drivers": [{
-                "id": package_id,
-                "name": package_id,
-                "service_name": null,
-                "driver_name": null,
-                "pnp_device_id": null,
-                "guid": null,
-                "mac_address": null,
-                "inf_files": ["nic.inf"],
-                "provider": null,
-                "version": null,
-                "architectures": ["x64"],
-                "hardware_ids": [hardware_id],
-                "compatible_ids": [],
-                "service_names": [],
-                "catalog_files": ["nic.cat"],
-                "imported_at": "2026-01-01T00:00:00Z",
-            }],
-        })
-        .to_string()
     }
 
     async fn ready_revision(pool: &sqlx::SqlitePool, packages: &[&str]) -> String {
@@ -2450,160 +2392,14 @@ mod error_contract_tests {
             .execute(pool)
             .await
             .unwrap();
-        sqlx::query("INSERT OR IGNORE INTO clients (id, name, mac, ip, master, enabled, created_at, updated_at) VALUES ('boot-test-client', 'Boot Test Client', '02:00:00:00:00:99', '192.0.2.99', 'img-win', 1, 'now', 'now')")
-            .execute(pool)
-            .await
-            .unwrap();
-        sqlx::query("INSERT INTO windows_revision_boot_tests (id, revision_id, test_client_id, expected_nic_id, candidate_snapshot, status, reported_revision, reported_nic_id, result_at, created_at) VALUES (?, ?, 'boot-test-client', 'PCI\\VEN_8086&DEV_15F3', 'img-rev@serviced-test', 'passed', ?, 'PCI\\VEN_8086&DEV_15F3', 'now', 'now')")
-            .bind(format!("passed-{}", revision.id))
-            .bind(&revision.id)
-            .bind(&revision.id)
-            .execute(pool)
-            .await
-            .unwrap();
         revision.id
     }
 
     #[tokio::test]
-    async fn gate_passes_non_windows_and_unknown_masters_untouched() {
-        let (state, settings) = gate_state(None).await;
-        for master in ["tank/image/linux", "tank/image/missing"] {
-            let mut request = gate_request(master);
-            super::gate_windows_assignment(&state, &settings, &mut request)
-                .await
-                .unwrap();
-            assert_eq!(request.master, master);
-            assert_eq!(request.snapshot.as_deref(), Some("snap"));
-        }
-    }
-
-    #[tokio::test]
-    async fn gate_refuses_windows_client_without_inventory_and_creates_nothing() {
-        let (state, settings) = gate_state(None).await;
-        let mut request = gate_request("tank/image/windows");
-        let (status, message) = super::gate_windows_assignment(&state, &settings, &mut request)
-            .await
-            .unwrap_err();
-        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
-        assert!(message.contains("02:00:00:00:00:09"), "{message}");
-        // Refusal happens before any storage or client side effect.
-        let clients: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM clients")
-            .fetch_one(&state.db_pool)
-            .await
-            .unwrap();
-        assert_eq!(clients, 0);
-    }
-
-    #[tokio::test]
-    async fn gate_assigns_newest_ready_revision_for_covered_boot_nic() {
-        let (state, settings) =
-            gate_state(Some(&catalog_with("pkg-1", "PCI\\VEN_8086&DEV_15F3"))).await;
-        sqlx::query("INSERT INTO windows_nic_inventory (mac, boot_nic_ids, observed_at) VALUES ('02:00:00:00:00:09', '[\"PCI\\\\VEN_8086&DEV_15F3\"]', '2026-01-01T00:00:00Z')")
-            .execute(&state.db_pool)
-            .await
-            .unwrap();
-        ready_revision(&state.db_pool, &["pkg-1"]).await;
-        let mut request = gate_request("tank/image/windows");
-        super::gate_windows_assignment(&state, &settings, &mut request)
-            .await
-            .unwrap();
-        assert_eq!(request.master, "tank/image/windows-rev");
-        assert_eq!(
-            request.snapshot.as_deref(),
-            Some("tank/image/windows-rev@serviced-test")
-        );
-        let first = super::build_storage_spec(
-            &state.config,
-            &settings,
-            "id-1",
-            "PC001",
-            &request.master,
-            request.snapshot.as_deref(),
-            false,
-        )
-        .unwrap();
-        let second = super::build_storage_spec(
-            &state.config,
-            &settings,
-            "id-2",
-            "PC002",
-            &request.master,
-            request.snapshot.as_deref(),
-            false,
-        )
-        .unwrap();
-        assert_eq!(
-            first.source,
-            crate::domain::storage::StorageSource::Snapshot(
-                "tank/image/windows-rev@serviced-test".into()
-            )
-        );
-        assert_eq!(second.source, first.source);
-        assert_ne!(first.dataset, second.dataset);
-        assert_ne!(first.dataset, request.master);
-        assert_ne!(second.dataset, request.master);
-    }
-
-    #[tokio::test]
-    async fn explicit_revision_requires_matching_inventory_and_private_storage() {
-        let (state, settings) =
-            gate_state(Some(&catalog_with("pkg-1", "PCI\\VEN_8086&DEV_15F3"))).await;
-        ready_revision(&state.db_pool, &["pkg-1"]).await;
-        let mut request = gate_request("tank/image/windows-rev");
-        request.snapshot = None;
-        assert!(
-            super::gate_windows_assignment(&state, &settings, &mut request)
-                .await
-                .is_err()
-        );
-        sqlx::query(
-            "INSERT INTO windows_nic_inventory (mac, boot_nic_ids, observed_at) VALUES (?, ?, ?)",
-        )
-        .bind(&request.mac)
-        .bind(serde_json::json!(["PCI\\VEN_8086&DEV_15F3"]).to_string())
-        .bind("2026-01-01T00:00:00Z")
-        .execute(&state.db_pool)
-        .await
-        .unwrap();
-        super::gate_windows_assignment(&state, &settings, &mut request)
-            .await
-            .unwrap();
-        assert_eq!(
-            request.snapshot.as_deref(),
-            Some("tank/image/windows-rev@serviced-test")
-        );
-    }
-
-    #[tokio::test]
-    async fn pending_enrollment_update_requires_windows_inventory_before_storage() {
-        let (state, _) = gate_state(None).await;
-        let mut pending = gate_request("pending");
-        pending.snapshot = None;
-        let existing = super::ClientManager::new(state.db_pool.clone())
-            .create(pending)
-            .await
-            .unwrap();
-        // This pool is deliberately outside the configured pool, so the broken
-        // path refuses validation before it can call privileged infrastructure.
-        let request =
-            serde_json::from_value(serde_json::json!({"master": "tank/image/windows"})).unwrap();
-        let (status, _) = super::update_client(
-            axum::extract::State(state),
-            axum::extract::Path(existing.id),
-            axum::Extension(admin_claims()),
-            axum::Json(request),
-        )
-        .await
-        .err()
-        .unwrap();
-        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
-    }
-
-    #[tokio::test]
     async fn generic_toggle_cannot_enable_super_for_a_revision_image() {
-        let (state, _) = gate_state(None).await;
+        let state = test_state().await;
         ready_revision(&state.db_pool, &["pkg-1"]).await;
-        let mut request = gate_request("tank/image/windows-rev");
+        let mut request = client_request("tank/image/windows-rev");
         request.snapshot = Some("tank/image/windows-rev@serviced-test".into());
         let existing = super::ClientManager::new(state.db_pool.clone())
             .create(request)
@@ -2627,8 +2423,8 @@ mod error_contract_tests {
 
     #[tokio::test]
     async fn generic_client_update_cannot_enable_legacy_shared_master_super_mode() {
-        let (state, _) = gate_state(None).await;
-        let mut request = gate_request("tank/image/linux");
+        let state = test_state().await;
+        let mut request = client_request("tank/image/linux");
         request.snapshot = Some("tank/image/linux@ready".into());
         let existing = super::ClientManager::new(state.db_pool.clone())
             .create(request)
@@ -2658,8 +2454,8 @@ mod error_contract_tests {
 
     #[tokio::test]
     async fn disabling_super_is_refused_for_a_client_booting_a_snapshot_clone() {
-        let (state, _) = gate_state(None).await;
-        let mut request = gate_request("tank/image/windows");
+        let state = test_state().await;
+        let mut request = client_request("tank/image/windows");
         request.snapshot = Some("tank/image/windows@clean".into());
         let existing = super::ClientManager::new(state.db_pool.clone())
             .create(request)
@@ -2690,8 +2486,8 @@ mod error_contract_tests {
 
     #[tokio::test]
     async fn a_direct_image_assignment_is_the_super_client() {
-        let (state, _) = gate_state(None).await;
-        let mut request = gate_request("tank/image/windows");
+        let state = test_state().await;
+        let mut request = client_request("tank/image/windows");
         request.snapshot = None;
         let existing = super::ClientManager::new(state.db_pool.clone())
             .create(request)
@@ -2700,50 +2496,5 @@ mod error_contract_tests {
         assert!(existing.is_super_client());
         assert!(existing.is_direct_image_assignment());
         assert!(!existing.is_super_mode());
-    }
-
-    #[tokio::test]
-    async fn explicit_revision_refuses_missing_or_ambiguous_immutable_snapshot() {
-        for ambiguous in [false, true] {
-            let (state, settings) =
-                gate_state(Some(&catalog_with("pkg-1", "PCI\\VEN_8086&DEV_15F3"))).await;
-            ready_revision(&state.db_pool, &["pkg-1"]).await;
-            sqlx::query("INSERT INTO windows_nic_inventory (mac, boot_nic_ids, observed_at) VALUES (?, ?, ?)")
-                .bind("02:00:00:00:00:09")
-                .bind(serde_json::json!(["PCI\\VEN_8086&DEV_15F3"]).to_string())
-                .bind("2026-01-01T00:00:00Z")
-                .execute(&state.db_pool).await.unwrap();
-            if ambiguous {
-                sqlx::query("INSERT INTO images (id, name, kind, os_type, size_gb, path, format, status, parent_id, created_at, updated_at) VALUES ('second', 'serviced-other', 'snapshot', 'windows', 50, '', 'raw', 'ready', 'img-rev', ?, ?)")
-                    .bind(chrono::Utc::now().to_rfc3339()).bind(chrono::Utc::now().to_rfc3339()).execute(&state.db_pool).await.unwrap();
-            } else {
-                sqlx::query("DELETE FROM images WHERE id = 'img-rev-snapshot'")
-                    .execute(&state.db_pool)
-                    .await
-                    .unwrap();
-            }
-            let mut request = gate_request("tank/image/windows-rev");
-            let (status, _) = super::gate_windows_assignment(&state, &settings, &mut request)
-                .await
-                .unwrap_err();
-            assert_eq!(status, StatusCode::CONFLICT);
-        }
-    }
-
-    #[tokio::test]
-    async fn gate_names_missing_hardware_id_for_uncovered_boot_nic() {
-        let (state, settings) =
-            gate_state(Some(&catalog_with("pkg-1", "PCI\\VEN_ABCD&DEV_EF01"))).await;
-        sqlx::query("INSERT INTO windows_nic_inventory (mac, boot_nic_ids, observed_at) VALUES ('02:00:00:00:00:09', '[\"PCI\\\\VEN_8086&DEV_15F3\"]', '2026-01-01T00:00:00Z')")
-            .execute(&state.db_pool)
-            .await
-            .unwrap();
-        ready_revision(&state.db_pool, &["pkg-1"]).await;
-        let mut request = gate_request("tank/image/windows");
-        let (status, message) = super::gate_windows_assignment(&state, &settings, &mut request)
-            .await
-            .unwrap_err();
-        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
-        assert!(message.contains("VEN_8086"), "{message}");
     }
 }

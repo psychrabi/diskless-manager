@@ -5,7 +5,7 @@ use crate::domain::{
     Client, ClientId,
 };
 use crate::infrastructure::iscsi::target_has_active_sessions;
-use crate::persistence::ClientRepository;
+use crate::persistence::{ClientRepository, InstallerMediaRepository};
 use crate::state::AppState;
 use serde::Serialize;
 
@@ -313,6 +313,19 @@ pub(crate) async fn storage_spec_for_client(
     // alternative is silently skipping enforcement.
     let chap = ensure_chap_credentials(pool, client.id.as_str(), &client.name, client.chap_enabled)
         .await?;
+    let installer_iso = if let Some(media_id) = client.installer_media_id.as_deref() {
+        let media = InstallerMediaRepository::new(pool.clone())
+            .get(media_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("client installer media '{media_id}' is missing"))?;
+        anyhow::ensure!(
+            media.validation_state == crate::persistence::StructuralValidationState::Valid,
+            "client installer media has not passed structural validation"
+        );
+        Some(media.managed_path)
+    } else {
+        None
+    };
 
     let source = match client.snapshot.as_deref().map(str::trim) {
         Some(snapshot) if !snapshot.is_empty() => {
@@ -334,6 +347,7 @@ pub(crate) async fn storage_spec_for_client(
                 use_game_disk,
                 game_disks,
                 chap: chap.clone(),
+                installer_iso: installer_iso.clone(),
             }));
         }
         _ => StorageSource::ExistingVolume(client.master.clone()),
@@ -349,6 +363,7 @@ pub(crate) async fn storage_spec_for_client(
         use_game_disk,
         game_disks,
         chap,
+        installer_iso,
         source,
     }))
 }
@@ -492,6 +507,7 @@ mod tests {
             chap_user: None,
             chap_secret: None,
             chap_enabled: false,
+            installer_media_id: None,
         };
 
         let spec = storage_spec_for_client(

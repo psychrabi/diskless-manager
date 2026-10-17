@@ -117,6 +117,10 @@ pub struct ClientStorageSpec {
     /// `None` preserves the legacy open portal (no authentication).
     #[serde(default)]
     pub chap: Option<ChapCredentials>,
+
+    /// Read-only installer ISO exported as LUN 1 while the client installs an OS.
+    #[serde(default)]
+    pub installer_iso: Option<PathBuf>,
 }
 
 impl ClientStorageSpec {
@@ -145,6 +149,7 @@ mod initiator_tests {
     #[test]
     fn client_name_controls_initiator_even_with_uuid_id_and_custom_target() {
         let spec = ClientStorageSpec {
+            installer_iso: None,
             client_id: "ed336631-0aa1-44b5-a4eb-c9d39d5742b3".into(),
             client_name: "PC 001/West".into(),
             source: StorageSource::ExistingVolume("pool/client".into()),

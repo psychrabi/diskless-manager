@@ -1,8 +1,10 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import { useAuth } from "@/contexts/auth";
-import { deleteClientWriteback, getClientNvmeOfStatus, rotateChapSecret } from "@/api/modules/clients";
+import { addClient, deleteClientWriteback, getClientNvmeOfStatus, rotateChapSecret, updateClient } from "@/api/modules/clients";
+import { prepareWindowsAssignment } from "@/api/modules/windowsServicing";
+import { useAppStore } from "@/store/useAppStore";
 import { listGameDisks } from "@/api/modules/zfs";
 import ClientFormModal from "./ClientFormModal";
 
@@ -15,9 +17,15 @@ vi.mock("@/contexts/auth", () => ({ useAuth: vi.fn(() => ({ user: { role: "admin
 
 vi.mock("@/api/modules/clients", async (original) => ({
   ...await original(),
+  addClient: vi.fn(),
+  updateClient: vi.fn(),
   getClientNvmeOfStatus: vi.fn(),
   rotateChapSecret: vi.fn(),
   deleteClientWriteback: vi.fn(),
+}));
+
+vi.mock("@/api/modules/windowsServicing", () => ({
+  prepareWindowsAssignment: vi.fn(),
 }));
 
 const confirm = vi.fn();
@@ -31,6 +39,10 @@ beforeEach(() => {
   useAuth.mockReturnValue({ user: { role: "admin" } });
   confirm.mockReset();
   deleteClientWriteback.mockReset();
+  addClient.mockReset();
+  updateClient.mockReset();
+  prepareWindowsAssignment.mockReset();
+  useAppStore.setState({ appConfig: { settings: {} } });
   toast.error.mockReset();
   toast.success.mockReset();
 });
@@ -104,7 +116,7 @@ it("disables credential rotation for regular users", async () => {
   expect(screen.getByRole("button", { name: "Rotate secret" })).toBeDisabled();
 });
 
-it("explains the inventory requirement for a new Windows client", async () => {
+it("shows driver guidance without requiring inventory or a boot test", async () => {
   getClientNvmeOfStatus.mockResolvedValue(null);
   const masters = [
     { name: "linux", os_type: "linux", snapshots: [] },
@@ -117,9 +129,63 @@ it("explains the inventory requirement for a new Windows client", async () => {
   );
   expect(screen.queryByTestId("windows-driver-hint")).not.toBeInTheDocument();
   fireEvent.change(screen.getByLabelText("Select Image"), { target: { value: "windows11" } });
-  expect(await screen.findByTestId("windows-driver-hint")).toHaveTextContent(/preboot NIC inventory/);
+  expect(await screen.findByTestId("windows-driver-hint")).toHaveTextContent(/Boot tests do not block assignment/);
   fireEvent.change(screen.getByLabelText("Select Image"), { target: { value: "linux" } });
   expect(screen.queryByTestId("windows-driver-hint")).not.toBeInTheDocument();
+});
+
+it("prepares Windows NIC drivers before assigning a Windows image", async () => {
+  getClientNvmeOfStatus.mockResolvedValue(null);
+  prepareWindowsAssignment.mockResolvedValue({
+    master: "windows11-serviced",
+    snapshot: "windows11-serviced@serviced-1",
+    prepared: true,
+    reused: false,
+    already_covered: false,
+  });
+  addClient.mockResolvedValue({ id: "new-client" });
+  useAppStore.setState({
+    appConfig: {
+      settings: {
+        windows_servicing: {
+          worker_host: "192.0.2.50",
+          worker_username: "Administrator",
+          iscsi_portal: "192.0.2.1",
+          report_server_url: "http://192.0.2.1:8080",
+        },
+      },
+    },
+  });
+  render(
+    <MemoryRouter>
+      <ClientFormModal
+        client={null}
+        masters={[{ name: "windows11", os_type: "windows", snapshots: [{ name: "windows11@installed" }] }]}
+        isOpen
+        onClose={() => {}}
+        refresh={() => {}}
+      />
+    </MemoryRouter>,
+  );
+
+  fireEvent.change(screen.getByLabelText("Client Name"), { target: { value: "PC011" } });
+  fireEvent.change(screen.getByLabelText("MAC Address"), { target: { value: "02:00:00:00:00:11" } });
+  fireEvent.change(screen.getByLabelText("IP Address"), { target: { value: "192.0.2.11" } });
+  fireEvent.change(screen.getByLabelText("Select Image"), { target: { value: "windows11" } });
+  fireEvent.change(screen.getByLabelText("Select Snapshot"), { target: { value: "windows11@installed" } });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+  await waitFor(() => expect(addClient).toHaveBeenCalled());
+  await waitFor(() => expect(prepareWindowsAssignment).toHaveBeenCalledWith({
+    image_name: "windows11",
+    snapshot: "windows11@installed",
+    mac: "02:00:00:00:00:11",
+  }));
+  expect(addClient).toHaveBeenCalledWith(expect.objectContaining({
+    master: "windows11-serviced",
+    snapshot: "windows11-serviced@serviced-1",
+  }));
 });
 
 const deletableClient = { id: "writeback-1", name: "PC010", mac: "00:11:22:33:44:70", ip: "192.168.1.110", master: "windows", snapshot: "windows@ready", writeback: "diskless/clients/PC010/writeback", status: "Offline" };

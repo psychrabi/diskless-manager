@@ -506,7 +506,7 @@ export default function WindowsServicingModal({ isOpen, onClose, onPrepared }) {
                   {revisions.filter((item) => item.status === "awaiting-test").map((item) => (
                     <p key={item.id} className="mt-1 text-muted-foreground">
                       Candidate {item.id.slice(0, 8)}: boot test {testStates[item.id] ?? "…"}.
-                      New clients stay on the latest tested revision until it passes.
+                      Boot tests are diagnostic and do not block image assignment.
                     </p>
                   ))}
                 </div>
@@ -543,10 +543,10 @@ export default function WindowsServicingModal({ isOpen, onClose, onPrepared }) {
             <div>
               <h3 className="text-sm font-semibold">Network drivers</h3>
               <p className="text-xs text-muted-foreground">
-                Managed catalog builds add packages matching recorded client Boot NICs and consistent
-                inventory architecture. If architecture is missing or mixed, automatic selection uses
-                architecture-neutral packages only. Manual selections add extra packages. Existing
-                worker folders are for dry runs because their package IDs cannot be recorded in a tested revision.
+                Managed catalog builds add signed packages matching each recorded client Boot NIC and
+                its architecture. Every inventoried Boot NIC needs a matching package. Manual selections
+                add extra packages. Existing worker folders are for dry runs because their package IDs
+                cannot be recorded in a tested revision.
               </p>
             </div>
             <div className="flex rounded-md border p-1">

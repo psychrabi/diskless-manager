@@ -14,6 +14,7 @@ use crate::{
 
 fn is_game_only_candidate(request: &UpdateClientRequest) -> bool {
     (request.use_game_disk.is_some() || request.game_disks.is_some())
+        && request.installer_media_id.is_none()
         && request.action.is_none()
         && request.make_super.is_none()
         && request.name.is_none()
@@ -50,6 +51,7 @@ fn is_actual_game_only_update(
 
 fn domain_to_legacy(client: crate::domain::Client) -> Client {
     Client {
+        installer_media_id: client.installer_media_id,
         id: client.id.to_string(),
         name: client.name,
         mac: client.mac.to_string(),
@@ -117,12 +119,6 @@ fn resolve_effective_game_selection(
         stored_or_requested,
         &discovered,
     ))
-}
-
-async fn publish_boot_menu(state: &AppState, client_id: &str) {
-    if let Err(error) = state.refresh_client_boot_menu(client_id).await {
-        tracing::warn!(client_id, %error, "failed to refresh client boot menu during game-disk update");
-    }
 }
 
 pub async fn update_client(
@@ -241,8 +237,6 @@ pub async fn update_client(
         None
     };
 
-    publish_boot_menu(&state, &id).await;
-
     let target_iqn = existing.target_iqn.clone().unwrap_or_else(|| {
         format!(
             "{}:client.{}",
@@ -319,6 +313,7 @@ mod tests {
 
     fn request() -> UpdateClientRequest {
         UpdateClientRequest {
+            installer_media_id: None,
             name: None,
             mac: None,
             ip: None,
@@ -340,6 +335,8 @@ mod tests {
 
     fn client(snapshot: Option<&str>) -> Client {
         let mut client = Client::create(CreateClient {
+            installer_media_id: None,
+            enabled: None,
             name: "PC001".into(),
             mac: "00:11:22:33:44:55".into(),
             ip: "192.168.1.10".into(),

@@ -1,6 +1,7 @@
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import {
   addClient,
+  completeClientInstallation,
   deleteClientWriteback,
   getClientNvmeOfStatus,
   prepareClientNvmeOf,
@@ -8,11 +9,14 @@ import {
   rotateChapSecret,
   updateClient,
 } from "@/api/modules/clients";
+import { listInstallerMedia } from "@/api/modules/installerMedia";
+import { prepareWindowsAssignment } from "@/api/modules/windowsServicing";
 import { listGameDisks } from "@/api/modules/zfs";
 import { readConfig } from "@/api/modules/config";
 import ClientGameDiskPicker from "./ClientGameDiskPicker";
 import { clientSchema } from "@/schema";
 import { useAuth } from "@/contexts/auth";
+import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Copy, Eye, EyeOff, KeyRound, RefreshCw, Save, Server, Trash2 } from "lucide-react";
@@ -38,6 +42,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Spinner } from "@/components/ui/spinner";
+import { Progress } from "@/components/ui/progress";
 import { useConfirm } from "@/contexts/confirmDialog";
 
 // Each opened client owns its form and asynchronous status state. Responses
@@ -46,21 +51,47 @@ const ClientFormModal = (props) => (
   <ClientFormModalContent key={`${props.client?.id ?? "new"}:${props.isOpen}`} {...props} />
 );
 
-// Explicit form defaults: a new client starts enabled with CHAP on, the
+// Explicit form defaults: a new client starts enabled with CHAP off, the
 // game switch off and an empty selection, instead of `undefined` values.
-const formDefaults = { enabled: true, chap_enabled: true, use_game_disk: false, game_disks: [] };
+const formDefaults = {
+  enabled: true,
+  keep_writeback: false,
+  chap_enabled: false,
+  use_game_disk: false,
+  game_disks: [],
+  installer_media_id: "",
+};
 
 const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) => {
   const { success, error } = useToastStore();
   const { user } = useAuth();
+  const chapFeatureEnabled = useAppStore(
+    (state) => state.appConfig?.settings?.client_features?.enable_chap_authentication === true,
+  );
+  const nvmeFeatureEnabled = useAppStore(
+    (state) => state.appConfig?.settings?.client_features?.enable_experimental_nvme_target === true,
+  );
+  const windowsServicingProfile = useAppStore(
+    (state) => state.appConfig?.settings?.windows_servicing,
+  );
+  const windowsServicingConfigured = Boolean(
+    windowsServicingProfile?.worker_host?.trim() &&
+    windowsServicingProfile?.worker_username?.trim() &&
+    windowsServicingProfile?.iscsi_portal?.trim() &&
+    windowsServicingProfile?.report_server_url?.trim(),
+  );
   const confirm = useConfirm();
   const [nvmeStatus, setNvmeStatus] = useState(null);
-  const [nvmeLoading, setNvmeLoading] = useState(Boolean(isOpen && client?.id));
+  const [nvmeLoading, setNvmeLoading] = useState(Boolean(isOpen && client?.id && nvmeFeatureEnabled));
   const [nvmeAction, setNvmeAction] = useState(null);
   const [nvmeError, setNvmeError] = useState("");
   // `null` means not fetched yet (loading); an array may be empty.
   const [gameDisks, setGameDisks] = useState(null);
   const [deletingWriteback, setDeletingWriteback] = useState(false);
+  const [installerMedia, setInstallerMedia] = useState(null);
+  const [installationMode, setInstallationMode] = useState(Boolean(client?.installer_media_id));
+  const [completingInstallation, setCompletingInstallation] = useState(false);
+  const [preparingWindowsDrivers, setPreparingWindowsDrivers] = useState(false);
 
   const {
     register,
@@ -77,7 +108,12 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
 
   useEffect(() => {
     if (isOpen && client) {
-      reset({ ...formDefaults, ...client });
+      reset({
+        ...formDefaults,
+        ...client,
+        keep_writeback: client.installer_media_id ? false : client.keep_writeback ?? false,
+        installer_media_id: client.installer_media_id || "",
+      });
     }
   }, [client, isOpen, reset]);
 
@@ -102,8 +138,22 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
     };
   }, [isOpen]);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    listInstallerMedia().then(
+      (media) => {
+        if (!cancelled) setInstallerMedia(media ?? []);
+      },
+      () => {
+        if (!cancelled) setInstallerMedia([]);
+      },
+    );
+    return () => { cancelled = true; };
+  }, [isOpen]);
+
   const loadNvmeStatus = useCallback(async () => {
-    if (!isOpen || !client?.id) {
+    if (!isOpen || !client?.id || !nvmeFeatureEnabled) {
       setNvmeStatus(null);
       setNvmeError("");
       return;
@@ -120,10 +170,10 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
     } finally {
       setNvmeLoading(false);
     }
-  }, [client, isOpen]);
+  }, [client, isOpen, nvmeFeatureEnabled]);
 
   useEffect(() => {
-    if (!isOpen || !client?.id) return;
+    if (!isOpen || !client?.id || !nvmeFeatureEnabled) return;
     let cancelled = false;
     getClientNvmeOfStatus(client.id).then(
       (status) => {
@@ -140,7 +190,7 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
       },
     );
     return () => { cancelled = true; };
-  }, [client?.id, isOpen]);
+  }, [client?.id, isOpen, nvmeFeatureEnabled]);
 
   const resolveNvmeServerIp = async () => {
     const config = await readConfig();
@@ -153,7 +203,7 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
   };
 
   const handlePrepareNvme = async () => {
-    if (!client?.id) return;
+    if (!client?.id || !nvmeFeatureEnabled) return;
 
     setNvmeAction("prepare");
     setNvmeError("");
@@ -197,37 +247,77 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
   };
 
   const onSubmit = async (data) => {
+    if (installationMode) {
+      if (!data.installer_media_id) {
+        error("Client Management", "Select a validated installation image first.");
+        return;
+      }
+      const selectedMedia = installerMedia?.find((item) => item.id === data.installer_media_id);
+      const approved = await confirm({
+        title: "Use this image for OS installation?",
+        description: `${selectedMedia?.display_name || "The selected installer"} will boot with ${data.master} as its writable disk. Installation writes directly to the master image, so use an empty image and keep it unassigned to other clients until installation is complete.`,
+        confirmText: "Use for OS installation",
+        cancelText: "Cancel",
+        size: "2xl",
+      });
+      if (!approved) return;
+    }
+    let request = {
+      name: data.name,
+      mac: data.mac,
+      ip: data.ip,
+      master: data.master,
+      snapshot: installationMode ? null : data.snapshot || null,
+      installer_media_id: installationMode ? data.installer_media_id || null : null,
+      keep_writeback: installationMode ? false : data.keep_writeback,
+      use_game_disk: installationMode ? false : data.use_game_disk,
+      game_disks: installationMode ? [] : data.game_disks || [],
+      enabled: data.enabled ?? true,
+      ...(chapFeatureEnabled ? { chap_enabled: Boolean(data.chap_enabled) } : {}),
+    };
     try {
+      let driverMessage = "";
+      const selectedImage = masters?.find((image) => image.name === data.master);
+      if (
+        !installationMode &&
+        windowsServicingConfigured &&
+        selectedImage?.os_type === "windows"
+      ) {
+        setPreparingWindowsDrivers(true);
+        try {
+          const prepared = await prepareWindowsAssignment({
+            image_name: data.master,
+            snapshot: request.snapshot,
+            mac: data.mac,
+          });
+          if (prepared.prepared) {
+            request = { ...request, master: prepared.master, snapshot: prepared.snapshot };
+            driverMessage = ` Windows NIC drivers were prepared in '${prepared.master}'.`;
+          } else if (!prepared.already_covered) {
+            throw new Error("The selected Windows image was not prepared with this client’s catalog drivers.");
+          }
+        } catch (prepareError) {
+          const proceed = await confirm({
+            title: "Windows driver preparation failed",
+            description: `${prepareError?.message || String(prepareError)} You can assign the original image anyway, but Windows may not boot if its Boot NIC driver is missing.`,
+            confirmText: "Assign original image",
+            cancelText: "Cancel",
+            size: "2xl",
+          });
+          if (!proceed) return;
+          driverMessage = " Windows driver preparation failed; the original image was assigned.";
+        } finally {
+          setPreparingWindowsDrivers(false);
+        }
+      }
       if (!client?.id) {
-        await addClient({
-          name: data.name,
-          mac: data.mac,
-          ip: data.ip,
-          master: data.master,
-          snapshot: data.snapshot || null,
-          keep_writeback: data.keep_writeback,
-          use_game_disk: data.use_game_disk,
-          game_disks: data.game_disks || [],
-          chap_enabled: data.chap_enabled ?? true,
-          enabled: data.enabled ?? true,
-        });
-        success("Client Management", `Client ${data.name} added successfully.`);
+        await addClient(request);
+        success("Client Management", `Client ${data.name} added successfully.${driverMessage}`);
       } else {
-        await updateClient(client.id, {
-          name: data.name,
-          mac: data.mac,
-          ip: data.ip,
-          master: data.master,
-          snapshot: data.snapshot || null,
-          keep_writeback: data.keep_writeback,
-          use_game_disk: data.use_game_disk,
-          game_disks: data.game_disks || [],
-          chap_enabled: data.chap_enabled ?? true,
-          enabled: data.enabled ?? true,
-        });
+        await updateClient(client.id, request);
         success(
           "Client Management",
-          `Client ${data.name} updated successfully.`
+          `Client ${data.name} updated successfully.${driverMessage}`
         );
       }
       onClose();
@@ -238,10 +328,32 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
     }
   };
 
+  const handleCompleteInstallation = async () => {
+    if (!client?.id || completingInstallation) return;
+    setCompletingInstallation(true);
+    try {
+      await completeClientInstallation(client.id);
+      success("Client Management", "Installation snapshot created and assigned for OS boot.");
+      onClose();
+      await refresh();
+    } catch (e) {
+      error("Client Management", e);
+    } finally {
+      setCompletingInstallation(false);
+    }
+  };
+
   const selectedMaster = useWatch({
     control,
     name: "master",
   });
+
+  const selectedInstallerMediaId = useWatch({ control, name: "installer_media_id" });
+  const selectedMasterOs = masters?.find((master) => master.name === selectedMaster)?.os_type;
+  const expectedInstallerType = selectedMasterOs === "windows" ? "winpe" : "linux_live";
+  const availableInstallerMedia = (installerMedia ?? []).filter(
+    (media) => media.validation_state === "valid" && media.media_type === expectedInstallerType,
+  );
 
   const keepWriteback = useWatch({
     control,
@@ -370,7 +482,7 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
     <Dialog
       open={isOpen}
       onOpenChange={(open) => {
-        if (!open && !deletingWriteback) onClose();
+        if (!open && !deletingWriteback && !completingInstallation) onClose();
       }}
     >
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
@@ -379,6 +491,14 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
         </DialogHeader>
 
         <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
+          {preparingWindowsDrivers && (
+            <Alert aria-live="polite">
+              <AlertDescription className="space-y-2">
+                Preparing a Windows image with catalog NIC drivers. This can take several minutes.
+                <Progress value={null} aria-label="Preparing Windows NIC drivers" />
+              </AlertDescription>
+            </Alert>
+          )}
           <Field>
             <FieldLabel htmlFor="name">Client Name</FieldLabel>
             <FieldContent>
@@ -421,6 +541,89 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
             </FieldContent>
           </Field>
 
+          <Field orientation="horizontal">
+            <Checkbox
+              id="client-enabled"
+              checked={clientEnabled ?? true}
+              onCheckedChange={(checked) =>
+                setValue("enabled", Boolean(checked), {
+                  shouldValidate: true,
+                  shouldDirty: true,
+                })
+              }
+            />
+            <FieldContent>
+              <FieldLabel htmlFor="client-enabled" className="cursor-pointer">
+                Enabled
+              </FieldLabel>
+              <FieldDescription>
+                If unchecked, this machine is denied at boot even when it is fully provisioned
+              </FieldDescription>
+            </FieldContent>
+          </Field>
+
+          <fieldset className="grid gap-2">
+            <legend className="text-sm font-medium">Client boot mode</legend>
+            <div className="flex flex-wrap gap-4 text-sm">
+              <label className="flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="client-boot-mode"
+                  checked={!installationMode}
+                  onChange={() => {
+                    setInstallationMode(false);
+                    setValue("installer_media_id", "", {
+                      shouldValidate: true,
+                      shouldDirty: true,
+                    });
+                  }}
+                />
+                OS boot
+              </label>
+              <label className="flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="client-boot-mode"
+                  checked={installationMode}
+                  onChange={() => {
+                    setInstallationMode(true);
+                    setValue("snapshot", "", { shouldValidate: true, shouldDirty: true });
+                    setValue("keep_writeback", false, { shouldDirty: true });
+                    setValue("use_game_disk", false, { shouldValidate: true, shouldDirty: true });
+                    setValue("game_disks", [], { shouldValidate: true, shouldDirty: true });
+                  }}
+                />
+                OS installation
+              </label>
+            </div>
+            {installationMode && (
+              <Field>
+                <FieldLabel htmlFor="installer-media">Installation image</FieldLabel>
+                <FieldContent>
+                  <NativeSelect
+                    id="installer-media"
+                    disabled={!selectedMaster || installerMedia === null}
+                    {...register("installer_media_id")}
+                  >
+                    <NativeSelectOption value="">Select installation image ...</NativeSelectOption>
+                    {availableInstallerMedia.map((media) => (
+                      <NativeSelectOption key={media.id} value={media.id}>
+                        {media.display_name}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
+                  <FieldDescription>
+                    {installerMedia === null
+                      ? "Loading installer catalog…"
+                      : availableInstallerMedia.length === 0
+                        ? `No validated ${expectedInstallerType === "winpe" ? "WinPE" : "Linux live"} images are available for this image type.`
+                        : "The selected ISO will be attached as read-only LUN 1."}
+                  </FieldDescription>
+                </FieldContent>
+              </Field>
+            )}
+          </fieldset>
+
           <Field>
             <FieldLabel htmlFor="master">Select Image</FieldLabel>
             <FieldContent>
@@ -434,6 +637,10 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
                     shouldValidate: true,
                     shouldDirty: true,
                   });
+                  setValue("installer_media_id", "", {
+                    shouldValidate: true,
+                    shouldDirty: true,
+                  });
                 }}
               >
                 <NativeSelectOption value="">Select image ...</NativeSelectOption>
@@ -444,17 +651,17 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
                 ))}
               </NativeSelect>
               <FieldError>{errors.master?.message}</FieldError>
-              {masters?.find((m) => m.name === selectedMaster)?.os_type === "windows" && !client?.id && (
+              {selectedMasterOs === "windows" && !installationMode && !client?.id && (
                 <p className="text-xs text-muted-foreground" data-testid="windows-driver-hint">
-                  Windows clients need a preboot NIC inventory and a boot-tested driver revision.
-                  Enroll the machine first, request an inventory boot from its row, then create it —
-                  it will use the newest tested revision automatically.
+                  Boot tests do not block assignment. {windowsServicingConfigured
+                    ? "Saving prepares the image with catalog drivers for inventoried clients."
+                    : "Configure the Windows servicing worker in System Settings to prepare catalog NIC drivers automatically."}
                 </p>
               )}
             </FieldContent>
           </Field>
 
-          <Field>
+          {!installationMode && <Field>
             <FieldLabel htmlFor="snapshot">Select Snapshot</FieldLabel>
             <FieldContent>
               <NativeSelect
@@ -481,31 +688,9 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
               </NativeSelect>
               <FieldError>{errors.snapshot?.message}</FieldError>
             </FieldContent>
-          </Field>
+          </Field>}
 
-          <Field orientation="horizontal">
-            <Checkbox
-              id="client-enabled"
-              checked={clientEnabled ?? true}
-              onCheckedChange={(checked) =>
-                setValue("enabled", Boolean(checked), {
-                  shouldValidate: true,
-                  shouldDirty: true,
-                })
-              }
-            />
-            <FieldContent>
-              <FieldLabel htmlFor="client-enabled" className="cursor-pointer">
-                Enabled
-              </FieldLabel>
-              <FieldDescription>
-                If unchecked, this machine is denied at boot even when it is
-                fully provisioned
-              </FieldDescription>
-            </FieldContent>
-          </Field>
-
-          <Field orientation="horizontal">
+          {!installationMode && <Field orientation="horizontal">
             <Checkbox
               id="keep-writeback"
               checked={Boolean(keepWriteback)}
@@ -525,9 +710,9 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
                 (non-persistent mode)
               </FieldDescription>
             </FieldContent>
-          </Field>
+          </Field>}
 
-          <div>
+          {!installationMode && <div>
             <Field orientation="horizontal">
               <Checkbox
                 id="use-game-disk"
@@ -555,94 +740,96 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
                 />
               </div>
             )}
-          </div>
+          </div>}
 
-          <div>
-            <Field orientation="horizontal">
-              <Checkbox
-                id="chap-enabled"
-                checked={chapEnabled ?? true}
-                onCheckedChange={(checked) =>
-                  setValue("chap_enabled", Boolean(checked), {
-                    shouldValidate: true,
-                    shouldDirty: true,
-                  })
-                }
-              />
-              <FieldContent>
-                <FieldLabel htmlFor="chap-enabled" className="cursor-pointer">
-                  CHAP Authentication
-                </FieldLabel>
-                <FieldDescription>
-                  If checked, the iSCSI target requires the login secret
-                  below. The boot menu carries it automatically.
-                </FieldDescription>
-              </FieldContent>
-            </Field>
-            {client?.id && (
-              <div className="mt-3 flex flex-col gap-2 rounded-lg border border-border bg-muted/30 p-3">
-                <div className="flex items-center gap-2 text-sm font-medium">
-                  <KeyRound className="size-4 text-muted-foreground" />
-                  iSCSI login secret
-                </div>
-                <div className="grid gap-1 text-sm">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-muted-foreground">Username</span>
-                    <span className="">{chapUsername || "—"}</span>
+          {chapFeatureEnabled && (
+            <div>
+              <Field orientation="horizontal">
+                <Checkbox
+                  id="chap-enabled"
+                  checked={chapEnabled ?? false}
+                  onCheckedChange={(checked) =>
+                    setValue("chap_enabled", Boolean(checked), {
+                      shouldValidate: true,
+                      shouldDirty: true,
+                    })
+                  }
+                />
+                <FieldContent>
+                  <FieldLabel htmlFor="chap-enabled" className="cursor-pointer">
+                    CHAP Authentication
+                  </FieldLabel>
+                  <FieldDescription>
+                    If checked, the iSCSI target requires the login secret
+                    below. The boot menu carries it automatically.
+                  </FieldDescription>
+                </FieldContent>
+              </Field>
+              {client?.id && (
+                <div className="mt-3 flex flex-col gap-2 rounded-lg border border-border bg-muted/30 p-3">
+                  <div className="flex items-center gap-2 text-sm font-medium">
+                    <KeyRound className="size-4 text-muted-foreground" />
+                    iSCSI login secret
                   </div>
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-muted-foreground">Secret</span>
-                    <span className="flex items-center gap-1">
-                      <span className="">
-                        {chapSecret ? (chapRevealed ? chapSecret : "••••••••••••") : "—"}
+                  <div className="grid gap-1 text-sm">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-muted-foreground">Username</span>
+                      <span className="">{chapUsername || "—"}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-muted-foreground">Secret</span>
+                      <span className="flex items-center gap-1">
+                        <span className="">
+                          {chapSecret ? (chapRevealed ? chapSecret : "••••••••••••") : "—"}
+                        </span>
+                        {chapSecret && (
+                          <>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              title={chapRevealed ? "Hide secret" : "Show secret"}
+                              onClick={() => setChapRevealed((value) => !value)}
+                            >
+                              {chapRevealed ? <EyeOff /> : <Eye />}
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              title="Copy secret"
+                              onClick={handleCopyChapSecret}
+                            >
+                              <Copy />
+                            </Button>
+                          </>
+                        )}
                       </span>
-                      {chapSecret && (
-                        <>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            title={chapRevealed ? "Hide secret" : "Show secret"}
-                            onClick={() => setChapRevealed((value) => !value)}
-                          >
-                            {chapRevealed ? <EyeOff /> : <Eye />}
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            title="Copy secret"
-                            onClick={handleCopyChapSecret}
-                          >
-                            <Copy />
-                          </Button>
-                        </>
-                      )}
-                    </span>
+                    </div>
                   </div>
+                  <div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      icon={RefreshCw}
+                      disabled={chapRotating || user?.role !== "admin"}
+                      onClick={handleRotateChap}
+                    >
+                      {chapRotating ? "Rotating..." : "Rotate secret"}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Login credentials are shown only after an administrator rotates the secret.
+                    Rotation applies to the live target at once; existing
+                    sessions stay up, new logins need the new secret, and the
+                    boot menu is republished automatically.
+                  </p>
                 </div>
-                <div>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    icon={RefreshCw}
-                    disabled={chapRotating || user?.role !== "admin"}
-                    onClick={handleRotateChap}
-                  >
-                    {chapRotating ? "Rotating..." : "Rotate secret"}
-                  </Button>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  Login credentials are shown only after an administrator rotates the secret.
-                  Rotation applies to the live target at once; existing
-                  sessions stay up, new logins need the new secret, and the
-                  boot menu is republished automatically.
-                </p>
-              </div>
-            )}
-          </div>
+              )}
+            </div>
+          )}
 
-          {client?.id && (
+          {client?.id && nvmeFeatureEnabled && (
             <div className="rounded-lg border border-border bg-muted/30 p-4">
               <div className="mb-3 flex items-start justify-between gap-3">
                 <div>
@@ -745,31 +932,57 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
             </div>
           )}
 
+          {client?.id && client.installer_media_id && (
+            <section className="rounded-lg border border-border bg-muted/30 p-4" aria-live="polite">
+              <div className="font-medium">OS installation</div>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Shut down the client before completing installation. The server checks for active iSCSI sessions.
+              </p>
+              {completingInstallation && (
+                <div className="mt-3 space-y-2">
+                  <p className="text-sm">Creating a snapshot and switching the client to OS boot…</p>
+                  <Progress value={null} aria-label="Completing OS installation" />
+                </div>
+              )}
+            </section>
+          )}
+
           <DialogFooter className="pt-2">
+            {user?.role === "admin" && client?.id && client.installer_media_id && (
+              <Button
+                type="button"
+                variant="default"
+                disabled={completingInstallation || isSubmitting || isDirty}
+                onClick={handleCompleteInstallation}
+              >
+                {completingInstallation ? <Spinner data-icon="inline-start" /> : <Save data-icon="inline-start" />}
+                {completingInstallation ? "Completing installation…" : "Installation Completed"}
+              </Button>
+            )}
             {user?.role === "admin" && client?.id && client?.snapshot && client?.writeback && (
               <Button
                 type="button"
                 variant="destructive"
-                disabled={deletingWriteback || client.status?.toLowerCase() === "online"}
+                disabled={deletingWriteback || completingInstallation || client.status?.toLowerCase() === "online"}
                 onClick={handleDeleteWriteback}
               >
                 {deletingWriteback ? <Spinner data-icon="inline-start" /> : <Trash2 data-icon="inline-start" />}
                 {deletingWriteback ? "Deleting..." : "Delete Writeback"}
               </Button>
             )}
-            <Button type="button" variant="ghost" disabled={deletingWriteback} onClick={() => onClose()}>
+            <Button type="button" variant="ghost" disabled={deletingWriteback || completingInstallation} onClick={() => onClose()}>
               Cancel
             </Button>
             <Button
               type="submit"
-              disabled={deletingWriteback || isSubmitting || !isDirty || !isValid}
+              disabled={deletingWriteback || completingInstallation || isSubmitting || !isDirty || !isValid || (installationMode && !selectedInstallerMediaId)}
             >
               {isSubmitting ? (
                 <Spinner data-icon="inline-start" />
               ) : (
                 <Save data-icon="inline-start" />
               )}
-              {isSubmitting ? "Saving..." : "Save"}
+              {preparingWindowsDrivers ? "Preparing Windows drivers..." : isSubmitting ? "Saving..." : "Save"}
             </Button>
           </DialogFooter>
         </form>

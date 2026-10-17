@@ -21,7 +21,9 @@ use crate::api::handlers::{
     client_delete::delete_client,
     client_storage::delete_client_writeback,
     client_update::update_client,
-    clients::{create_client, exit_legacy_super, request_inventory_boot},
+    clients::{
+        complete_client_installation, create_client, exit_legacy_super, request_inventory_boot,
+    },
     clients_v2::{get_client, get_client_boot_history, list_clients},
     config::get_config,
     control::{
@@ -76,7 +78,8 @@ use crate::api::handlers::{
         prepare_image_managed as prepare_windows_image_managed,
         prepare_image_remote as prepare_windows_image_remote,
         prepare_image_remote_catalog as prepare_windows_image_remote_catalog,
-        remote_capabilities as windows_servicing_remote_capabilities, start_boot_test,
+        prepare_windows_assignment, remote_capabilities as windows_servicing_remote_capabilities,
+        start_boot_test,
     },
     ws::ws_metrics_handler,
     zfs::{
@@ -229,6 +232,10 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route(
             "/api/clients/{id}/boot-history",
             get(get_client_boot_history),
+        )
+        .route(
+            "/api/clients/{id}/installation/complete",
+            post(complete_client_installation),
         )
         .route("/api/clients/{id}/super/status", get(super_status))
         .route("/api/clients/{id}/super/enter", post(enter_super))
@@ -455,6 +462,10 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route(
             "/api/pxe/windows/prepare-image/managed",
             post(prepare_windows_image_managed),
+        )
+        .route(
+            "/api/pxe/windows/prepare-assignment",
+            post(prepare_windows_assignment),
         )
         .route(
             "/api/pxe/windows/prepare-image/remote/catalog",

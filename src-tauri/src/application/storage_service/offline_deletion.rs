@@ -282,6 +282,7 @@ mod tests {
 
     fn spec() -> ClientStorageSpec {
         ClientStorageSpec {
+            installer_iso: None,
             client_id: "client-1".into(),
             client_name: "client-1".into(),
             source: StorageSource::Snapshot("pool/master@ready".into()),

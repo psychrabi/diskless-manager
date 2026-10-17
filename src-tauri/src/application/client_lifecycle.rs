@@ -9,7 +9,7 @@ use crate::{
     state::AppState,
 };
 use anyhow::{bail, Context, Result};
-use std::{future::Future, pin::Pin, sync::Arc};
+use std::sync::Arc;
 
 #[derive(Debug, Default, sqlx::FromRow)]
 struct ResetState {
@@ -117,6 +117,7 @@ fn storage_spec(client: &Client) -> Result<ClientStorageSpec> {
         bail!("refusing to delete a master or invalid dataset");
     }
     Ok(ClientStorageSpec {
+        installer_iso: None,
         client_id: client.id.to_string(),
         client_name: client.name.clone(),
         source: StorageSource::Snapshot(snapshot.to_owned()),
@@ -179,14 +180,7 @@ pub async fn delete_writeback_locked(state: &AppState, client: &Client) -> Resul
     .await??;
     spec.chap = None;
     let mut operation = OfflineDeletion::new(spec, game_clones);
-    persist_deletion(
-        state,
-        client.id.as_str(),
-        client.mac.as_str(),
-        &mut operation,
-        false,
-    )
-    .await
+    persist_deletion(state, client.id.as_str(), &mut operation, false).await
 }
 
 /// Reject boot-time repair when persisted resource identities are shared.
@@ -265,19 +259,15 @@ fn validate_deletion_owner(client: &Client, operation: &OfflineDeletion) -> Resu
 async fn persist_deletion(
     state: &AppState,
     client_id: &str,
-    client_mac: &str,
     operation: &mut OfflineDeletion,
     already_journaled: bool,
 ) -> Result<()> {
-    let settings = state.settings.read().await.clone();
     let workflow: Arc<dyn LifecycleDeletionWorkflow> = Arc::new(SystemLifecycleDeletionWorkflow(
         state.application.storage.clone(),
     ));
     persist_deletion_with(
         &state.db_pool,
-        &settings,
         client_id,
-        client_mac,
         operation,
         already_journaled,
         workflow,
@@ -287,11 +277,6 @@ async fn persist_deletion(
 
 trait LifecycleDeletionWorkflow: Send + Sync + 'static {
     fn preflight(&self, operation: &OfflineDeletion) -> Result<()>;
-    fn remove_menu<'a>(
-        &'a self,
-        settings: &'a crate::core::config::Settings,
-        client_mac: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
     fn delete(&self, operation: &mut OfflineDeletion) -> Result<()>;
 }
 
@@ -302,16 +287,6 @@ impl LifecycleDeletionWorkflow for SystemLifecycleDeletionWorkflow {
         preflight_deletion(&self.0, operation)
     }
 
-    fn remove_menu<'a>(
-        &'a self,
-        settings: &'a crate::core::config::Settings,
-        client_mac: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
-        Box::pin(crate::infrastructure::dhcp::remove_client_ipxe_menu(
-            settings, client_mac,
-        ))
-    }
-
     fn delete(&self, operation: &mut OfflineDeletion) -> Result<()> {
         self.0.delete_offline(operation)
     }
@@ -319,9 +294,7 @@ impl LifecycleDeletionWorkflow for SystemLifecycleDeletionWorkflow {
 
 async fn persist_deletion_with(
     pool: &sqlx::SqlitePool,
-    settings: &crate::core::config::Settings,
     client_id: &str,
-    client_mac: &str,
     operation: &mut OfflineDeletion,
     already_journaled: bool,
     workflow: Arc<dyn LifecycleDeletionWorkflow>,
@@ -339,8 +312,6 @@ async fn persist_deletion_with(
     let work = operation.clone();
     let check = workflow.clone();
     tokio::task::spawn_blocking(move || check.preflight(&work)).await??;
-    // Remove the stale boot script before its target can disappear; readiness republishes it after recovery.
-    workflow.remove_menu(settings, client_mac).await?;
     let mut work = operation.clone();
     let delete = workflow.clone();
     let (result, updated) = tokio::task::spawn_blocking(move || {
@@ -471,14 +442,7 @@ async fn process(state: &AppState, client: &Client) -> Result<()> {
                     return Ok(());
                 }
                 validate_unshared_storage(state, client, &operation.spec).await?;
-                persist_deletion(
-                    state,
-                    client.id.as_str(),
-                    client.mac.as_str(),
-                    &mut operation,
-                    true,
-                )
-                .await?;
+                persist_deletion(state, client.id.as_str(), &mut operation, true).await?;
                 return Ok(());
             }
             PendingJournal::Replacement(mut operation) => {
@@ -716,9 +680,7 @@ pub async fn retry_pending_recovery(state: &AppState, id: &str) -> Result<bool> 
         PendingJournal::Deletion(mut operation) => {
             validate_deletion_owner(&client, &operation)?;
             validate_unshared_storage(state, &client, &operation.spec).await?;
-            if let Err(error) =
-                persist_deletion(state, id, client.mac.as_str(), &mut operation, true).await
-            {
+            if let Err(error) = persist_deletion(state, id, &mut operation, true).await {
                 record_manual_recovery_failure(&state.db_pool, id, failures, &error).await?;
                 return Err(error).context("storage deletion retry failed");
             }
@@ -776,6 +738,7 @@ mod tests {
     #[test]
     fn journal_envelope_and_legacy_formats_decode_safely() {
         let replacement = OfflineReplacement::new(ClientStorageSpec {
+            installer_iso: None,
             client_id: "client".into(),
             client_name: "pc".into(),
             source: StorageSource::Snapshot("pool/master@ready".into()),
@@ -853,6 +816,7 @@ mod tests {
             .await
             .unwrap();
         let op = OfflineReplacement::new(ClientStorageSpec {
+            installer_iso: None,
             client_id: "client".into(),
             client_name: "PC001".into(),
             source: StorageSource::Snapshot("pool/master@ready".into()),
@@ -1024,9 +988,7 @@ mod pending_recovery_tests {
     };
 
     struct FakeLifecycleWorkflow {
-        pool: sqlx::SqlitePool,
         fail_preflight: AtomicBool,
-        fail_menu: AtomicBool,
         fail_delete: AtomicBool,
         calls: std::sync::Mutex<Vec<&'static str>>,
     }
@@ -1038,27 +1000,6 @@ mod pending_recovery_tests {
                 bail!("injected preflight failure");
             }
             Ok(())
-        }
-
-        fn remove_menu<'a>(
-            &'a self,
-            _: &'a crate::core::config::Settings,
-            _: &'a str,
-        ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
-            Box::pin(async move {
-                let journal: Option<String> = sqlx::query_scalar(
-                    "SELECT operation FROM client_offline_resets WHERE client_id = 'client'",
-                )
-                .fetch_optional(&self.pool)
-                .await?
-                .flatten();
-                anyhow::ensure!(journal.is_some(), "intent must precede menu removal");
-                self.calls.lock().unwrap().push("menu");
-                if self.fail_menu.load(Ordering::SeqCst) {
-                    bail!("injected menu removal failure");
-                }
-                Ok(())
-            })
         }
 
         fn delete(&self, operation: &mut OfflineDeletion) -> Result<()> {
@@ -1078,6 +1019,7 @@ mod pending_recovery_tests {
     fn deletion_operation() -> OfflineDeletion {
         OfflineDeletion::new(
             ClientStorageSpec {
+                installer_iso: None,
                 client_id: "client".into(),
                 client_name: "pc".into(),
                 source: StorageSource::Snapshot("pool/master@ready".into()),
@@ -1111,29 +1053,20 @@ mod pending_recovery_tests {
     }
 
     #[tokio::test]
-    async fn journaled_deletion_orders_safety_menu_and_storage_and_keeps_metadata() {
+    async fn journaled_deletion_checks_safety_and_keeps_metadata_on_failure() {
         let pool = deletion_test_pool().await;
         let workflow = Arc::new(FakeLifecycleWorkflow {
-            pool: pool.clone(),
             fail_preflight: AtomicBool::new(true),
-            fail_menu: AtomicBool::new(false),
             fail_delete: AtomicBool::new(false),
             calls: std::sync::Mutex::new(Vec::new()),
         });
-        let settings = crate::core::config::Settings::default();
         let mut operation = deletion_operation();
 
-        assert!(persist_deletion_with(
-            &pool,
-            &settings,
-            "client",
-            "00:11:22:33:44:55",
-            &mut operation,
-            false,
-            workflow.clone(),
-        )
-        .await
-        .is_err());
+        assert!(
+            persist_deletion_with(&pool, "client", &mut operation, false, workflow.clone(),)
+                .await
+                .is_err()
+        );
         let count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM client_offline_resets WHERE client_id = 'client'",
         )
@@ -1147,21 +1080,15 @@ mod pending_recovery_tests {
         assert_eq!(workflow.calls.lock().unwrap().as_slice(), ["preflight"]);
 
         workflow.fail_preflight.store(false, Ordering::SeqCst);
-        workflow.fail_menu.store(true, Ordering::SeqCst);
-        assert!(persist_deletion_with(
-            &pool,
-            &settings,
-            "client",
-            "00:11:22:33:44:55",
-            &mut operation,
-            false,
-            workflow.clone(),
-        )
-        .await
-        .is_err());
+        workflow.fail_delete.store(true, Ordering::SeqCst);
+        assert!(
+            persist_deletion_with(&pool, "client", &mut operation, false, workflow.clone(),)
+                .await
+                .is_err()
+        );
         assert_eq!(
             workflow.calls.lock().unwrap().as_slice(),
-            ["preflight", "preflight", "preflight", "menu"]
+            ["preflight", "preflight", "preflight", "delete"]
         );
         let pending: Option<String> = sqlx::query_scalar(
             "SELECT operation FROM client_offline_resets WHERE client_id = 'client'",
@@ -1169,21 +1096,14 @@ mod pending_recovery_tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert!(pending.is_some(), "menu failure retains durable intent");
+        assert!(pending.is_some(), "storage failure retains durable intent");
 
-        workflow.fail_menu.store(false, Ordering::SeqCst);
         workflow.fail_delete.store(true, Ordering::SeqCst);
-        assert!(persist_deletion_with(
-            &pool,
-            &settings,
-            "client",
-            "00:11:22:33:44:55",
-            &mut operation,
-            true,
-            workflow.clone(),
-        )
-        .await
-        .is_err());
+        assert!(
+            persist_deletion_with(&pool, "client", &mut operation, true, workflow.clone(),)
+                .await
+                .is_err()
+        );
         let pending: Option<String> = sqlx::query_scalar(
             "SELECT operation FROM client_offline_resets WHERE client_id = 'client'",
         )
@@ -1201,9 +1121,7 @@ mod pending_recovery_tests {
         workflow.fail_delete.store(false, Ordering::SeqCst);
         persist_deletion_with(
             &pool,
-            &settings,
             "client",
-            "00:11:22:33:44:55",
             &mut restored.clone(),
             true,
             workflow.clone(),
@@ -1243,7 +1161,7 @@ mod pending_recovery_tests {
             .calls
             .lock()
             .unwrap()
-            .ends_with(&["preflight", "menu", "delete"]));
+            .ends_with(&["preflight", "delete"]));
     }
 
     #[tokio::test]
@@ -1261,6 +1179,7 @@ mod pending_recovery_tests {
 
         let mut operation = OfflineDeletion::new(
             ClientStorageSpec {
+                installer_iso: None,
                 client_id: "client".into(),
                 client_name: "pc".into(),
                 source: StorageSource::Snapshot("pool/master@ready".into()),
@@ -1336,6 +1255,7 @@ mod pending_recovery_tests {
 
     fn operation(client_id: &str) -> OfflineReplacement {
         OfflineReplacement::new(ClientStorageSpec {
+            installer_iso: None,
             client_id: client_id.to_owned(),
             client_name: "client".into(),
             source: StorageSource::Snapshot("pool/master@ready".into()),
@@ -1351,6 +1271,7 @@ mod pending_recovery_tests {
 
     fn client(id: &str) -> Client {
         Client {
+            installer_media_id: None,
             id: crate::domain::ClientId::from_string(id.to_owned()).unwrap(),
             name: "client".into(),
             mac: crate::domain::MacAddress::parse("00:11:22:33:44:55").unwrap(),

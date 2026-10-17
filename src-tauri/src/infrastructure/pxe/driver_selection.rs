@@ -96,8 +96,8 @@ pub fn select_compatible_for_image(
     selected
 }
 
-/// Return all catalog-backed packages matching a known Boot NIC, plus any
-/// packages explicitly selected by an administrator.
+/// Return signed catalog packages for every known Boot NIC, plus any packages
+/// explicitly selected by an administrator.
 pub fn select_managed_image_driver_ids(
     packages: &[NetworkDriverPackage],
     boot_nic_ids: &[String],
@@ -128,9 +128,31 @@ pub fn select_managed_image_driver_ids(
                 .any(|package| package.id == *id && package.architectures.is_empty())
         });
     }
+    let uncovered = boot_nic_ids
+        .iter()
+        .filter(|boot_nic_id| {
+            !packages.iter().any(|package| {
+                ids.contains(&package.id)
+                    && !package.catalog_files.is_empty()
+                    && package
+                        .hardware_ids
+                        .iter()
+                        .chain(package.pnp_device_id.iter())
+                        .chain(package.compatible_ids.iter())
+                        .any(|id| pnp_id_matches(id, boot_nic_id))
+            })
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if !uncovered.is_empty() {
+        return Err(format!(
+            "no compatible signed imported driver covers Boot NIC hardware ID(s): {}",
+            uncovered.join(", ")
+        ));
+    }
     ids.extend(explicit_ids.iter().cloned());
     if ids.is_empty() {
-        return Err("no imported network-driver package matches a recorded Boot NIC and consistent client architecture; import a compatible package or select one explicitly".to_string());
+        return Err("no imported network-driver package matches this client inventory; import a compatible package or select one explicitly".to_string());
     }
     Ok(ids.into_iter().collect())
 }

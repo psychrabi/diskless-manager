@@ -153,6 +153,8 @@ mod tests {
             .application
             .clients
             .create(crate::domain::CreateClient {
+                installer_media_id: None,
+                enabled: None,
                 name: "storage-test".into(),
                 mac: "02:00:00:00:00:01".into(),
                 ip: "192.0.2.1".into(),

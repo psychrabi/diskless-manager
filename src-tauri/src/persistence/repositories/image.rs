@@ -231,49 +231,6 @@ impl ImageRepository {
 
     pub async fn set_default(&self, id: &str) -> Result<bool> {
         let mut transaction = self.pool.begin().await?;
-        let revision: Option<(String, String)> = sqlx::query_as(
-            "SELECT id, status FROM windows_image_driver_revisions WHERE revision_image_id = ?",
-        )
-        .bind(id)
-        .fetch_optional(&mut *transaction)
-        .await?;
-        if let Some((revision_id, status)) = revision {
-            if status != DriverRevisionStatus::Ready.to_string() {
-                anyhow::bail!(
-                    "a Windows image revision must pass boot testing before it can be the default"
-                );
-            }
-            let inventories: Vec<String> =
-                sqlx::query_scalar("SELECT boot_nic_ids FROM windows_nic_inventory ORDER BY mac")
-                    .fetch_all(&mut *transaction)
-                    .await?;
-            let passed_tests: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
-                "SELECT expected_nic_id, reported_revision, reported_nic_id FROM windows_revision_boot_tests WHERE revision_id = ? AND status = 'passed'",
-            )
-            .bind(&revision_id)
-            .fetch_all(&mut *transaction)
-            .await?;
-            for inventory in inventories {
-                let boot_nic_ids: Vec<String> = serde_json::from_str(&inventory)
-                    .context("failed to decode a stored Windows Boot NIC inventory")?;
-                let covered = boot_nic_ids.iter().any(|boot_nic_id| {
-                    passed_tests
-                        .iter()
-                        .any(|(expected, reported_revision, reported_nic)| {
-                            expected.eq_ignore_ascii_case(boot_nic_id)
-                                && reported_revision.as_deref() == Some(revision_id.as_str())
-                                && reported_nic
-                                    .as_deref()
-                                    .is_some_and(|reported| reported.eq_ignore_ascii_case(expected))
-                        })
-                });
-                if !covered {
-                    anyhow::bail!(
-                        "a Windows revision needs a passed matching NIC boot test for every recorded client before it can be the default"
-                    );
-                }
-            }
-        }
         sqlx::query("UPDATE images SET is_default = 0")
             .execute(&mut *transaction)
             .await?;
@@ -398,15 +355,17 @@ impl ImageRepository {
     pub async fn find_driver_revision_by_hash(
         &self,
         source_image_id: &str,
+        source_snapshot: &str,
         driver_set_hash: &str,
     ) -> Result<Option<ImageDriverRevision>> {
         use anyhow::Context;
         // Failed attempts never block a retry; only the live record matches.
         let row = sqlx::query_as::<_, (String, String, String, Option<String>, String, String, String, String, String)>(
             r#"SELECT id, source_image_id, source_snapshot, revision_image_id, driver_package_ids, driver_set_hash, status, created_at, updated_at
-            FROM windows_image_driver_revisions WHERE source_image_id = ? AND driver_set_hash = ? AND status != 'failed' LIMIT 1"#,
+            FROM windows_image_driver_revisions WHERE source_image_id = ? AND source_snapshot = ? AND driver_set_hash = ? AND status != 'failed' LIMIT 1"#,
         )
         .bind(source_image_id)
+        .bind(source_snapshot)
         .bind(driver_set_hash)
         .fetch_optional(&self.pool)
         .await

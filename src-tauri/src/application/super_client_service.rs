@@ -86,7 +86,9 @@ impl SuperClientService {
             let _guard = guard;
             runtime.block_on(async move {
                 let session = service.enter_locked(&client_id, verification_only).await?;
-                service.refresh_client_menu(&session.client_id).await?;
+                service
+                    .restore_custom_menu_backup(&session.client_id)
+                    .await?;
                 Ok(session)
             })
         })
@@ -103,7 +105,9 @@ impl SuperClientService {
             let _guard = guard;
             runtime.block_on(async move {
                 service.finish_locked(&operation_client_id, true).await?;
-                service.refresh_client_menu(&operation_client_id).await
+                service
+                    .restore_custom_menu_backup(&operation_client_id)
+                    .await
             })
         })
         .await
@@ -119,7 +123,9 @@ impl SuperClientService {
             let _guard = guard;
             runtime.block_on(async move {
                 service.finish_locked(&operation_client_id, false).await?;
-                service.refresh_client_menu(&operation_client_id).await
+                service
+                    .restore_custom_menu_backup(&operation_client_id)
+                    .await
             })
         })
         .await
@@ -139,7 +145,7 @@ impl SuperClientService {
                 let client = service
                     .exit_legacy_locked(&client_id, &selected_snapshot)
                     .await?;
-                service.refresh_client_menu(&client_id).await?;
+                service.restore_custom_menu_backup(&client_id).await?;
                 Ok(client)
             })
         })
@@ -306,12 +312,12 @@ impl SuperClientService {
                 let _guard = guard;
                 runtime.block_on(async move {
                     let recovery = service.recover_one(session).await;
-                    let menu = service.refresh_client_menu(&client_id).await;
-                    match (recovery, menu) {
+                    let backup = service.restore_custom_menu_backup(&client_id).await;
+                    match (recovery, backup) {
                         (Ok(()), Ok(())) => Ok(()),
                         (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
-                        (Err(error), Err(menu_error)) => Err(error).context(format!(
-                            "client menu refresh after recovery also failed: {menu_error:#}"
+                        (Err(error), Err(backup_error)) => Err(error).context(format!(
+                            "custom menu restoration after recovery also failed: {backup_error:#}"
                         )),
                     }
                 })
@@ -338,13 +344,13 @@ impl SuperClientService {
                     service
                         .exit_legacy_locked(&client_id, &selected_snapshot)
                         .await?;
-                    service.refresh_client_menu(&client_id).await
+                    service.restore_custom_menu_backup(&client_id).await
                 })
             })
             .await
             .context("legacy Super exit recovery worker failed")?;
             if let Err(error) = result {
-                tracing::warn!(client_id = %recovery_client_id, %error, "legacy Super exit recovery or menu refresh failed");
+                tracing::warn!(client_id = %recovery_client_id, %error, "legacy Super exit recovery or custom menu restoration failed");
             }
         }
         let backed_up_menus: Vec<String> =
@@ -358,13 +364,13 @@ impl SuperClientService {
             let menu_client_id = client_id.clone();
             let result = tokio::task::spawn_blocking(move || {
                 let _guard = guard;
-                runtime.block_on(service.refresh_client_menu(&client_id))
+                runtime.block_on(service.restore_custom_menu_backup(&client_id))
             })
             .await
-            .context("client boot menu recovery worker failed")?;
+            .context("custom menu backup recovery worker failed")?;
             if let Err(error) = result {
                 failures.push(format!(
-                    "client {menu_client_id} boot menu recovery failed: {error:#}"
+                    "client {menu_client_id} custom menu backup recovery failed: {error:#}"
                 ));
             }
         }
@@ -379,83 +385,24 @@ impl SuperClientService {
         }
     }
 
-    pub async fn refresh_client_menu(&self, client_id: &str) -> Result<()> {
+    pub async fn restore_custom_menu_backup(&self, client_id: &str) -> Result<()> {
         let id = ClientId::from_string(client_id.to_owned()).map_err(anyhow::Error::from)?;
         let client = self
             .clients
             .find_by_id(&id)
             .await?
-            .context("session client disappeared while refreshing its boot menu")?;
-        if !client.enabled {
-            return crate::application::client_boot::publish_client_menu(
-                &self.clients,
-                &client,
-                &self.settings,
-                Some(crate::infrastructure::dhcp::SuperBootReservation::Deny),
-            )
-            .await;
-        }
+            .context("session client disappeared while restoring its custom menu")?;
         let session = self.sessions.get_for_client(client_id).await?;
-        let super_boot = match session {
-            Some(session) if session.state == SuperSessionState::Active && !client.enabled => {
-                Some(crate::infrastructure::dhcp::SuperBootReservation::Deny)
-            }
-            Some(session) if session.state == SuperSessionState::Active => {
-                let media = async {
-                    self.verify_active_session(&client, &session).await?;
-                    let media = self
-                        .media_service
-                        .verify_integrity(
-                            session
-                                .installer_media_id
-                                .as_deref()
-                                .context("active Super session is missing installer media")?,
-                        )
-                        .await?;
-                    let image = self.images.get(&session.prior_image_id).await?;
-                    let expected_type = match image.os_type {
-                        OsType::Windows => crate::persistence::InstallerMediaType::WinPe,
-                        OsType::Linux => crate::persistence::InstallerMediaType::LinuxLive,
-                    };
-                    anyhow::ensure!(
-                        media.media_type == expected_type,
-                        "Super installer media does not match the assigned image OS"
-                    );
-                    Ok::<_, anyhow::Error>(media)
-                }
-                .await;
-                match media {
-                    Ok(media) => Some(
-                        crate::infrastructure::dhcp::SuperBootReservation::Installer {
-                            media_type: media.media_type,
-                            firmware: client.pxe_mode.clone(),
-                        },
-                    ),
-                    Err(error) => {
-                        crate::application::client_boot::publish_client_menu(
-                            &self.clients,
-                            &client,
-                            &self.settings,
-                            Some(crate::infrastructure::dhcp::SuperBootReservation::Deny),
-                        )
-                        .await?;
-                        return Err(error).context("active Super-session menu validation failed");
-                    }
-                }
-            }
-            Some(session) if session.state != SuperSessionState::Completed => {
-                Some(crate::infrastructure::dhcp::SuperBootReservation::Deny)
-            }
-            _ if client.is_super_mode() => {
-                Some(crate::infrastructure::dhcp::SuperBootReservation::Deny)
-            }
-            _ => None,
-        };
-        crate::application::client_boot::publish_client_menu(
+        if session
+            .as_ref()
+            .is_some_and(|session| session.state != SuperSessionState::Completed)
+        {
+            return Ok(());
+        }
+        crate::application::client_boot::restore_legacy_client_menu_backup(
             &self.clients,
             &client,
             &self.settings,
-            super_boot,
         )
         .await
     }
@@ -1614,6 +1561,8 @@ mod tests {
             .unwrap()
             .insert(working.name.clone(), "pool/master@v1".into());
         let mut client = Client::create(CreateClient {
+            installer_media_id: None,
+            enabled: None,
             name: "client-a".into(),
             mac: "02:00:00:00:00:01".into(),
             ip: "192.0.2.1".into(),
@@ -1781,6 +1730,8 @@ mod tests {
     async fn entry_refuses_storage_identifiers_shared_with_another_client() {
         let (service, clients, sessions, _, iscsi, client, _media_root) = fixture().await;
         let other = Client::create(CreateClient {
+            installer_media_id: None,
+            enabled: None,
             name: "client-b".into(),
             mac: "02:00:00:00:00:02".into(),
             ip: "192.0.2.2".into(),
@@ -1812,7 +1763,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn completed_session_restores_custom_menu_after_restart() {
+    async fn completed_session_keeps_custom_menu_across_restart() {
         let (service, clients, _, _, _, client, media_root) = fixture().await;
         let relative = crate::infrastructure::pxe::client_mac_script_path(client.mac.as_str());
         let menu = media_root.path().join(relative);
@@ -1823,10 +1774,7 @@ mod tests {
         tokio::fs::write(&menu, original).await.unwrap();
 
         service.enter(client.id.as_str(), true, true).await.unwrap();
-        assert!(tokio::fs::read_to_string(&menu)
-            .await
-            .unwrap()
-            .contains("Super installer boot"));
+        assert_eq!(tokio::fs::read_to_string(&menu).await.unwrap(), original);
         service
             .finish_locked(client.id.as_str(), false)
             .await
@@ -1938,22 +1886,8 @@ mod tests {
 
     #[tokio::test]
     async fn legacy_exit_recovery_repairs_a_missing_target_after_assignment_commit() {
-        let (service, clients, sessions, _disks, iscsi, client, media_root) = fixture().await;
+        let (service, clients, sessions, _disks, iscsi, client, _media_root) = fixture().await;
         *iscsi.target.lock().unwrap() = None;
-        let menu = media_root
-            .path()
-            .join(crate::infrastructure::pxe::client_mac_script_path(
-                client.mac.as_str(),
-            ));
-        tokio::fs::create_dir_all(menu.parent().unwrap())
-            .await
-            .unwrap();
-        tokio::fs::write(
-            &menu,
-            crate::infrastructure::pxe::render_super_boot_denied(),
-        )
-        .await
-        .unwrap();
         sqlx::query("INSERT INTO legacy_super_exits(client_id, prior_master, prior_snapshot, selected_snapshot, state, created_at, updated_at) VALUES (?, ?, ?, ?, 'pending', ?, ?)")
             .bind(client.id.as_str())
             .bind(&client.master)
@@ -1982,9 +1916,6 @@ mod tests {
             clients.find_by_id(&client.id).await.unwrap().unwrap().mode,
             BootMode::Normal
         );
-        let menu_contents = tokio::fs::read_to_string(menu).await.unwrap();
-        assert!(menu_contents.contains("Client-specific iPXE script generated"));
-        assert!(!menu_contents.contains("Super-session boot denied"));
     }
 
     #[tokio::test]
@@ -2148,6 +2079,8 @@ mod tests {
     async fn preparing_recovery_refuses_storage_shared_with_another_client() {
         let (service, clients, sessions, _, iscsi, client, _media_root) = fixture().await;
         let other = Client::create(CreateClient {
+            installer_media_id: None,
+            enabled: None,
             name: "client-b".into(),
             mac: "02:00:00:00:00:02".into(),
             ip: "192.0.2.2".into(),
@@ -2232,23 +2165,21 @@ mod tests {
         disabled.enabled = false;
         clients.update(&disabled).await.unwrap();
         service
-            .refresh_client_menu(client.id.as_str())
+            .restore_custom_menu_backup(client.id.as_str())
             .await
             .unwrap();
 
-        let denied = tokio::fs::read_to_string(&menu).await.unwrap();
-        assert!(denied.contains("Super-session boot denied"));
-        assert_ne!(denied, original);
+        assert_eq!(tokio::fs::read_to_string(&menu).await.unwrap(), original);
         assert!(clients
             .boot_menu_backup(client.id.as_str())
             .await
             .unwrap()
-            .is_some());
+            .is_none());
 
         disabled.enabled = true;
         clients.update(&disabled).await.unwrap();
         service
-            .refresh_client_menu(client.id.as_str())
+            .restore_custom_menu_backup(client.id.as_str())
             .await
             .unwrap();
 
@@ -2261,7 +2192,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn normal_entry_requires_current_checksum_boot_verification_and_publishes_after_ready() {
+    async fn normal_entry_requires_current_checksum_boot_verification_without_static_super_menu() {
         let (service, clients, sessions, _, iscsi, client, media_root) = fixture().await;
         let media = service.media.get("media-1").await.unwrap().unwrap();
         service
@@ -2299,6 +2230,7 @@ mod tests {
         .await
         .unwrap();
 
+        let normal_menu = tokio::fs::read_to_string(&menu).await.unwrap();
         let session = service
             .enter(client.id.as_str(), false, false)
             .await
@@ -2310,11 +2242,7 @@ mod tests {
             session.working_clone,
             format!("pool/super-{}", session.id.replace('-', ""))
         );
-        let published = tokio::fs::read_to_string(&menu).await.unwrap();
-        assert!(published.contains("# Super installer boot for"));
-        assert!(published.contains("sanhook --drive 0x81"));
-        assert!(published.contains("sanboot --no-describe"));
-        assert!(!published.contains("Diskless Boot Menu"));
+        assert_eq!(tokio::fs::read_to_string(&menu).await.unwrap(), normal_menu);
         assert_eq!(updated.mode, BootMode::Super);
         assert_eq!(target.luns.len(), 2);
         assert_eq!(
@@ -2335,8 +2263,7 @@ mod tests {
             SuperSessionState::Active
         );
 
-        // Existing-client mutations may ask for a menu refresh after the
-        // durable session starts. That refresh must retain Super boot policy.
+        // The shared dispatcher reads the active Super-session state per boot.
         tokio::fs::write(
             &menu,
             crate::infrastructure::pxe::render_client_script(
@@ -2348,22 +2275,20 @@ mod tests {
         .await
         .unwrap();
         service
-            .refresh_client_menu(client.id.as_str())
+            .restore_custom_menu_backup(client.id.as_str())
             .await
             .unwrap();
-        let published = tokio::fs::read_to_string(&menu).await.unwrap();
-        assert!(published.contains("# Super installer boot for"));
+        assert_eq!(tokio::fs::read_to_string(&menu).await.unwrap(), normal_menu);
 
         // Disabling a client during an active session must fail closed.
         let mut disabled = updated;
         disabled.enabled = false;
         clients.update(&disabled).await.unwrap();
         service
-            .refresh_client_menu(client.id.as_str())
+            .restore_custom_menu_backup(client.id.as_str())
             .await
             .unwrap();
-        let published = tokio::fs::read_to_string(menu).await.unwrap();
-        assert!(published.contains("# Super-session boot denied"));
+        assert_eq!(tokio::fs::read_to_string(menu).await.unwrap(), normal_menu);
     }
 
     #[tokio::test]
@@ -2614,9 +2539,8 @@ mod tests {
         .await
         .unwrap();
         service.save(client.id.as_str()).await.unwrap();
-        let published = tokio::fs::read_to_string(menu).await.unwrap();
-        assert!(published.contains("Diskless Boot Menu"));
-        assert!(!published.contains("Super-session boot denied"));
+        let retained = tokio::fs::read_to_string(menu).await.unwrap();
+        assert!(retained.contains("Super-session boot denied"));
         let updated = clients.find_by_id(&client.id).await.unwrap().unwrap();
         let unchanged = clients.find_by_id(&other.id).await.unwrap().unwrap();
         assert!(updated.master.contains("super-revision-session1"));
@@ -2719,9 +2643,8 @@ mod tests {
         .unwrap();
 
         service.discard(client.id.as_str()).await.unwrap();
-        let published = tokio::fs::read_to_string(menu).await.unwrap();
-        assert!(published.contains("Diskless Boot Menu"));
-        assert!(!published.contains("Super-session boot denied"));
+        let retained = tokio::fs::read_to_string(menu).await.unwrap();
+        assert!(retained.contains("Super-session boot denied"));
         assert_eq!(iscsi.seen_lun_counts.lock().unwrap().last(), Some(&2));
         assert!(backend.datasets.lock().unwrap().contains(
             &crate::application::storage_service::game_clone_dataset(

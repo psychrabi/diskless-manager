@@ -66,6 +66,7 @@ pub fn storage_spec_for_values(
     };
 
     Ok(ClientStorageSpec {
+        installer_iso: None,
         client_id: client_id.into(),
         client_name: client_name.to_string(),
         source,

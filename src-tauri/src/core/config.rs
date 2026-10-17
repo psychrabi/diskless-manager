@@ -27,6 +27,52 @@ pub struct Settings {
     pub storage: StorageConfig,
     #[serde(default)]
     pub installer_media: InstallerMediaConfig,
+    #[serde(default)]
+    pub client_features: ClientFeaturesConfig,
+    #[serde(default)]
+    pub windows_servicing: WindowsServicingConfig,
+}
+
+/// Non-secret connection details for the unattended Windows servicing worker.
+/// Authentication uses the Diskless Manager service account's SSH key.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WindowsServicingConfig {
+    pub worker_host: String,
+    pub worker_username: String,
+    pub helper_executable_path: String,
+    pub iscsi_portal: String,
+    pub report_server_url: String,
+}
+
+impl Default for WindowsServicingConfig {
+    fn default() -> Self {
+        Self {
+            worker_host: String::new(),
+            worker_username: String::new(),
+            helper_executable_path:
+                r"C:\Program Files\Diskless Manager\diskless-windows-servicer.exe".into(),
+            iscsi_portal: String::new(),
+            report_server_url: String::new(),
+        }
+    }
+}
+
+impl WindowsServicingConfig {
+    pub fn is_configured(&self) -> bool {
+        !self.worker_host.trim().is_empty()
+            && !self.worker_username.trim().is_empty()
+            && !self.iscsi_portal.trim().is_empty()
+            && !self.report_server_url.trim().is_empty()
+    }
+}
+
+/// Optional client capabilities, disabled until an administrator opts in.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ClientFeaturesConfig {
+    pub enable_chap_authentication: bool,
+    pub enable_experimental_nvme_target: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -467,5 +513,40 @@ mod compatibility_tests {
         }))
         .unwrap();
         assert!(oversized.validate().is_err());
+    }
+
+    #[test]
+    fn windows_servicing_worker_profile_roundtrips_without_passwords() {
+        let settings: Settings = serde_json::from_value(serde_json::json!({
+            "windows_servicing": {
+                "worker_host": "192.0.2.50",
+                "worker_username": "Administrator",
+                "helper_executable_path": "C:\\\\Program Files\\\\Diskless Manager\\\\diskless-windows-servicer.exe",
+                "iscsi_portal": "192.0.2.1",
+                "report_server_url": "http://192.0.2.1:8080"
+            }
+        }))
+        .unwrap();
+
+        assert!(settings.validate().is_ok());
+        let encoded = serde_json::to_value(&settings).unwrap();
+        let profile = &encoded["windows_servicing"];
+        assert_eq!(profile["worker_host"], "192.0.2.50");
+        assert_eq!(profile["worker_username"], "Administrator");
+        assert_eq!(profile["iscsi_portal"], "192.0.2.1");
+        assert!(profile.get("password").is_none());
+        assert_eq!(
+            serde_json::from_value::<Settings>(encoded)
+                .unwrap()
+                .windows_servicing
+                .worker_host,
+            "192.0.2.50"
+        );
+    }
+
+    #[test]
+    fn legacy_settings_have_an_unconfigured_windows_worker_profile() {
+        let settings: Settings = serde_json::from_str("{}").unwrap();
+        assert!(!settings.windows_servicing.is_configured());
     }
 }

@@ -11,12 +11,16 @@ import ISCSIForm from "./Forms/ISCSIForm";
 import BootProcessOverview from "./BootProcessOverview";
 import EnrollmentControl from "./EnrollmentControl";
 import NetworkConfig from "./NetworkConfig";
-import { clientLifecycleSchema } from "@/schema";
+import { clientFeaturesSchema, clientLifecycleSchema, windowsServicingSchema } from "@/schema";
 import ClientLifecycleForm from "./Forms/ClientLifecycleForm";
+import ClientFeaturesForm from "./Forms/ClientFeaturesForm";
+import WindowsServicingForm from "./Forms/WindowsServicingForm";
 import IscsiBackendSetting from "./IscsiBackendSetting";
 
 const SECTIONS = [
   { section: "client_lifecycle", title: "Client Reset", schema: clientLifecycleSchema, Form: ClientLifecycleForm },
+  { section: "client_features", title: "Client Features", schema: clientFeaturesSchema, Form: ClientFeaturesForm },
+  { section: "windows_servicing", title: "Windows Servicing", schema: windowsServicingSchema, Form: WindowsServicingForm },
   { section: "dhcp", title: "DHCP Server", schema: dhcpSchema, Form: DHCPForm },
   { section: "tftp", title: "TFTP", schema: tftpSchema, Form: TFTPForm },
   { section: "http", title: "HTTP", schema: httpSchema, Form: HTTPForm },

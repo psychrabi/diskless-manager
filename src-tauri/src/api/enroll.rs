@@ -36,9 +36,8 @@ fn client_name_from_mac(mac: &MacAddress) -> String {
     format!("client-{slug}")
 }
 
-/// The enrollment listener serves a single purpose: let an unprovisioned PXE
-/// client register itself so it appears in the clients list for an
-/// administrator to assign an image to.
+/// Enroll an unknown PXE client, then collect its hardware inventory before
+/// an administrator enables it and assigns an image.
 pub fn enroll_router(state: AppState) -> Router {
     Router::new()
         .route("/enroll/{mac}", get(enroll_client))
@@ -95,7 +94,10 @@ impl BoundEnrollServer {
 
 fn ipxe_response(script: String) -> Response {
     (
-        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        [
+            (header::CONTENT_TYPE, "text/plain; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
         script,
     )
         .into_response()
@@ -129,15 +131,47 @@ async fn register_pending_client(
     }
 
     let name = client_name_from_mac(&mac);
+    let images =
+        match crate::persistence::repositories::image::ImageRepository::new(state.db_pool.clone())
+            .list()
+            .await
+        {
+            Ok(images) => images,
+            Err(error) => {
+                warn!("failed to find the default image for enrolled client: {error:#}");
+                Vec::new()
+            }
+        };
+    let default_assignment = images
+        .iter()
+        .find(|image| image.is_default && image.kind != crate::core::image::ImageKind::Snapshot)
+        .and_then(|default_image| {
+            images
+                .iter()
+                .filter(|image| {
+                    image.kind == crate::core::image::ImageKind::Snapshot
+                        && image.parent_id.as_deref() == Some(default_image.id.as_str())
+                })
+                .max_by_key(|snapshot| snapshot.created_at)
+                .map(|snapshot| {
+                    (
+                        default_image.name.clone(),
+                        format!("{}@{}", default_image.name, snapshot.name),
+                    )
+                })
+        });
+    let (master, snapshot) =
+        default_assignment.unwrap_or_else(|| ("pending".into(), String::new()));
     let request = CreateClient {
+        installer_media_id: None,
+        enabled: None,
         name: name.clone(),
         mac: mac.to_string(),
         ip: source_ip.to_string(),
-        // Placeholder until an administrator assigns a real image during
-        // provisioning. The presence of a `target_iqn` marks the client as
-        // projectable/bootable.
-        master: "pending".to_string(),
-        snapshot: None,
+        // Image selection is metadata only; storage is provisioned after
+        // inventory and administrator enablement.
+        master,
+        snapshot: (!snapshot.is_empty()).then_some(snapshot),
         block_store: None,
         block_device: None,
         target_iqn: None,
@@ -255,7 +289,7 @@ async fn enroll_client(
                         },
                     );
                     match receive.await {
-                        Ok(Ok(Ok(()))) => crate::infrastructure::pxe::render_enrollment_redirect(),
+                        Ok(Ok(Ok(script))) => script,
                         Ok(Ok(Err(error))) => {
                             warn!(client = %client.name, "PXE storage readiness deferred: {error}");
                             crate::infrastructure::pxe::render_enrollment_retry()
@@ -298,7 +332,7 @@ async fn enroll_client(
                 crate::infrastructure::pxe::render_enrollment_closed()
             } else {
                 match register_pending_client(&state, parsed, remote.ip()).await {
-                    Ok(_) => crate::infrastructure::pxe::render_enrollment_pending(),
+                    Ok(_) => crate::infrastructure::pxe::render_inventory_boot(),
                     Err(error) => {
                         error!("failed to register enrolled client: {error:#}");
                         crate::infrastructure::pxe::render_enrollment_pending()
@@ -633,7 +667,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn assigned_boot_creates_boot_and_selected_game_luns_before_redirect() {
+    async fn assigned_boot_creates_boot_and_selected_game_luns_before_returning_menu() {
         let mut state = test_state().await;
         let image = std::sync::Arc::new(FakeImage::default());
         let iscsi = std::sync::Arc::new(FakeIscsi::default());
@@ -667,17 +701,14 @@ mod tests {
             get_enroll(&state, "02:00:00:00:00:0d"),
         );
 
-        assert!(
-            first.contains("Re-entering the normal boot menu")
-                || second.contains("Re-entering the normal boot menu")
-        );
+        assert!(first.contains("custom menu") || second.contains("custom menu"));
         for response in [&first, &second] {
-            if !response.contains("Re-entering the normal boot menu") {
+            if !response.contains("custom menu") {
                 assert!(response.contains("storage is not ready yet"));
             }
         }
         let (_, retry) = get_enroll(&state, "02:00:00:00:00:0d").await;
-        assert!(retry.contains("Re-entering the normal boot menu"));
+        assert!(retry.contains("custom menu"));
         assert!(image.exists("pool/clients/boot-game").unwrap());
         assert!(image.exists("pool/games/boot-game-game-games").unwrap());
         assert_eq!(*iscsi.creates.lock().unwrap(), 1);
@@ -773,7 +804,7 @@ mod tests {
             .unwrap();
         let (_, script) = get_enroll(&state, "02:00:00:00:00:0c").await;
         assert!(script.contains("boot-inventory.wim"));
-        assert!(script.contains("clients/${client-mac}.ipxe"));
+        assert!(!script.contains("clients/${client-mac}.ipxe"));
         let (_, next_boot) = get_enroll(&state, "02:00:00:00:00:0c").await;
         assert!(next_boot.contains("No master image has been assigned yet"));
         let inventory_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM windows_nic_inventory")
@@ -855,7 +886,7 @@ mod tests {
 
         assert!(script.contains("storage is not ready yet"));
         assert!(script.contains("sleep 10"));
-        assert!(!script.contains("Re-entering the normal boot menu"));
+        assert!(!script.contains("clients/${client-mac}.ipxe"));
         let error: String = sqlx::query_scalar(
             "SELECT last_error FROM client_boot_failures WHERE client_id = 'retry'",
         )

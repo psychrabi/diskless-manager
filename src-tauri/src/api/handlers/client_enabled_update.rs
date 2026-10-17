@@ -13,6 +13,7 @@ use crate::{
 
 fn is_enabled_only_update(request: &UpdateClientRequest) -> bool {
     request.enabled.is_some()
+        && request.installer_media_id.is_none()
         && request.action.is_none()
         && request.make_super.is_none()
         && request.name.is_none()
@@ -32,6 +33,7 @@ fn is_enabled_only_update(request: &UpdateClientRequest) -> bool {
 
 fn domain_to_legacy(client: crate::domain::Client) -> Client {
     Client {
+        installer_media_id: client.installer_media_id,
         id: client.id.to_string(),
         name: client.name,
         mac: client.mac.to_string(),
@@ -81,12 +83,6 @@ fn domain_to_legacy(client: crate::domain::Client) -> Client {
     }
 }
 
-async fn publish_boot_menu(state: &AppState, client_id: &str) {
-    if let Err(error) = state.refresh_client_boot_menu(client_id).await {
-        tracing::warn!(client_id, %error, "failed to regenerate boot menu while enabling client");
-    }
-}
-
 pub async fn update_client(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -105,7 +101,7 @@ pub async fn update_client(
 
     let _client_guard = state.client_mutations.lock_client(&id).await;
 
-    let existing = state
+    let _existing = state
         .application
         .clients
         .get_by_string(&id)
@@ -159,46 +155,6 @@ pub async fn update_client(
         .expect("enabled-only request has enabled value");
     let settings = state.settings.read().await.clone();
 
-    let super_session = state
-        .application
-        .super_sessions
-        .get_for_client(&id)
-        .await
-        .map_err(|error| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    status: 500,
-                    error: format!(
-                        "Failed to inspect Super-session before disabling client: {error}"
-                    ),
-                }),
-            )
-        })?;
-    let has_incomplete_super_session = super_session
-        .as_ref()
-        .is_some_and(|session| session.state != crate::persistence::SuperSessionState::Completed);
-
-    if existing.enabled && !enabled && !has_incomplete_super_session {
-        crate::infrastructure::dhcp::remove_client_ipxe_menu(
-            &state.settings.read().await.clone(),
-            existing.mac.as_str(),
-        )
-        .await
-        .map_err(|error| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    status: 500,
-                    error: format!(
-                        "Failed to remove boot menu for '{}': {error}",
-                        existing.name
-                    ),
-                }),
-            )
-        })?;
-    }
-
     let client = state
         .application
         .clients
@@ -213,10 +169,6 @@ pub async fn update_client(
                 }),
             )
         })?;
-
-    if enabled || has_incomplete_super_session {
-        publish_boot_menu(&state, &id).await;
-    }
 
     if let Err(error) = state.refresh_client_ips().await {
         tracing::warn!(%error, "failed to refresh client IP cache after enabled-state update");
@@ -233,6 +185,7 @@ mod tests {
 
     fn request() -> UpdateClientRequest {
         UpdateClientRequest {
+            installer_media_id: None,
             name: None,
             mac: None,
             ip: None,

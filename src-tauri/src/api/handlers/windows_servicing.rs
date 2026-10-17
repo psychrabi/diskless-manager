@@ -15,6 +15,7 @@ use crate::{
     state::AppState,
     types::Claims,
 };
+use anyhow::Context;
 use axum::{
     extract::{Query, State},
     http::StatusCode,
@@ -26,6 +27,61 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 const WINDOWS_IMAGE_WORKFLOW_RESOURCE: &str = "windows-image-revisions";
+
+#[derive(Debug, Deserialize)]
+pub struct PrepareWindowsAssignmentRequest {
+    pub image_name: String,
+    pub snapshot: Option<String>,
+    pub mac: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WindowsAssignmentPreparation {
+    pub master: String,
+    pub snapshot: Option<String>,
+    pub prepared: bool,
+    pub reused: bool,
+    pub already_covered: bool,
+}
+
+fn normalize_mac(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| !matches!(character, ':' | '-'))
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn select_assignment_driver_ids(
+    packages: &[crate::infrastructure::pxe::NetworkDriverPackage],
+    inventory: &[(String, Vec<String>, String)],
+    target_mac: &str,
+) -> Result<Vec<String>, String> {
+    let mut target_has_inventory = false;
+    let mut selected = BTreeSet::new();
+    for (mac, boot_nic_ids, architecture) in inventory {
+        if normalize_mac(mac) == normalize_mac(target_mac) && !boot_nic_ids.is_empty() {
+            target_has_inventory = true;
+        }
+        let ids = select_managed_image_driver_ids(
+            packages,
+            boot_nic_ids,
+            std::slice::from_ref(architecture),
+            &[],
+        )
+        .map_err(|error| format!("client {mac}: {error}"))?;
+        selected.extend(ids);
+    }
+    if !target_has_inventory {
+        return Err(format!(
+            "no Boot NIC inventory is recorded for client MAC '{target_mac}'"
+        ));
+    }
+    if selected.is_empty() {
+        return Err("no imported network drivers match the recorded client inventory".into());
+    }
+    Ok(selected.into_iter().collect())
+}
 
 #[derive(Debug, Serialize)]
 pub struct WindowsServicingCapabilities {
@@ -238,29 +294,24 @@ pub async fn prepare_image_managed(
             .driver_root
             .as_ref()
             .is_some_and(|path| !path.as_os_str().is_empty());
-        let (boot_nic_ids, architectures) = if driver_root {
-            (Vec::new(), Vec::new())
+        let inventory = if driver_root {
+            Vec::new()
         } else {
-            let inventory: Vec<(String, String)> = sqlx::query_as(
-                "SELECT boot_nic_ids, architecture FROM windows_nic_inventory ORDER BY mac",
+            let records: Vec<(String, String, String)> = sqlx::query_as(
+                "SELECT mac, boot_nic_ids, architecture FROM windows_nic_inventory ORDER BY mac",
             )
             .fetch_all(&state.db_pool)
             .await?;
-            let boot_nic_ids = inventory
+            records
                 .iter()
-                .map(|(entry, _)| serde_json::from_str::<Vec<String>>(entry))
-                .collect::<Result<Vec<_>, _>>()?
-                .into_iter()
-                .flatten()
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect();
-            let architectures = inventory
-                .into_iter()
-                .map(|(_, architecture)| architecture)
-                .filter(|architecture| !architecture.trim().is_empty())
-                .collect();
-            (boot_nic_ids, architectures)
+                .map(|(mac, boot_nic_ids, architecture)| {
+                    Ok((
+                        mac.clone(),
+                        serde_json::from_str::<Vec<String>>(boot_nic_ids)?,
+                        architecture.clone(),
+                    ))
+                })
+                .collect::<Result<Vec<_>, serde_json::Error>>()?
         };
         let explicit_ids = request.driver_ids.clone();
         let packages =
@@ -270,13 +321,26 @@ pub async fn prepare_image_managed(
                     Vec::new()
                 } else {
                     let packages = plugin.list()?;
-                    select_managed_image_driver_ids(
-                        &packages,
-                        &boot_nic_ids,
-                        &architectures,
-                        &explicit_ids,
-                    )
-                    .map_err(anyhow::Error::msg)?
+                    let mut selected_ids = BTreeSet::new();
+                    for (mac, boot_nic_ids, architecture) in inventory {
+                        let selected = select_managed_image_driver_ids(
+                            &packages,
+                            &boot_nic_ids,
+                            &[architecture],
+                            &[],
+                        )
+                        .map_err(|error| {
+                            anyhow::anyhow!("client inventory {mac}: {error}")
+                        })?;
+                        selected_ids.extend(selected);
+                    }
+                    selected_ids.extend(explicit_ids);
+                    if selected_ids.is_empty() {
+                        return Err(anyhow::anyhow!(
+                            "no Windows Boot NIC inventory is available; inventory clients before building a managed image"
+                        ));
+                    }
+                    selected_ids.into_iter().collect()
                 };
                 selected_ids
                     .into_iter()
@@ -295,6 +359,219 @@ pub async fn prepare_image_managed(
             packages,
         )
         .await
+    })
+    .await
+    .map_err(|error| internal_message(error.to_string()))?
+    .map_err(operation_error)?;
+    Ok(Json(result))
+}
+
+/// Prepare a Windows assignment with every catalog NIC package matching the
+/// recorded client inventory. This task is detached so a closed browser does
+/// not cancel a worker that is modifying its private image clone.
+pub async fn prepare_windows_assignment(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Json(request): Json<PrepareWindowsAssignmentRequest>,
+) -> Result<Json<WindowsAssignmentPreparation>, (StatusCode, Json<WindowsServicingError>)> {
+    require_admin(&claims)?;
+    if crate::validation::validate_mac_address(&request.mac).is_err() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(WindowsServicingError {
+                error: "Invalid client MAC address".to_string(),
+            }),
+        ));
+    }
+    let result = tokio::spawn(async move {
+        let _guard = state
+            .client_mutations
+            .lock_resource(WINDOWS_IMAGE_WORKFLOW_RESOURCE)
+            .await;
+        let settings = state.settings.read().await.clone();
+        let profile = settings.windows_servicing;
+        if !profile.is_configured() {
+            anyhow::bail!("Windows servicing worker is not configured in System Settings");
+        }
+
+        let images = crate::application::image_service::ImageService::new(
+            crate::persistence::repositories::image::ImageRepository::new(
+                state.db_pool.clone(),
+            ),
+        );
+        let source = images.get(&request.image_name).await?;
+        if source.os_type != crate::core::image::OsType::Windows
+            || source.kind == crate::core::image::ImageKind::Snapshot
+        {
+            return Ok(WindowsAssignmentPreparation {
+                master: source.name,
+                snapshot: request.snapshot,
+                prepared: false,
+                reused: false,
+                already_covered: false,
+            });
+        }
+        let snapshot = request
+            .snapshot
+            .as_deref()
+            .context("select a ready snapshot before preparing Windows drivers")?;
+        let (snapshot_image, snapshot_name) = snapshot
+            .split_once('@')
+            .context("Windows driver preparation requires an image@snapshot selection")?;
+        anyhow::ensure!(
+            snapshot_image == source.name,
+            "selected snapshot does not belong to Windows image '{}'",
+            source.name
+        );
+
+        let records: Vec<(String, String, String)> = sqlx::query_as(
+            "SELECT mac, boot_nic_ids, architecture FROM windows_nic_inventory ORDER BY mac",
+        )
+        .fetch_all(&state.db_pool)
+        .await
+        .context("failed to read client Boot NIC inventory")?;
+        let inventory = records
+            .iter()
+            .map(|(mac, boot_nic_ids, architecture)| {
+                Ok((
+                    mac.clone(),
+                    serde_json::from_str::<Vec<String>>(boot_nic_ids)?,
+                    architecture.clone(),
+                ))
+            })
+            .collect::<Result<Vec<_>, serde_json::Error>>()?;
+        let root = settings.http.root_dir.clone();
+        let target_mac = request.mac.clone();
+        let (package_ids, packages) = tokio::task::spawn_blocking(move || {
+            let plugin = NetworkDriverInjectionPlugin::new(PathBuf::from(root));
+            let catalog = plugin.list()?;
+            let ids = select_assignment_driver_ids(&catalog, &inventory, &target_mac)
+                .map_err(anyhow::Error::msg)?;
+            let packages = ids
+                .iter()
+                .map(|id| {
+                    Ok(StagedDriverPackage {
+                        id: id.clone(),
+                        source_dir: plugin.package_directory(id)?,
+                    })
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            Ok::<_, anyhow::Error>((ids, packages))
+        })
+        .await
+        .context("driver catalog selection worker failed")??;
+
+        // Reuse a selected managed revision when it already includes this
+        // complete package set. Unmanaged images are prepared once per hash.
+        let candidate_rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT driver_package_ids FROM windows_image_driver_revisions WHERE revision_image_id = ? AND status IN ('awaiting-test', 'ready')",
+        )
+        .bind(&source.id)
+        .fetch_all(&state.db_pool)
+        .await
+        .context("failed to inspect existing Windows image revisions")?;
+        for (json_ids,) in candidate_rows {
+            let existing_ids: BTreeSet<String> = serde_json::from_str(&json_ids)?;
+            if package_ids.iter().all(|id| existing_ids.contains(id)) {
+                return Ok(WindowsAssignmentPreparation {
+                    master: source.name,
+                    snapshot: request.snapshot,
+                    prepared: false,
+                    reused: false,
+                    already_covered: true,
+                });
+            }
+        }
+
+        let planned = crate::application::windows_servicing::plan_driver_revision(
+            &source.id,
+            snapshot_name,
+            &package_ids,
+        );
+        let repository = crate::persistence::repositories::image::ImageRepository::new(
+            state.db_pool.clone(),
+        );
+        if let Some(existing) = repository
+            .find_driver_revision_by_hash(&source.id, snapshot_name, &planned.driver_set_hash)
+            .await?
+        {
+            match existing.status {
+                crate::core::image::DriverRevisionStatus::AwaitingTest
+                | crate::core::image::DriverRevisionStatus::Ready => {
+                    let candidate_id = existing
+                        .revision_image_id
+                        .context("prepared Windows revision has no image")?;
+                    let rows: Vec<(String, String)> = sqlx::query_as(
+                        "SELECT image.name, snapshot.name FROM images AS image JOIN images AS snapshot ON snapshot.parent_id = image.id AND snapshot.kind = 'snapshot' AND snapshot.status = 'ready' AND snapshot.name LIKE 'serviced-%' WHERE image.id = ? AND image.status = 'ready' ORDER BY snapshot.created_at DESC",
+                    )
+                    .bind(candidate_id)
+                    .fetch_all(&state.db_pool)
+                    .await
+                    .context("failed to read prepared Windows revision snapshot")?;
+                    anyhow::ensure!(
+                        rows.len() == 1,
+                        "prepared Windows revision must have one ready servicing snapshot"
+                    );
+                    let (master, snapshot_name) = rows.into_iter().next().context(
+                        "prepared Windows revision snapshot query returned no row",
+                    )?;
+                    return Ok(WindowsAssignmentPreparation {
+                        snapshot: Some(format!("{master}@{snapshot_name}")),
+                        master,
+                        prepared: true,
+                        reused: true,
+                        already_covered: false,
+                    });
+                }
+                crate::core::image::DriverRevisionStatus::Preparing => {
+                    anyhow::bail!("an identical Windows driver revision is already being prepared; retry assignment shortly");
+                }
+                crate::core::image::DriverRevisionStatus::Failed => {}
+            }
+        }
+
+        let helper = profile.helper_executable_path.trim().to_owned();
+        let preparation =
+            crate::application::windows_servicing::ManagedWindowsPreparationRequest {
+                worker: RemoteWindowsCapabilitiesRequest {
+                    host: profile.worker_host,
+                    username: profile.worker_username,
+                    password: None,
+                    executable_path: (!helper.is_empty()).then_some(helper),
+                },
+                image_id: source.id,
+                source_snapshot: snapshot_name.to_owned(),
+                new_name: format!("auto-serviced-{}", uuid::Uuid::new_v4().simple()),
+                portal: profile.iscsi_portal,
+                driver_ids: package_ids,
+                driver_root: None,
+                commit: true,
+                report_server_url: Some(profile.report_server_url),
+                boot_arm: WindowsBootArmConfig::default(),
+            };
+        preparation.validate()?;
+        let prepared = crate::application::windows_servicing::prepare_managed(
+            state.db_pool.clone(),
+            Arc::clone(&state.application.iscsi),
+            state.config.clone(),
+            preparation,
+            packages,
+        )
+        .await?;
+        let master = prepared
+            .image
+            .context("Windows servicing completed without publishing an image")?
+            .name;
+        let snapshot = prepared
+            .snapshot
+            .context("Windows servicing completed without publishing a snapshot")?;
+        Ok(WindowsAssignmentPreparation {
+            master: master.clone(),
+            snapshot: Some(format!("{master}@{}", snapshot.name)),
+            prepared: true,
+            reused: false,
+            already_covered: false,
+        })
     })
     .await
     .map_err(|error| internal_message(error.to_string()))?
@@ -591,8 +868,8 @@ pub async fn list_boot_tests(
 }
 
 /// Admin-only listing of driver revision records for one source image, newest
-/// last. Existing client assignments stay pinned; only the boot-test gate
-/// moves a candidate to `ready` for new clients.
+/// last. The boot-test result controls revision readiness reporting, not image
+/// assignment.
 pub async fn list_revisions(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
@@ -607,4 +884,36 @@ pub async fn list_revisions(
         .await
         .map(Json)
         .map_err(operation_error)
+}
+
+#[cfg(test)]
+mod automatic_assignment_tests {
+    use super::select_assignment_driver_ids;
+    use crate::infrastructure::pxe::NetworkDriverPackage;
+
+    #[test]
+    fn automatic_assignment_selects_drivers_for_every_inventoried_client() {
+        let packages: Vec<NetworkDriverPackage> = serde_json::from_value(serde_json::json!([
+            {"id":"pkg-a","name":"A","inf_files":["a.inf"],"architectures":["x64"],"hardware_ids":["PCI\\VEN_1234&DEV_0001"],"catalog_files":["a.cat"],"imported_at":"2026-01-01T00:00:00Z"},
+            {"id":"pkg-b","name":"B","inf_files":["b.inf"],"architectures":["x64"],"hardware_ids":["PCI\\VEN_1234&DEV_0002"],"catalog_files":["b.cat"],"imported_at":"2026-01-01T00:00:00Z"}
+        ]))
+        .unwrap();
+        let inventory = vec![
+            (
+                "02:00:00:00:00:01".into(),
+                vec!["PCI\\VEN_1234&DEV_0001".into()],
+                "x64".into(),
+            ),
+            (
+                "02:00:00:00:00:02".into(),
+                vec!["PCI\\VEN_1234&DEV_0002".into()],
+                "x64".into(),
+            ),
+        ];
+
+        assert_eq!(
+            select_assignment_driver_ids(&packages, &inventory, "02-00-00-00-00-02").unwrap(),
+            vec!["pkg-a", "pkg-b"]
+        );
+    }
 }

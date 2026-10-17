@@ -26,6 +26,7 @@ pub struct Client {
     pub pxe_mode: Option<String>,
     pub keep_writeback: Option<bool>,
     pub use_game_disk: Option<bool>,
+    pub installer_media_id: Option<String>,
     #[serde(skip_serializing)]
     pub chap_user: Option<String>,
     #[serde(skip_serializing)]
@@ -39,6 +40,7 @@ pub struct CreateClientRequest {
     pub mac: String,
     pub ip: String,
     pub master: String,
+    pub enabled: Option<bool>,
     pub snapshot: Option<String>,
     pub keep_writeback: Option<bool>,
     pub use_game_disk: Option<bool>,
@@ -49,15 +51,18 @@ pub struct CreateClientRequest {
     pub block_store: Option<String>,
     pub block_device: Option<String>,
     pub target_iqn: Option<String>,
+    pub installer_media_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UpdateClientRequest {
     pub name: Option<String>,
     pub mac: Option<String>,
     pub ip: Option<String>,
     pub master: Option<String>,
     pub snapshot: Option<String>,
+    /// Set when a full client form selects or clears installation media.
+    pub installer_media_id: Option<String>,
     pub keep_writeback: Option<bool>,
     pub use_game_disk: Option<bool>,
     /// Explicit per-client game master selection. `None` keeps the stored
@@ -97,7 +102,7 @@ impl Client {
             mac,
             ip: req.ip,
             master: req.master,
-            enabled: true,
+            enabled: req.enabled.unwrap_or(true),
             created_at: Utc::now(),
             updated_at: Utc::now(),
             snapshot: req.snapshot,
@@ -111,6 +116,7 @@ impl Client {
             pxe_mode: Some("uefi".to_string()),
             keep_writeback: req.keep_writeback,
             use_game_disk: req.use_game_disk,
+            installer_media_id: req.installer_media_id,
             chap_user: None,
             chap_secret: None,
             chap_enabled: None,
@@ -213,6 +219,7 @@ struct ClientRow {
     chap_user: Option<String>,
     chap_secret: Option<String>,
     chap_enabled: Option<bool>,
+    installer_media_id: Option<String>,
 }
 
 impl ClientManager {
@@ -229,8 +236,8 @@ impl ClientManager {
                 id, name, mac, ip, master, snapshot, block_store, target_iqn,
                 writeback, block_device, status, mode, pxe_mode, keep_writeback,
                 use_game_disk, chap_user, chap_secret, chap_enabled,
-                created_at, last_modified, enabled, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                installer_media_id, created_at, last_modified, enabled, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name, mac = excluded.mac, ip = excluded.ip,
                 master = excluded.master, snapshot = excluded.snapshot,
@@ -240,6 +247,7 @@ impl ClientManager {
                 keep_writeback = excluded.keep_writeback, use_game_disk = excluded.use_game_disk,
                 chap_user = excluded.chap_user, chap_secret = excluded.chap_secret,
                 chap_enabled = excluded.chap_enabled,
+                installer_media_id = excluded.installer_media_id,
                 created_at = excluded.created_at, last_modified = excluded.last_modified,
                 enabled = excluded.enabled, updated_at = excluded.updated_at
             "#,
@@ -262,6 +270,7 @@ impl ClientManager {
         .bind(&client.chap_user)
         .bind(&client.chap_secret)
         .bind(client.chap_enabled.unwrap_or(false))
+        .bind(&client.installer_media_id)
         .bind(client.created_at.to_rfc3339())
         .bind(&client.last_modified)
         .bind(client.enabled)
@@ -278,7 +287,7 @@ impl ClientManager {
             SELECT id, name, mac, ip, master, enabled, created_at, updated_at,
                    snapshot, block_store, target_iqn, writeback, last_modified,
                    block_device, status, mode, keep_writeback, use_game_disk,
-                   chap_user, chap_secret, chap_enabled
+                   chap_user, chap_secret, chap_enabled, installer_media_id
             FROM clients
             ORDER BY name
             "#,
@@ -321,6 +330,7 @@ impl ClientManager {
                 chap_user: row.chap_user,
                 chap_secret: row.chap_secret,
                 chap_enabled: row.chap_enabled,
+                installer_media_id: row.installer_media_id,
             })
             .collect();
 
@@ -333,7 +343,7 @@ impl ClientManager {
             SELECT id, name, mac, ip, master, enabled, created_at, updated_at,
                    snapshot, block_store, target_iqn, writeback, last_modified,
                    block_device, status, mode, keep_writeback, use_game_disk,
-                   chap_user, chap_secret, chap_enabled
+                   chap_user, chap_secret, chap_enabled, installer_media_id
             FROM clients
             WHERE id = ? OR name = ? OR mac = ?
             "#,
@@ -379,6 +389,7 @@ impl ClientManager {
             chap_user: row.chap_user,
             chap_secret: row.chap_secret,
             chap_enabled: row.chap_enabled,
+            installer_media_id: row.installer_media_id,
         })
     }
 
@@ -393,6 +404,7 @@ impl ClientManager {
 
     pub async fn update(&self, id: &str, req: UpdateClientRequest) -> anyhow::Result<Client> {
         let mut client = self.get(id).await?;
+        let full_form_update = req.master.is_some();
 
         if let Some(name) = req.name {
             client.name = name;
@@ -405,6 +417,9 @@ impl ClientManager {
         }
         if let Some(master) = req.master {
             client.master = master;
+        }
+        if full_form_update {
+            client.installer_media_id = req.installer_media_id;
         }
         client.snapshot = req.snapshot;
         // Storage pointers are only overwritten when the request carries
@@ -577,6 +592,7 @@ mod response_tests {
     #[test]
     fn serialized_clients_do_not_include_chap_credentials() {
         let client = Client {
+            installer_media_id: None,
             id: "id".to_string(),
             name: "PC001".to_string(),
             mac: "00:11:22:33:44:55".to_string(),

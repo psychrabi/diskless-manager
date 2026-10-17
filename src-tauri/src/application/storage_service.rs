@@ -1186,6 +1186,17 @@ impl StorageService {
             );
             luns.extend(game_luns);
         }
+        if let Some(installer_iso) = &spec.installer_iso {
+            anyhow::ensure!(
+                !spec.use_game_disk,
+                "installer media cannot share the game-disk LUN range"
+            );
+            luns.push(IscsiLunSpec::readonly_file(
+                1,
+                format!("installer_{}", sanitize_client_id(&spec.client_id)),
+                installer_iso.clone(),
+            ));
+        }
 
         if settle_devices {
             self.image_backend
@@ -1315,7 +1326,10 @@ impl StorageService {
             "destroying client storage"
         );
 
-        let owned_backstores = vec![storage.backstore().to_string()];
+        let owned_backstores = vec![
+            storage.backstore().to_string(),
+            format!("installer_{}", sanitize_client_id(&storage.client_id)),
+        ];
 
         self.iscsi
             .remove_target_with_backstores(storage.target_iqn(), &owned_backstores)
@@ -1370,7 +1384,10 @@ impl StorageService {
             "resetting client storage"
         );
 
-        let owned_backstores = vec![current.backstore().to_string()];
+        let owned_backstores = vec![
+            current.backstore().to_string(),
+            format!("installer_{}", sanitize_client_id(&current.client_id)),
+        ];
 
         self.iscsi
             .remove_target_with_backstores(current.target_iqn(), &owned_backstores)
@@ -1532,6 +1549,17 @@ impl StorageService {
                 spec.lun,
             )
         };
+        if let Some(installer_iso) = &spec.installer_iso {
+            anyhow::ensure!(
+                !spec.use_game_disk,
+                "installer media cannot share the game-disk LUN range"
+            );
+            iscsi_spec.luns.push(IscsiLunSpec::readonly_file(
+                1,
+                format!("installer_{}", sanitize_client_id(&spec.client_id)),
+                installer_iso.clone(),
+            ));
+        }
         iscsi_spec.initiator_iqn = Some(spec.initiator_iqn());
         iscsi_spec.chap = spec.chap.clone();
 
@@ -1751,6 +1779,7 @@ mod game_storage_tests {
     #[test]
     fn super_session_target_uses_lun_zero_and_readonly_iso_lun_one_without_games() {
         let spec = crate::domain::storage::ClientStorageSpec {
+            installer_iso: None,
             client_id: "pc001".into(),
             client_name: "pc001".into(),
             source: StorageSource::ExistingClientVolume("pool/pc001".into()),

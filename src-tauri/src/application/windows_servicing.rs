@@ -103,81 +103,6 @@ pub struct ManagedWindowsPreparationResult {
     pub revision: Option<ImageDriverRevision>,
 }
 
-/// Assignment of a new client to a tested Windows image revision.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WindowsAssignment {
-    pub revision_id: String,
-    pub revision_image_id: String,
-}
-
-/// Decide the Windows image for a new client.
-///
-/// - `inventory_boot_ids` is `None` when no preboot record exists for the
-///   client's MAC: creation is refused with an actionable message instead of
-///   silently booting an untested image.
-/// - `ready_revisions` are ordered newest-first internally; the newest revision whose driver
-///   set covers a Boot NIC ID wins, preserving the last known-good revision
-///   for rollback by never mutating older records.
-/// - A revision with an empty driver set never matches: the Boot NIC driver
-///   is required, secondary adapters alone do not qualify.
-///
-/// Update paths never call this: existing clients stay pinned to the image
-/// they were created with.
-pub fn select_windows_assignment(
-    client_mac: &str,
-    inventory_boot_ids: Option<&[String]>,
-    ready_revisions: &[ImageDriverRevision],
-    passed_boot_test_nics: &std::collections::HashMap<String, Vec<String>>,
-    catalog: &[NetworkDriverPackage],
-) -> Result<Option<WindowsAssignment>> {
-    let Some(boot_ids) = inventory_boot_ids else {
-        bail!(
-            "no preboot NIC inventory for client MAC '{client_mac}'; request a WinPE inventory boot for this machine before creating it as a Windows client"
-        );
-    };
-    if ready_revisions.is_empty() {
-        bail!(
-            "no tested Windows image revision is available; build a candidate revision and pass its boot test before creating Windows clients"
-        );
-    }
-    let by_id: std::collections::HashMap<&str, &NetworkDriverPackage> = catalog
-        .iter()
-        .map(|package| (package.id.as_str(), package))
-        .collect();
-    let mut ordered: Vec<&ImageDriverRevision> = ready_revisions.iter().collect();
-    ordered.sort_by_key(|revision| std::cmp::Reverse(revision.created_at));
-    for revision in ordered {
-        let tested_nics = passed_boot_test_nics
-            .get(&revision.id)
-            .map(Vec::as_slice)
-            .unwrap_or_default();
-        let covers = boot_ids.iter().any(|boot_id| {
-            tested_nics
-                .iter()
-                .any(|tested| tested.eq_ignore_ascii_case(boot_id))
-                && revision.driver_package_ids.iter().any(|package_id| {
-                    by_id
-                        .get(package_id.as_str())
-                        .is_some_and(|package| package_matches_boot_nic(package, boot_id))
-                })
-        });
-        if !covers {
-            continue;
-        }
-        let Some(image_id) = revision.revision_image_id.clone() else {
-            continue;
-        };
-        return Ok(Some(WindowsAssignment {
-            revision_id: revision.id.clone(),
-            revision_image_id: image_id,
-        }));
-    }
-    bail!(
-        "no ready revision has a passed boot test and matching driver package for Boot NIC hardware ID(s) {}; test a candidate with this exact NIC before assigning it",
-        boot_ids.join(", ")
-    )
-}
-
 pub fn package_matches_boot_nic(package: &NetworkDriverPackage, boot_nic_id: &str) -> bool {
     package
         .hardware_ids
@@ -384,10 +309,9 @@ async fn set_status(images: &ImageService, id: &str, status: &str) -> Result<()>
 
 /// Build the deterministic candidate revision for a compatible driver set.
 ///
-/// Pure constructor: the driver-set hash makes retries idempotent, so repeated
-/// reports for the same source image and package set resolve to the same
-/// revision instead of creating duplicates. The source image is never
-/// modified; the revision record starts in `preparing`.
+/// Pure constructor: repeated requests for the same source snapshot and driver
+/// set resolve to one revision. The source image is never modified; the
+/// revision record starts in `preparing`.
 pub fn plan_driver_revision(
     source_image_id: &str,
     source_snapshot: &str,
@@ -410,10 +334,9 @@ pub fn plan_driver_revision(
     }
 }
 
-/// Return the existing revision for this driver set or persist a new
-/// `preparing` record. Idempotent by driver-set hash: failed attempts never
-/// match, so a retry starts a fresh record, while a concurrent insert that
-/// wins the race is returned instead of erroring.
+/// Return the existing revision for this source snapshot and driver set or
+/// persist a new `preparing` record. Failed attempts never match, so a retry
+/// starts a fresh record, while a concurrent insert is returned instead.
 ///
 /// Note: driver installation runs through DISM signature verification without
 /// any unsigned-driver override (no `/ForceUnsigned` is ever passed), so DISM
@@ -427,7 +350,7 @@ pub async fn ensure_managed_revision(
     let repository = ImageRepository::new(pool.clone());
     let planned = plan_driver_revision(source_image_id, source_snapshot, package_ids);
     if let Some(existing) = repository
-        .find_driver_revision_by_hash(source_image_id, &planned.driver_set_hash)
+        .find_driver_revision_by_hash(source_image_id, source_snapshot, &planned.driver_set_hash)
         .await
         .with_context(|| {
             format!("failed to check existing driver revisions for image '{source_image_id}'")
@@ -438,7 +361,11 @@ pub async fn ensure_managed_revision(
     match repository.insert_driver_revision(&planned).await {
         Ok(()) => Ok(planned),
         Err(_) => repository
-            .find_driver_revision_by_hash(source_image_id, &planned.driver_set_hash)
+            .find_driver_revision_by_hash(
+                source_image_id,
+                source_snapshot,
+                &planned.driver_set_hash,
+            )
             .await
             .with_context(|| {
                 format!("failed to record driver revision for image '{source_image_id}'")
@@ -459,8 +386,8 @@ pub async fn fail_managed_revision(
 }
 
 /// Record a successfully serviced candidate as `awaiting-test` with its
-/// published image. Only the boot-test gate may later move it to `ready`,
-/// keeping existing client assignments on their current revision.
+/// published image. A passing boot report moves it to `ready` for diagnostics;
+/// revision readiness does not restrict client image assignment.
 pub async fn mark_revision_awaiting_test(
     pool: &sqlx::SqlitePool,
     revision_id: &str,
@@ -710,7 +637,7 @@ pub async fn record_boot_test_result(
         tracing::info!(
             revision = %revision_id,
             client = %client_id,
-            "candidate revision passed its boot test and is ready for new clients"
+            "candidate revision passed its boot test"
         );
         Ok(BootTestOutcome::Passed)
     } else {
@@ -877,6 +804,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(first.id, second.id);
+        let newer_source = ensure_managed_revision(&pool, "img", "newer-snap", &ids)
+            .await
+            .unwrap();
+        assert_ne!(first.id, newer_source.id);
+        assert_eq!(newer_source.source_snapshot, "newer-snap");
         let awaiting = mark_revision_awaiting_test(&pool, &first.id, "rev-image")
             .await
             .unwrap();
@@ -928,7 +860,7 @@ mod tests {
         assert_eq!(failed.status, DriverRevisionStatus::Failed);
         // A failed attempt is invisible to the idempotency lookup...
         assert!(repo
-            .find_driver_revision_by_hash("img", &attempt.driver_set_hash)
+            .find_driver_revision_by_hash("img", "snap", &attempt.driver_set_hash)
             .await
             .unwrap()
             .is_none());
@@ -1236,147 +1168,5 @@ mod tests {
         assert!(start_boot_test(&pool, &revision.id, "test-1", "")
             .await
             .is_err());
-    }
-    fn gate_package(id: &str, hardware_ids: &[&str]) -> NetworkDriverPackage {
-        NetworkDriverPackage {
-            id: id.to_string(),
-            name: id.to_string(),
-            service_name: None,
-            driver_name: None,
-            pnp_device_id: None,
-            guid: None,
-            mac_address: None,
-            inf_files: vec!["nic.inf".to_string()],
-            provider: None,
-            version: None,
-            architectures: vec!["x64".to_string()],
-            hardware_ids: hardware_ids.iter().map(|value| value.to_string()).collect(),
-            compatible_ids: Vec::new(),
-            service_names: Vec::new(),
-            catalog_files: vec!["nic.cat".to_string()],
-            imported_at: chrono::Utc::now(),
-        }
-    }
-
-    fn gate_revision(id: &str, packages: &[&str], image: Option<&str>) -> ImageDriverRevision {
-        // Deterministic timestamps: fixture order must not decide newness.
-        let now = if id.contains("new") {
-            chrono::DateTime::parse_from_rfc3339("2026-02-01T00:00:00Z")
-                .unwrap()
-                .with_timezone(&chrono::Utc)
-        } else {
-            chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
-                .unwrap()
-                .with_timezone(&chrono::Utc)
-        };
-        let package_ids = packages
-            .iter()
-            .map(|value| value.to_string())
-            .collect::<Vec<_>>();
-        ImageDriverRevision {
-            id: id.to_string(),
-            source_image_id: "img".to_string(),
-            source_snapshot: "snap".to_string(),
-            revision_image_id: image.map(str::to_string),
-            driver_set_hash: ImageDriverRevision::hash_driver_set(&package_ids),
-            driver_package_ids: package_ids,
-            status: DriverRevisionStatus::Ready,
-            created_at: now,
-            updated_at: now,
-        }
-    }
-
-    fn passed_nic_tests(
-        entries: &[(&str, &str)],
-    ) -> std::collections::HashMap<String, Vec<String>> {
-        let mut passed = std::collections::HashMap::new();
-        for (revision_id, nic_id) in entries {
-            passed
-                .entry((*revision_id).to_string())
-                .or_insert_with(Vec::new)
-                .push((*nic_id).to_string());
-        }
-        passed
-    }
-
-    #[test]
-    fn assignment_requires_inventory_and_names_the_mac() {
-        let catalog = vec![gate_package("pkg", &["PCI\\VEN_8086&DEV_15F3"])];
-        let revisions = vec![gate_revision("rev-1", &["pkg"], Some("img-1"))];
-        let error = select_windows_assignment(
-            "02:00:00:00:00:09",
-            None,
-            &revisions,
-            &passed_nic_tests(&[]),
-            &catalog,
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("02:00:00:00:00:09"), "{error:#}");
-        assert!(error.to_string().contains("inventory"), "{error:#}");
-    }
-
-    #[test]
-    fn assignment_prefers_newest_covering_revision() {
-        let catalog = vec![
-            gate_package("old-pkg", &["PCI\\VEN_8086&DEV_15F3"]),
-            gate_package("new-pkg", &["PCI\\VEN_8086&DEV_15F3"]),
-        ];
-        let revisions = vec![
-            gate_revision("rev-new", &["new-pkg"], Some("img-new")),
-            gate_revision("rev-old", &["old-pkg"], Some("img-old")),
-        ];
-        let boot = vec!["PCI\\VEN_8086&DEV_15F3".to_string()];
-        let passed = passed_nic_tests(&[
-            ("rev-new", "PCI\\VEN_8086&DEV_15F3"),
-            ("rev-old", "PCI\\VEN_8086&DEV_15F3"),
-        ]);
-        let assignment =
-            select_windows_assignment("mac", Some(&boot), &revisions, &passed, &catalog).unwrap();
-        assert_eq!(
-            assignment,
-            Some(WindowsAssignment {
-                revision_id: "rev-new".to_string(),
-                revision_image_id: "img-new".to_string(),
-            })
-        );
-    }
-
-    #[test]
-    fn assignment_refuses_untested_boot_nic_with_hardware_id() {
-        let catalog = vec![gate_package("pkg", &["PCI\\VEN_ABCD&DEV_EF01"])];
-        let revisions = vec![gate_revision("rev-1", &["pkg"], Some("img-1"))];
-        let boot = vec!["PCI\\VEN_8086&DEV_15F3".to_string()];
-        let passed = passed_nic_tests(&[("rev-1", "PCI\\VEN_8086&DEV_15F3")]);
-        let error = select_windows_assignment("mac", Some(&boot), &revisions, &passed, &catalog)
-            .unwrap_err();
-        assert!(error.to_string().contains("VEN_8086"), "{error:#}");
-        // A revision without a published image or without packages never matches.
-        let empty = vec![
-            gate_revision("rev-noimg", &["pkg"], None),
-            gate_revision("rev-empty", &[], Some("img-empty")),
-        ];
-        assert!(select_windows_assignment("mac", Some(&boot), &empty, &passed, &catalog).is_err());
-        // No ready revision at all is a distinct actionable refusal.
-        let error =
-            select_windows_assignment("mac", Some(&boot), &[], &passed, &catalog).unwrap_err();
-        assert!(error.to_string().contains("no tested"), "{error:#}");
-    }
-
-    #[test]
-    fn assignment_refuses_package_covered_nic_without_its_own_passed_test() {
-        let nic_a = "PCI\\VEN_8086&DEV_15F3";
-        let nic_b = "PCI\\VEN_10EC&DEV_8168";
-        let catalog = vec![
-            gate_package("pkg-a", &[nic_a]),
-            gate_package("pkg-b", &[nic_b]),
-        ];
-        let revisions = vec![gate_revision("rev-1", &["pkg-a", "pkg-b"], Some("img-1"))];
-        let boot = vec![nic_b.to_string()];
-        let passed = passed_nic_tests(&[("rev-1", nic_a)]);
-
-        let error = select_windows_assignment("mac", Some(&boot), &revisions, &passed, &catalog)
-            .unwrap_err();
-
-        assert!(error.to_string().contains(nic_b), "{error:#}");
     }
 }

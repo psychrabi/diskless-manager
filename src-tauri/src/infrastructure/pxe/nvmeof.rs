@@ -15,7 +15,7 @@ pub fn render_windows_nvmeof_boot(nqn: &str) -> String {
     format!(
         r##"# Experimental Windows Server NVMe/TCP boot path.
 # Stock iPXE first chains snponly-nvmeof.efi. Its embedded startup script sets
-# diskless-nvmeof=1 and re-enters the normal per-client menu.
+# diskless-nvmeof=1 and re-enters the shared dispatcher.
 set nvme-nqn {nqn}
 isset ${{diskless-nvmeof}} || goto load_nvmeof_firmware
 set nvme-root nvme://${{next-server}}:{port}/${{nvme-nqn}}
@@ -33,9 +33,8 @@ chain http://${{next-server}}/snponly-nvmeof.efi || goto failed
 
 /// Render the common iPXE entry point used by every client.
 ///
-/// The common script does not contain client boot policy. It normalizes the
-/// active NIC MAC address to the same 12-hex-character form used by
-/// `client_mac_script_path()` and then chains the generated per-client menu.
+/// The common script normalizes the active NIC MAC and asks the server to
+/// return the current boot policy for that client.
 #[must_use]
 pub fn render_client_dispatcher_autoexec(http_port: u16, enroll_port: u16) -> String {
     render_client_dispatcher_autoexec_with_scheme(http_port, enroll_port, false)

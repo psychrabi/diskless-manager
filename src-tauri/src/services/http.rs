@@ -58,7 +58,7 @@ impl HttpService {
         write_with_sudo_tee(config_str, &apache_config).await?;
 
         self.publish_autoexec().await?;
-        self.publish_cached_client_menus().await?;
+        self.remove_stale_generated_client_menus().await?;
         info!("Apache configuration written to {}", config_path.display());
 
         // Fedora's httpd automatically loads every *.conf file dropped into
@@ -89,94 +89,25 @@ impl HttpService {
         Ok(())
     }
 
-    /// Rebuild MAC-specific boot menus from persisted clients when HTTP
-    /// configuration is generated.
-    ///
-    /// This repairs existing installations automatically when the HTTP service
-    /// is generated, started, or reloaded. New clients are also generated
-    /// transactionally by `IscDhcpPublisher` during provisioning.
-    async fn publish_cached_client_menus(&self) -> anyhow::Result<()> {
+    /// Remove obsolete manager scripts while preserving administrator menus.
+    async fn remove_stale_generated_client_menus(&self) -> anyhow::Result<()> {
         let config = crate::config::read_config_db(&self.db_pool).await?;
-        let server_ip = if self.settings.dhcp.next_server_ip.trim().is_empty() {
-            self.settings.server.ip_address.trim()
-        } else {
-            self.settings.dhcp.next_server_ip.trim()
-        };
-
-        let mut published = 0usize;
+        let mut removed = 0usize;
         for client in config.clients {
-            if !client.enabled {
-                continue;
-            }
-
-            let session = crate::persistence::SuperSessionRepository::new(self.db_pool.clone())
-                .get_for_client(&client.id)
-                .await?;
-            let session_state = session.as_ref().map(|session| session.state);
-            if preserve_cached_client_menu(session_state, client.is_super_mode()) {
-                if session_state
-                    .is_some_and(|state| state != crate::persistence::SuperSessionState::Completed)
-                {
-                    tracing::debug!(client = %client.name, "preserving Super-session menu during cached menu regeneration");
-                } else {
-                    tracing::warn!(client = %client.name, "preserving menu for unmanaged Super-mode client during cached menu regeneration");
-                }
-                continue;
-            }
-
-            let Some(target_iqn) = client
-                .target_iqn
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            else {
-                tracing::warn!(
-                    client = %client.name,
-                    "skipping per-client iPXE menu because no target IQN is persisted"
-                );
-                continue;
-            };
-
-            let chap = match (
-                client.chap_enabled,
-                client.chap_user.as_deref(),
-                client.chap_secret.as_deref(),
-            ) {
-                (Some(true), Some(username), Some(password))
-                    if !username.trim().is_empty() && !password.is_empty() =>
-                {
-                    Some(crate::infrastructure::iscsi::ChapCredentials {
-                        username: username.to_string(),
-                        password: password.to_string(),
-                    })
-                }
-                _ => None,
-            };
-
-            crate::infrastructure::dhcp::publish_client_ipxe(
+            if crate::infrastructure::dhcp::remove_generated_client_ipxe_menu(
                 &self.settings,
-                &crate::infrastructure::dhcp::BootReservation {
-                    client_name: client.name.clone(),
-                    mac: client.mac.clone(),
-                    ip: client.ip.clone(),
-                    target_iqn: target_iqn.to_string(),
-                    server_ip: server_ip.to_string(),
-                    chap,
-                    super_boot: None,
-                },
+                &client.mac,
             )
-            .await
-            .map_err(|error| {
-                anyhow::anyhow!(
-                    "failed to regenerate iPXE menu for client '{}': {}",
-                    client.name,
-                    error
-                )
-            })?;
-            published += 1;
+            .await?
+            {
+                removed += 1;
+            }
         }
 
-        info!("Regenerated {} per-client iPXE menu file(s)", published);
+        info!(
+            "Removed {} stale manager-generated iPXE menu file(s)",
+            removed
+        );
         Ok(())
     }
 
@@ -237,41 +168,10 @@ impl HttpService {
     }
 }
 
-fn preserve_cached_client_menu(
-    session_state: Option<crate::persistence::SuperSessionState>,
-    client_is_super: bool,
-) -> bool {
-    client_is_super
-        || session_state
-            .is_some_and(|state| state != crate::persistence::SuperSessionState::Completed)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{preserve_cached_client_menu, render_apache_config};
-    use crate::{core::config::Settings, persistence::SuperSessionState};
-
-    #[test]
-    fn cached_menu_regeneration_preserves_incomplete_and_super_mode_mismatch() {
-        assert!(preserve_cached_client_menu(
-            Some(SuperSessionState::Active),
-            false
-        ));
-        assert!(preserve_cached_client_menu(
-            Some(SuperSessionState::RecoveryRequired),
-            false
-        ));
-        assert!(preserve_cached_client_menu(
-            Some(SuperSessionState::Completed),
-            true
-        ));
-        assert!(preserve_cached_client_menu(None, true));
-        assert!(!preserve_cached_client_menu(
-            Some(SuperSessionState::Completed),
-            false
-        ));
-        assert!(!preserve_cached_client_menu(None, false));
-    }
+    use super::render_apache_config;
+    use crate::core::config::Settings;
 
     #[test]
     fn default_http_settings_do_not_require_tls_certificates() {
