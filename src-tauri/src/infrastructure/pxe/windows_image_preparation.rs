@@ -200,34 +200,6 @@ impl WindowsImagePreparer {
                 validate_reporter_config(reporter)?;
             }
         }
-        if request.driver_install_strategy == WindowsDriverInstallStrategy::NexbootBootTime {
-            let drivers_added = super::windows_nexboot_adaptation::stage(
-                &request.image_path,
-                &request.driver_root,
-                request.recursive,
-            )?;
-            return Ok(WindowsImagePreparationResult {
-                image_path: request.image_path.display().to_string(),
-                image_index: 0,
-                driver_root: request.driver_root.display().to_string(),
-                mount_path: request.image_path.display().to_string(),
-                system_hive_path: system_hive.display().to_string(),
-                drivers_added,
-                boot_arm: WindowsBootArmResult {
-                    system_hive: system_hive.display().to_string(),
-                    plan: super::windows_boot_arming::WindowsBootArmPlan {
-                        active_control_set: String::new(),
-                        native_nic_services: Vec::new(),
-                        selected_nic_services: Vec::new(),
-                        hive_dirty: false,
-                        changes: Vec::new(),
-                        warnings: vec!["NexBoot boot-time adaptation selected; DISM and offline hive arming were skipped".into()],
-                    },
-                    applied: false,
-                },
-                committed: request.commit,
-            });
-        }
         let selected = selected_driver_services(&request.driver_root, request.recursive)?;
         let drivers_added = self.driver_injector.add_drivers(
             &request.image_path,
@@ -250,6 +222,13 @@ impl WindowsImagePreparer {
             &selected,
             &profiles,
         )?;
+        if request.driver_install_strategy == WindowsDriverInstallStrategy::NexbootBootTime {
+            super::windows_nexboot_adaptation::stage(
+                &request.image_path,
+                &request.driver_root,
+                request.recursive,
+            )?;
+        }
         if request.commit {
             if let Some(reporter) = &request.reporter {
                 install_reporter(&request.image_path, &system_hive, reporter)?;

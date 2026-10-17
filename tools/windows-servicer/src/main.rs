@@ -33,7 +33,7 @@ use windows_image_preparation::{
     WindowsImagePreparationResult, WindowsImagePreparer,
 };
 
-const PROTOCOL_VERSION: u32 = 2;
+const PROTOCOL_VERSION: u32 = 3;
 const MAX_REQUEST_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Serialize)]
@@ -43,6 +43,7 @@ struct WindowsServicerCapabilities {
     available: bool,
     elevated: bool,
     iscsi_volume_servicing: bool,
+    nexboot_boot_time: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -63,6 +64,7 @@ fn main() {
             available: windows_servicing_available(),
             elevated: is_elevated(),
             iscsi_volume_servicing: cfg!(windows),
+            nexboot_boot_time: true,
         })
         .map(|_| 0)
         .unwrap_or_else(report_output_error),

@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use uuid::Uuid;
 
-const PROTOCOL_VERSION: u32 = 2;
+const PROTOCOL_VERSION: u32 = 3;
 const DEFAULT_HELPER: &str = r"C:\Program Files\Diskless Manager\diskless-windows-servicer.exe";
 
 #[derive(Debug, Clone, Deserialize)]
@@ -44,6 +44,8 @@ pub struct RemoteWindowsServicingCapabilities {
     pub elevated: bool,
     #[serde(default)]
     pub iscsi_volume_servicing: bool,
+    #[serde(default)]
+    pub nexboot_boot_time: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -134,6 +136,21 @@ impl RemoteWindowsServicer {
         request: RemoteWindowsServicingRequest,
     ) -> Result<WindowsImagePreparationResult> {
         validate_remote_identity(&request.host, &request.username)?;
+        if request.preparation.driver_install_strategy
+            == super::windows_image_preparation::WindowsDriverInstallStrategy::NexbootBootTime
+        {
+            let capabilities = self
+                .capabilities(RemoteWindowsCapabilitiesRequest {
+                    host: request.host.clone(),
+                    username: request.username.clone(),
+                    password: request.password.clone(),
+                    executable_path: request.executable_path.clone(),
+                })
+                .await?;
+            if !capabilities.nexboot_boot_time {
+                bail!("the Windows worker does not advertise NexBoot boot-time support; install helper protocol version 3");
+            }
+        }
         let executable =
             validate_helper_path(request.executable_path.as_deref().unwrap_or(DEFAULT_HELPER))?;
         let payload = serde_json::to_vec(&request.preparation)

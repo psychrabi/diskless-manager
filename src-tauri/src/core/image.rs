@@ -285,9 +285,17 @@ impl ImageDriverRevision {
     /// Stable across processes (FNV-1a 64-bit over the sorted, deduplicated,
     /// comma-joined package IDs); the same set always yields the same hash.
     pub fn hash_driver_set(package_ids: &[String]) -> String {
+        Self::hash_driver_set_with_strategy(package_ids, "offline_dism")
+    }
+
+    /// Deterministic hash of a driver set and installation strategy.
+    pub fn hash_driver_set_with_strategy(package_ids: &[String], strategy: &str) -> String {
         use std::collections::BTreeSet;
         let ordered: BTreeSet<&str> = package_ids.iter().map(String::as_str).collect();
-        let joined = ordered.into_iter().collect::<Vec<_>>().join(",");
+        let joined = format!(
+            "{strategy}:{}",
+            ordered.into_iter().collect::<Vec<_>>().join(",")
+        );
         let mut hash: u64 = 0xcbf29ce484222325;
         for byte in joined.bytes() {
             hash ^= u64::from(byte);

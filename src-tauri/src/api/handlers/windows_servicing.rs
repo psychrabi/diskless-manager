@@ -391,6 +391,11 @@ pub async fn prepare_windows_assignment(
             .await;
         let settings = state.settings.read().await.clone();
         let profile = settings.windows_servicing;
+        let strategy = if profile.driver_install_strategy == "nexboot_boot_time" {
+            WindowsDriverInstallStrategy::NexbootBootTime
+        } else {
+            WindowsDriverInstallStrategy::OfflineDism
+        };
         if !profile.is_configured() {
             anyhow::bail!("Windows servicing worker is not configured in System Settings");
         }
@@ -464,16 +469,24 @@ pub async fn prepare_windows_assignment(
 
         // Reuse a selected managed revision when it already includes this
         // complete package set. Unmanaged images are prepared once per hash.
-        let candidate_rows: Vec<(String,)> = sqlx::query_as(
-            "SELECT driver_package_ids FROM windows_image_driver_revisions WHERE revision_image_id = ? AND status IN ('awaiting-test', 'ready')",
+        let planned = crate::application::windows_servicing::plan_driver_revision_with_strategy(
+            &source.id,
+            snapshot_name,
+            &package_ids,
+            strategy,
+        );
+        let candidate_rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT driver_package_ids, driver_set_hash FROM windows_image_driver_revisions WHERE revision_image_id = ? AND status IN ('awaiting-test', 'ready')",
         )
         .bind(&source.id)
         .fetch_all(&state.db_pool)
         .await
         .context("failed to inspect existing Windows image revisions")?;
-        for (json_ids,) in candidate_rows {
+        for (json_ids, existing_hash) in candidate_rows {
             let existing_ids: BTreeSet<String> = serde_json::from_str(&json_ids)?;
-            if package_ids.iter().all(|id| existing_ids.contains(id)) {
+            if existing_hash == planned.driver_set_hash
+                && package_ids.iter().all(|id| existing_ids.contains(id))
+            {
                 return Ok(WindowsAssignmentPreparation {
                     master: source.name,
                     snapshot: request.snapshot,
@@ -484,11 +497,6 @@ pub async fn prepare_windows_assignment(
             }
         }
 
-        let planned = crate::application::windows_servicing::plan_driver_revision(
-            &source.id,
-            snapshot_name,
-            &package_ids,
-        );
         let repository = crate::persistence::repositories::image::ImageRepository::new(
             state.db_pool.clone(),
         );
@@ -549,11 +557,7 @@ pub async fn prepare_windows_assignment(
                 commit: true,
                 report_server_url: Some(profile.report_server_url),
                 boot_arm: WindowsBootArmConfig::default(),
-                driver_install_strategy: if profile.driver_install_strategy == "nexboot_boot_time" {
-                    WindowsDriverInstallStrategy::NexbootBootTime
-                } else {
-                    WindowsDriverInstallStrategy::OfflineDism
-                },
+                driver_install_strategy: strategy,
             };
         preparation.validate()?;
         let prepared = crate::application::windows_servicing::prepare_managed(

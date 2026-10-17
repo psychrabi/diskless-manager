@@ -146,8 +146,14 @@ pub async fn prepare_managed(
         .collect::<Vec<_>>();
     let mut revision = if request.commit {
         Some(
-            ensure_managed_revision(&pool, &source.id, &request.source_snapshot, &package_ids)
-                .await?,
+            ensure_managed_revision_with_strategy(
+                &pool,
+                &source.id,
+                &request.source_snapshot,
+                &package_ids,
+                request.driver_install_strategy,
+            )
+            .await?,
         )
     } else {
         None
@@ -168,6 +174,11 @@ pub async fn prepare_managed(
     let capabilities = worker.capabilities(request.worker.clone()).await?;
     if !capabilities.available || !capabilities.elevated || !capabilities.iscsi_volume_servicing {
         bail!("install the updated helper on an elevated Windows worker with iSCSI volume servicing support");
+    }
+    if request.driver_install_strategy == WindowsDriverInstallStrategy::NexbootBootTime
+        && !capabilities.nexboot_boot_time
+    {
+        bail!("the Windows worker does not advertise NexBoot boot-time support; install helper protocol version 3 or select Offline DISM");
     }
     let clone = images
         .clone_image(&source.id, &request.source_snapshot, &request.new_name)
@@ -321,6 +332,20 @@ pub fn plan_driver_revision(
     source_snapshot: &str,
     package_ids: &[String],
 ) -> ImageDriverRevision {
+    plan_driver_revision_with_strategy(
+        source_image_id,
+        source_snapshot,
+        package_ids,
+        WindowsDriverInstallStrategy::OfflineDism,
+    )
+}
+
+pub fn plan_driver_revision_with_strategy(
+    source_image_id: &str,
+    source_snapshot: &str,
+    package_ids: &[String],
+    strategy: WindowsDriverInstallStrategy,
+) -> ImageDriverRevision {
     let mut ordered: Vec<String> = package_ids.to_vec();
     ordered.sort();
     ordered.dedup();
@@ -330,7 +355,13 @@ pub fn plan_driver_revision(
         source_image_id: source_image_id.to_string(),
         source_snapshot: source_snapshot.to_string(),
         revision_image_id: None,
-        driver_set_hash: ImageDriverRevision::hash_driver_set(&ordered),
+        driver_set_hash: ImageDriverRevision::hash_driver_set_with_strategy(
+            &ordered,
+            match strategy {
+                WindowsDriverInstallStrategy::OfflineDism => "offline_dism",
+                WindowsDriverInstallStrategy::NexbootBootTime => "nexboot_boot_time",
+            },
+        ),
         driver_package_ids: ordered,
         status: DriverRevisionStatus::Preparing,
         created_at: now,
@@ -351,8 +382,26 @@ pub async fn ensure_managed_revision(
     source_snapshot: &str,
     package_ids: &[String],
 ) -> Result<ImageDriverRevision> {
+    ensure_managed_revision_with_strategy(
+        pool,
+        source_image_id,
+        source_snapshot,
+        package_ids,
+        WindowsDriverInstallStrategy::OfflineDism,
+    )
+    .await
+}
+
+pub async fn ensure_managed_revision_with_strategy(
+    pool: &sqlx::SqlitePool,
+    source_image_id: &str,
+    source_snapshot: &str,
+    package_ids: &[String],
+    strategy: WindowsDriverInstallStrategy,
+) -> Result<ImageDriverRevision> {
     let repository = ImageRepository::new(pool.clone());
-    let planned = plan_driver_revision(source_image_id, source_snapshot, package_ids);
+    let planned =
+        plan_driver_revision_with_strategy(source_image_id, source_snapshot, package_ids, strategy);
     if let Some(existing) = repository
         .find_driver_revision_by_hash(source_image_id, source_snapshot, &planned.driver_set_hash)
         .await
@@ -766,6 +815,13 @@ mod tests {
         let b = plan_driver_revision("img", "snap", &["a".into(), "b".into()]);
         assert_eq!(a.driver_package_ids, vec!["a".to_string(), "b".to_string()]);
         assert_eq!(a.driver_set_hash, b.driver_set_hash);
+        let nexboot = plan_driver_revision_with_strategy(
+            "img",
+            "snap",
+            &["a".into(), "b".into()],
+            WindowsDriverInstallStrategy::NexbootBootTime,
+        );
+        assert_ne!(a.driver_set_hash, nexboot.driver_set_hash);
         assert_eq!(a.status, DriverRevisionStatus::Preparing);
         // Terminal/invalid transitions are rejected at the model level.
         assert!(a.can_transition(DriverRevisionStatus::AwaitingTest));

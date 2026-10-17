@@ -95,11 +95,33 @@ fn install_startup_registration(image_root: &Path) -> Result<()> {
         .context("failed to install Group Policy adaptation script")?;
     fs::write(startup.join("ndadapt.cmd"), ADAPT_CMD)
         .context("failed to install Group Policy startup command")?;
-    fs::write(
-        scripts.join("scripts.ini"),
-        "[Startup]\r\n0CmdLine=ndadapt.cmd\r\n0Parameters=\r\n",
-    )
-    .context("failed to register NexBoot startup command")?;
+    let ini_path = scripts.join("scripts.ini");
+    let existing = if ini_path.is_file() {
+        fs::read(&ini_path).context("failed to read existing Group Policy scripts")?
+    } else {
+        Vec::new()
+    };
+    let utf16 = existing.starts_with(&[0xFF, 0xFE]);
+    let text = if utf16 {
+        let units = existing[2..]
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect::<Vec<_>>();
+        String::from_utf16(&units).context("existing Group Policy scripts are invalid UTF-16")?
+    } else {
+        String::from_utf8_lossy(&existing).into_owned()
+    };
+    let merged = merge_startup_ini(&text);
+    let bytes = if utf16 {
+        let mut bytes = vec![0xFF, 0xFE];
+        for unit in merged.encode_utf16() {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        bytes
+    } else {
+        merged.into_bytes()
+    };
+    fs::write(&ini_path, bytes).context("failed to merge Group Policy startup command")?;
 
     let gpt = image_root.join("Windows/System32/GroupPolicy/gpt.ini");
     let mut text = if gpt.is_file() {
@@ -127,6 +149,75 @@ fn install_startup_registration(image_root: &Path) -> Result<()> {
     Ok(())
 }
 
+fn merge_startup_ini(text: &str) -> String {
+    let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
+    let Some(start) = lines
+        .iter()
+        .position(|line| line.trim().eq_ignore_ascii_case("[Startup]"))
+    else {
+        if !lines.is_empty() {
+            lines.push(String::new());
+        }
+        lines.extend([
+            "[Startup]".into(),
+            "0CmdLine=ndadapt.cmd".into(),
+            "0Parameters=".into(),
+        ]);
+        return lines.join("\r\n") + "\r\n";
+    };
+    let end = lines
+        .iter()
+        .enumerate()
+        .skip(start + 1)
+        .find(|(_, line)| line.trim_start().starts_with('['))
+        .map(|(index, _)| index)
+        .unwrap_or(lines.len());
+    let mut remove_numbers = std::collections::BTreeSet::new();
+    for line in &lines[start + 1..end] {
+        if let Some((left, value)) = line.split_once('=') {
+            let digits = left
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect::<String>();
+            if left[digits.len()..].eq_ignore_ascii_case("CmdLine")
+                && value.trim().eq_ignore_ascii_case("ndadapt.cmd")
+            {
+                remove_numbers.insert(digits);
+            }
+        }
+    }
+    let mut items = Vec::new();
+    for line in &lines[start + 1..end] {
+        let digits = line
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect::<String>();
+        if digits.is_empty() || !remove_numbers.contains(&digits) {
+            items.push(line.clone());
+        }
+    }
+    let next = items
+        .iter()
+        .filter_map(|line| {
+            let digits = line
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect::<String>();
+            (!digits.is_empty())
+                .then(|| digits.parse::<u64>().ok())
+                .flatten()
+        })
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1);
+    items.extend([
+        format!("{next}CmdLine=ndadapt.cmd"),
+        format!("{next}Parameters="),
+    ]);
+    lines.splice(start + 1..end, items);
+    lines.join("\r\n") + "\r\n"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -143,5 +234,14 @@ mod tests {
             .path()
             .join("Windows/System32/GroupPolicy/Machine/Scripts/scripts.ini")
             .is_file());
+    }
+
+    #[test]
+    fn merges_startup_without_removing_other_entries_or_shutdown() {
+        let ini = "[Startup]\r\n0CmdLine=ndmount.cmd\r\n0Parameters=\r\n[Shutdown]\r\n0CmdLine=cleanup.cmd\r\n";
+        let merged = merge_startup_ini(ini);
+        assert!(merged.contains("0CmdLine=ndmount.cmd"));
+        assert!(merged.contains("[Shutdown]"));
+        assert!(merged.contains("1CmdLine=ndadapt.cmd"));
     }
 }
