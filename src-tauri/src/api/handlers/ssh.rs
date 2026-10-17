@@ -1,4 +1,4 @@
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{extract::State, http::StatusCode, Extension, Json};
 use serde::{Deserialize, Serialize};
 
 use crate::commands::system::{
@@ -6,6 +6,7 @@ use crate::commands::system::{
     test_ssh_connection as test_ssh_conn, SshTestRequest, SshTestResult, WindowsSystemInfo,
 };
 use crate::state::AppState;
+use crate::types::Claims;
 
 #[derive(Debug)]
 pub struct ErrorResponse {
@@ -52,6 +53,18 @@ pub struct GetSystemInfoRequest {
     pub password: Option<String>,
 }
 
+fn require_admin(claims: &Claims) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    if claims.role != "admin" {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: "Forbidden: admin role required".to_string(),
+            }),
+        ));
+    }
+    Ok(())
+}
+
 /// Test SSH connection to a remote host
 pub async fn test_ssh_connection(
     State(_state): State<AppState>,
@@ -78,8 +91,10 @@ pub async fn test_ssh_connection(
 /// Execute SSH command on a remote host
 pub async fn execute_ssh_command(
     State(_state): State<AppState>,
+    Extension(claims): Extension<Claims>,
     Json(request): Json<ExecuteCommandRequest>,
 ) -> Result<Json<SshTestResult>, (StatusCode, Json<ErrorResponse>)> {
+    require_admin(&claims)?;
     match execute_ssh_cmd(
         request.host,
         request.username,

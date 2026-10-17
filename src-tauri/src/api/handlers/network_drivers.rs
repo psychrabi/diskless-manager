@@ -15,6 +15,9 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use tokio::io::AsyncWriteExt;
 
+const MAX_DRIVER_ARCHIVE_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_DRIVER_REPORT_BYTES: usize = 64 * 1024;
+
 async fn plugin(state: &AppState) -> anyhow::Result<NetworkDriverInjectionPlugin> {
     let root = state.settings.read().await.http.root_dir.clone();
     Ok(NetworkDriverInjectionPlugin::new(PathBuf::from(root)))
@@ -107,11 +110,18 @@ async fn receive_archive(
         .reopen()
         .map_err(|e| internal_message(e.to_string()))?;
     let mut file = tokio::fs::File::from_std(handle);
+    let mut total = 0u64;
     while let Some(chunk) = field
         .chunk()
         .await
         .map_err(|e| bad_request(e.to_string()))?
     {
+        total = total
+            .checked_add(chunk.len() as u64)
+            .ok_or_else(|| payload_too_large("driver archive exceeds 512 MiB limit"))?;
+        if total > MAX_DRIVER_ARCHIVE_BYTES {
+            return Err(payload_too_large("driver archive exceeds 512 MiB limit"));
+        }
         file.write_all(&chunk)
             .await
             .map_err(|e| internal_message(e.to_string()))?;
@@ -215,10 +225,7 @@ pub async fn submit_report(
                 if report_json.is_some() {
                     return Err(bad_request("only one report field is allowed".to_string()));
                 }
-                let bytes = field
-                    .bytes()
-                    .await
-                    .map_err(|e| bad_request(e.to_string()))?;
+                let bytes = receive_report_json(&mut field).await?;
                 report_json = Some(
                     String::from_utf8(bytes.to_vec())
                         .map_err(|_| bad_request("report field must be UTF-8 JSON".to_string()))?,
@@ -483,6 +490,32 @@ async fn evaluate_test_claim(
     }
 }
 
+fn payload_too_large(message: &str) -> (StatusCode, Json<NetworkDriverError>) {
+    (
+        StatusCode::PAYLOAD_TOO_LARGE,
+        Json(NetworkDriverError {
+            error: message.to_string(),
+        }),
+    )
+}
+
+async fn receive_report_json(
+    field: &mut axum::extract::multipart::Field<'_>,
+) -> Result<Vec<u8>, (StatusCode, Json<NetworkDriverError>)> {
+    let mut bytes = Vec::new();
+    while let Some(chunk) = field
+        .chunk()
+        .await
+        .map_err(|e| bad_request(e.to_string()))?
+    {
+        if bytes.len().saturating_add(chunk.len()) > MAX_DRIVER_REPORT_BYTES {
+            return Err(payload_too_large("driver report exceeds 64 KiB limit"));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
+
 fn internal_message(message: String) -> (StatusCode, Json<NetworkDriverError>) {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -727,6 +760,17 @@ mod tests {
                 == 1
         );
     }
+
+    #[test]
+    fn upload_limits_have_explicit_boundaries() {
+        assert_eq!(MAX_DRIVER_ARCHIVE_BYTES, 512 * 1024 * 1024);
+        assert_eq!(MAX_DRIVER_REPORT_BYTES, 64 * 1024);
+        assert_eq!(
+            payload_too_large("oversized").0,
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
+    }
+
     async fn claim_pool() -> (sqlx::SqlitePool, String) {
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)

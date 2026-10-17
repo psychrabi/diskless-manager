@@ -306,9 +306,19 @@ async fn assert_open_websocket_closes(expire_token: bool) {
 #[tokio::test]
 async fn audit_sensitive_mutations_require_admin() {
     let (_, app, _, user) = setup().await;
-    for path in ["/api/services/install", "/api/clients/missing/chap/rotate"] {
+    for (path, body) in [
+        ("/api/services/install", json!({"service":"iftop"})),
+        (
+            "/api/clients/missing/chap/rotate",
+            json!({"service":"iftop"}),
+        ),
+        (
+            "/api/ssh/execute-command",
+            json!({"host":"192.0.2.1","username":"operator","command":"true"}),
+        ),
+    ] {
         assert_eq!(
-            request(&app, "POST", path, &user, json!({"service":"iftop"})).await,
+            request(&app, "POST", path, &user, body).await,
             StatusCode::FORBIDDEN
         );
     }
