@@ -4,10 +4,11 @@ use crate::infrastructure::pxe::{
     NetworkDriverInjectionPlugin, NetworkDriverPackage,
 };
 use crate::state::AppState;
+use crate::types::Claims;
 use axum::{
     extract::{ConnectInfo, Multipart, Path, State},
     http::StatusCode,
-    Json,
+    Extension, Json,
 };
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, SocketAddr};
@@ -22,6 +23,18 @@ async fn plugin(state: &AppState) -> anyhow::Result<NetworkDriverInjectionPlugin
 #[derive(Debug, Serialize)]
 pub struct NetworkDriverError {
     pub error: String,
+}
+
+fn require_admin(claims: &Claims) -> Result<(), (StatusCode, Json<NetworkDriverError>)> {
+    if claims.role != "admin" {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(NetworkDriverError {
+                error: "Forbidden: admin role required".to_string(),
+            }),
+        ));
+    }
+    Ok(())
 }
 
 pub async fn status(
@@ -48,8 +61,10 @@ pub async fn list(
 
 pub async fn import(
     State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
     mut multipart: Multipart,
 ) -> Result<Json<NetworkDriverPackage>, (StatusCode, Json<NetworkDriverError>)> {
+    require_admin(&claims)?;
     let mut archive = None;
     while let Some(mut field) = multipart
         .next_field()
@@ -109,8 +124,10 @@ async fn receive_archive(
 
 pub async fn remove(
     State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, Json<NetworkDriverError>)> {
+    require_admin(&claims)?;
     let plugin = plugin(&state).await.map_err(internal_error)?;
     tokio::task::spawn_blocking(move || plugin.remove(&id))
         .await
@@ -121,7 +138,9 @@ pub async fn remove(
 
 pub async fn rebuild(
     State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
 ) -> Result<Json<DriverInjectionStatus>, (StatusCode, Json<NetworkDriverError>)> {
+    require_admin(&claims)?;
     let plugin = plugin(&state).await.map_err(internal_error)?;
     tokio::task::spawn_blocking(move || plugin.rebuild())
         .await

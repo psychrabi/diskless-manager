@@ -803,3 +803,30 @@ async fn driver_boot_tests_are_admin_only() {
         StatusCode::FORBIDDEN
     );
 }
+
+#[tokio::test]
+async fn network_driver_catalog_mutations_are_admin_only() {
+    let (_, app, _, user) = setup().await;
+    assert_eq!(
+        request(
+            &app,
+            "POST",
+            "/api/pxe/network-drivers/rebuild",
+            &user,
+            json!(null)
+        )
+        .await,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        request(
+            &app,
+            "DELETE",
+            "/api/pxe/network-drivers/not-a-driver",
+            &user,
+            json!(null)
+        )
+        .await,
+        StatusCode::FORBIDDEN
+    );
+}
