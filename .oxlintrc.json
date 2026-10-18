@@ -1,0 +1,22 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["react", "react-hooks"],
+  "ignorePatterns": [
+    "dist",
+    "node_modules",
+    "src-tauri/target",
+    "tools/windows-servicer/target",
+    ".agents"
+  ],
+  "rules": {
+    "no-unused-vars": [
+      "error",
+      {
+        "varsIgnorePattern": "^[A-Z_]",
+        "argsIgnorePattern": "^[A-Z_]"
+      }
+    ],
+    "react-hooks/rules-of-hooks": "error",
+    "react-hooks/exhaustive-deps": "warn"
+  }
+}
