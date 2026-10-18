@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::core::config::Settings;
-use crate::infrastructure::pxe::render_client_dispatcher_autoexec_with_scheme;
+use crate::infrastructure::pxe::render_client_dispatcher_autoexec;
 use crate::services::{
     get_service_pid, is_systemd_service_running, run_sudo_command, write_with_sudo_tee,
     ServiceStatus,
@@ -73,11 +73,8 @@ impl HttpService {
     }
 
     async fn publish_autoexec(&self) -> anyhow::Result<()> {
-        let autoexec = render_client_dispatcher_autoexec_with_scheme(
-            80,
-            crate::infrastructure::pxe::ENROLL_PORT,
-            false,
-        );
+        let autoexec =
+            render_client_dispatcher_autoexec(80, crate::infrastructure::pxe::ENROLL_PORT);
         let root_dir = PathBuf::from(&self.settings.http.root_dir);
         let path = root_dir.join("autoexec.ipxe");
         let path = path
@@ -144,15 +141,13 @@ impl HttpService {
     }
 
     pub async fn get_config(&self) -> anyhow::Result<String> {
-        let config_path = PathBuf::from(crate::platform::detect().http_config_path());
+        let distro = crate::platform::detect();
+        let config_path = PathBuf::from(distro.http_config_path());
         if config_path.exists() {
             return Ok(std::fs::read_to_string(config_path)?);
         }
 
-        Ok(render_apache_config(
-            &self.settings,
-            crate::platform::detect().http_log_dir(),
-        ))
+        Ok(render_apache_config(&self.settings, distro.http_log_dir()))
     }
 
     pub async fn status(&self) -> anyhow::Result<ServiceStatus> {

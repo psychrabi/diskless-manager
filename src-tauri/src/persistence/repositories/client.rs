@@ -36,6 +36,22 @@ struct ClientRow {
     installer_media_id: Option<String>,
 }
 
+#[derive(Debug, FromRow)]
+pub(crate) struct NvmeOfClient {
+    pub id: String,
+    pub name: String,
+    pub enabled: i64,
+    pub mode: Option<String>,
+    pub block_device: Option<String>,
+    pub block_store: Option<String>,
+}
+
+impl NvmeOfClient {
+    pub fn is_super_mode(&self) -> bool {
+        matches!(self.mode.as_deref(), Some("super"))
+    }
+}
+
 #[derive(Clone)]
 pub struct ClientRepository {
     pool: SqlitePool,
@@ -50,29 +66,29 @@ impl ClientRepository {
         let row = sqlx::query_as::<_, ClientRow>(
             r#"
             SELECT
-                id,
-                name,
-                mac,
-                ip,
-                master,
-                enabled,
-                created_at,
-                updated_at,
-                snapshot,
-                block_store,
-                target_iqn,
-                writeback,
-                last_modified,
-                block_device,
-                status,
-                mode,
-                pxe_mode,
-                keep_writeback,
-                use_game_disk,
-                chap_user,
-                chap_secret,
-                chap_enabled,
-                installer_media_id
+                CAST(id AS TEXT) AS id,
+                CAST(name AS TEXT) AS name,
+                CAST(mac AS TEXT) AS mac,
+                CAST(ip AS TEXT) AS ip,
+                CAST(master AS TEXT) AS master,
+                CAST(enabled AS INTEGER) AS enabled,
+                CAST(created_at AS TEXT) AS created_at,
+                CAST(updated_at AS TEXT) AS updated_at,
+                CAST(snapshot AS TEXT) AS snapshot,
+                CAST(block_store AS TEXT) AS block_store,
+                CAST(target_iqn AS TEXT) AS target_iqn,
+                CAST(writeback AS TEXT) AS writeback,
+                CAST(last_modified AS TEXT) AS last_modified,
+                CAST(block_device AS TEXT) AS block_device,
+                CAST(status AS TEXT) AS status,
+                CAST(mode AS TEXT) AS mode,
+                CAST(pxe_mode AS TEXT) AS pxe_mode,
+                CAST(keep_writeback AS INTEGER) AS keep_writeback,
+                CAST(use_game_disk AS INTEGER) AS use_game_disk,
+                CASE WHEN typeof(chap_user) = 'text' THEN chap_user END AS chap_user,
+                CASE WHEN typeof(chap_secret) = 'text' THEN chap_secret END AS chap_secret,
+                CAST(chap_enabled AS INTEGER) AS chap_enabled,
+                CAST(installer_media_id AS TEXT) AS installer_media_id
             FROM clients
             WHERE id = ?
             "#,
@@ -83,6 +99,26 @@ impl ClientRepository {
         .context("failed to query client by id")?;
 
         row.map(Self::row_to_domain).transpose()
+    }
+
+    pub(crate) async fn find_nvmeof_client(&self, id: &ClientId) -> Result<Option<NvmeOfClient>> {
+        sqlx::query_as::<_, NvmeOfClient>(
+            r#"
+            SELECT
+                CAST(id AS TEXT) AS id,
+                CAST(name AS TEXT) AS name,
+                CAST(enabled AS INTEGER) AS enabled,
+                CAST(mode AS TEXT) AS mode,
+                CAST(block_device AS TEXT) AS block_device,
+                CAST(block_store AS TEXT) AS block_store
+            FROM clients
+            WHERE id = ?
+            "#,
+        )
+        .bind(id.as_str())
+        .fetch_optional(&self.pool)
+        .await
+        .context("failed to query NVMe-oF client")
     }
 
     pub async fn has_other_storage_owner(&self, client: &Client) -> Result<bool> {
@@ -431,8 +467,8 @@ impl ClientRepository {
                 pxe_mode = ?,
                 keep_writeback = ?,
                 use_game_disk = ?,
-                chap_user = ?,
-                chap_secret = ?,
+                chap_user = COALESCE(?, chap_user),
+                chap_secret = COALESCE(?, chap_secret),
                 chap_enabled = ?,
                 installer_media_id = ?
             WHERE id = ?
@@ -651,6 +687,135 @@ fn parse_pxe_mode(value: Option<&str>) -> PxeMode {
 mod tests {
     use super::*;
     use crate::domain::{CreateClient, PxeMode};
+
+    #[tokio::test]
+    async fn listing_preserves_lookup_decoding_and_order() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let repository = ClientRepository::new(pool.clone());
+        assert!(repository.find_all().await.unwrap().is_empty());
+        for (id, name, mac, ip) in [
+            ("z", "Zulu", "AA-BB-CC-DD-EE-FF", "2001:db8::1"),
+            ("a", "Alpha", "00:11:22:33:44:55", "192.168.1.2"),
+        ] {
+            sqlx::query("INSERT INTO clients (id,name,mac,ip,master,enabled,created_at,updated_at,snapshot,block_store,target_iqn,writeback,last_modified,block_device,status,mode,pxe_mode,keep_writeback,use_game_disk,chap_user,chap_secret,chap_enabled) VALUES (?,?,?,?,'diskless/windows',2,'2026-01-01T05:45:00+05:45','2026-01-01 00:00:00','diskless/windows@ready','store','iqn.test','writeback','2026-01-01 00:00:00','/dev/zvol/test','ONLINE','SUPER','legacy',2,2,'user','quoted\"secret',2)")
+                .bind(id).bind(name).bind(mac).bind(ip).execute(&pool).await.unwrap();
+        }
+        for defaults in [false, true] {
+            sqlx::query(
+                "UPDATE clients SET enabled=0,keep_writeback=1,use_game_disk=0,chap_enabled=1",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+            if defaults {
+                sqlx::query("UPDATE clients SET snapshot=NULL,block_store=NULL,target_iqn=NULL,writeback=NULL,last_modified=NULL,block_device=NULL,status=NULL,mode=NULL,pxe_mode=NULL,chap_user=NULL,chap_secret=NULL")
+                    .execute(&pool).await.unwrap();
+            }
+            let expected = vec![
+                repository.find_by_name("Alpha").await.unwrap().unwrap(),
+                repository.find_by_name("Zulu").await.unwrap().unwrap(),
+            ];
+            let actual = repository.find_all().await.unwrap();
+            assert_eq!(
+                serde_json::to_value(&actual).unwrap(),
+                serde_json::to_value(&expected).unwrap()
+            );
+            for (actual, expected) in actual.iter().zip(&expected) {
+                assert_eq!(actual.chap_user, expected.chap_user);
+                assert_eq!(actual.chap_secret, expected.chap_secret);
+            }
+        }
+        for column in ["mac", "ip", "created_at", "updated_at", "last_modified"] {
+            let previous: Option<String> =
+                sqlx::query_scalar(&format!("SELECT {column} FROM clients WHERE id='a'"))
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            sqlx::query(&format!(
+                "UPDATE clients SET {column}='invalid' WHERE id='a'"
+            ))
+            .execute(&pool)
+            .await
+            .unwrap();
+            assert!(
+                repository.find_all().await.is_err(),
+                "accepted invalid {column}"
+            );
+            assert!(repository.find_by_name("Alpha").await.is_err());
+            sqlx::query(&format!("UPDATE clients SET {column}=? WHERE id='a'"))
+                .bind(previous)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        for column in ["enabled", "keep_writeback", "use_game_disk", "chap_enabled"] {
+            sqlx::query(&format!("UPDATE clients SET {column}=12.5 WHERE id='a'"))
+                .execute(&pool)
+                .await
+                .unwrap();
+            assert!(
+                repository.find_all().await.is_err(),
+                "accepted REAL {column}"
+            );
+            assert!(repository.find_by_name("Alpha").await.is_err());
+            sqlx::query(&format!("UPDATE clients SET {column}=2 WHERE id='a'"))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query("UPDATE clients SET chap_secret=? WHERE id='a'")
+            .bind(vec![65_u8, 66])
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(repository.find_all().await.is_err());
+        assert!(repository.find_by_name("Alpha").await.is_err());
+        let client_id = ClientId::from_string("a").unwrap();
+        let client = repository.find_by_id(&client_id).await.unwrap().unwrap();
+        assert_eq!(client.name, "Alpha");
+        assert_eq!(client.chap_secret, None);
+        repository.update(&client).await.unwrap();
+        let secret_type: String =
+            sqlx::query_scalar("SELECT typeof(chap_secret) FROM clients WHERE id='a'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(secret_type, "blob");
+        sqlx::query("UPDATE clients SET mode='super' WHERE id='a'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let boot_client = repository
+            .find_nvmeof_client(&client_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(boot_client.name, "Alpha");
+        assert_eq!(boot_client.mode.as_deref(), Some("super"));
+        assert!(boot_client.is_super_mode());
+    }
+
+    #[tokio::test]
+    async fn listing_preserves_order_across_batches() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        sqlx::query("WITH RECURSIVE n(i) AS (SELECT 300 UNION ALL SELECT i-1 FROM n WHERE i>0) INSERT INTO clients (id,name,mac,ip,master,created_at,updated_at) SELECT 'pc-'||i,printf('PC%06d',i),printf('02:00:00:00:%02x:%02x',(i>>8)&255,i&255),printf('2001:db8::%x',i+1),'pending','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z' FROM n")
+            .execute(&pool).await.unwrap();
+        let clients = ClientRepository::new(pool).find_all().await.unwrap();
+        assert_eq!(clients.len(), 301);
+        for (index, client) in clients.iter().enumerate() {
+            assert_eq!(client.name, format!("PC{index:06}"));
+        }
+    }
 
     #[test]
     fn parses_mac_addresses() {

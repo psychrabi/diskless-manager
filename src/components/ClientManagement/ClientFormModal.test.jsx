@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { useAuth } from "@/contexts/auth";
 import { addClient, deleteClientWriteback, getClientNvmeOfStatus, rotateChapSecret, updateClient } from "@/api/modules/clients";
@@ -45,6 +46,31 @@ beforeEach(() => {
   useAppStore.setState({ appConfig: { settings: {} } });
   toast.error.mockReset();
   toast.success.mockReset();
+});
+
+it("saves an unchecked keep-writeback setting as false", async () => {
+  const user = userEvent.setup();
+  getClientNvmeOfStatus.mockResolvedValue(null);
+  updateClient.mockResolvedValue({});
+  const client = {
+    id: "six",
+    name: "PC006",
+    mac: "00:11:22:33:44:69",
+    ip: "192.168.1.106",
+    master: "windows",
+    snapshot: "windows@ready",
+    keep_writeback: true,
+  };
+  render(
+    <MemoryRouter>
+      <ClientFormModal client={client} masters={[]} isOpen onClose={() => {}} refresh={() => {}} />
+    </MemoryRouter>,
+  );
+
+  await user.click(await screen.findByRole("checkbox", { name: /keep writeback/i }));
+  await user.click(screen.getByRole("button", { name: "Save" }));
+
+  expect(updateClient).toHaveBeenCalledWith("six", { keep_writeback: false });
 });
 
 it("ignores an earlier client's status response after switching clients", async () => {

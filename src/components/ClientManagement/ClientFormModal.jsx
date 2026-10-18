@@ -96,7 +96,7 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
   const {
     register,
     handleSubmit,
-    formState: { errors, isSubmitting, isDirty, isValid },
+    formState: { errors, isSubmitting, isDirty, isValid, dirtyFields },
     setValue,
     control,
     reset,
@@ -314,7 +314,27 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
         await addClient(request);
         success("Client Management", `Client ${data.name} added successfully.${driverMessage}`);
       } else {
-        await updateClient(client.id, request);
+        const editableFields = [
+          "name",
+          "mac",
+          "ip",
+          "installer_media_id",
+          "keep_writeback",
+          "use_game_disk",
+          "game_disks",
+          "chap_enabled",
+          "enabled",
+        ];
+        const update = Object.fromEntries(
+          editableFields
+            .filter((field) => dirtyFields[field])
+            .map((field) => [field, data[field]]),
+        );
+        if (dirtyFields.master || dirtyFields.snapshot) {
+          update.master = data.master;
+          update.snapshot = data.snapshot || null;
+        }
+        await updateClient(client.id, update);
         success(
           "Client Management",
           `Client ${data.name} updated successfully.${driverMessage}`

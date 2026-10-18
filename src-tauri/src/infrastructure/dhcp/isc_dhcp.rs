@@ -57,12 +57,11 @@ pub(crate) fn render_client_ipxe(reservation: &BootReservation) -> String {
             reservation.chap.as_ref(),
         ),
         Some(SuperBootReservation::Deny) => crate::infrastructure::pxe::render_super_boot_denied(),
-        None => crate::infrastructure::pxe::render_client_script_with_scheme(
+        None => crate::infrastructure::pxe::render_client_script_for_boot(
             &reservation.client_name,
             &reservation.target_iqn,
             80,
             true,
-            false,
             reservation.chap.as_ref(),
         ),
     }
