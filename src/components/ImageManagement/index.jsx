@@ -152,13 +152,11 @@ const ImageManagement = () => {
           setOpenImageCreateModal={setOpenImageCreateModal}
         />
       )}
-      {windowsServicingOpen && (
-        <WindowsServicingModal
-          isOpen={windowsServicingOpen}
-          onClose={() => setWindowsServicingOpen(false)}
-          onPrepared={() => Promise.all([fetchMasters(), fetchImages()])}
-        />
-      )}
+      <WindowsServicingModal
+        isOpen={windowsServicingOpen}
+        onClose={() => setWindowsServicingOpen(false)}
+        onPrepared={() => Promise.all([fetchMasters(), fetchImages()])}
+      />
     </div>
   );
 };

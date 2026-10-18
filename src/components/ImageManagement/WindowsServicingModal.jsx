@@ -40,6 +40,30 @@ const DEFAULTS = {
   clearPagingFiles: false,
 };
 
+const REMEMBER_KEY = "diskless.windows-servicing";
+
+function rememberedSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(REMEMBER_KEY));
+    if (!saved || typeof saved !== "object") return null;
+    const form = { ...DEFAULTS };
+    for (const key of Object.keys(DEFAULTS)) {
+      if (key !== "password" && typeof saved.form?.[key] === typeof DEFAULTS[key]) {
+        form[key] = saved.form[key];
+      }
+    }
+    return {
+      form,
+      imageMode: saved.imageMode === "wim" ? "wim" : "managed",
+      driverSource: saved.driverSource === "remote" ? "remote" : "catalog",
+      selectedDriverIds: Array.isArray(saved.selectedDriverIds)
+        ? saved.selectedDriverIds.filter((id) => typeof id === "string") : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
 function Toggle({ id, checked, onChange, label, description, danger = false }) {
   return (
     <label
@@ -85,22 +109,37 @@ function formatBytes(value) {
 }
 
 export default function WindowsServicingModal({ isOpen, onClose, onPrepared }) {
-  const [form, setForm] = useState(DEFAULTS);
+  const [saved] = useState(rememberedSettings);
+  const [remember, setRemember] = useState(Boolean(saved));
+  const [form, setForm] = useState(saved?.form ?? DEFAULTS);
   const [worker, setWorker] = useState(null);
   const [result, setResult] = useState(null);
   const [checking, setChecking] = useState(false);
   const [preparing, setPreparing] = useState(false);
-  const [imageMode, setImageMode] = useState("managed");
+  const [imageMode, setImageMode] = useState(saved?.imageMode ?? "managed");
   const [images, setImages] = useState([]);
-  const [driverSource, setDriverSource] = useState("catalog");
+  const [driverSource, setDriverSource] = useState(saved?.driverSource ?? "catalog");
   const [drivers, setDrivers] = useState([]);
   const [driversLoading, setDriversLoading] = useState(true);
-  const [selectedDriverIds, setSelectedDriverIds] = useState([]);
+  const [selectedDriverIds, setSelectedDriverIds] = useState(saved?.selectedDriverIds ?? []);
   const [readiness, setReadiness] = useState(null);
   const [revisions, setRevisions] = useState([]);
   const [testStates, setTestStates] = useState({});
   const { success, error } = useToastStore();
   const confirm = useConfirm();
+
+  useEffect(() => {
+    try {
+      if (remember) {
+        const fields = Object.fromEntries(Object.entries(form).filter(([key]) => key !== "password"));
+        localStorage.setItem(REMEMBER_KEY, JSON.stringify({ form: fields, imageMode, driverSource, selectedDriverIds }));
+      } else {
+        localStorage.removeItem(REMEMBER_KEY);
+      }
+    } catch {
+      // Storage may be unavailable; keep the current form in memory.
+    }
+  }, [remember, form, imageMode, driverSource, selectedDriverIds]);
 
   useEffect(() => {
     if (!isOpen) return undefined;
@@ -348,12 +387,14 @@ export default function WindowsServicingModal({ isOpen, onClose, onPrepared }) {
 
   const resetAndClose = () => {
     if (preparing || checking) return;
-    setForm(DEFAULTS);
     setWorker(null);
     setResult(null);
-    setImageMode("managed");
-    setDriverSource("catalog");
-    setSelectedDriverIds([]);
+    if (!remember) {
+      setForm(DEFAULTS);
+      setImageMode("managed");
+      setDriverSource("catalog");
+      setSelectedDriverIds([]);
+    }
     onClose?.();
   };
 
@@ -429,6 +470,13 @@ export default function WindowsServicingModal({ isOpen, onClose, onPrepared }) {
             </div>
           </div>
 
+          <Toggle
+            id="servicing-remember"
+            checked={remember}
+            onChange={setRemember}
+            label="Remember these fields"
+            description="Save settings in this browser. The password is kept only while this page stays open."
+          />
           <div className="flex items-center gap-3">
             <Button
               variant="outline"
@@ -531,7 +579,7 @@ export default function WindowsServicingModal({ isOpen, onClose, onPrepared }) {
                 type="number"
                 min="1"
                 value={form.imageIndex}
-                onChange={(event) => update("imageIndex", event.target.value)}
+                onChange={(event) => update("imageIndex", Number(event.target.value))}
               />
             </div>
           </div>

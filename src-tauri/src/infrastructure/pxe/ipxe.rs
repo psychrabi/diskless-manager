@@ -207,21 +207,24 @@ chain http://${next-server}:4237/enroll/${client-mac} || shell
 /// the block exits silently and the normal boot menu continues.
 #[must_use]
 pub fn render_auto_pnp_block() -> &'static str {
-    r##":auto_pnp_scan
+    r##"clear auto-pnp-addr || goto auto_pnp_done
+:auto_pnp_scan
 pciscan auto-pnp-addr || goto auto_pnp_done
-set auto-pnp-class ${pci/${auto-pnp-addr}.0x0b.1}
+set auto-pnp-class ${pci/${auto-pnp-addr}.0x0b.1} || goto auto_pnp_done
 iseq ${auto-pnp-class} 02 || goto auto_pnp_scan
-set auto-pnp-header ${pci/${auto-pnp-addr}.0x0e.1}
-set auto-pnp-ven ${pci/${auto-pnp-addr}.0x00.2}
-set auto-pnp-dev ${pci/${auto-pnp-addr}.0x02.2}
-iseq ${auto-pnp-header} 00 && goto auto_pnp_endpoint
-iseq ${auto-pnp-header} 80 && goto auto_pnp_endpoint
+set auto-pnp-header ${pci/${auto-pnp-addr}.0x0e.1} || goto auto_pnp_done
+set auto-pnp-ven ${pci/${auto-pnp-addr}.0x00.2} || goto auto_pnp_done
+set auto-pnp-dev ${pci/${auto-pnp-addr}.0x02.2} || goto auto_pnp_done
+# A false iseq is an error status; handle both header comparisons.
+iseq ${auto-pnp-header} 00 || iseq ${auto-pnp-header} 80 || goto auto_pnp_nonendpoint
+goto auto_pnp_endpoint
+:auto_pnp_nonendpoint
 echo Auto PNP NIC ${auto-pnp-addr:busdevfn}: VEN_${auto-pnp-ven}&DEV_${auto-pnp-dev} (PCI header ${auto-pnp-header}; no subsystem registers)
 goto auto_pnp_scan
 :auto_pnp_endpoint
-set auto-pnp-subven ${pci/${auto-pnp-addr}.0x2c.2}
-set auto-pnp-subdev ${pci/${auto-pnp-addr}.0x2e.2}
-set auto-pnp-rev ${pci/${auto-pnp-addr}.0x08.1}
+set auto-pnp-subven ${pci/${auto-pnp-addr}.0x2c.2} || goto auto_pnp_done
+set auto-pnp-subdev ${pci/${auto-pnp-addr}.0x2e.2} || goto auto_pnp_done
+set auto-pnp-rev ${pci/${auto-pnp-addr}.0x08.1} || goto auto_pnp_done
 echo Auto PNP NIC ${auto-pnp-addr:busdevfn}: VEN_${auto-pnp-ven}&DEV_${auto-pnp-dev}&SUBSYS_${auto-pnp-subdev}${auto-pnp-subven}&REV_${auto-pnp-rev}
 echo   PCI vendor=${auto-pnp-ven} device=${auto-pnp-dev} subsystem_vendor=${auto-pnp-subven} subsystem_device=${auto-pnp-subdev}
 goto auto_pnp_scan

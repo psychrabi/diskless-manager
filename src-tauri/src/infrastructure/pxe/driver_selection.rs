@@ -96,8 +96,8 @@ pub fn select_compatible_for_image(
     selected
 }
 
-/// Return signed catalog packages for every known Boot NIC, plus any packages
-/// explicitly selected by an administrator.
+/// Return signed catalog packages for one Boot NIC's alternative hardware and
+/// compatible IDs, plus any packages explicitly selected by an administrator.
 pub fn select_managed_image_driver_ids(
     packages: &[NetworkDriverPackage],
     boot_nic_ids: &[String],
@@ -128,26 +128,11 @@ pub fn select_managed_image_driver_ids(
                 .any(|package| package.id == *id && package.architectures.is_empty())
         });
     }
-    let uncovered = boot_nic_ids
-        .iter()
-        .filter(|boot_nic_id| {
-            !packages.iter().any(|package| {
-                ids.contains(&package.id)
-                    && !package.catalog_files.is_empty()
-                    && package
-                        .hardware_ids
-                        .iter()
-                        .chain(package.pnp_device_id.iter())
-                        .chain(package.compatible_ids.iter())
-                        .any(|id| pnp_id_matches(id, boot_nic_id))
-            })
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    if !uncovered.is_empty() {
+    // WinPE reports alternative IDs for the same adapter, not separate devices.
+    if !boot_nic_ids.is_empty() && ids.is_empty() {
         return Err(format!(
             "no compatible signed imported driver covers Boot NIC hardware ID(s): {}",
-            uncovered.join(", ")
+            boot_nic_ids.join(", ")
         ));
     }
     ids.extend(explicit_ids.iter().cloned());
