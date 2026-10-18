@@ -90,6 +90,8 @@ try {
     & pnputil.exe /add-driver $inf.FullName /install 2>&1 | Out-File $pnputilLog -Append -Encoding utf8
     if ($LASTEXITCODE -eq 3010) {
       $rebootRequired = $true
+    } elseif ($LASTEXITCODE -eq 259) {
+      Log "pnputil $($inf.Name) returned 259 (no matching device or a better driver already bound); continuing"
     } elseif ($LASTEXITCODE -ne 0) {
       throw "pnputil failed for $($inf.FullName) with exit code $LASTEXITCODE"
     }

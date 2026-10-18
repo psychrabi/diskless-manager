@@ -222,7 +222,7 @@ fn merge_gpt_ini(text: &str) -> Result<String> {
     }
     let mut additions = Vec::new();
     if !saw_version {
-        additions.push("Version=1".to_string());
+        additions.push("Version=65539".to_string());
     }
     if !saw_extensions {
         additions.push(format!("gPCMachineExtensionNames={SCRIPTS_CSE_PAIR}"));
@@ -255,6 +255,21 @@ fn merge_extension_groups(value: &str) -> String {
     groups.join("")
 }
 
+fn parse_startup_entry(line: &str) -> Option<(u64, String, String)> {
+    let (left, value) = line.trim_start().split_once('=')?;
+    let digits = left
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>();
+    let key = left[digits.len()..].trim();
+    if digits.is_empty()
+        || (!key.eq_ignore_ascii_case("CmdLine") && !key.eq_ignore_ascii_case("Parameters"))
+    {
+        return None;
+    }
+    Some((digits.parse().ok()?, key.to_string(), value.to_string()))
+}
+
 fn merge_startup_ini(text: &str) -> String {
     let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
     let Some(start) = lines
@@ -278,49 +293,38 @@ fn merge_startup_ini(text: &str) -> String {
         .find(|(_, line)| line.trim_start().starts_with('['))
         .map(|(index, _)| index)
         .unwrap_or(lines.len());
-    let mut remove_numbers = std::collections::BTreeSet::new();
+    let mut entries: std::collections::BTreeMap<u64, (String, String)> =
+        std::collections::BTreeMap::new();
+    let mut preserved = Vec::new();
     for line in &lines[start + 1..end] {
-        if let Some((left, value)) = line.split_once('=') {
-            let digits = left
-                .chars()
-                .take_while(char::is_ascii_digit)
-                .collect::<String>();
-            if left[digits.len()..].eq_ignore_ascii_case("CmdLine")
-                && value.trim().eq_ignore_ascii_case("ndadapt.cmd")
-            {
-                remove_numbers.insert(digits);
+        match parse_startup_entry(line) {
+            Some((number, key, value)) => {
+                let entry = entries.entry(number).or_default();
+                if key.eq_ignore_ascii_case("CmdLine") {
+                    entry.0 = value;
+                } else {
+                    entry.1 = value;
+                }
             }
+            None if line.trim().is_empty() => {}
+            None => preserved.push(line.clone()),
         }
     }
-    let mut items = Vec::new();
-    for line in &lines[start + 1..end] {
-        let digits = line
-            .chars()
-            .take_while(char::is_ascii_digit)
-            .collect::<String>();
-        if digits.is_empty() || !remove_numbers.contains(&digits) {
-            items.push(line.clone());
+    // ndadapt.cmd runs first: the boot NIC drivers must be installed before any
+    // other machine startup script, matching NexBoot's registration order.
+    let mut rebuilt = preserved;
+    rebuilt.push("0CmdLine=ndadapt.cmd".into());
+    rebuilt.push("0Parameters=".into());
+    let mut next = 1u64;
+    for (_, (command, parameters)) in entries {
+        if command.is_empty() || command.trim().eq_ignore_ascii_case("ndadapt.cmd") {
+            continue;
         }
+        rebuilt.push(format!("{next}CmdLine={command}"));
+        rebuilt.push(format!("{next}Parameters={parameters}"));
+        next += 1;
     }
-    let next = items
-        .iter()
-        .filter_map(|line| {
-            let digits = line
-                .chars()
-                .take_while(char::is_ascii_digit)
-                .collect::<String>();
-            (!digits.is_empty())
-                .then(|| digits.parse::<u64>().ok())
-                .flatten()
-        })
-        .max()
-        .unwrap_or(0)
-        .saturating_add(1);
-    items.extend([
-        format!("{next}CmdLine=ndadapt.cmd"),
-        format!("{next}Parameters="),
-    ]);
-    lines.splice(start + 1..end, items);
+    lines.splice(start + 1..end, rebuilt);
     lines.join("\r\n") + "\r\n"
 }
 
@@ -343,7 +347,7 @@ mod tests {
         let gpt =
             fs::read_to_string(root.path().join("Windows/System32/GroupPolicy/gpt.ini")).unwrap();
         assert!(gpt.contains("gPCMachineExtensionNames=[{42B5FAAE-6536-11D2-AE5A-0000F87571E3}{40B6664F-4972-11D1-A7CA-0000F87571E3}]"));
-        assert!(gpt.contains("Version=1"));
+        assert!(gpt.contains("Version=65539"));
     }
 
     #[test]
@@ -410,8 +414,20 @@ mod tests {
     fn merges_startup_without_removing_other_entries_or_shutdown() {
         let ini = "[Startup]\r\n0CmdLine=ndmount.cmd\r\n0Parameters=\r\n[Shutdown]\r\n0CmdLine=cleanup.cmd\r\n";
         let merged = merge_startup_ini(ini);
-        assert!(merged.contains("0CmdLine=ndmount.cmd"));
+        assert!(merged.contains("0CmdLine=ndadapt.cmd"));
+        assert!(merged.contains("1CmdLine=ndmount.cmd"));
         assert!(merged.contains("[Shutdown]"));
-        assert!(merged.contains("1CmdLine=ndadapt.cmd"));
+        assert!(merged.contains("0CmdLine=cleanup.cmd"));
+    }
+
+    #[test]
+    fn registers_ndadapt_before_existing_entries_and_restaging_is_stable() {
+        let ini = "[Startup]\r\n0CmdLine=ndmount.cmd\r\n0Parameters=\r\n3CmdLine=other.cmd\r\n3Parameters=-x\r\n";
+        let first = merge_startup_ini(ini);
+        assert!(first.contains("0CmdLine=ndadapt.cmd"), "{first}");
+        assert!(first.contains("1CmdLine=ndmount.cmd"), "{first}");
+        assert!(first.contains("2CmdLine=other.cmd"), "{first}");
+        assert!(first.contains("2Parameters=-x"), "{first}");
+        assert_eq!(merge_startup_ini(&first), first);
     }
 }
