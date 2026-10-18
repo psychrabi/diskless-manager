@@ -52,35 +52,80 @@ fn normalize_mac(value: &str) -> String {
         .collect()
 }
 
+async fn load_assignment_boot_inventory(
+    pool: &sqlx::SqlitePool,
+    target_mac: &str,
+) -> anyhow::Result<Option<(Vec<String>, String)>> {
+    let normalized_mac = normalize_mac(target_mac);
+    let report: Option<(String, String)> = sqlx::query_as(
+        "SELECT report.boot_nic_ids, report.architecture FROM windows_driver_reports AS report JOIN clients AS client ON client.id = report.client_id WHERE lower(replace(replace(client.mac, ':', ''), '-', '')) = ? LIMIT 1",
+    )
+    .bind(&normalized_mac)
+    .fetch_optional(pool)
+    .await
+    .context("failed to read verified Windows Boot NIC report")?;
+    let record = if let Some(report) = report {
+        Some(report)
+    } else {
+        sqlx::query_as(
+            "SELECT boot_nic_ids, architecture FROM windows_nic_inventory WHERE lower(replace(replace(mac, ':', ''), '-', '')) = ? LIMIT 1",
+        )
+        .bind(&normalized_mac)
+        .fetch_optional(pool)
+        .await
+        .context("failed to read preboot Boot NIC inventory")?
+    };
+    record
+        .map(|(ids, architecture)| {
+            let ids: Vec<String> = serde_json::from_str(&ids)
+                .context("stored Boot NIC hardware IDs are invalid JSON")?;
+            anyhow::ensure!(!ids.is_empty(), "stored Boot NIC inventory is empty");
+            Ok((ids, architecture))
+        })
+        .transpose()
+}
+
+async fn load_managed_driver_inventory(
+    pool: &sqlx::SqlitePool,
+) -> anyhow::Result<Vec<(String, Vec<String>, String)>> {
+    let records: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT client.mac, inventory.boot_nic_ids, inventory.architecture FROM windows_nic_inventory AS inventory JOIN clients AS client ON lower(replace(replace(client.mac, ':', ''), '-', '')) = lower(replace(replace(inventory.mac, ':', ''), '-', '')) WHERE NOT EXISTS (SELECT 1 FROM windows_driver_reports AS report WHERE report.client_id = client.id) UNION ALL SELECT client.mac, report.boot_nic_ids, report.architecture FROM windows_driver_reports AS report JOIN clients AS client ON client.id = report.client_id ORDER BY 1",
+    )
+    .fetch_all(pool)
+    .await
+    .context("failed to read Windows client NIC inventory")?;
+    records
+        .into_iter()
+        .map(|(mac, ids, architecture)| {
+            let ids: Vec<String> = serde_json::from_str(&ids)
+                .context("stored Boot NIC hardware IDs are invalid JSON")?;
+            anyhow::ensure!(
+                !ids.is_empty(),
+                "stored Boot NIC inventory is empty for {mac}"
+            );
+            Ok((mac, ids, architecture))
+        })
+        .collect()
+}
+
 fn select_assignment_driver_ids(
     packages: &[crate::infrastructure::pxe::NetworkDriverPackage],
     inventory: &[(String, Vec<String>, String)],
     target_mac: &str,
 ) -> Result<Vec<String>, String> {
-    let mut target_has_inventory = false;
-    let mut selected = BTreeSet::new();
-    for (mac, boot_nic_ids, architecture) in inventory {
-        if normalize_mac(mac) == normalize_mac(target_mac) && !boot_nic_ids.is_empty() {
-            target_has_inventory = true;
-        }
-        let ids = select_managed_image_driver_ids(
-            packages,
-            boot_nic_ids,
-            std::slice::from_ref(architecture),
-            &[],
-        )
-        .map_err(|error| format!("client {mac}: {error}"))?;
-        selected.extend(ids);
-    }
-    if !target_has_inventory {
+    let Some((_, boot_nic_ids, architecture)) = inventory.iter().find(|(mac, boot_nic_ids, _)| {
+        normalize_mac(mac) == normalize_mac(target_mac) && !boot_nic_ids.is_empty()
+    }) else {
         return Err(format!(
             "no Boot NIC inventory is recorded for client MAC '{target_mac}'"
         ));
-    }
-    if selected.is_empty() {
-        return Err("no imported network drivers match the recorded client inventory".into());
-    }
-    Ok(selected.into_iter().collect())
+    };
+    select_managed_image_driver_ids(
+        packages,
+        boot_nic_ids,
+        std::slice::from_ref(architecture),
+        &[],
+    )
 }
 
 #[derive(Debug, Serialize)]
@@ -298,21 +343,7 @@ pub async fn prepare_image_managed(
         let inventory = if driver_root {
             Vec::new()
         } else {
-            let records: Vec<(String, String, String)> = sqlx::query_as(
-                "SELECT mac, boot_nic_ids, architecture FROM windows_nic_inventory ORDER BY mac",
-            )
-            .fetch_all(&state.db_pool)
-            .await?;
-            records
-                .iter()
-                .map(|(mac, boot_nic_ids, architecture)| {
-                    Ok((
-                        mac.clone(),
-                        serde_json::from_str::<Vec<String>>(boot_nic_ids)?,
-                        architecture.clone(),
-                    ))
-                })
-                .collect::<Result<Vec<_>, serde_json::Error>>()?
+            load_managed_driver_inventory(&state.db_pool).await?
         };
         let explicit_ids = request.driver_ids.clone();
         let packages =
@@ -330,9 +361,7 @@ pub async fn prepare_image_managed(
                             &[architecture],
                             &[],
                         )
-                        .map_err(|error| {
-                            anyhow::anyhow!("client inventory {mac}: {error}")
-                        })?;
+                        .map_err(|error| anyhow::anyhow!("client inventory {mac}: {error}"))?;
                         selected_ids.extend(selected);
                     }
                     selected_ids.extend(explicit_ids);
@@ -430,24 +459,14 @@ pub async fn prepare_windows_assignment(
             source.name
         );
 
-        let records: Vec<(String, String, String)> = sqlx::query_as(
-            "SELECT mac, boot_nic_ids, architecture FROM windows_nic_inventory ORDER BY mac",
-        )
-        .fetch_all(&state.db_pool)
-        .await
-        .context("failed to read client Boot NIC inventory")?;
-        let inventory = records
-            .iter()
-            .map(|(mac, boot_nic_ids, architecture)| {
-                Ok((
-                    mac.clone(),
-                    serde_json::from_str::<Vec<String>>(boot_nic_ids)?,
-                    architecture.clone(),
-                ))
-            })
-            .collect::<Result<Vec<_>, serde_json::Error>>()?;
-        let root = settings.http.root_dir.clone();
         let target_mac = request.mac.clone();
+        let Some((boot_nic_ids, architecture)) =
+            load_assignment_boot_inventory(&state.db_pool, &target_mac).await?
+        else {
+            anyhow::bail!("no Boot NIC inventory is recorded for client MAC '{target_mac}'");
+        };
+        let inventory = vec![(target_mac.clone(), boot_nic_ids, architecture)];
+        let root = settings.http.root_dir.clone();
         let (package_ids, packages) = tokio::task::spawn_blocking(move || {
             let plugin = NetworkDriverInjectionPlugin::new(PathBuf::from(root));
             let catalog = plugin.list()?;
@@ -898,11 +917,14 @@ pub async fn list_revisions(
 
 #[cfg(test)]
 mod automatic_assignment_tests {
-    use super::select_assignment_driver_ids;
+    use super::{
+        load_assignment_boot_inventory, load_managed_driver_inventory, select_assignment_driver_ids,
+    };
     use crate::infrastructure::pxe::NetworkDriverPackage;
+    use sqlx::sqlite::SqlitePoolOptions;
 
     #[test]
-    fn automatic_assignment_selects_drivers_for_every_inventoried_client() {
+    fn automatic_assignment_ignores_other_clients_with_unmatched_nics() {
         let packages: Vec<NetworkDriverPackage> = serde_json::from_value(serde_json::json!([
             {"id":"pkg-a","name":"A","inf_files":["a.inf"],"architectures":["x64"],"hardware_ids":["PCI\\VEN_1234&DEV_0001"],"catalog_files":["a.cat"],"imported_at":"2026-01-01T00:00:00Z"},
             {"id":"pkg-b","name":"B","inf_files":["b.inf"],"architectures":["x64"],"hardware_ids":["PCI\\VEN_1234&DEV_0002"],"catalog_files":["b.cat"],"imported_at":"2026-01-01T00:00:00Z"}
@@ -911,7 +933,7 @@ mod automatic_assignment_tests {
         let inventory = vec![
             (
                 "02:00:00:00:00:01".into(),
-                vec!["PCI\\VEN_1234&DEV_0001".into()],
+                vec!["PCI\\VEN_9999&DEV_9999".into()],
                 "x64".into(),
             ),
             (
@@ -923,7 +945,59 @@ mod automatic_assignment_tests {
 
         assert_eq!(
             select_assignment_driver_ids(&packages, &inventory, "02-00-00-00-00-02").unwrap(),
-            vec!["pkg-a", "pkg-b"]
+            vec!["pkg-b"]
         );
+    }
+
+    #[tokio::test]
+    async fn assignment_prefers_verified_client_report_to_stale_preboot_inventory() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE clients (id TEXT PRIMARY KEY, mac TEXT NOT NULL)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE windows_driver_reports (client_id TEXT, boot_nic_ids TEXT, architecture TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE windows_nic_inventory (mac TEXT, boot_nic_ids TEXT, architecture TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO clients (id, mac) VALUES ('client-1', '02:00:00:00:00:01')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO windows_driver_reports (client_id, boot_nic_ids, architecture) VALUES ('client-1', '[\"PCI\\\\VEN_1234&DEV_0002\"]', 'x64')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO windows_nic_inventory (mac, boot_nic_ids, architecture) VALUES ('02:00:00:00:00:01', '[\"PCI\\\\VEN_1234&DEV_0001\"]', 'x64')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO windows_nic_inventory (mac, boot_nic_ids, architecture) VALUES ('02:00:00:00:00:99', '[\"PCI\\\\VEN_9999&DEV_9999\"]', 'x64')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let inventory = load_assignment_boot_inventory(&pool, "02-00-00-00-00-01")
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(inventory.0, vec!["PCI\\VEN_1234&DEV_0002"]);
+        assert_eq!(inventory.1, "x64");
+
+        let managed_inventory = load_managed_driver_inventory(&pool).await.unwrap();
+        assert_eq!(managed_inventory.len(), 1);
+        assert_eq!(managed_inventory[0].0, "02:00:00:00:00:01");
+        assert_eq!(managed_inventory[0].1, vec!["PCI\\VEN_1234&DEV_0002"]);
     }
 }

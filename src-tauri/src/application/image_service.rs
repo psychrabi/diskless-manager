@@ -796,7 +796,11 @@ impl ImageService {
                     .backend
                     .exists(&format!("{}@{}", parent.name, image.name))?
                 {
-                    self.backend.destroy_snapshot(&parent.name, &image.name)?;
+                    self.backend
+                        .destroy_snapshot(&parent.name, &image.name)
+                        .with_context(|| {
+                            format!("failed to delete snapshot '{}@{}'", parent.name, image.name)
+                        })?;
                 }
             }
 
@@ -825,12 +829,17 @@ impl ImageService {
                 }
 
                 if self.backend.exists(&image.name)? {
-                    self.backend.destroy(&image.name)?;
+                    self.backend
+                        .destroy(&image.name)
+                        .with_context(|| format!("failed to delete image '{}'", image.name))?;
                 }
             }
         }
 
-        self.repository.delete(&image.id).await?;
+        self.repository
+            .delete(&image.id)
+            .await
+            .context("failed to remove image metadata")?;
 
         Ok(())
     }

@@ -349,13 +349,13 @@ async fn enroll_client(
     ipxe_response(script)
 }
 
-/// Inventory submitted from WinPE, keyed by the observed MAC.
+/// Inventory submitted from WinPE for an already registered client.
 ///
-/// The record stays pending until the client is assigned: the MAC is only the
-/// lookup key and matching always uses hardware IDs. Malformed payloads are
-/// rejected without touching stored inventory.
+/// The request source must match that client's recorded PXE address. The MAC
+/// is only a lookup key, and matching drivers still uses hardware IDs.
 async fn submit_inventory(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Path(mac): Path<String>,
     Json(payload): Json<crate::infrastructure::pxe::NicInventoryPayload>,
 ) -> (StatusCode, Json<serde_json::Value>) {
@@ -377,11 +377,36 @@ async fn submit_inventory(
             )
         }
     };
+    let client =
+        sqlx::query_as::<_, (String, Option<String>)>("SELECT id, ip FROM clients WHERE mac = ?")
+            .bind(parsed.as_str())
+            .fetch_optional(&state.db_pool)
+            .await;
+    let client_id = match client {
+        Ok(Some((client_id, Some(client_ip)))) if peer_matches_client_ip(&client_ip, peer.ip()) => {
+            client_id
+        }
+        Ok(_) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(
+                    serde_json::json!({"ok": false, "error": "inventory submission is not authorized for this client address"}),
+                ),
+            );
+        }
+        Err(error) => {
+            error!("failed to authorize NIC inventory submission: {error:#}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"ok": false, "error": "failed to authorize inventory"})),
+            );
+        }
+    };
     let observed_at = chrono::Utc::now().to_rfc3339();
     let stored = sqlx::query(
         r#"INSERT INTO windows_nic_inventory
         (mac, client_id, boot_nic_ids, secondary_ids, architecture, firmware, observed_at)
-        VALUES (?, (SELECT id FROM clients WHERE mac = ?), ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(mac) DO UPDATE SET
             client_id = excluded.client_id,
             boot_nic_ids = excluded.boot_nic_ids,
@@ -391,7 +416,7 @@ async fn submit_inventory(
             observed_at = excluded.observed_at"#,
     )
     .bind(parsed.as_str())
-    .bind(parsed.as_str())
+    .bind(&client_id)
     .bind(serde_json::to_string(&validated.boot_nic_ids).unwrap_or_default())
     .bind(serde_json::to_string(&validated.secondary_ids).unwrap_or_default())
     .bind(&validated.architecture)
@@ -408,6 +433,8 @@ async fn submit_inventory(
     }
     tracing::info!(
         mac = %parsed.as_str(),
+        client_id,
+        peer_ip = %peer.ip(),
         boot_nics = validated.boot_nic_ids.len(),
         "stored preboot NIC inventory"
     );
@@ -415,6 +442,21 @@ async fn submit_inventory(
         StatusCode::OK,
         Json(serde_json::json!({"ok": true, "mac": parsed.as_str()})),
     )
+}
+
+fn peer_matches_client_ip(client_ip: &str, peer: std::net::IpAddr) -> bool {
+    fn normalize(address: std::net::IpAddr) -> std::net::IpAddr {
+        match address {
+            std::net::IpAddr::V6(v6) => v6
+                .to_ipv4_mapped()
+                .map(std::net::IpAddr::V4)
+                .unwrap_or(address),
+            other => other,
+        }
+    }
+    client_ip
+        .parse::<std::net::IpAddr>()
+        .is_ok_and(|client_ip| normalize(client_ip) == normalize(peer))
 }
 
 /// Consume the one-shot request before sending the client to WinPE. If it never
@@ -610,9 +652,21 @@ mod tests {
         mac: &str,
         body: serde_json::Value,
     ) -> (StatusCode, serde_json::Value) {
+        post_inventory_from(state, mac, body, "192.0.2.50").await
+    }
+
+    async fn post_inventory_from(
+        state: &AppState,
+        mac: &str,
+        body: serde_json::Value,
+        peer_ip: &str,
+    ) -> (StatusCode, serde_json::Value) {
         let app = enroll_router(state.clone());
-        let peer: ConnectInfo<SocketAddr> =
-            ConnectInfo("192.0.2.50:68".parse().expect("test peer must parse"));
+        let peer: ConnectInfo<SocketAddr> = ConnectInfo(
+            format!("{peer_ip}:68")
+                .parse()
+                .expect("test peer must parse"),
+        );
         let response = app
             .oneshot(
                 Request::builder()
@@ -1056,6 +1110,10 @@ mod tests {
     #[tokio::test]
     async fn inventory_submit_stores_pending_record_by_mac() {
         let state = test_state().await;
+        sqlx::query("INSERT INTO clients (id, name, mac, ip, master, enabled, created_at, updated_at) VALUES ('inventory-client', 'inventory-client', '02:00:00:00:00:09', '192.0.2.50', 'pending', 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+            .execute(&state.db_pool)
+            .await
+            .unwrap();
         let (status, body) = post_inventory(&state, "02:00:00:00:00:09", inventory_body()).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["ok"], true);
@@ -1067,8 +1125,27 @@ mod tests {
         .await
         .unwrap();
         assert!(row.0.contains("VEN_8086"));
-        // Unassigned: the MAC is only the lookup key until provisioning pins it.
-        assert!(row.1.is_none());
+        assert_eq!(row.1.as_deref(), Some("inventory-client"));
+    }
+
+    #[tokio::test]
+    async fn inventory_submit_rejects_unregistered_macs_and_unmatched_peer_addresses() {
+        let state = test_state().await;
+        let (status, _) = post_inventory(&state, "02:00:00:00:00:09", inventory_body()).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+
+        sqlx::query("INSERT INTO clients (id, name, mac, ip, master, enabled, created_at, updated_at) VALUES ('inventory-client', 'inventory-client', '02:00:00:00:00:09', '192.0.2.50', 'pending', 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+            .execute(&state.db_pool)
+            .await
+            .unwrap();
+        let (status, _) =
+            post_inventory_from(&state, "02:00:00:00:00:09", inventory_body(), "192.0.2.51").await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM windows_nic_inventory")
+            .fetch_one(&state.db_pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
     }
 
     #[tokio::test]
@@ -1093,7 +1170,7 @@ mod tests {
     #[tokio::test]
     async fn inventory_boot_request_is_consumed_before_upload() {
         let state = test_state().await;
-        sqlx::query("INSERT INTO clients (id, name, mac, ip, master, created_at, updated_at) VALUES ('c1', 'client-c1', '02:00:00:00:00:0b', '192.0.2.11', 'pending', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+        sqlx::query("INSERT INTO clients (id, name, mac, ip, master, created_at, updated_at) VALUES ('c1', 'client-c1', '02:00:00:00:00:0b', '192.0.2.50', 'pending', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
             .execute(&state.db_pool)
             .await
             .unwrap();
@@ -1128,7 +1205,7 @@ mod tests {
     #[tokio::test]
     async fn old_inventory_upload_does_not_clear_a_rearmed_boot_request() {
         let state = test_state().await;
-        sqlx::query("INSERT INTO clients (id, name, mac, ip, master, created_at, updated_at) VALUES ('c1', 'client-c1', '02:00:00:00:00:0b', '192.0.2.11', 'pending', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+        sqlx::query("INSERT INTO clients (id, name, mac, ip, master, created_at, updated_at) VALUES ('c1', 'client-c1', '02:00:00:00:00:0b', '192.0.2.50', 'pending', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
             .execute(&state.db_pool)
             .await
             .unwrap();

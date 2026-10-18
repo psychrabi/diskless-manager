@@ -10,6 +10,7 @@ import { Button, Modal, Select } from "@/components/ui";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useConfirm } from "@/contexts/confirmDialog";
+import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
 import {
   CheckCircle2,
@@ -42,7 +43,7 @@ const DEFAULTS = {
 
 const REMEMBER_KEY = "diskless.windows-servicing";
 
-function rememberedSettings() {
+function rememberedSettings(defaultDriverInstallStrategy) {
   try {
     const saved = JSON.parse(localStorage.getItem(REMEMBER_KEY));
     if (!saved || typeof saved !== "object") return null;
@@ -56,6 +57,12 @@ function rememberedSettings() {
       form,
       imageMode: saved.imageMode === "wim" ? "wim" : "managed",
       driverSource: saved.driverSource === "remote" ? "remote" : "catalog",
+      driverInstallStrategy:
+        saved.driverInstallStrategy === "nexboot_boot_time"
+          ? "nexboot_boot_time"
+          : saved.driverInstallStrategy === "offline_dism"
+            ? "offline_dism"
+            : defaultDriverInstallStrategy,
       selectedDriverIds: Array.isArray(saved.selectedDriverIds)
         ? saved.selectedDriverIds.filter((id) => typeof id === "string") : [],
     };
@@ -109,7 +116,14 @@ function formatBytes(value) {
 }
 
 export default function WindowsServicingModal({ isOpen, onClose, onPrepared }) {
-  const [saved] = useState(rememberedSettings);
+  const configuredDriverInstallStrategy = useAppStore(
+    (state) =>
+      state.appConfig?.settings?.windows_servicing?.driver_install_strategy ??
+      "offline_dism",
+  );
+  const [saved] = useState(() =>
+    rememberedSettings(configuredDriverInstallStrategy),
+  );
   const [remember, setRemember] = useState(Boolean(saved));
   const [form, setForm] = useState(saved?.form ?? DEFAULTS);
   const [worker, setWorker] = useState(null);
@@ -119,6 +133,9 @@ export default function WindowsServicingModal({ isOpen, onClose, onPrepared }) {
   const [imageMode, setImageMode] = useState(saved?.imageMode ?? "managed");
   const [images, setImages] = useState([]);
   const [driverSource, setDriverSource] = useState(saved?.driverSource ?? "catalog");
+  const [driverInstallStrategy, setDriverInstallStrategy] = useState(
+    saved?.driverInstallStrategy ?? configuredDriverInstallStrategy,
+  );
   const [drivers, setDrivers] = useState([]);
   const [driversLoading, setDriversLoading] = useState(true);
   const [selectedDriverIds, setSelectedDriverIds] = useState(saved?.selectedDriverIds ?? []);
@@ -132,14 +149,14 @@ export default function WindowsServicingModal({ isOpen, onClose, onPrepared }) {
     try {
       if (remember) {
         const fields = Object.fromEntries(Object.entries(form).filter(([key]) => key !== "password"));
-        localStorage.setItem(REMEMBER_KEY, JSON.stringify({ form: fields, imageMode, driverSource, selectedDriverIds }));
+        localStorage.setItem(REMEMBER_KEY, JSON.stringify({ form: fields, imageMode, driverSource, driverInstallStrategy, selectedDriverIds }));
       } else {
         localStorage.removeItem(REMEMBER_KEY);
       }
     } catch {
       // Storage may be unavailable; keep the current form in memory.
     }
-  }, [remember, form, imageMode, driverSource, selectedDriverIds]);
+  }, [remember, form, imageMode, driverSource, driverInstallStrategy, selectedDriverIds]);
 
   useEffect(() => {
     if (!isOpen) return undefined;
@@ -336,6 +353,7 @@ export default function WindowsServicingModal({ isOpen, onClose, onPrepared }) {
         response = await prepareWindowsImageManaged({
           ...remoteIdentity(), image_id: form.imageId, source_snapshot: form.snapshot,
           new_name: form.newName.trim(), portal: form.portal.trim(), commit, boot_arm: bootArm(),
+          driver_install_strategy: driverInstallStrategy,
           ...(commit ? { report_server_url: window.location.origin } : {}),
           ...(driverSource === "catalog" ? { driver_ids: selectedDriverIds } : { driver_root: form.driverRoot.trim() }),
         });
@@ -393,6 +411,7 @@ export default function WindowsServicingModal({ isOpen, onClose, onPrepared }) {
       setForm(DEFAULTS);
       setImageMode("managed");
       setDriverSource("catalog");
+      setDriverInstallStrategy(configuredDriverInstallStrategy);
       setSelectedDriverIds([]);
     }
     onClose?.();
@@ -539,6 +558,18 @@ export default function WindowsServicingModal({ isOpen, onClose, onPrepared }) {
               </div>
               <p className="text-xs text-muted-foreground md:col-span-2">
                 Choose a snapshot that already boots from iSCSI. Preparation uses a separate clone. Dry Run deletes that clone; committing saves a new image and snapshot.
+              </p>
+              <Select
+                label="Windows NIC installation strategy"
+                value={driverInstallStrategy}
+                disabled={preparing}
+                onChange={(event) => setDriverInstallStrategy(event.target.value)}
+              >
+                <option value="offline_dism">Offline DISM</option>
+                <option value="nexboot_boot_time">NexBoot boot-time adaptation (test)</option>
+              </Select>
+              <p className="text-xs text-muted-foreground md:col-span-2">
+                Both strategies inject and arm the boot NIC offline. NexBoot additionally stages a one-time startup install for testing.
               </p>
               {form.imageId && (
                 <div className="rounded-md border border-border/60 p-3 text-xs md:col-span-2" data-testid="driver-readiness">

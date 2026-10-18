@@ -53,15 +53,128 @@ pub enum InfServiceValue {
     MultiString(Vec<String>),
 }
 
+fn architecture_token(architecture: &str) -> Result<&'static str> {
+    match architecture.trim().to_ascii_lowercase().as_str() {
+        "x64" | "amd64" | "x86_64" => Ok("ntamd64"),
+        "x86" | "i386" => Ok("ntx86"),
+        "arm64" | "aarch64" => Ok("ntarm64"),
+        other => bail!("unsupported Windows architecture '{other}' for INF service parsing"),
+    }
+}
+
+fn service_sections_for_architecture<'a>(
+    sections: &'a BTreeMap<String, InfSection>,
+    architecture: &str,
+) -> Result<Vec<&'a InfSection>> {
+    let target = architecture_token(architecture)?;
+    let mut ranked = Vec::new();
+    for section in sections
+        .values()
+        .filter(|section| section.name.to_ascii_lowercase().ends_with(".services"))
+    {
+        let decorators = section
+            .name
+            .to_ascii_lowercase()
+            .split('.')
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let platform = decorators
+            .iter()
+            .take(decorators.len().saturating_sub(1))
+            .find(|part| part.starts_with("nt"));
+        let rank = match platform.map(String::as_str) {
+            Some(value) if value == target => 0,
+            Some("nt") => 1,
+            Some("ntamd64" | "ntx86" | "ntarm64") => continue,
+            Some(_) => continue,
+            None => 2,
+        };
+        ranked.push((rank, section));
+    }
+    let Some(best_rank) = ranked.iter().map(|(rank, _)| *rank).min() else {
+        return Ok(Vec::new());
+    };
+    Ok(ranked
+        .into_iter()
+        .filter_map(|(rank, section)| (rank == best_rank).then_some(section))
+        .collect())
+}
+
+/// Return only the associated function-driver services for an INF's matching
+/// architecture. Other architecture-specific service sections are excluded.
+pub fn associated_service_names_for_architecture(
+    path: &Path,
+    architecture: &str,
+) -> Result<Vec<String>> {
+    let text = decode_inf_bytes(&fs::read(path)?);
+    let sections = parse_sections(&text);
+    let strings = collect_strings(&sections);
+    let service_sections = service_sections_for_architecture(&sections, architecture)?;
+    let mut declarations = Vec::new();
+    for section in service_sections {
+        let mut names = BTreeSet::new();
+        for line in &section.lines {
+            let Some((key, value)) = split_assignment(line) else {
+                continue;
+            };
+            if !key.eq_ignore_ascii_case("AddService") {
+                continue;
+            }
+            let fields = split_csv(value)
+                .iter()
+                .map(|field| expand_tokens(field, &strings))
+                .collect::<Vec<_>>();
+            if fields.first().is_some_and(|name| !name.is_empty())
+                && fields
+                    .get(1)
+                    .and_then(|flags| parse_inf_number(flags))
+                    .is_some_and(|flags| flags & 2 != 0)
+            {
+                names.insert(fields[0].clone());
+            }
+        }
+        declarations.push(names.into_iter().collect::<Vec<_>>());
+    }
+    let Some(selected) = declarations.first().cloned() else {
+        return Ok(Vec::new());
+    };
+    if declarations
+        .iter()
+        .any(|declaration| *declaration != selected)
+    {
+        bail!("architecture-specific service declarations differ; refusing ambiguous offline reflection");
+    }
+    Ok(selected)
+}
+
 pub fn boot_service_profiles(path: &Path) -> Result<Vec<InfBootService>> {
+    boot_service_profiles_impl(path, None)
+}
+
+/// Parse boot profiles only from service sections applicable to `architecture`.
+pub fn boot_service_profiles_for_architecture(
+    path: &Path,
+    architecture: &str,
+) -> Result<Vec<InfBootService>> {
+    boot_service_profiles_impl(path, Some(architecture))
+}
+
+fn boot_service_profiles_impl(
+    path: &Path,
+    architecture: Option<&str>,
+) -> Result<Vec<InfBootService>> {
     let text = decode_inf_bytes(&fs::read(path)?);
     let sections = parse_sections(&text);
     let strings = collect_strings(&sections);
     let mut profiles = BTreeMap::new();
-    for section in sections
-        .values()
-        .filter(|s| s.name.to_ascii_lowercase().ends_with(".services"))
-    {
+    let service_sections = match architecture {
+        Some(architecture) => service_sections_for_architecture(&sections, architecture)?,
+        None => sections
+            .values()
+            .filter(|section| section.name.to_ascii_lowercase().ends_with(".services"))
+            .collect(),
+    };
+    for section in service_sections {
         let associated = section
             .lines
             .iter()
@@ -830,6 +943,47 @@ Device="Example Ethernet"
         ).replace("Provider=\"Example Vendor\"", "Provider=\"Example Vendor\"\nNicService=\"e2fexpress\"\nFlags=0x00000012"));
         assert_eq!(metadata.associated_service_names, vec!["e2fexpress"]);
         assert_eq!(metadata.service_names, vec!["e2fexpress", "filter"]);
+    }
+
+    #[test]
+    fn architecture_specific_service_parsing_ignores_other_install_sections() {
+        let dir = tempfile::tempdir().unwrap();
+        let inf = dir.path().join("multiarch.inf");
+        let content = r#"[Version]
+Class=Net
+[Install.NTamd64.Services]
+AddService=NetKvm,2,X64Service
+[X64Service]
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%13%\netkvm.sys
+[Install.NTx86.Services]
+AddService=LegacyNic,2,X86Service
+[X86Service]
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%13%\legacy.sys
+"#;
+        fs::write(&inf, content).unwrap();
+
+        assert_eq!(
+            associated_service_names_for_architecture(&inf, "x64").unwrap(),
+            vec!["NetKvm"]
+        );
+        assert_eq!(
+            associated_service_names_for_architecture(&inf, "x86").unwrap(),
+            vec!["LegacyNic"]
+        );
+        assert_eq!(
+            boot_service_profiles_for_architecture(&inf, "x64")
+                .unwrap()
+                .iter()
+                .map(|profile| profile.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["NetKvm"]
+        );
     }
 
     #[test]

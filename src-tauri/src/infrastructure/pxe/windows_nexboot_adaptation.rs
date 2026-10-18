@@ -13,6 +13,8 @@ use zip::write::SimpleFileOptions;
 
 const ADAPT_SCRIPT: &str = include_str!("../../../../tools/windows-servicer/assets/auto-adapt.ps1");
 const ADAPT_CMD: &str = include_str!("../../../../tools/windows-servicer/assets/ndadapt.cmd");
+const SCRIPTS_CSE_PAIR: &str =
+    "[{42B5FAAE-6536-11D2-AE5A-0000F87571E3}{40B6664F-4972-11D1-A7CA-0000F87571E3}]";
 
 pub fn stage(image_root: &Path, driver_root: &Path, recursive: bool) -> Result<usize> {
     if !image_root.is_dir() {
@@ -124,29 +126,133 @@ fn install_startup_registration(image_root: &Path) -> Result<()> {
     fs::write(&ini_path, bytes).context("failed to merge Group Policy startup command")?;
 
     let gpt = image_root.join("Windows/System32/GroupPolicy/gpt.ini");
-    let mut text = if gpt.is_file() {
-        fs::read_to_string(&gpt).context("failed to read Group Policy version")?
+    let bytes = if gpt.is_file() {
+        fs::read(&gpt).context("failed to read Group Policy configuration")?
     } else {
-        "[General]\r\nVersion=0\r\n".to_string()
+        Vec::new()
     };
-    let mut changed = false;
-    let mut lines = Vec::new();
-    for line in text.lines() {
-        if let Some(value) = line.strip_prefix("Version=") {
-            let version = value.trim().parse::<u64>().unwrap_or(0).saturating_add(1);
-            lines.push(format!("Version={version}"));
-            changed = true;
-        } else {
-            lines.push(line.to_string());
+    let (text, encoding) = decode_gpt_ini(&bytes)?;
+    let merged = merge_gpt_ini(&text)?;
+    fs::create_dir_all(gpt.parent().unwrap_or_else(|| Path::new(".")))?;
+    fs::write(&gpt, encode_gpt_ini(&merged, encoding))
+        .context("failed to update Group Policy configuration")?;
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum GptIniEncoding {
+    Utf8,
+    Utf8Bom,
+    Utf16Le,
+}
+
+fn decode_gpt_ini(bytes: &[u8]) -> Result<(String, GptIniEncoding)> {
+    if bytes.starts_with(&[0xFF, 0xFE]) {
+        if (bytes.len() - 2) % 2 != 0 {
+            bail!("Group Policy gpt.ini has an incomplete UTF-16 code unit");
+        }
+        let units = bytes[2..]
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect::<Vec<_>>();
+        return Ok((
+            String::from_utf16(&units).context("Group Policy gpt.ini is invalid UTF-16")?,
+            GptIniEncoding::Utf16Le,
+        ));
+    }
+    let (text, encoding) = if let Some(bytes) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
+        (bytes, GptIniEncoding::Utf8Bom)
+    } else {
+        (bytes, GptIniEncoding::Utf8)
+    };
+    Ok((
+        String::from_utf8(text.to_vec()).context("Group Policy gpt.ini is not valid UTF-8")?,
+        encoding,
+    ))
+}
+
+fn encode_gpt_ini(text: &str, encoding: GptIniEncoding) -> Vec<u8> {
+    match encoding {
+        GptIniEncoding::Utf8 => text.as_bytes().to_vec(),
+        GptIniEncoding::Utf8Bom => [b"\xEF\xBB\xBF".as_slice(), text.as_bytes()].concat(),
+        GptIniEncoding::Utf16Le => {
+            let mut bytes = vec![0xFF, 0xFE];
+            for unit in text.encode_utf16() {
+                bytes.extend_from_slice(&unit.to_le_bytes());
+            }
+            bytes
         }
     }
-    if !changed {
-        lines.push("Version=1".to_string());
+}
+
+fn merge_gpt_ini(text: &str) -> Result<String> {
+    let mut lines = text.lines().map(str::to_owned).collect::<Vec<_>>();
+    let Some(start) = lines
+        .iter()
+        .position(|line| line.trim().eq_ignore_ascii_case("[General]"))
+    else {
+        lines.splice(0..0, ["[General]".to_string()]);
+        return merge_gpt_ini(&lines.join("\r\n"));
+    };
+    let end = lines
+        .iter()
+        .enumerate()
+        .skip(start + 1)
+        .find(|(_, line)| line.trim_start().starts_with('['))
+        .map(|(index, _)| index)
+        .unwrap_or(lines.len());
+    let mut saw_version = false;
+    let mut saw_extensions = false;
+    for line in &mut lines[start + 1..end] {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if key.trim().eq_ignore_ascii_case("Version") {
+            let version = value
+                .trim()
+                .parse::<u64>()
+                .context("Group Policy Version is not a non-negative integer")?
+                .saturating_add(1);
+            *line = format!("{}={version}", key.trim());
+            saw_version = true;
+        } else if key.trim().eq_ignore_ascii_case("gPCMachineExtensionNames") {
+            *line = format!("{}={}", key.trim(), merge_extension_groups(value));
+            saw_extensions = true;
+        }
     }
-    text = lines.join("\r\n") + "\r\n";
-    fs::create_dir_all(gpt.parent().unwrap_or_else(|| Path::new(".")))?;
-    fs::write(gpt, text).context("failed to update Group Policy version")?;
-    Ok(())
+    let mut additions = Vec::new();
+    if !saw_version {
+        additions.push("Version=1".to_string());
+    }
+    if !saw_extensions {
+        additions.push(format!("gPCMachineExtensionNames={SCRIPTS_CSE_PAIR}"));
+    }
+    lines.splice(end..end, additions);
+    Ok(lines.join("\r\n") + "\r\n")
+}
+
+fn merge_extension_groups(value: &str) -> String {
+    let mut groups = Vec::new();
+    let mut remainder = value;
+    while let Some(start) = remainder.find('[') {
+        let after_start = &remainder[start..];
+        let Some(end) = after_start.find(']') else {
+            break;
+        };
+        groups.push(after_start[..=end].to_string());
+        remainder = &after_start[end + 1..];
+    }
+    if groups.is_empty() && !value.trim().is_empty() {
+        groups.push(value.trim().to_string());
+    }
+    if !value
+        .to_ascii_uppercase()
+        .contains("{42B5FAAE-6536-11D2-AE5A-0000F87571E3}")
+    {
+        groups.push(SCRIPTS_CSE_PAIR.to_string());
+    }
+    groups.sort_by_key(|group| group.to_ascii_uppercase());
+    groups.join("")
 }
 
 fn merge_startup_ini(text: &str) -> String {
@@ -234,6 +340,70 @@ mod tests {
             .path()
             .join("Windows/System32/GroupPolicy/Machine/Scripts/scripts.ini")
             .is_file());
+        let gpt =
+            fs::read_to_string(root.path().join("Windows/System32/GroupPolicy/gpt.ini")).unwrap();
+        assert!(gpt.contains("gPCMachineExtensionNames=[{42B5FAAE-6536-11D2-AE5A-0000F87571E3}{40B6664F-4972-11D1-A7CA-0000F87571E3}]"));
+        assert!(gpt.contains("Version=1"));
+    }
+
+    #[test]
+    fn registers_scripts_cse_while_preserving_existing_extensions_and_bumping_version() {
+        let root = tempfile::tempdir().unwrap();
+        let drivers = tempfile::tempdir().unwrap();
+        fs::write(drivers.path().join("test.inf"), "[Version]").unwrap();
+        let group_policy = root.path().join("Windows/System32/GroupPolicy");
+        fs::create_dir_all(&group_policy).unwrap();
+        fs::write(
+            group_policy.join("gpt.ini"),
+            "[General]\r\nVersion=12\r\ngPCMachineExtensionNames=[{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}{BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB}]\r\n",
+        )
+        .unwrap();
+
+        stage(root.path(), drivers.path(), true).unwrap();
+
+        let gpt = fs::read_to_string(group_policy.join("gpt.ini")).unwrap();
+        assert!(gpt.contains("Version=13"), "{gpt}");
+        assert!(
+            gpt.contains(
+                "{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}{BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB}"
+            ),
+            "{gpt}"
+        );
+        assert!(
+            gpt.contains(
+                "{42B5FAAE-6536-11D2-AE5A-0000F87571E3}{40B6664F-4972-11D1-A7CA-0000F87571E3}"
+            ),
+            "{gpt}"
+        );
+    }
+
+    #[test]
+    fn preserves_utf16le_group_policy_encoding() {
+        let root = tempfile::tempdir().unwrap();
+        let drivers = tempfile::tempdir().unwrap();
+        fs::write(drivers.path().join("test.inf"), "[Version]").unwrap();
+        let group_policy = root.path().join("Windows/System32/GroupPolicy");
+        fs::create_dir_all(&group_policy).unwrap();
+        let text = "[General]\r\nVersion=4\r\n";
+        let mut bytes = vec![0xFF, 0xFE];
+        for unit in text.encode_utf16() {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        fs::write(group_policy.join("gpt.ini"), bytes).unwrap();
+
+        stage(root.path(), drivers.path(), true).unwrap();
+
+        let bytes = fs::read(group_policy.join("gpt.ini")).unwrap();
+        assert!(bytes.starts_with(&[0xFF, 0xFE]));
+        let text = String::from_utf16(
+            &bytes[2..]
+                .chunks_exact(2)
+                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        assert!(text.contains("Version=5"), "{text}");
+        assert!(text.contains("42B5FAAE"), "{text}");
     }
 
     #[test]

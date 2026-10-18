@@ -147,6 +147,15 @@ fn run_bounded(program: &str, args: &[&str]) -> Result<String> {
 }
 
 fn run_with_timeout(program: &str, args: &[&str], timeout: Duration) -> Result<String> {
+    run_with_timeout_accepting(program, args, timeout, &[0]).map(|(stdout, _)| stdout)
+}
+
+fn run_with_timeout_accepting(
+    program: &str,
+    args: &[&str],
+    timeout: Duration,
+    accepted_exit_codes: &[i32],
+) -> Result<(String, i32)> {
     let mut child = Command::new(program)
         .args(args)
         .stdout(Stdio::piped())
@@ -184,13 +193,16 @@ fn run_with_timeout(program: &str, args: &[&str], timeout: Duration) -> Result<S
     let stderr = stderr_reader
         .join()
         .map_err(|_| anyhow::anyhow!("{program} stderr reader panicked"))??;
-    if !status.success() {
+    let exit_code = status
+        .code()
+        .context("child process terminated without an exit code")?;
+    if !accepted_exit_codes.contains(&exit_code) {
         bail!(
-            "{program} failed: {}",
+            "{program} failed with exit code {exit_code}: {}",
             String::from_utf8_lossy(&stderr).trim()
         );
     }
-    Ok(String::from_utf8_lossy(&stdout).into_owned())
+    Ok((String::from_utf8_lossy(&stdout).into_owned(), exit_code))
 }
 
 /// Parse `Get-NetAdapter ... | ConvertTo-Json` output.
@@ -393,8 +405,23 @@ fn collect_published_nic_infs() -> Result<Vec<String>> {
     Ok(infs)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NicDriverInstallResult {
+    pub inf_count: usize,
+    pub reboot_required: bool,
+}
+
+fn pnputil_install_reboot_required(exit_code: i32) -> Result<bool> {
+    match exit_code {
+        0 => Ok(false),
+        3010 => Ok(true),
+        _ => bail!("pnputil failed with exit code {exit_code}"),
+    }
+}
+
 /// Install collected or administrator-approved NIC packages into the local OS.
-pub fn install_nic_drivers(root: &Path) -> Result<usize> {
+/// Exit code 3010 is successful and signals that a reboot is needed to use them.
+pub fn install_nic_drivers(root: &Path) -> Result<NicDriverInstallResult> {
     anyhow::ensure!(cfg!(windows), "NIC driver installation runs on Windows");
     anyhow::ensure!(
         root.is_dir(),
@@ -410,8 +437,9 @@ pub fn install_nic_drivers(root: &Path) -> Result<usize> {
         "no INF files found under {}",
         root.display()
     );
+    let mut reboot_required = false;
     for inf in &infs {
-        run_bounded(
+        let (_, exit_code) = run_with_timeout_accepting(
             "pnputil",
             &[
                 "/add-driver",
@@ -419,10 +447,16 @@ pub fn install_nic_drivers(root: &Path) -> Result<usize> {
                     .context("NIC driver path is not valid Unicode")?,
                 "/install",
             ],
+            COMMAND_TIMEOUT,
+            &[0, 3010],
         )
         .with_context(|| format!("failed to install NIC driver {}", inf.display()))?;
+        reboot_required |= pnputil_install_reboot_required(exit_code)?;
     }
-    Ok(infs.len())
+    Ok(NicDriverInstallResult {
+        inf_count: infs.len(),
+        reboot_required,
+    })
 }
 
 fn collect_inf_files(root: &Path, output: &mut Vec<PathBuf>) -> Result<()> {
@@ -568,6 +602,13 @@ mod tests {
         assert!(!is_exportable_published_inf("nete1.inf"));
         assert!(!is_exportable_published_inf(""));
         assert!(!is_exportable_published_inf("oem.inf"));
+    }
+
+    #[test]
+    fn pnputil_reboot_required_exit_is_success_but_other_errors_fail() {
+        assert!(!pnputil_install_reboot_required(0).unwrap());
+        assert!(pnputil_install_reboot_required(3010).unwrap());
+        assert!(pnputil_install_reboot_required(1).is_err());
     }
 
     #[test]

@@ -6,6 +6,7 @@ vi.mock("@/api/modules/images", () => ({ listMasters: async () => [{id:"win",nam
 vi.mock("@/api/modules/networkDrivers", () => ({listNetworkDrivers: async () => [{id:"netkvm",name:"VirtIO Ethernet"}], listDriverRevisions: async () => [{id:"rev-candidate-1",status:"awaiting-test"}], listBootTests: async () => [{id:"test-1",status:"candidate"}]}));
 vi.mock("@/api/modules/windowsServicing", () => ({getRemoteWindowsServicingCapabilities: mocks.capabilities, prepareWindowsImageManaged: mocks.prepare, prepareWindowsImageRemote: vi.fn(), prepareWindowsImageRemoteCatalog: vi.fn()}));
 vi.mock("@/store/useToastStore", () => ({useToastStore: () => ({success:mocks.success,error:mocks.error})}));
+vi.mock("@/store/useAppStore", () => ({useAppStore: (selector) => selector({appConfig:{settings:{windows_servicing:{driver_install_strategy:"offline_dism"}}}})}));
 vi.mock("@/contexts/confirmDialog", () => ({useConfirm: () => mocks.confirm}));
 beforeEach(() => {
   vi.clearAllMocks();
@@ -33,6 +34,17 @@ it("services a selected managed snapshot and refreshes images after saving",asyn
   await waitFor(() => expect(mocks.prepare).toHaveBeenCalledWith(expect.objectContaining({host:"192.168.123.10",image_id:"win",source_snapshot:"installed",new_name:"windows11-serviced",portal:"192.168.123.1",driver_ids:["netkvm"],commit:true,report_server_url:window.location.origin})));
   expect(await screen.findByText(/Saved windows11-serviced@serviced-test/)).toBeInTheDocument();
   expect(onPrepared).toHaveBeenCalledOnce();
+});
+it("submits the selected NIC installation strategy for managed image preparation", async () => {
+  render(<WindowsServicingModal isOpen/>);
+  await fillForm();
+  fireEvent.change(screen.getByLabelText("Windows NIC installation strategy"), {
+    target: { value: "nexboot_boot_time" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Dry Run" }));
+  await waitFor(() => expect(mocks.prepare).toHaveBeenCalledWith(
+    expect.objectContaining({ driver_install_strategy: "nexboot_boot_time" }),
+  ));
 });
 it("allows managed catalog builds without manual driver selections",async () => {
   render(<WindowsServicingModal isOpen/>);

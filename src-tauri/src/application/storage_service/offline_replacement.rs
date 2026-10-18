@@ -231,7 +231,11 @@ mod tests {
             bail!("must preserve target")
         }
         fn remove_target_with_backstores(&self, _: &str, backstores: &[String]) -> Result<()> {
-            assert_eq!(backstores, &["block_pc001"]);
+            assert!(
+                backstores == ["block_pc001"]
+                    || backstores == ["block_pc001", "installer_client-1"],
+                "unexpected owned backstores: {backstores:?}"
+            );
             if *self.connected.lock().unwrap() {
                 bail!("client reconnected");
             }

@@ -6,11 +6,20 @@ $ErrorActionPreference = 'Stop'
 $work = 'C:\ndadapt'
 $done = Join-Path $work 'done.txt'
 $exit = 0
+$rebootRequired = $false
 function Log($m) { $m | Out-File (Join-Path $work 'adapt.log') -Append -Encoding utf8 }
 
 function Get-InfBindings([string]$path) {
   $sections = @{}
   $current = ''
+  $architecture = $env:PROCESSOR_ARCHITEW6432
+  if (-not $architecture) { $architecture = $env:PROCESSOR_ARCHITECTURE }
+  $architectureSection = switch -Regex ($architecture) {
+    '^(?i:AMD64|x64|x86_64)$' { 'NTamd64'; break }
+    '^(?i:ARM64|aarch64)$' { 'NTarm64'; break }
+    '^(?i:x86|i386)$' { 'NTx86'; break }
+    default { throw "unsupported Windows architecture '$architecture'" }
+  }
   foreach ($line in (Get-Content -LiteralPath $path)) {
     if ($line -match '^\s*\[([^]]+)\]') {
       $current = $Matches[1].Trim()
@@ -22,16 +31,36 @@ function Get-InfBindings([string]$path) {
   $bindings = @()
   foreach ($sectionName in $sections.Keys) {
     if ($sectionName -match '(?i)\.Services($|\.)') { continue }
+    if ($sectionName -match '(?i)\.NT(x86|amd64|arm64)(\.|$)' -and
+        $sectionName -notmatch "(?i)\.$([regex]::Escape($architectureSection))(\.|$)") { continue }
     foreach ($line in $sections[$sectionName]) {
       if ($line -notmatch '^\s*[^;].*=\s*([^,]+),\s*(PCI\\[^;]+)$') { continue }
       $installSection = $Matches[1].Trim()
       $ids = $Matches[2] -split ',' | ForEach-Object { $_.Trim() } |
         Where-Object { $_ -match '^PCI\\VEN_[0-9A-Fa-f]{4}&DEV_[0-9A-Fa-f]{4}' }
-      $serviceSections = $sections.Keys | Where-Object { $_ -ieq "$installSection.Services" -or $_ -like "$installSection.Services.*" }
+      $installPrefix = [regex]::Escape($installSection)
+      $serviceSectionPatterns = @(
+        "(?i)^$installPrefix\.$architectureSection(?:\.[^.]+)*\.Services(?:\..*)?$",
+        "(?i)^$installPrefix\.NT(?:\.[^.]+)*\.Services(?:\..*)?$",
+        "(?i)^$installPrefix(?:\.[^.]+)*\.Services(?:\..*)?$"
+      )
+      $serviceSections = @()
+      foreach ($servicePattern in $serviceSectionPatterns) {
+        $serviceSections = @($sections.Keys | Where-Object { $_ -match $servicePattern })
+        if ($serviceSections.Count -gt 0) { break }
+      }
       $services = @($serviceSections | ForEach-Object { $sections[$_] } |
-        ForEach-Object { $_ } |
-        Where-Object { $_ -match 'AddService\s*=\s*([^,\s]+)' } |
-        ForEach-Object { $Matches[1] } | Sort-Object -Unique)
+        ForEach-Object {
+          if ($_ -match '^\s*AddService\s*=\s*([^,\s]+)\s*,\s*(0x[0-9A-Fa-f]+|\d+)\s*,') {
+            $flagText = $Matches[2]
+            if ($flagText.StartsWith('0x', [StringComparison]::OrdinalIgnoreCase)) {
+              $flags = [Convert]::ToInt32($flagText.Substring(2), 16)
+            } else {
+              $flags = [int]$flagText
+            }
+            if (($flags -band 2) -ne 0) { $Matches[1] }
+          }
+        } | Sort-Object -Unique)
       if ($services.Count -eq 1) {
         foreach ($id in $ids) {
           $bindings += [pscustomobject]@{ Hwid = $id; Service = $services[0] }
@@ -59,7 +88,9 @@ try {
   $pnputilLog = Join-Path $work 'pnputil.log'
   foreach ($inf in $infs) {
     & pnputil.exe /add-driver $inf.FullName /install 2>&1 | Out-File $pnputilLog -Append -Encoding utf8
-    if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 259) {
+    if ($LASTEXITCODE -eq 3010) {
+      $rebootRequired = $true
+    } elseif ($LASTEXITCODE -ne 0) {
       throw "pnputil failed for $($inf.FullName) with exit code $LASTEXITCODE"
     }
   }
@@ -74,9 +105,8 @@ try {
   }
 
   foreach ($inf in $infs) {
-    $svcNames = @(Select-String -Path $inf.FullName -Pattern 'AddService\s*=\s*([^,\s]+)' -AllMatches |
-      ForEach-Object { $_.Matches } | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
     $bindings = @(Get-InfBindings $inf.FullName)
+    $svcNames = @($bindings | ForEach-Object { $_.Service } | Sort-Object -Unique)
 
     foreach ($svc in $svcNames) {
       $key = "HKLM:\SYSTEM\CurrentControlSet\Services\$svc"
@@ -99,7 +129,7 @@ try {
   Log ("failure: " + $_.Exception.Message)
 }
 
-"OK=$($exit -eq 0) EXIT=$exit AT=$(Get-Date -Format o)" | Out-File $done -Encoding utf8
+"OK=$($exit -eq 0) EXIT=$exit REBOOT_REQUIRED=$rebootRequired AT=$(Get-Date -Format o)" | Out-File $done -Encoding utf8
 
 function Add-StartupItems($out, $items) {
   $k = 0

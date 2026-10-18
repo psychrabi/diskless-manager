@@ -89,7 +89,7 @@ export const useMasterManager = () => {
           success("Image Management", "Image deleted successfully");
           await fetchMasters();
         } catch (err) {
-          error(err?.error || "Unknown error");
+          error(err?.message || err?.error || String(err));
         }
       })
       .catch((err) => {

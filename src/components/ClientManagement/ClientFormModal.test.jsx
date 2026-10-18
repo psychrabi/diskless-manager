@@ -48,6 +48,9 @@ beforeEach(() => {
 });
 
 it("ignores an earlier client's status response after switching clients", async () => {
+  useAppStore.setState({
+    appConfig: { settings: { client_features: { enable_experimental_nvme_target: true } } },
+  });
   let finishFirst;
   getClientNvmeOfStatus.mockImplementation((id) => id === "one"
     ? new Promise((resolve) => { finishFirst = resolve; })
@@ -94,6 +97,9 @@ it("lists discovered game disks for selection", async () => {
 });
 
 it("shows credentials only from an administrator's rotation response", async () => {
+  useAppStore.setState({
+    appConfig: { settings: { client_features: { enable_chap_authentication: true } } },
+  });
   getClientNvmeOfStatus.mockResolvedValue(null);
   rotateChapSecret.mockResolvedValue({ username: "rotated-user", password: "rotated-secret" });
   const client = { id: "five", name: "PC005", mac: "00:11:22:33:44:68", ip: "192.168.1.105", master: "windows", chap_secret: "old-secret" };
@@ -107,6 +113,9 @@ it("shows credentials only from an administrator's rotation response", async () 
 });
 
 it("disables credential rotation for regular users", async () => {
+  useAppStore.setState({
+    appConfig: { settings: { client_features: { enable_chap_authentication: true } } },
+  });
   useAuth.mockReturnValue({ user: { role: "user" } });
   getClientNvmeOfStatus.mockResolvedValue(null);
   const client = { id: "six", name: "PC006", mac: "00:11:22:33:44:69", ip: "192.168.1.106", master: "windows" };

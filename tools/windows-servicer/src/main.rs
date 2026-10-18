@@ -68,7 +68,7 @@ fn main() {
             available: windows_servicing_available(),
             elevated: is_elevated(),
             iscsi_volume_servicing: cfg!(windows),
-            nexboot_boot_time: true,
+            nexboot_boot_time: cfg!(windows),
             nic_collection: cfg!(windows),
             local_nic_installation: cfg!(windows),
         })
@@ -141,10 +141,11 @@ fn main() {
                 .nth(2)
                 .unwrap_or_else(|| r"C:\ProgramData\Diskless Manager\Drivers".to_string());
             match windows_client_report::install_nic_drivers(std::path::Path::new(&root)) {
-                Ok(inf_count) => write_json(&serde_json::json!({
+                Ok(result) => write_json(&serde_json::json!({
                     "ok": true,
                     "operation": "install-nic-drivers",
-                    "inf_count": inf_count,
+                    "inf_count": result.inf_count,
+                    "reboot_required": result.reboot_required,
                 }))
                 .map(|_| 0)
                 .unwrap_or_else(report_output_error),

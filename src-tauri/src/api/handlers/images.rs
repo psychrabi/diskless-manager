@@ -10,6 +10,21 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+type ImageDeleteError = (
+    StatusCode,
+    Json<crate::api::handlers::clients::ErrorResponse>,
+);
+
+fn image_delete_error(status: StatusCode, message: impl Into<String>) -> ImageDeleteError {
+    (
+        status,
+        Json(crate::api::handlers::clients::ErrorResponse {
+            status: status.as_u16(),
+            error: message.into(),
+        }),
+    )
+}
+
 fn image_service(state: &AppState) -> ImageService {
     ImageService::with_backend(
         ImageRepository::new(state.db_pool.clone()),
@@ -234,16 +249,16 @@ pub async fn rename_image(
 pub async fn delete_image(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<(), StatusCode> {
+) -> Result<(), ImageDeleteError> {
     let service = image_service(&state);
 
     match service.delete(&id).await {
         Ok(()) => Ok(()),
 
         Err(error) => {
-            let message = error.to_string();
+            let message = format!("{error:#}");
 
-            log::error!("Failed to delete image '{}': {}", id, message);
+            log::error!("Failed to delete image '{}': {message}", id);
 
             /*
              * Image lifecycle conflicts are expected application-level
@@ -257,18 +272,17 @@ pub async fn delete_image(
              * - image is marked as default
              */
             if message.contains("while dependent snapshots or clones exist") {
-                return Err(StatusCode::CONFLICT);
+                return Err(image_delete_error(StatusCode::CONFLICT, message));
             }
 
             if message.contains("cannot delete the default image") {
-                return Err(StatusCode::CONFLICT);
+                return Err(image_delete_error(StatusCode::CONFLICT, message));
             }
 
-            /*
-             * Everything else remains an internal error until we
-             * introduce a typed application error hierarchy.
-             */
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
+            Err(image_delete_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                message,
+            ))
         }
     }
 }
@@ -411,29 +425,53 @@ pub async fn verify_image(
 pub async fn delete_snapshot(
     State(state): State<AppState>,
     Path((master_name, snapshot_name)): Path<(String, String)>,
-) -> Result<(), StatusCode> {
+) -> Result<(), ImageDeleteError> {
     let service = image_service(&state);
 
-    let master = service
-        .get(&master_name)
-        .await
-        .map_err(|_| StatusCode::NOT_FOUND)?;
+    let master = service.get(&master_name).await.map_err(|error| {
+        let message = format!("{error:#}");
+        let status = if message.starts_with("Image not found:") {
+            StatusCode::NOT_FOUND
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        };
+        log::error!(
+            "Failed to find image '{}' for snapshot deletion: {message}",
+            master_name
+        );
+        image_delete_error(status, message)
+    })?;
 
     let snapshots = service.snapshots(&master.id).await.map_err(|error| {
-        log::error!("Failed to list snapshots for '{}': {}", master.name, error);
+        let message = format!("{error:#}");
+        log::error!("Failed to list snapshots for '{}': {message}", master.name);
 
-        StatusCode::INTERNAL_SERVER_ERROR
+        image_delete_error(StatusCode::INTERNAL_SERVER_ERROR, message)
     })?;
 
     let snapshot = snapshots
         .into_iter()
         .find(|image| image.name == snapshot_name)
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .ok_or_else(|| {
+            image_delete_error(
+                StatusCode::NOT_FOUND,
+                format!(
+                    "Snapshot '{}' was not found for image '{}'",
+                    snapshot_name, master.name
+                ),
+            )
+        })?;
 
     service.delete(&snapshot.id).await.map_err(|error| {
-        log::error!("Failed to delete snapshot '{}': {}", snapshot_name, error);
+        let message = format!("{error:#}");
+        log::error!("Failed to delete snapshot '{}': {message}", snapshot_name);
 
-        StatusCode::INTERNAL_SERVER_ERROR
+        let status = if message.contains("dependent clones") || message.contains("has clones") {
+            StatusCode::CONFLICT
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        };
+        image_delete_error(status, message)
     })
 }
 
