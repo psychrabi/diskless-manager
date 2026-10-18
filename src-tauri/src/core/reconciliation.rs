@@ -292,7 +292,7 @@ pub(crate) async fn storage_spec_for_client(
         return Ok(None);
     }
 
-    let defaults = ClientStoragePaths::new(config, &client.name, client.mac.as_str());
+    let defaults = ClientStoragePaths::new(config, &client.name, client.mac.as_str()).await;
 
     let target_iqn = client
         .target_iqn

@@ -20,7 +20,7 @@ fn target_iqn(settings: &Settings, client_name: &str, persisted: Option<&str>) -
         })
 }
 
-pub fn storage_spec_for_values(
+pub async fn storage_spec_for_values(
     config: &crate::config::RuntimeConfig,
     settings: &Settings,
     client_id: impl Into<String>,
@@ -47,10 +47,11 @@ pub fn storage_spec_for_values(
     let (source, dataset) = match snapshot.map(str::trim).filter(|value| !value.is_empty()) {
         Some(snapshot) => (
             StorageSource::Snapshot(snapshot.to_string()),
-            crate::infrastructure::zfs::legacy::get_writeback_or_default_dataset(
+            crate::infrastructure::zfs::legacy::get_writeback_or_default_dataset_async(
                 config,
                 client_name,
-            ),
+            )
+            .await,
         ),
         None => {
             crate::validation::validate_managed_dataset(
@@ -80,7 +81,7 @@ pub fn storage_spec_for_values(
     })
 }
 
-pub fn storage_from_client(
+pub async fn storage_from_client(
     config: &crate::config::RuntimeConfig,
     settings: &Settings,
     client: &Client,
@@ -93,7 +94,8 @@ pub fn storage_from_client(
         &client.master,
         client.snapshot.as_deref(),
         client.use_game_disk,
-    )?;
+    )
+    .await?;
 
     spec.target_iqn = target_iqn(settings, &client.name, client.target_iqn.as_deref());
 

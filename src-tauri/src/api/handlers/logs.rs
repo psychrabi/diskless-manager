@@ -11,16 +11,20 @@ pub struct LogsQuery {
 pub async fn get_logs(
     Query(params): Query<LogsQuery>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let unit = params.unit.as_deref();
+    let unit = params.unit;
     let lines = params.lines.unwrap_or(50);
 
-    let logs = if let Some(unit) = unit {
+    // journalctl/file reads are synchronous; keep them off the request worker.
+    let logs = tokio::task::spawn_blocking(move || match unit.as_deref() {
         // Fetch logs for a specific systemd unit
-        crate::infrastructure::command::read_service_logs(unit, lines).unwrap_or_default()
-    } else {
+        Some(unit) => {
+            crate::infrastructure::command::read_service_logs(unit, lines).unwrap_or_default()
+        }
         // Fetch app logs
-        crate::infrastructure::command::read_logs()
-    };
+        None => crate::infrastructure::command::read_logs(),
+    })
+    .await
+    .unwrap_or_default();
 
     Ok(Json(json!({ "text": logs })))
 }

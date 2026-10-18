@@ -754,6 +754,7 @@ pub async fn start_boot_test(
         Some(&candidate_snapshot),
         client.use_game_disk,
     )
+    .await
     .map_err(|error| operation_error(anyhow::anyhow!(error)))?;
     let storage = state.application.storage.clone();
     let discovered_games = tokio::task::spawn_blocking(move || storage.discover_game_masters())

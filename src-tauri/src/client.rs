@@ -85,7 +85,11 @@ pub async fn add_client_impl(
     let dataset = if snapshot.is_empty() {
         master.clone()
     } else {
-        crate::infrastructure::zfs::legacy::get_writeback_or_default_dataset(&state.config, &name)
+        crate::infrastructure::zfs::legacy::get_writeback_or_default_dataset_async(
+            &state.config,
+            &name,
+        )
+        .await
     };
     let storage_spec = ClientStorageSpec {
         installer_iso: None,

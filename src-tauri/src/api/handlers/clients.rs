@@ -79,6 +79,9 @@ impl IntoResponse for ErrorResponse {
     }
 }
 
+/// Result shape shared by the client update handler and its action helpers.
+type UpdateClientResult = Result<Json<Client>, (StatusCode, Json<ErrorResponse>)>;
+
 // ============================================================================
 // Storage helpers
 // ============================================================================
@@ -106,7 +109,7 @@ impl IntoResponse for ErrorResponse {
 ///     ▼
 /// iSCSI LUN
 /// ```
-fn build_storage_spec(
+async fn build_storage_spec(
     config: &crate::config::RuntimeConfig,
     settings: &crate::core::config::Settings,
     client_id: &str,
@@ -135,10 +138,12 @@ fn build_storage_spec(
 
     match snapshot {
         Some(snapshot) if !snapshot.trim().is_empty() => {
-            let dataset = crate::infrastructure::zfs::legacy::get_writeback_or_default_dataset(
-                config,
-                client_name,
-            );
+            let dataset =
+                crate::infrastructure::zfs::legacy::get_writeback_or_default_dataset_async(
+                    config,
+                    client_name,
+                )
+                .await;
 
             Ok(ClientStorageSpec {
                 installer_iso: None,
@@ -423,7 +428,7 @@ async fn persist_game_selection(
 ///
 /// This is required when deleting/resetting a client because the actual
 /// application storage object is not persisted separately.
-fn storage_from_client(
+async fn storage_from_client(
     config: &crate::config::RuntimeConfig,
     settings: &crate::core::config::Settings,
     client: &Client,
@@ -436,7 +441,8 @@ fn storage_from_client(
         &client.master,
         client.snapshot.as_deref(),
         client.use_game_disk.unwrap_or(false),
-    )?;
+    )
+    .await?;
 
     preserve_persisted_target_iqn(&mut spec, client);
 
@@ -596,6 +602,7 @@ pub async fn create_client(
         request.snapshot.as_deref(),
         request.use_game_disk.unwrap_or(false),
     )
+    .await
     .map_err(|error| {
         error!(
             "Invalid storage configuration for client '{}': {}",
@@ -796,85 +803,7 @@ pub async fn update_client(
     }
 
     if request.action.as_deref() == Some("complete_installation") {
-        if claims.role != "admin" {
-            return Err((
-                StatusCode::FORBIDDEN,
-                Json(ErrorResponse {
-                    status: 403,
-                    error: "Only administrators can complete OS installation".into(),
-                }),
-            ));
-        }
-        if existing_client.installer_media_id.is_none() || existing_client.snapshot.is_some() {
-            return Err((
-                StatusCode::CONFLICT,
-                Json(ErrorResponse {
-                    status: 409,
-                    error: "Client is not in direct-master OS installation mode".into(),
-                }),
-            ));
-        }
-        let target_iqn = existing_client
-            .target_iqn
-            .as_deref()
-            .filter(|target| !target.trim().is_empty())
-            .ok_or_else(|| {
-                (
-                    StatusCode::CONFLICT,
-                    Json(ErrorResponse {
-                        status: 409,
-                        error: "Client has no iSCSI target to verify".into(),
-                    }),
-                )
-            })?;
-        let active = crate::infrastructure::iscsi::target_has_active_sessions(target_iqn).map_err(
-            |error| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        status: 500,
-                        error: format!("Failed to check client iSCSI sessions: {error}"),
-                    }),
-                )
-            },
-        )?;
-        if active {
-            return Err((
-                StatusCode::CONFLICT,
-                Json(ErrorResponse {
-                    status: 409,
-                    error: "Client must be powered off with no active iSCSI session before completing installation".into(),
-                }),
-            ));
-        }
-        let images = image_service(&state);
-        let image = images.get(&existing_client.master).await.map_err(|error| {
-            (
-                StatusCode::CONFLICT,
-                Json(ErrorResponse {
-                    status: 409,
-                    error: format!("Installation master is unavailable: {error:#}"),
-                }),
-            )
-        })?;
-        let snapshot_name = format!("installed-{}", uuid::Uuid::new_v4().simple());
-        let snapshot = images
-            .create_snapshot(&image.id, &snapshot_name)
-            .await
-            .map_err(|error| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        status: 500,
-                        error: format!("Failed to snapshot installed OS: {error:#}"),
-                    }),
-                )
-            })?;
-        request.master = Some(image.name.clone());
-        request.snapshot = Some(format!("{}@{}", image.name, snapshot.name));
-        request.installer_media_id = None;
-        request.use_game_disk = Some(false);
-        request.action = None;
+        rewrite_complete_installation(&state, &claims, &existing_client, &mut request).await?;
     }
 
     if request.installer_media_id.is_some() && request.master.is_none() {
@@ -944,668 +873,18 @@ pub async fn update_client(
 
     if let Some(action) = &request.action {
         match action.as_str() {
-            // ----------------------------------------------------------------
-            // Wake
-            // ----------------------------------------------------------------
-            "wake" => {
-                let mac = &existing_client.mac;
-
-                info!(
-                    "Attempting to send WOL packet to client {} ({})",
-                    existing_client.name, mac
-                );
-
-                let mut wake_cmd = Command::new(crate::platform::wol_binary());
-                wake_cmd.arg(mac);
-                let result = crate::api::util::run_command(&mut wake_cmd).await;
-
-                match result {
-                    Ok(output) => {
-                        let stdout = String::from_utf8_lossy(&output.stdout);
-
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-
-                        if output.status.success() {
-                            info!(
-                                "Successfully sent WOL packet using wakeonlan to client {} ({}). Output: {}",
-                                existing_client.name,
-                                mac,
-                                stdout
-                            );
-
-                            return Ok(Json(existing_client));
-                        }
-
-                        error!(
-                            "wakeonlan failed for client {} ({}). Status: {:?}, Stderr: {}",
-                            existing_client.name, mac, output.status, stderr
-                        );
-                    }
-
-                    Err(e) => {
-                        error!("wakeonlan command not found or failed: {}", e);
-                    }
-                }
-
-                // Fallback to etherwake.
-                let mut ether_cmd = Command::new("etherwake");
-                ether_cmd.args(["-b", mac]);
-                let ether_result = crate::api::util::run_command(&mut ether_cmd).await;
-
-                match ether_result {
-                    Ok(output) => {
-                        let stdout = String::from_utf8_lossy(&output.stdout);
-
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-
-                        if output.status.success() {
-                            info!(
-                                "Successfully sent WOL packet using etherwake to client {} ({}). Output: {}",
-                                existing_client.name,
-                                mac,
-                                stdout
-                            );
-
-                            return Ok(Json(existing_client));
-                        }
-
-                        let error_msg = format!(
-                            "etherwake failed for client {} ({}): {}",
-                            existing_client.name, mac, stderr
-                        );
-
-                        error!("{}", error_msg);
-
-                        return Err((
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ErrorResponse {
-                                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                                error: error_msg,
-                            }),
-                        ));
-                    }
-
-                    Err(e) => {
-                        let error_msg = format!(
-                            "Failed to execute etherwake for client {} ({}): {}",
-                            existing_client.name, mac, e
-                        );
-
-                        error!("{}", error_msg);
-
-                        return Err((
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ErrorResponse {
-                                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                                error: error_msg,
-                            }),
-                        ));
-                    }
-                }
-            }
-
-            // ----------------------------------------------------------------
-            // Reboot
-            // ----------------------------------------------------------------
-            "reboot" => {
-                let ip = &existing_client.ip;
-
-                if ip.is_empty() {
-                    let error_msg = format!("IP address not found for '{}'", existing_client.name);
-
-                    return Err((
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(ErrorResponse {
-                            status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                            error: error_msg,
-                        }),
-                    ));
-                }
-
-                let master_os =
-                    super::control::resolve_master_os(&state.db_pool, &existing_client.master)
-                        .await
-                        .map_err(|error| {
-                            (
-                                StatusCode::BAD_REQUEST,
-                                Json(ErrorResponse { status: 400, error }),
-                            )
-                        })?;
-                let mut cmd = super::control::build_power_command(
-                    "reboot",
-                    ip,
-                    &master_os,
-                    master_os == "windows",
-                    "diskless",
-                );
-                let output = crate::api::util::run_command(&mut cmd)
-                    .await
-                    .map_err(|error| {
-                        (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ErrorResponse {
-                                status: 500,
-                                error: error.to_string(),
-                            }),
-                        )
-                    })?;
-                if !output.status.success() {
-                    return Err((
-                        StatusCode::BAD_GATEWAY,
-                        Json(ErrorResponse {
-                            status: 502,
-                            error: format!(
-                                "Failed to reboot client: {}",
-                                String::from_utf8_lossy(&output.stderr)
-                            ),
-                        }),
-                    ));
-                }
-
-                info!("Reboot command sent to {} ({})", existing_client.name, ip);
-
-                return Ok(Json(existing_client));
-            }
-
-            // ----------------------------------------------------------------
-            // Shutdown
-            // ----------------------------------------------------------------
-            "shutdown" => {
-                let ip = &existing_client.ip;
-
-                if ip.is_empty() {
-                    let error_msg = format!("IP address not found for '{}'", existing_client.name);
-
-                    return Err((
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(ErrorResponse {
-                            status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                            error: error_msg,
-                        }),
-                    ));
-                }
-
-                let master_os =
-                    super::control::resolve_master_os(&state.db_pool, &existing_client.master)
-                        .await
-                        .map_err(|error| {
-                            (
-                                StatusCode::BAD_REQUEST,
-                                Json(ErrorResponse { status: 400, error }),
-                            )
-                        })?;
-                let mut cmd = super::control::build_power_command(
-                    "shutdown",
-                    ip,
-                    &master_os,
-                    master_os == "windows",
-                    "diskless",
-                );
-                let output = crate::api::util::run_command(&mut cmd)
-                    .await
-                    .map_err(|error| {
-                        (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ErrorResponse {
-                                status: 500,
-                                error: error.to_string(),
-                            }),
-                        )
-                    })?;
-                if !output.status.success() {
-                    return Err((
-                        StatusCode::BAD_GATEWAY,
-                        Json(ErrorResponse {
-                            status: 502,
-                            error: format!(
-                                "Failed to shutdown client: {}",
-                                String::from_utf8_lossy(&output.stderr)
-                            ),
-                        }),
-                    ));
-                }
-
-                info!("Shutdown command sent to {} ({})", existing_client.name, ip);
-
-                return Ok(Json(existing_client));
-            }
-
-            // ----------------------------------------------------------------
-            // Remote
-            // ----------------------------------------------------------------
+            "wake" => return wake_client(&existing_client).await,
+            "reboot" => return reboot_client(&state, &existing_client).await,
+            "shutdown" => return shutdown_client(&state, &existing_client).await,
             "remote" => {
                 info!("Remote control for client: {}", existing_client.name);
-
                 return Ok(Json(existing_client));
             }
-
-            // ----------------------------------------------------------------
-            // Super mode
-            // ----------------------------------------------------------------
             "super" => {
-                let Some(make_super) = request.make_super else {
-                    return Ok(Json(existing_client));
-                };
-
-                if claims.role != "admin" {
-                    return Err((
-                        StatusCode::FORBIDDEN,
-                        Json(ErrorResponse {
-                            status: 403,
-                            error: "Only administrators can change Super mode".into(),
-                        }),
-                    ));
-                }
-                if make_super {
-                    return Err((
-                        StatusCode::CONFLICT,
-                        Json(ErrorResponse {
-                            status: StatusCode::CONFLICT.as_u16(),
-                            error: "Use the managed Super session API; the legacy toggle can export a shared image as writable storage".into(),
-                        }),
-                    ));
-                }
-                if existing_client.is_super_mode() {
-                    return Err((
-                        StatusCode::CONFLICT,
-                        Json(ErrorResponse {
-                            status: 409,
-                            error: "Use the administrator-only legacy Super exit operation and select a snapshot".into(),
-                        }),
-                    ));
-                }
-                let settings = state.settings.read().await;
-
-                let master = existing_client.master.trim().to_string();
-
-                if master.is_empty() || master == "pending" {
-                    return Err((
-                        StatusCode::BAD_REQUEST,
-                        Json(ErrorResponse {
-                            status: StatusCode::BAD_REQUEST.as_u16(),
-                            error: format!(
-                                "Cannot toggle Super mode for '{}': no master image configured",
-                                existing_client.name
-                            ),
-                        }),
-                    ));
-                }
-
-                // The assignment decides what "currently super" means. A
-                // client that boots a snapshot clone has no direct image
-                // writes to return, and rebuilding its storage anyway would
-                // discard the clone it is meant to keep.
-                if !existing_client.is_super_client() {
-                    return Err((
-                        StatusCode::CONFLICT,
-                        Json(ErrorResponse {
-                            status: StatusCode::CONFLICT.as_u16(),
-                            error: format!(
-                                "Cannot disable Super mode for '{}': it boots a snapshot clone, not an image directly. Nothing was changed.",
-                                existing_client.name
-                            ),
-                        }),
-                    ));
-                }
-
-                let client_status =
-                    crate::utils::network::get_client_status_realtime(existing_client.ip.clone());
-
-                if client_status != "Offline" {
-                    return Err((
-                        StatusCode::CONFLICT,
-                        Json(ErrorResponse {
-                            status: StatusCode::CONFLICT.as_u16(),
-                            error: format!(
-                                "Cannot toggle Super mode for '{}': client must be offline (current status: {})",
-                                existing_client.name, client_status
-                            ),
-                        }),
-                    ));
-                }
-
-                let mut client = existing_client.clone();
-
-                {
-                    // -------------------------------------------------------
-                    // Disable Super mode: revert the client to a snapshot
-                    // clone of the master.
-                    // -------------------------------------------------------
-                    info!(
-                        "Disabling Super mode for client '{}' using master '{}'",
-                        existing_client.name, master
-                    );
-
-                    let image = image_service(&state).get(&master).await.map_err(|e| {
-                        (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ErrorResponse {
-                                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                                error: format!(
-                                    "Failed to look up master image '{}': {}",
-                                    master, e
-                                ),
-                            }),
-                        )
-                    })?;
-
-                    let snapshots =
-                        image_service(&state)
-                            .snapshots(&image.id)
-                            .await
-                            .map_err(|e| {
-                                (
-                                    StatusCode::INTERNAL_SERVER_ERROR,
-                                    Json(ErrorResponse {
-                                        status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                                        error: format!(
-                                            "Failed to list snapshots for master '{}': {}",
-                                            master, e
-                                        ),
-                                    }),
-                                )
-                            })?;
-
-                    let snapshot_image =
-                        select_super_snapshot(&snapshots, &master, request.snapshot.as_deref())
-                            .map_err(|error| {
-                                (
-                                    StatusCode::BAD_REQUEST,
-                                    Json(ErrorResponse { status: 400, error }),
-                                )
-                            })?;
-
-                    let Some(snapshot_image) = snapshot_image else {
-                        return Err((
-                            StatusCode::BAD_REQUEST,
-                            Json(ErrorResponse {
-                                status: StatusCode::BAD_REQUEST.as_u16(),
-                                error: format!(
-                                    "Cannot disable Super mode for '{}': no snapshots found for master '{}'. Client remains in Super mode.",
-                                    existing_client.name, master
-                                ),
-                            }),
-                        ));
-                    };
-
-                    let snapshot_source = format!("{}@{}", master, snapshot_image.name);
-
-                    let current_storage =
-                        storage_from_client(&state.config, &settings, &existing_client).map_err(
-                            |error| {
-                                (
-                                    StatusCode::INTERNAL_SERVER_ERROR,
-                                    Json(ErrorResponse {
-                                        status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                                        error,
-                                    }),
-                                )
-                            },
-                        )?;
-
-                    if let Err(error) = state
-                        .application
-                        .storage
-                        .destroy_client_storage(&current_storage)
-                    {
-                        tracing::warn!(
-                            "Failed to remove existing storage before disabling Super mode for '{}': {}",
-                            existing_client.name,
-                            error
-                        );
-                    }
-
-                    let mut spec = build_storage_spec(
-                        &state.config,
-                        &settings,
-                        &existing_client.id,
-                        &existing_client.name,
-                        &master,
-                        Some(&snapshot_source),
-                        existing_client.use_game_disk.unwrap_or(false),
-                    )
-                    .map_err(|error| {
-                        (
-                            StatusCode::BAD_REQUEST,
-                            Json(ErrorResponse {
-                                status: StatusCode::BAD_REQUEST.as_u16(),
-                                error,
-                            }),
-                        )
-                    })?;
-
-                    preserve_persisted_target_iqn(&mut spec, &existing_client);
-
-                    // A super-mode rebuild must not silently drop target
-                    // authentication.
-                    spec.chap = crate::core::reconciliation::ensure_chap_credentials(
-                        &state.db_pool,
-                        &existing_client.id,
-                        &existing_client.name,
-                        existing_client.chap_enabled.unwrap_or(false),
-                    )
-                    .await
-                    .map_err(|error| {
-                        (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ErrorResponse {
-                                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                                error: format!("Failed to resolve CHAP credentials: {}", error),
-                            }),
-                        )
-                    })?;
-
-                    let storage = state
-                        .application
-                        .storage
-                        .create_client_storage(&spec)
-                        .map_err(|error| {
-                            (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                Json(ErrorResponse {
-                                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                                    error: format!(
-                                        "Failed to rebuild client storage from snapshot: {}",
-                                        error
-                                    ),
-                                }),
-                            )
-                        })?;
-
-                    client.mode = None;
-                    client.master = master;
-                    client.snapshot = Some(snapshot_source.clone());
-                    client.block_device = Some(format!("/dev/zvol/{}", storage.dataset()));
-                    client.block_store = Some(storage.backstore().to_string());
-                    client.target_iqn = Some(storage.target_iqn().to_string());
-
-                    info!(
-                        "Super mode disabled for client '{}': storage rebuilt from snapshot '{}'",
-                        client.name, snapshot_source
-                    );
-                }
-
-                client.updated_at = Utc::now();
-
-                client.last_modified =
-                    Some(client.updated_at.format("%Y-%m-%d %H:%M:%S").to_string());
-
-                persist_client_runtime_state(&client, &state.db_pool)
-                    .await
-                    .map_err(|e| {
-                        (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ErrorResponse {
-                                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                                error: format!("Failed to persist Super mode state: {}", e),
-                            }),
-                        )
-                    })?;
-
-                info!(
-                    "Super mode state saved for client '{}': mode={:?}, device={}",
-                    client.name,
-                    client.mode,
-                    client.block_device.as_deref().unwrap_or_default()
-                );
-
-                drop(settings);
-
-                if let Err(e) = state.refresh_client_ips().await {
-                    tracing::warn!("Failed to refresh client IPs cache: {}", e);
-                }
-
-                let settings = state.settings.read().await;
-
-                refresh_dhcp(&state, &settings, "toggling super mode").await;
-
-                return Ok(Json(client));
+                return toggle_super_mode(&state, &claims, &existing_client, &request).await;
             }
-
-            // ----------------------------------------------------------------
-            // Reset writeback
-            // ----------------------------------------------------------------
-            "reset" => {
-                info!("Reset writeback for client: {}", existing_client.name);
-
-                let snapshot = match existing_client.snapshot.as_deref() {
-                    Some(value) if !value.trim().is_empty() => value,
-
-                    _ => {
-                        return Err((
-                            StatusCode::BAD_REQUEST,
-                            Json(ErrorResponse {
-                                status: StatusCode::BAD_REQUEST.as_u16(),
-                                error: "Cannot reset writeback: client has no snapshot configured"
-                                    .to_string(),
-                            }),
-                        ));
-                    }
-                };
-
-                let settings = state.settings.read().await;
-
-                let mut spec = build_storage_spec(
-                    &state.config,
-                    &settings,
-                    &existing_client.id,
-                    &existing_client.name,
-                    &existing_client.master,
-                    Some(snapshot),
-                    existing_client.use_game_disk.unwrap_or(false),
-                )
-                .map_err(|error| {
-                    (
-                        StatusCode::BAD_REQUEST,
-                        Json(ErrorResponse {
-                            status: StatusCode::BAD_REQUEST.as_u16(),
-                            error,
-                        }),
-                    )
-                })?;
-
-                preserve_persisted_target_iqn(&mut spec, &existing_client);
-
-                let current = storage_from_client(&state.config, &settings, &existing_client)
-                    .map_err(|error| {
-                        (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ErrorResponse {
-                                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                                error,
-                            }),
-                        )
-                    })?;
-
-                state
-                    .application
-                    .storage
-                    .reset_client_storage(&current, &spec)
-                    .map_err(|error| {
-                        (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ErrorResponse {
-                                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                                error: format!("Failed to reset client storage: {error:#}"),
-                            }),
-                        )
-                    })?;
-
-                info!(
-                    "Successfully reset writeback for client '{}'",
-                    existing_client.name
-                );
-
-                return Ok(Json(existing_client));
-            }
-
-            // ----------------------------------------------------------------
-            // Reset clean
-            // ----------------------------------------------------------------
-            "reset_clean" => {
-                info!("Reset to clean state for client: {}", existing_client.name);
-
-                let settings = state.settings.read().await;
-
-                let source = existing_client
-                    .snapshot
-                    .as_deref()
-                    .filter(|value| !value.trim().is_empty());
-
-                let mut spec = build_storage_spec(
-                    &state.config,
-                    &settings,
-                    &existing_client.id,
-                    &existing_client.name,
-                    &existing_client.master,
-                    source,
-                    existing_client.use_game_disk.unwrap_or(false),
-                )
-                .map_err(|error| {
-                    (
-                        StatusCode::BAD_REQUEST,
-                        Json(ErrorResponse {
-                            status: StatusCode::BAD_REQUEST.as_u16(),
-                            error,
-                        }),
-                    )
-                })?;
-
-                preserve_persisted_target_iqn(&mut spec, &existing_client);
-
-                let current = storage_from_client(&state.config, &settings, &existing_client)
-                    .map_err(|error| {
-                        (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ErrorResponse {
-                                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                                error,
-                            }),
-                        )
-                    })?;
-
-                state
-                    .application
-                    .storage
-                    .reset_client_storage(&current, &spec)
-                    .map_err(|error| {
-                        (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ErrorResponse {
-                                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                                error: format!("Failed to reset client storage: {error:#}"),
-                            }),
-                        )
-                    })?;
-
-                info!(
-                    "Successfully reset client '{}' to clean state",
-                    existing_client.name
-                );
-
-                return Ok(Json(existing_client));
-            }
-
+            "reset" => return reset_client_writeback(&state, &existing_client).await,
+            "reset_clean" => return reset_client_clean(&state, &existing_client).await,
             _ => {
                 tracing::warn!("Unknown client action: {}", action);
             }
@@ -1616,6 +895,645 @@ pub async fn update_client(
     // Normal client update
     // ========================================================================
 
+    update_client_assignment(
+        state,
+        manager,
+        id,
+        existing_client,
+        request,
+        installer_media,
+    )
+    .await
+}
+
+async fn wake_client(client: &Client) -> UpdateClientResult {
+    let mac = &client.mac;
+
+    info!(
+        "Attempting to send WOL packet to client {} ({})",
+        client.name, mac
+    );
+
+    let mut wake_cmd = Command::new(crate::platform::wol_binary());
+    wake_cmd.arg(mac);
+    let result = crate::api::util::run_command(&mut wake_cmd).await;
+
+    match result {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+
+            let stderr = String::from_utf8_lossy(&output.stderr);
+
+            if output.status.success() {
+                info!(
+                    "Successfully sent WOL packet using wakeonlan to client {} ({}). Output: {}",
+                    client.name, mac, stdout
+                );
+
+                return Ok(Json(client.clone()));
+            }
+
+            error!(
+                "wakeonlan failed for client {} ({}). Status: {:?}, Stderr: {}",
+                client.name, mac, output.status, stderr
+            );
+        }
+
+        Err(e) => {
+            error!("wakeonlan command not found or failed: {}", e);
+        }
+    }
+
+    // Fallback to etherwake.
+    let mut ether_cmd = Command::new("etherwake");
+    ether_cmd.args(["-b", mac]);
+    let ether_result = crate::api::util::run_command(&mut ether_cmd).await;
+
+    match ether_result {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+
+            let stderr = String::from_utf8_lossy(&output.stderr);
+
+            if output.status.success() {
+                info!(
+                    "Successfully sent WOL packet using etherwake to client {} ({}). Output: {}",
+                    client.name, mac, stdout
+                );
+
+                return Ok(Json(client.clone()));
+            }
+
+            let error_msg = format!(
+                "etherwake failed for client {} ({}): {}",
+                client.name, mac, stderr
+            );
+
+            error!("{}", error_msg);
+
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                    error: error_msg,
+                }),
+            ))
+        }
+
+        Err(e) => {
+            let error_msg = format!(
+                "Failed to execute etherwake for client {} ({}): {}",
+                client.name, mac, e
+            );
+
+            error!("{}", error_msg);
+
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                    error: error_msg,
+                }),
+            ))
+        }
+    }
+}
+
+async fn reboot_client(state: &AppState, client: &Client) -> UpdateClientResult {
+    let ip = &client.ip;
+
+    if ip.is_empty() {
+        let error_msg = format!("IP address not found for '{}'", client.name);
+
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                error: error_msg,
+            }),
+        ));
+    }
+
+    let master_os = super::control::resolve_master_os(&state.db_pool, &client.master)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse { status: 400, error }),
+            )
+        })?;
+    let mut cmd = super::control::build_power_command(
+        "reboot",
+        ip,
+        &master_os,
+        master_os == "windows",
+        "diskless",
+    );
+    let output = crate::api::util::run_command(&mut cmd)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    status: 500,
+                    error: error.to_string(),
+                }),
+            )
+        })?;
+    if !output.status.success() {
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            Json(ErrorResponse {
+                status: 502,
+                error: format!(
+                    "Failed to reboot client: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                ),
+            }),
+        ));
+    }
+
+    info!("Reboot command sent to {} ({})", client.name, ip);
+
+    Ok(Json(client.clone()))
+}
+
+async fn shutdown_client(state: &AppState, client: &Client) -> UpdateClientResult {
+    let ip = &client.ip;
+
+    if ip.is_empty() {
+        let error_msg = format!("IP address not found for '{}'", client.name);
+
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                error: error_msg,
+            }),
+        ));
+    }
+
+    let master_os = super::control::resolve_master_os(&state.db_pool, &client.master)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse { status: 400, error }),
+            )
+        })?;
+    let mut cmd = super::control::build_power_command(
+        "shutdown",
+        ip,
+        &master_os,
+        master_os == "windows",
+        "diskless",
+    );
+    let output = crate::api::util::run_command(&mut cmd)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    status: 500,
+                    error: error.to_string(),
+                }),
+            )
+        })?;
+    if !output.status.success() {
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            Json(ErrorResponse {
+                status: 502,
+                error: format!(
+                    "Failed to shutdown client: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                ),
+            }),
+        ));
+    }
+
+    info!("Shutdown command sent to {} ({})", client.name, ip);
+
+    Ok(Json(client.clone()))
+}
+
+async fn toggle_super_mode(
+    state: &AppState,
+    claims: &crate::types::Claims,
+    client: &Client,
+    request: &UpdateClientRequest,
+) -> UpdateClientResult {
+    let Some(make_super) = request.make_super else {
+        return Ok(Json(client.clone()));
+    };
+
+    if claims.role != "admin" {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                status: 403,
+                error: "Only administrators can change Super mode".into(),
+            }),
+        ));
+    }
+    if make_super {
+        return Err((
+                            StatusCode::CONFLICT,
+                            Json(ErrorResponse {
+                                    status: StatusCode::CONFLICT.as_u16(),
+                                    error: "Use the managed Super session API; the legacy toggle can export a shared image as writable storage".into(),
+                            }),
+                    ));
+    }
+    if client.is_super_mode() {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(ErrorResponse {
+                status: 409,
+                error:
+                    "Use the administrator-only legacy Super exit operation and select a snapshot"
+                        .into(),
+            }),
+        ));
+    }
+    let settings = state.settings.read().await;
+
+    let master = client.master.trim().to_string();
+
+    if master.is_empty() || master == "pending" {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                status: StatusCode::BAD_REQUEST.as_u16(),
+                error: format!(
+                    "Cannot toggle Super mode for '{}': no master image configured",
+                    client.name
+                ),
+            }),
+        ));
+    }
+
+    // The assignment decides what "currently super" means. A
+    // client that boots a snapshot clone has no direct image
+    // writes to return, and rebuilding its storage anyway would
+    // discard the clone it is meant to keep.
+    if !client.is_super_client() {
+        return Err((
+                            StatusCode::CONFLICT,
+                            Json(ErrorResponse {
+                                    status: StatusCode::CONFLICT.as_u16(),
+                                    error: format!(
+                                            "Cannot disable Super mode for '{}': it boots a snapshot clone, not an image directly. Nothing was changed.",
+                                            client.name
+                                    ),
+                            }),
+                    ));
+    }
+
+    if crate::utils::network::is_online(&client.ip).await {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(ErrorResponse {
+                status: StatusCode::CONFLICT.as_u16(),
+                error: format!(
+                    "Cannot toggle Super mode for '{}': client must be offline",
+                    client.name
+                ),
+            }),
+        ));
+    }
+
+    let mut client = client.clone();
+
+    {
+        // -------------------------------------------------------
+        // Disable Super mode: revert the client to a snapshot
+        // clone of the master.
+        // -------------------------------------------------------
+        info!(
+            "Disabling Super mode for client '{}' using master '{}'",
+            client.name, master
+        );
+
+        let image = image_service(state).get(&master).await.map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                    error: format!("Failed to look up master image '{}': {}", master, e),
+                }),
+            )
+        })?;
+
+        let snapshots = image_service(state)
+            .snapshots(&image.id)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                        error: format!("Failed to list snapshots for master '{}': {}", master, e),
+                    }),
+                )
+            })?;
+
+        let snapshot_image =
+            select_super_snapshot(&snapshots, &master, request.snapshot.as_deref()).map_err(
+                |error| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        Json(ErrorResponse { status: 400, error }),
+                    )
+                },
+            )?;
+
+        let Some(snapshot_image) = snapshot_image else {
+            return Err((
+                                    StatusCode::BAD_REQUEST,
+                                    Json(ErrorResponse {
+                                            status: StatusCode::BAD_REQUEST.as_u16(),
+                                            error: format!(
+                                                    "Cannot disable Super mode for '{}': no snapshots found for master '{}'. Client remains in Super mode.",
+                                                    client.name, master
+                                            ),
+                                    }),
+                            ));
+        };
+
+        let snapshot_source = format!("{}@{}", master, snapshot_image.name);
+
+        let current_storage = storage_from_client(&state.config, &settings, &client)
+            .await
+            .map_err(|error| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                        error,
+                    }),
+                )
+            })?;
+
+        if let Err(error) = state
+            .application
+            .storage
+            .destroy_client_storage(&current_storage)
+        {
+            tracing::warn!(
+                "Failed to remove existing storage before disabling Super mode for '{}': {}",
+                client.name,
+                error
+            );
+        }
+
+        let mut spec = build_storage_spec(
+            &state.config,
+            &settings,
+            &client.id,
+            &client.name,
+            &master,
+            Some(&snapshot_source),
+            client.use_game_disk.unwrap_or(false),
+        )
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    status: StatusCode::BAD_REQUEST.as_u16(),
+                    error,
+                }),
+            )
+        })?;
+
+        preserve_persisted_target_iqn(&mut spec, &client);
+
+        // A super-mode rebuild must not silently drop target
+        // authentication.
+        spec.chap = crate::core::reconciliation::ensure_chap_credentials(
+            &state.db_pool,
+            &client.id,
+            &client.name,
+            client.chap_enabled.unwrap_or(false),
+        )
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                    error: format!("Failed to resolve CHAP credentials: {}", error),
+                }),
+            )
+        })?;
+
+        let storage = state
+            .application
+            .storage
+            .create_client_storage(&spec)
+            .map_err(|error| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                        error: format!("Failed to rebuild client storage from snapshot: {}", error),
+                    }),
+                )
+            })?;
+
+        client.mode = None;
+        client.master = master;
+        client.snapshot = Some(snapshot_source.clone());
+        client.block_device = Some(format!("/dev/zvol/{}", storage.dataset()));
+        client.block_store = Some(storage.backstore().to_string());
+        client.target_iqn = Some(storage.target_iqn().to_string());
+
+        info!(
+            "Super mode disabled for client '{}': storage rebuilt from snapshot '{}'",
+            client.name, snapshot_source
+        );
+    }
+
+    client.updated_at = Utc::now();
+
+    client.last_modified = Some(client.updated_at.format("%Y-%m-%d %H:%M:%S").to_string());
+
+    persist_client_runtime_state(&client, &state.db_pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                    error: format!("Failed to persist Super mode state: {}", e),
+                }),
+            )
+        })?;
+
+    info!(
+        "Super mode state saved for client '{}': mode={:?}, device={}",
+        client.name,
+        client.mode,
+        client.block_device.as_deref().unwrap_or_default()
+    );
+
+    drop(settings);
+
+    if let Err(e) = state.refresh_client_ips().await {
+        tracing::warn!("Failed to refresh client IPs cache: {}", e);
+    }
+
+    let settings = state.settings.read().await;
+
+    refresh_dhcp(state, &settings, "toggling super mode").await;
+
+    Ok(Json(client))
+}
+
+async fn reset_client_writeback(state: &AppState, client: &Client) -> UpdateClientResult {
+    info!("Reset writeback for client: {}", client.name);
+
+    let snapshot = match client.snapshot.as_deref() {
+        Some(value) if !value.trim().is_empty() => value,
+
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    status: StatusCode::BAD_REQUEST.as_u16(),
+                    error: "Cannot reset writeback: client has no snapshot configured".to_string(),
+                }),
+            ));
+        }
+    };
+
+    let settings = state.settings.read().await;
+
+    let mut spec = build_storage_spec(
+        &state.config,
+        &settings,
+        &client.id,
+        &client.name,
+        &client.master,
+        Some(snapshot),
+        client.use_game_disk.unwrap_or(false),
+    )
+    .await
+    .map_err(|error| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                status: StatusCode::BAD_REQUEST.as_u16(),
+                error,
+            }),
+        )
+    })?;
+
+    preserve_persisted_target_iqn(&mut spec, client);
+
+    let current = storage_from_client(&state.config, &settings, client)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                    error,
+                }),
+            )
+        })?;
+
+    state
+        .application
+        .storage
+        .reset_client_storage(&current, &spec)
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                    error: format!("Failed to reset client storage: {error:#}"),
+                }),
+            )
+        })?;
+
+    info!("Successfully reset writeback for client '{}'", client.name);
+
+    Ok(Json(client.clone()))
+}
+
+async fn reset_client_clean(state: &AppState, client: &Client) -> UpdateClientResult {
+    info!("Reset to clean state for client: {}", client.name);
+
+    let settings = state.settings.read().await;
+
+    let source = client
+        .snapshot
+        .as_deref()
+        .filter(|value| !value.trim().is_empty());
+
+    let mut spec = build_storage_spec(
+        &state.config,
+        &settings,
+        &client.id,
+        &client.name,
+        &client.master,
+        source,
+        client.use_game_disk.unwrap_or(false),
+    )
+    .await
+    .map_err(|error| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                status: StatusCode::BAD_REQUEST.as_u16(),
+                error,
+            }),
+        )
+    })?;
+
+    preserve_persisted_target_iqn(&mut spec, client);
+
+    let current = storage_from_client(&state.config, &settings, client)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                    error,
+                }),
+            )
+        })?;
+
+    state
+        .application
+        .storage
+        .reset_client_storage(&current, &spec)
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                    error: format!("Failed to reset client storage: {error:#}"),
+                }),
+            )
+        })?;
+
+    info!("Successfully reset client '{}' to clean state", client.name);
+
+    Ok(Json(client.clone()))
+}
+
+async fn update_client_assignment(
+    state: AppState,
+    manager: ClientManager,
+    id: String,
+    existing_client: Client,
+    mut request: UpdateClientRequest,
+    installer_media: Option<crate::persistence::InstallerMedia>,
+) -> UpdateClientResult {
     let settings = state.settings.read().await;
 
     // A persistence-only PATCH must retain the selected snapshot. A full form
@@ -1815,6 +1733,7 @@ pub async fn update_client(
 
     if !is_unprovisioned_enrollment(&existing_client) {
         let current_storage = storage_from_client(&state.config, &settings, &existing_client)
+            .await
             .map_err(|error| {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -1887,6 +1806,7 @@ pub async fn update_client(
             .or(existing_client.use_game_disk)
             .unwrap_or(false),
     )
+    .await
     .map_err(|error| {
         (
             StatusCode::BAD_REQUEST,
@@ -1997,6 +1917,93 @@ pub async fn update_client(
     Ok(Json(client))
 }
 
+async fn rewrite_complete_installation(
+    state: &AppState,
+    claims: &crate::types::Claims,
+    existing_client: &Client,
+    request: &mut UpdateClientRequest,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    if claims.role != "admin" {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                status: 403,
+                error: "Only administrators can complete OS installation".into(),
+            }),
+        ));
+    }
+    if existing_client.installer_media_id.is_none() || existing_client.snapshot.is_some() {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(ErrorResponse {
+                status: 409,
+                error: "Client is not in direct-master OS installation mode".into(),
+            }),
+        ));
+    }
+    let target_iqn = existing_client
+        .target_iqn
+        .as_deref()
+        .filter(|target| !target.trim().is_empty())
+        .ok_or_else(|| {
+            (
+                StatusCode::CONFLICT,
+                Json(ErrorResponse {
+                    status: 409,
+                    error: "Client has no iSCSI target to verify".into(),
+                }),
+            )
+        })?;
+    let active =
+        crate::infrastructure::iscsi::target_has_active_sessions(target_iqn).map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    status: 500,
+                    error: format!("Failed to check client iSCSI sessions: {error}"),
+                }),
+            )
+        })?;
+    if active {
+        return Err((
+                    StatusCode::CONFLICT,
+                    Json(ErrorResponse {
+                            status: 409,
+                            error: "Client must be powered off with no active iSCSI session before completing installation".into(),
+                    }),
+            ));
+    }
+    let images = image_service(state);
+    let image = images.get(&existing_client.master).await.map_err(|error| {
+        (
+            StatusCode::CONFLICT,
+            Json(ErrorResponse {
+                status: 409,
+                error: format!("Installation master is unavailable: {error:#}"),
+            }),
+        )
+    })?;
+    let snapshot_name = format!("installed-{}", uuid::Uuid::new_v4().simple());
+    let snapshot = images
+        .create_snapshot(&image.id, &snapshot_name)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    status: 500,
+                    error: format!("Failed to snapshot installed OS: {error:#}"),
+                }),
+            )
+        })?;
+    request.master = Some(image.name.clone());
+    request.snapshot = Some(format!("{}@{}", image.name, snapshot.name));
+    request.installer_media_id = None;
+    request.use_game_disk = Some(false);
+    request.action = None;
+    Ok(())
+}
+
 pub async fn complete_client_installation(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -2048,7 +2055,7 @@ pub async fn exit_legacy_super(
                 }),
             )
         })?;
-    if crate::utils::network::get_client_status_realtime(current.ip.clone()) != "Offline" {
+    if crate::utils::network::is_online(&current.ip).await {
         return Err((
             StatusCode::CONFLICT,
             Json(ErrorResponse {

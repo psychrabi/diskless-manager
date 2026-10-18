@@ -2,7 +2,7 @@
 
 use crate::config::get_zpool_name;
 use crate::error::AppError;
-use crate::infrastructure::command::run_command_output_no_sudo;
+use crate::infrastructure::command::run_command_output_no_sudo_async;
 use crate::infrastructure::zfs::ZfsCommand;
 
 pub fn zfs_destroy(dataset: &str) -> Result<(), AppError> {
@@ -14,30 +14,30 @@ pub fn zfs_destroy(dataset: &str) -> Result<(), AppError> {
 /// Resolve the client's clone destination under the first writeback dataset,
 /// falling back to the pool root when no writeback dataset can be listed.
 ///
-/// # Arguments
-///
-/// * `client_name` - Client name used to build the destination dataset name.
-///
-/// # Returns
-///
-/// The full destination dataset name for the client's writeback clone.
-pub fn get_writeback_or_default_dataset(
+/// The listing can take seconds on large pools, so this runs through tokio's
+/// process driver and never blocks an async worker.
+pub async fn get_writeback_or_default_dataset_async(
     config: &crate::config::RuntimeConfig,
     client_name: &str,
 ) -> String {
     let zpool = get_zpool_name(config);
-    let listing = run_command_output_no_sudo(&[
+    let listing = run_command_output_no_sudo_async(writeback_listing_args(&zpool))
+        .await
+        .unwrap_or_default();
+
+    client_writeback_dataset(client_name, &zpool, &listing)
+}
+
+fn writeback_listing_args(zpool: &str) -> [&str; 7] {
+    [
         "zfs",
         "list",
         "-H",
         "-o",
         "name,org.diskless:type",
         "-r",
-        &zpool,
-    ])
-    .unwrap_or_default();
-
-    client_writeback_dataset(client_name, &zpool, &listing)
+        zpool,
+    ]
 }
 
 fn writeback_parent(listing: &str) -> Option<&str> {

@@ -40,31 +40,33 @@ pub struct SuperClientService {
     mutation_locks: ClientMutationLocks,
 }
 
+/// Dependencies required to construct a [`SuperClientService`].
+pub struct SuperClientServiceDeps {
+    pub clients: ClientRepository,
+    pub media: InstallerMediaRepository,
+    pub sessions: SuperSessionRepository,
+    pub images: ImageService,
+    pub storage: Arc<StorageService>,
+    pub iscsi: Arc<dyn IscsiProvisioner>,
+    pub config: RuntimeConfig,
+    pub settings: Settings,
+    pub media_service: InstallerMediaService,
+    pub mutation_locks: ClientMutationLocks,
+}
+
 impl SuperClientService {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        clients: ClientRepository,
-        media: InstallerMediaRepository,
-        sessions: SuperSessionRepository,
-        images: ImageService,
-        storage: Arc<StorageService>,
-        iscsi: Arc<dyn IscsiProvisioner>,
-        config: RuntimeConfig,
-        settings: Settings,
-        media_service: InstallerMediaService,
-        mutation_locks: ClientMutationLocks,
-    ) -> Self {
+    pub fn new(deps: SuperClientServiceDeps) -> Self {
         Self {
-            clients,
-            media,
-            sessions,
-            images,
-            storage,
-            iscsi,
-            config,
-            settings,
-            media_service,
-            mutation_locks,
+            clients: deps.clients,
+            media: deps.media,
+            sessions: deps.sessions,
+            images: deps.images,
+            storage: deps.storage,
+            iscsi: deps.iscsi,
+            config: deps.config,
+            settings: deps.settings,
+            media_service: deps.media_service,
+            mutation_locks: deps.mutation_locks,
         }
     }
 
@@ -830,6 +832,7 @@ impl SuperClientService {
             client.snapshot.as_deref(),
             client.use_game_disk,
         )
+        .await
         .map_err(anyhow::Error::msg)?;
         spec.target_iqn = client
             .target_iqn
@@ -1175,6 +1178,7 @@ impl SuperClientService {
             client.snapshot.as_deref(),
             client.use_game_disk,
         )
+        .await
         .map_err(anyhow::Error::msg)?;
         spec.target_iqn = client
             .target_iqn
@@ -1629,18 +1633,18 @@ mod tests {
         );
         let mut settings = Settings::default();
         settings.http.root_dir = media_root.path().to_string_lossy().into_owned();
-        let service = SuperClientService::new(
-            clients.clone(),
-            InstallerMediaRepository::new(pool),
-            sessions.clone(),
+        let service = SuperClientService::new(SuperClientServiceDeps {
+            clients: clients.clone(),
+            media: InstallerMediaRepository::new(pool),
+            sessions: sessions.clone(),
             images,
             storage,
-            iscsi.clone(),
-            runtime_config,
+            iscsi: iscsi.clone(),
+            config: runtime_config,
             settings,
             media_service,
-            ClientMutationLocks::default(),
-        );
+            mutation_locks: ClientMutationLocks::default(),
+        });
         (
             service,
             clients,
@@ -1687,18 +1691,18 @@ mod tests {
     }
 
     fn restarted_service(service: &SuperClientService) -> SuperClientService {
-        SuperClientService::new(
-            service.clients.clone(),
-            service.media.clone(),
-            service.sessions.clone(),
-            service.images.clone(),
-            service.storage.clone(),
-            service.iscsi.clone(),
-            service.config.clone(),
-            service.settings.clone(),
-            service.media_service.clone(),
-            service.mutation_locks.clone(),
-        )
+        SuperClientService::new(SuperClientServiceDeps {
+            clients: service.clients.clone(),
+            media: service.media.clone(),
+            sessions: service.sessions.clone(),
+            images: service.images.clone(),
+            storage: service.storage.clone(),
+            iscsi: service.iscsi.clone(),
+            config: service.config.clone(),
+            settings: service.settings.clone(),
+            media_service: service.media_service.clone(),
+            mutation_locks: service.mutation_locks.clone(),
+        })
     }
 
     #[tokio::test]

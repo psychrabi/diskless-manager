@@ -1,6 +1,8 @@
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -22,6 +24,10 @@ pub struct ImageService {
     backend: Arc<dyn ImageBackend>,
 }
 
+/// A unit of storage orchestration that may block and still awaits the
+/// database internally; it therefore has to run on a blocking-pool thread.
+type BlockingJob<T> = Pin<Box<dyn Future<Output = Result<T>> + Send>>;
+
 impl ImageService {
     pub fn new(repository: ImageRepository) -> Self {
         Self {
@@ -35,6 +41,25 @@ impl ImageService {
             repository,
             backend,
         }
+    }
+
+    /// Run a storage job on the blocking pool while database awaits inside it
+    /// keep working.
+    ///
+    /// `Handle::block_on` is safe on a blocking-pool thread because it is not
+    /// an async execution context; the request worker stays free meanwhile.
+    /// Only call from async context, and never run blocking-pool work from
+    /// inside a job: the pool is finite and nesting can starve it.
+    async fn run_blocking<T, F>(&self, job: F) -> Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(ImageService) -> BlockingJob<T> + Send + 'static,
+    {
+        let service = self.clone();
+        let runtime = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || runtime.block_on(job(service)))
+            .await
+            .context("image worker failed")?
     }
 
     pub async fn list(&self) -> Result<Vec<Image>> {
@@ -82,12 +107,10 @@ impl ImageService {
     }
 
     pub async fn create(&self, request: CreateImageRequest) -> Result<Image> {
-        let service = self.clone();
-
-        let runtime = tokio::runtime::Handle::current();
-        tokio::task::spawn_blocking(move || runtime.block_on(service.create_blocking(request)))
-            .await
-            .context("image worker failed")?
+        self.run_blocking(move |service| {
+            Box::pin(async move { service.create_blocking(request).await })
+        })
+        .await
     }
 
     async fn create_blocking(&self, request: CreateImageRequest) -> Result<Image> {
@@ -163,15 +186,12 @@ impl ImageService {
     }
 
     pub async fn rename(&self, id: &str, new_name: &str) -> Result<Image> {
-        let service = self.clone();
         let id = id.to_owned();
         let new_name = new_name.to_owned();
-        let runtime = tokio::runtime::Handle::current();
-        tokio::task::spawn_blocking(move || {
-            runtime.block_on(service.rename_blocking(&id, &new_name))
+        self.run_blocking(move |service| {
+            Box::pin(async move { service.rename_blocking(&id, &new_name).await })
         })
         .await
-        .context("image worker failed")?
     }
 
     async fn rename_blocking(&self, id: &str, new_name: &str) -> Result<Image> {
@@ -209,19 +229,20 @@ impl ImageService {
     }
 
     pub async fn update(&self, id: &str, request: UpdateImageRequest) -> Result<Image> {
-        let service = self.clone();
         let id = id.to_owned();
-        let runtime = tokio::runtime::Handle::current();
-        tokio::task::spawn_blocking(move || runtime.block_on(service.update_blocking(&id, request)))
-            .await
-            .context("image worker failed")?
+        self.run_blocking(move |service| {
+            Box::pin(async move { service.update_blocking(&id, request).await })
+        })
+        .await
     }
 
     async fn update_blocking(&self, id: &str, request: UpdateImageRequest) -> Result<Image> {
         let mut image = self.get(id).await?;
 
         if let Some(name) = request.name {
-            image = self.rename(&image.id, &name).await?;
+            // Already on a blocking-pool thread: call the inner job directly
+            // instead of nesting another spawn_blocking.
+            image = self.rename_blocking(&image.id, &name).await?;
         }
 
         if let Some(os_type) = request.os_type {
@@ -253,16 +274,17 @@ impl ImageService {
         snapshot_name: &str,
         new_name: &str,
     ) -> Result<Image> {
-        let service = self.clone();
         let source_id = source_id.to_owned();
         let snapshot_name = snapshot_name.to_owned();
         let new_name = new_name.to_owned();
-        let runtime = tokio::runtime::Handle::current();
-        tokio::task::spawn_blocking(move || {
-            runtime.block_on(service.clone_image_blocking(&source_id, &snapshot_name, &new_name))
+        self.run_blocking(move |service| {
+            Box::pin(async move {
+                service
+                    .clone_image_blocking(&source_id, &snapshot_name, &new_name)
+                    .await
+            })
         })
         .await
-        .context("image worker failed")?
     }
 
     async fn clone_image_blocking(
@@ -427,15 +449,16 @@ impl ImageService {
         master_id_or_name: &str,
         snapshot_name: &str,
     ) -> Result<usize> {
-        let service = self.clone();
         let master_id_or_name = master_id_or_name.to_owned();
         let snapshot_name = snapshot_name.to_owned();
-        let runtime = tokio::runtime::Handle::current();
-        tokio::task::spawn_blocking(move || {
-            runtime.block_on(service.rollback_snapshot_blocking(&master_id_or_name, &snapshot_name))
+        self.run_blocking(move |service| {
+            Box::pin(async move {
+                service
+                    .rollback_snapshot_blocking(&master_id_or_name, &snapshot_name)
+                    .await
+            })
         })
         .await
-        .context("image worker failed")?
     }
 
     async fn rollback_snapshot_blocking(
@@ -478,12 +501,10 @@ impl ImageService {
     }
 
     pub async fn import(&self, request: ImportImageRequest) -> Result<Image> {
-        let service = self.clone();
-
-        let runtime = tokio::runtime::Handle::current();
-        tokio::task::spawn_blocking(move || runtime.block_on(service.import_blocking(request)))
-            .await
-            .context("image worker failed")?
+        self.run_blocking(move |service| {
+            Box::pin(async move { service.import_blocking(request).await })
+        })
+        .await
     }
 
     async fn import_blocking(&self, request: ImportImageRequest) -> Result<Image> {
@@ -591,14 +612,11 @@ impl ImageService {
     }
 
     pub async fn resize(&self, id: &str, new_size_gb: u64) -> Result<Image> {
-        let service = self.clone();
         let id = id.to_owned();
-        let runtime = tokio::runtime::Handle::current();
-        tokio::task::spawn_blocking(move || {
-            runtime.block_on(service.resize_blocking(&id, new_size_gb))
+        self.run_blocking(move |service| {
+            Box::pin(async move { service.resize_blocking(&id, new_size_gb).await })
         })
         .await
-        .context("image worker failed")?
     }
 
     async fn resize_blocking(&self, id: &str, new_size_gb: u64) -> Result<Image> {
@@ -632,12 +650,11 @@ impl ImageService {
     }
 
     pub async fn verify(&self, id: &str) -> Result<bool> {
-        let service = self.clone();
         let id = id.to_owned();
-        let runtime = tokio::runtime::Handle::current();
-        tokio::task::spawn_blocking(move || runtime.block_on(service.verify_blocking(&id)))
-            .await
-            .context("image worker failed")?
+        self.run_blocking(move |service| {
+            Box::pin(async move { service.verify_blocking(&id).await })
+        })
+        .await
     }
 
     async fn verify_blocking(&self, id: &str) -> Result<bool> {
@@ -647,12 +664,11 @@ impl ImageService {
     }
 
     pub async fn get_info(&self, id: &str) -> Result<ImageInfo> {
-        let service = self.clone();
         let id = id.to_owned();
-        let runtime = tokio::runtime::Handle::current();
-        tokio::task::spawn_blocking(move || runtime.block_on(service.get_info_blocking(&id)))
-            .await
-            .context("image worker failed")?
+        self.run_blocking(move |service| {
+            Box::pin(async move { service.get_info_blocking(&id).await })
+        })
+        .await
     }
 
     async fn get_info_blocking(&self, id: &str) -> Result<ImageInfo> {
@@ -664,15 +680,12 @@ impl ImageService {
     }
 
     pub async fn create_snapshot(&self, id: &str, snapshot_name: &str) -> Result<Image> {
-        let service = self.clone();
         let id = id.to_owned();
         let snapshot_name = snapshot_name.to_owned();
-        let runtime = tokio::runtime::Handle::current();
-        tokio::task::spawn_blocking(move || {
-            runtime.block_on(service.create_snapshot_blocking(&id, &snapshot_name))
+        self.run_blocking(move |service| {
+            Box::pin(async move { service.create_snapshot_blocking(&id, &snapshot_name).await })
         })
         .await
-        .context("image worker failed")?
     }
 
     async fn create_snapshot_blocking(&self, id: &str, snapshot_name: &str) -> Result<Image> {
@@ -759,12 +772,11 @@ impl ImageService {
     }
 
     pub async fn delete(&self, id: &str) -> Result<()> {
-        let service = self.clone();
         let id = id.to_owned();
-        let runtime = tokio::runtime::Handle::current();
-        tokio::task::spawn_blocking(move || runtime.block_on(service.delete_blocking(&id)))
-            .await
-            .context("image worker failed")?
+        self.run_blocking(move |service| {
+            Box::pin(async move { service.delete_blocking(&id).await })
+        })
+        .await
     }
 
     async fn delete_blocking(&self, id: &str) -> Result<()> {
@@ -876,14 +888,10 @@ impl ImageService {
     /// duplicate snapshot name) is skipped with a warning rather than aborting
     /// the whole scan.
     pub async fn import_existing_images(&self) -> Result<ImportScanResult> {
-        let service = self.clone();
-
-        let runtime = tokio::runtime::Handle::current();
-        tokio::task::spawn_blocking(move || {
-            runtime.block_on(service.import_existing_images_blocking())
+        self.run_blocking(|service| {
+            Box::pin(async move { service.import_existing_images_blocking().await })
         })
         .await
-        .context("image worker failed")?
     }
 
     async fn import_existing_images_blocking(&self) -> Result<ImportScanResult> {

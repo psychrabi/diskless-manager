@@ -43,6 +43,7 @@ pub async fn delete_client(
         || client.snapshot.is_some();
     if has_storage {
         let storage = crate::application::client_storage_mapping::storage_from_client(&state.config, &settings, &client)
+            .await
             .map_err(|error| {
                 tracing::error!(client_id = %id, %error, "could not reconstruct client storage during deletion");
                 StatusCode::INTERNAL_SERVER_ERROR

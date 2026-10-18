@@ -48,6 +48,9 @@ tempfile = "3"
 zip = "2.2"
 
 
+[lints.rust]
+unsafe_code = "forbid"
+
 [profile.dev]
 debug = "line-tables-only"
 incremental = true # Compile your binary in smaller steps.

@@ -299,6 +299,36 @@ where
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+/// Async variant of [`run_command_output_no_sudo`] for async callers.
+///
+/// Uses tokio's process driver so request workers are never blocked by the
+/// child process.
+pub async fn run_command_output_no_sudo_async<II>(args: II) -> Result<String, AppError>
+where
+    II: IntoIterator,
+    II::Item: AsRef<std::ffi::OsStr>,
+{
+    let mut cmd_iter = args.into_iter();
+    let program = cmd_iter
+        .next()
+        .ok_or(AppError::Command("No command provided".to_string()))?;
+
+    let output = tokio::process::Command::new(program)
+        .args(cmd_iter)
+        .output()
+        .await
+        .map_err(|e| AppError::Command(e.to_string()))?;
+
+    if !output.status.success() {
+        return Err(AppError::Command(format!(
+            "Command failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
 pub fn list_disks() -> Result<Vec<Disk>, AppError> {
     let output = Command::new("lsblk")
         .args(["-dn", "-o", "NAME,SIZE,TYPE"])

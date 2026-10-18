@@ -115,11 +115,11 @@ pub async fn create_pool(
 }
 
 pub async fn pool_exists(State(state): State<AppState>) -> Result<Json<bool>, StatusCode> {
-    use std::process::Command;
     let pool_name = crate::config::get_zpool_name(&state.config);
-    let output = Command::new("zpool")
+    let output = tokio::process::Command::new("zpool")
         .args(["list", "-H", "-o", "name", &pool_name])
-        .output();
+        .output()
+        .await;
 
     match output {
         Ok(output) => {

@@ -88,6 +88,7 @@ use crate::api::handlers::{
     },
 };
 use crate::api::middleware::{cors_layer, rate_limit_auth, require_auth, AuthRateLimiter};
+use crate::state::AppState;
 use tower::limit::ConcurrencyLimitLayer;
 use tower_http::trace::TraceLayer;
 
@@ -155,7 +156,7 @@ async fn apply_request_timeout(request: Request<Body>, next: Next) -> Response {
     await_request(timeout, task).await
 }
 
-pub fn create_app(state: crate::state::AppState) -> Router {
+pub fn create_app(state: AppState) -> Router {
     let cors = cors_layer();
     let rate_limiter = AuthRateLimiter::new();
     let media_body_limit = state
@@ -219,12 +220,82 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         ));
 
     let api_router = Router::new()
+        .merge(client_routes())
+        .merge(image_routes())
+        .merge(installer_media_routes(media_body_limit))
+        .merge(system_routes())
+        .merge(network_driver_routes())
+        .with_state(state.clone())
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            require_auth,
+        ));
+
+    // Serve the bundled frontend; extensionless unknown paths fall through
+    // to index.html for client-side routing, while missing assets keep a
+    // real 404. FRONTEND_DIR defaults to the Vite output next to the
+    // source tree.
+    let frontend_dir = std::env::var("FRONTEND_DIR").unwrap_or_else(|_| "../dist".to_string());
+    let static_files = tower_http::services::ServeDir::new(&frontend_dir);
+    let index_file = tower_http::services::ServeFile::new(format!("{frontend_dir}/index.html"));
+
+    let api = Router::new()
+        .merge(public_router)
+        .merge(ws_router)
+        .merge(api_router);
+
+    Router::new()
+        .merge(api)
+        .fallback(move |request: axum::extract::Request| async move {
+            use tower::ServiceExt;
+            if is_api_or_ws_path(request.uri().path()) {
+                return (
+                    StatusCode::NOT_FOUND,
+                    axum::Json(json!({ "error": "route not found" })),
+                )
+                    .into_response();
+            }
+            // tower-http keeps ServeDir's 404 status on the index fallback,
+            // so route directories to index.html explicitly for a clean 200.
+            let is_asset = request
+                .uri()
+                .path()
+                .rsplit('/')
+                .next()
+                .is_some_and(|segment| segment.contains('.'));
+            let response = if is_asset {
+                static_files
+                    .oneshot(request)
+                    .await
+                    .expect("static file service is infallible")
+                    .map(axum::body::Body::new)
+            } else {
+                index_file
+                    .oneshot(request)
+                    .await
+                    .expect("static file service is infallible")
+                    .map(axum::body::Body::new)
+            };
+            response
+        })
+        .layer(cors)
+        .layer(axum::middleware::from_fn_with_state(
+            rate_limiter,
+            rate_limit_auth,
+        ))
+        .layer(TraceLayer::new_for_http())
+        .layer(ConcurrencyLimitLayer::new(100))
+        .layer(DefaultBodyLimit::max(16 * 1024 * 1024))
+        .layer(axum::middleware::from_fn(apply_request_timeout))
+        .layer(axum::middleware::from_fn(
+            crate::api::error::normalize_api_errors,
+        ))
+        .with_state(state)
+}
+
+fn client_routes() -> Router<AppState> {
+    Router::new()
         .route("/api/clients", get(list_clients).post(create_client))
-        .route("/api/config", get(get_config))
-        .route("/api/license/info", get(get_license_info_handler))
-        .route("/api/disks", get(list_disks))
-        .route("/api/disks/pool/exists", get(pool_exists))
-        .route("/api/system/dependencies", get(check_dependencies))
         .route(
             "/api/clients/{id}",
             get(get_client).put(update_client).delete(delete_client),
@@ -241,17 +312,6 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route("/api/clients/{id}/super/enter", post(enter_super))
         .route("/api/clients/{id}/super/save", post(save_super))
         .route("/api/clients/{id}/super/discard", post(discard_super))
-        .route("/api/installer-media", get(list_media))
-        .route(
-            "/api/installer-media/upload",
-            post(upload_media).layer(DefaultBodyLimit::max(media_body_limit)),
-        )
-        .route("/api/installer-media/{id}/default", post(set_media_default))
-        .route(
-            "/api/installer-media/{id}/verification",
-            post(record_verification),
-        )
-        .route("/api/installer-media/{id}", delete(delete_media))
         .route(
             "/api/clients/{id}/nvmeof",
             get(inspect_nvmeof_boot).delete(remove_nvmeof_boot),
@@ -285,6 +345,10 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         )
         .route("/api/audit-logs", get(get_audit_logs))
         .route("/api/scheduled-operations", get(get_scheduled_operations))
+}
+
+fn image_routes() -> Router<AppState> {
+    Router::new()
         .route("/api/images", get(list_images).post(create_image))
         .route("/api/masters", get(list_masters))
         .route(
@@ -315,6 +379,31 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route("/api/images/{id}/resize", post(resize_image))
         .route("/api/images/{id}/verify", post(verify_image))
         .route("/api/images/{id}/set-default", post(set_default_image))
+        .route("/api/dashboard/default-image", get(get_default_image))
+}
+
+fn installer_media_routes(media_body_limit: usize) -> Router<AppState> {
+    Router::new()
+        .route("/api/installer-media", get(list_media))
+        .route(
+            "/api/installer-media/upload",
+            post(upload_media).layer(DefaultBodyLimit::max(media_body_limit)),
+        )
+        .route("/api/installer-media/{id}/default", post(set_media_default))
+        .route(
+            "/api/installer-media/{id}/verification",
+            post(record_verification),
+        )
+        .route("/api/installer-media/{id}", delete(delete_media))
+}
+
+fn system_routes() -> Router<AppState> {
+    Router::new()
+        .route("/api/config", get(get_config))
+        .route("/api/license/info", get(get_license_info_handler))
+        .route("/api/disks", get(list_disks))
+        .route("/api/disks/pool/exists", get(pool_exists))
+        .route("/api/system/dependencies", get(check_dependencies))
         .route("/api/services", get(list_services))
         .route("/api/services/{name}/status", get(get_service_status))
         .route("/api/services/{name}/start", post(start_service))
@@ -400,7 +489,6 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route("/api/zfs/datasets", get(list_datasets).post(create_dataset))
         .route("/api/zfs/game-disks", get(list_game_disks))
         .route("/api/zfs/datasets/{dataset}", delete(delete_dataset))
-        .route("/api/dashboard/default-image", get(get_default_image))
         .route("/api/dashboard/clients", get(get_client_overview))
         .route(
             "/api/dashboard/clients/io-metrics",
@@ -418,6 +506,10 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route("/api/ssh/test-connection", post(test_ssh_connection))
         .route("/api/ssh/execute-command", post(execute_ssh_command))
         .route("/api/ssh/system-info", post(get_windows_system_info))
+}
+
+fn network_driver_routes() -> Router<AppState> {
+    Router::new()
         .route(
             "/api/pxe/network-drivers",
             get(list_network_drivers).post(import_network_driver),
@@ -471,72 +563,6 @@ pub fn create_app(state: crate::state::AppState) -> Router {
             "/api/pxe/windows/prepare-image/remote/catalog",
             post(prepare_windows_image_remote_catalog),
         )
-        .with_state(state.clone())
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            require_auth,
-        ));
-
-    // Serve the bundled frontend; extensionless unknown paths fall through
-    // to index.html for client-side routing, while missing assets keep a
-    // real 404. FRONTEND_DIR defaults to the Vite output next to the
-    // source tree.
-    let frontend_dir = std::env::var("FRONTEND_DIR").unwrap_or_else(|_| "../dist".to_string());
-    let static_files = tower_http::services::ServeDir::new(&frontend_dir);
-    let index_file = tower_http::services::ServeFile::new(format!("{frontend_dir}/index.html"));
-
-    let api = Router::new()
-        .merge(public_router)
-        .merge(ws_router)
-        .merge(api_router);
-
-    Router::new()
-        .merge(api)
-        .fallback(move |request: axum::extract::Request| async move {
-            use tower::ServiceExt;
-            if is_api_or_ws_path(request.uri().path()) {
-                return (
-                    StatusCode::NOT_FOUND,
-                    axum::Json(json!({ "error": "route not found" })),
-                )
-                    .into_response();
-            }
-            // tower-http keeps ServeDir's 404 status on the index fallback,
-            // so route directories to index.html explicitly for a clean 200.
-            let is_asset = request
-                .uri()
-                .path()
-                .rsplit('/')
-                .next()
-                .is_some_and(|segment| segment.contains('.'));
-            let response = if is_asset {
-                static_files
-                    .oneshot(request)
-                    .await
-                    .expect("static file service is infallible")
-                    .map(axum::body::Body::new)
-            } else {
-                index_file
-                    .oneshot(request)
-                    .await
-                    .expect("static file service is infallible")
-                    .map(axum::body::Body::new)
-            };
-            response
-        })
-        .layer(cors)
-        .layer(axum::middleware::from_fn_with_state(
-            rate_limiter,
-            rate_limit_auth,
-        ))
-        .layer(TraceLayer::new_for_http())
-        .layer(ConcurrencyLimitLayer::new(100))
-        .layer(DefaultBodyLimit::max(16 * 1024 * 1024))
-        .layer(axum::middleware::from_fn(apply_request_timeout))
-        .layer(axum::middleware::from_fn(
-            crate::api::error::normalize_api_errors,
-        ))
-        .with_state(state)
 }
 
 #[cfg(test)]
