@@ -70,7 +70,7 @@ impl SuperClientService {
         }
     }
 
-    /// Start a verified installer session, or an explicitly confirmed disposable verification session.
+    /// Start an installer session, or an explicitly confirmed disposable verification session.
     pub async fn enter(
         &self,
         client_id: &str,
@@ -680,14 +680,6 @@ impl SuperClientService {
             media.media_type == media_type,
             "installer media type does not match assigned image OS"
         );
-        if !verification_only {
-            anyhow::ensure!(
-                self.media
-                    .has_boot_verification(&media.id, &client.pxe_mode)
-                    .await?,
-                "installer media has no passing boot verification for this firmware mode"
-            );
-        }
         let media = self.media_service.verify_integrity(&media.id).await?;
         crate::application::client_boot::backup_custom_client_menu(
             &self.clients,
@@ -1234,7 +1226,7 @@ mod tests {
         },
         persistence::{
             repositories::{
-                image::ImageRepository, BootVerification, InstallerMedia, InstallerMediaType,
+                image::ImageRepository, InstallerMedia, InstallerMediaType,
                 StructuralValidationState,
             },
             SuperSessionState,
@@ -2196,24 +2188,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn normal_entry_requires_current_checksum_boot_verification_without_static_super_menu() {
+    async fn normal_entry_does_not_require_a_boot_verification_record() {
         let (service, clients, sessions, _, iscsi, client, media_root) = fixture().await;
-        let media = service.media.get("media-1").await.unwrap().unwrap();
-        service
-            .media
-            .record_boot_verification(&BootVerification {
-                id: "verification-1".into(),
-                installer_media_id: media.id.clone(),
-                checksum: media.checksum.clone(),
-                firmware_mode: client.pxe_mode,
-                test_client_id: "fixture-client".into(),
-                assigned_image_revision: "pool/master@v1".into(),
-                observed_luns: vec![0, 1],
-                boot_result: "passed".into(),
-                verified_at: Utc::now(),
-            })
-            .await
-            .unwrap();
 
         let menu = media_root
             .path()
@@ -2249,6 +2225,7 @@ mod tests {
         assert_eq!(tokio::fs::read_to_string(&menu).await.unwrap(), normal_menu);
         assert_eq!(updated.mode, BootMode::Super);
         assert_eq!(target.luns.len(), 2);
+        assert_eq!(target.luns[1].lun, 2);
         assert_eq!(
             target.luns[0].block_device,
             PathBuf::from(format!("/dev/zvol/{}", session.working_clone))
@@ -2293,18 +2270,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(tokio::fs::read_to_string(menu).await.unwrap(), normal_menu);
-    }
-
-    #[tokio::test]
-    async fn entry_rejects_missing_boot_verification_for_current_firmware() {
-        let (service, _, sessions, _, iscsi, client, _media_root) = fixture().await;
-
-        assert!(service
-            .enter(client.id.as_str(), false, false)
-            .await
-            .is_err());
-        assert!(sessions.list_incomplete().await.unwrap().is_empty());
-        assert_eq!(iscsi.seen_lun_counts.lock().unwrap().len(), 0);
     }
 
     #[tokio::test]

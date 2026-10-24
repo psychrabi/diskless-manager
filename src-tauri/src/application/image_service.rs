@@ -786,72 +786,53 @@ impl ImageService {
             bail!("cannot delete the default image");
         }
 
-        match image.kind {
+        let storage_name = match image.kind {
             ImageKind::Snapshot => {
-                /*
-                 * A snapshot is represented in the database as:
-                 *
-                 *     name = "v1"
-                 *     parent_id = source image ID
-                 *
-                 * The actual ZFS object is:
-                 *
-                 *     source.name@image.name
-                 */
                 let parent_id = image.parent_id.as_deref().ok_or_else(|| {
                     anyhow::anyhow!("snapshot '{}' has no parent image", image.name)
                 })?;
-
                 let parent = self.get(parent_id).await?;
-
-                if self
-                    .backend
-                    .exists(&format!("{}@{}", parent.name, image.name))?
-                {
-                    self.backend
-                        .destroy_snapshot(&parent.name, &image.name)
-                        .with_context(|| {
-                            format!("failed to delete snapshot '{}@{}'", parent.name, image.name)
-                        })?;
-                }
+                format!("{}@{}", parent.name, image.name)
             }
-
             ImageKind::Master | ImageKind::Clone => {
-                /*
-                 * Both masters and clones are ZFS volumes.
-                 *
-                 * Therefore both must use:
-                 *
-                 *     zfs destroy <dataset>
-                 *
-                 * NOT destroy_snapshot().
-                 */
-
                 let children = self.repository.list().await?;
-
-                let has_children = children
+                if children
                     .iter()
-                    .any(|candidate| candidate.parent_id.as_deref() == Some(&image.id));
-
-                if has_children {
+                    .any(|candidate| candidate.parent_id.as_deref() == Some(&image.id))
+                {
                     bail!(
                         "cannot delete image '{}' while dependent snapshots or clones exist",
                         image.name
                     );
                 }
-
-                if self.backend.exists(&image.name)? {
-                    self.backend
-                        .destroy(&image.name)
-                        .with_context(|| format!("failed to delete image '{}'", image.name))?;
-                }
+                image.name.clone()
             }
-        }
+        };
 
-        self.repository
-            .delete(&image.id)
+        // An image whose storage already vanished can never be used again, so
+        // its revision references must not keep the record alive, and there is
+        // nothing left to destroy (ZFS fails on a snapshot that is already gone).
+        let storage_missing = !self.backend.exists(&storage_name)?;
+        let (transaction, _) = self
+            .repository
+            .begin_delete(&image.id, storage_missing)
+            .await?;
+        if !storage_missing {
+            match image.kind {
+                ImageKind::Snapshot => {
+                    let (parent, snapshot) = storage_name
+                        .rsplit_once('@')
+                        .context("snapshot storage name has no parent")?;
+                    self.backend.destroy_snapshot(parent, snapshot)
+                }
+                ImageKind::Master | ImageKind::Clone => self.backend.destroy(&storage_name),
+            }
+            .with_context(|| format!("failed to delete image '{}'", storage_name))?;
+        }
+        transaction
+            .commit()
             .await
-            .context("failed to remove image metadata")?;
+            .context("failed to remove image metadata after storage deletion")?;
 
         Ok(())
     }
@@ -1386,6 +1367,90 @@ mod storage_presence_tests {
                 .unwrap()
                 .is_default
         );
+    }
+
+    #[tokio::test]
+    async fn deleting_boot_test_candidate_preserves_history() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let mut service = service(&[], false).await;
+        service.repository = ImageRepository::new(pool.clone());
+        for id in ["source", "candidate"] {
+            service
+                .repository
+                .insert(&image(id, &format!("pool/{id}"), None))
+                .await
+                .unwrap();
+        }
+        sqlx::query("INSERT INTO windows_image_driver_revisions (id, source_image_id, source_snapshot, driver_set_hash, status, created_at, updated_at) VALUES ('revision', 'source', 'pool/source@snap', 'hash', 'ready', '2026-10-12', '2026-10-12')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO windows_revision_boot_tests (id, revision_id, test_client_id, expected_nic_id, candidate_image_id, candidate_snapshot, status, created_at) VALUES ('test', 'revision', 'client', 'nic', 'candidate', 'pool/candidate@snap', 'passed', '2026-10-12')")
+            .execute(&pool).await.unwrap();
+
+        service.backend = Arc::new(FakeStorage {
+            present: HashSet::from(["pool/candidate".to_owned()]),
+            fail: false,
+            promoted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        });
+        assert!(service
+            .delete("candidate")
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("failed to delete image"));
+        assert!(service.get_optional("candidate").await.unwrap().is_some());
+        let candidate: Option<String> = sqlx::query_scalar(
+            "SELECT candidate_image_id FROM windows_revision_boot_tests WHERE id = 'test'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(candidate.as_deref(), Some("candidate"));
+        service.backend = Arc::new(FakeStorage {
+            present: HashSet::new(),
+            fail: false,
+            promoted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        });
+
+        service.delete("candidate").await.unwrap();
+        assert!(service.get_optional("candidate").await.unwrap().is_none());
+        let history: (Option<String>, String, String) = sqlx::query_as("SELECT candidate_image_id, candidate_snapshot, status FROM windows_revision_boot_tests WHERE id = 'test'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(
+            history,
+            (None, "pool/candidate@snap".into(), "passed".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn referenced_source_is_rejected_before_destroying_storage() {
+        let service = service(&["pool/source"], false).await;
+        service
+            .repository
+            .insert(&image("source", "pool/source", None))
+            .await
+            .unwrap();
+        service
+            .repository
+            .insert_driver_revision(&crate::core::image::ImageDriverRevision {
+                id: "revision".into(),
+                source_image_id: "source".into(),
+                source_snapshot: "pool/source@snap".into(),
+                revision_image_id: None,
+                driver_package_ids: vec![],
+                driver_set_hash: "hash".into(),
+                status: crate::core::image::DriverRevisionStatus::Ready,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            })
+            .await
+            .unwrap();
+        let error = service.delete("source").await.unwrap_err();
+        assert!(
+            format!("{error:#}").contains("required by driver revisions or super sessions"),
+            "{error:#}"
+        );
+        assert!(service.get_optional("source").await.unwrap().is_some());
     }
 
     #[tokio::test]

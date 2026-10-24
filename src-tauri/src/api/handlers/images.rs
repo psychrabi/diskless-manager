@@ -275,7 +275,9 @@ pub async fn delete_image(
                 return Err(image_delete_error(StatusCode::CONFLICT, message));
             }
 
-            if message.contains("cannot delete the default image") {
+            if message.contains("cannot delete the default image")
+                || message.contains("required by driver revisions or super sessions")
+            {
                 return Err(image_delete_error(StatusCode::CONFLICT, message));
             }
 
@@ -466,7 +468,10 @@ pub async fn delete_snapshot(
         let message = format!("{error:#}");
         log::error!("Failed to delete snapshot '{}': {message}", snapshot_name);
 
-        let status = if message.contains("dependent clones") || message.contains("has clones") {
+        let status = if message.contains("dependent clones")
+            || message.contains("has clones")
+            || message.contains("required by driver revisions or super sessions")
+        {
             StatusCode::CONFLICT
         } else {
             StatusCode::INTERNAL_SERVER_ERROR

@@ -118,7 +118,7 @@ pub struct ClientStorageSpec {
     #[serde(default)]
     pub chap: Option<ChapCredentials>,
 
-    /// Read-only installer ISO exported as LUN 1 while the client installs an OS.
+    /// Read-only installer ISO exported as LUN 2 while the client installs an OS.
     #[serde(default)]
     pub installer_iso: Option<PathBuf>,
 }

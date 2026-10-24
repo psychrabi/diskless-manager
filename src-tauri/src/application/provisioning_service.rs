@@ -27,6 +27,7 @@ fn boot_reservation(
         server_ip: server_ip.to_owned(),
         chap: storage_spec.chap.clone(),
         super_boot: None,
+        assigned_windows: false,
     }
 }
 
@@ -271,6 +272,7 @@ impl ProvisioningService {
             // The provisioned menu must carry the same credentials the
             // target enforces, or the first boot cannot log in.
             chap: storage_spec.chap.clone(),
+            assigned_windows: false,
             super_boot: None,
         };
         if let Err(error) = self.boot.publish(&reservation).await {

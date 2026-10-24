@@ -94,6 +94,16 @@ if (-not $bootIds) {
     Write-Host "Boot NIC '$($boot.Description)' has no PnP hardware or compatible IDs."
     exit 1
 }
+# PCI SUBSYS is encoded as subsystem-device followed by subsystem-vendor.
+$subvendor_id = ""
+$subdevice_id = ""
+foreach ($id in $bootIds) {
+    if ($id -match 'SUBSYS_(?<device>[0-9A-Fa-f]{4})(?<vendor>[0-9A-Fa-f]{4})(?:&|$)') {
+        $subvendor_id = $matches['vendor']
+        $subdevice_id = $matches['device']
+        break
+    }
+}
 $secondaryIds = @()
 foreach ($device in $devices | Where-Object { $_.PNPDeviceID -ne $bootDevice.PNPDeviceID }) {
     try { $secondaryIds += Get-DeviceNicIds $device } catch { Write-Host "Could not read secondary NIC IDs for '$($device.Name)'." }
@@ -117,6 +127,8 @@ $payload = @{
     secondary_ids = @($secondaryIds)
     architecture = $arch
     firmware = $firmware
+    subvendor_id = $subvendor_id
+    subdevice_id = $subdevice_id
 } | ConvertTo-Json -Depth 3
 
 $uri = "http://$server/inventory/$mac"

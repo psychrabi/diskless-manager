@@ -276,6 +276,8 @@ async fn enroll_client(
     };
 
     let clients = ClientRepository::new(state.db_pool.clone());
+    let enroll_started = std::time::Instant::now();
+    let enroll_mac = parsed.to_string();
     let script = match clients.find_by_mac(&parsed).await {
         Ok(Some(client)) => {
             // Binding gate: a disabled record never boots, even when it
@@ -384,6 +386,11 @@ async fn enroll_client(
         }
     };
 
+    tracing::info!(
+        mac = %enroll_mac,
+        elapsed_ms = enroll_started.elapsed().as_millis(),
+        "PXE enrollment script served"
+    );
     ipxe_response(script)
 }
 
@@ -443,14 +450,16 @@ async fn submit_inventory(
     let observed_at = chrono::Utc::now().to_rfc3339();
     let stored = sqlx::query(
         r#"INSERT INTO windows_nic_inventory
-        (mac, client_id, boot_nic_ids, secondary_ids, architecture, firmware, observed_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        (mac, client_id, boot_nic_ids, secondary_ids, architecture, firmware, subvendor_id, subdevice_id, observed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(mac) DO UPDATE SET
             client_id = excluded.client_id,
             boot_nic_ids = excluded.boot_nic_ids,
             secondary_ids = excluded.secondary_ids,
             architecture = excluded.architecture,
             firmware = excluded.firmware,
+            subvendor_id = excluded.subvendor_id,
+            subdevice_id = excluded.subdevice_id,
             observed_at = excluded.observed_at"#,
     )
     .bind(parsed.as_str())
@@ -459,6 +468,8 @@ async fn submit_inventory(
     .bind(serde_json::to_string(&validated.secondary_ids).unwrap_or_default())
     .bind(&validated.architecture)
     .bind(validated.firmware.to_string())
+    .bind(validated.subvendor_id.as_deref().unwrap_or_default())
+    .bind(validated.subdevice_id.as_deref().unwrap_or_default())
     .bind(&observed_at)
     .execute(&state.db_pool)
     .await;
@@ -733,6 +744,8 @@ mod tests {
             "secondary_ids": ["PCI\\VEN_10EC&DEV_8168"],
             "architecture": "AMD64",
             "firmware": "uefi",
+            "subvendor_id": "8086",
+            "subdevice_id": "15F3",
         })
     }
 

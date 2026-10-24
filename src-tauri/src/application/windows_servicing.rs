@@ -170,31 +170,39 @@ pub async fn prepare_managed(
             );
         }
     }
-    let worker = RemoteWindowsServicer::new();
-    let capabilities = worker.capabilities(request.worker.clone()).await?;
-    if !capabilities.available || !capabilities.elevated || !capabilities.iscsi_volume_servicing {
-        bail!("install the updated helper on an elevated Windows worker with iSCSI volume servicing support");
-    }
-    if request.driver_install_strategy == WindowsDriverInstallStrategy::NexbootBootTime
-        && !capabilities.nexboot_boot_time
-    {
-        bail!("the Windows worker does not advertise NexBoot boot-time support; install helper protocol version 3 or select Offline DISM");
-    }
-    let clone = images
-        .clone_image(&source.id, &request.source_snapshot, &request.new_name)
-        .await?;
     let job = Uuid::new_v4();
     let target = format!("{SERVICING_IQN_PREFIX}{job}");
     let backstore = format!("service_{}", job.simple());
+    // The candidate record exists before the worker is probed so a duplicate
+    // assignment notices the live build, but every later failure must abandon
+    // it: the idempotency lookup ignores only `failed` records, so a record
+    // left `preparing` rejects all identical assignments until a restart.
+    let mut clone: Option<Image> = None;
     let operation = async {
-        set_status(&images, &clone.id, "preparing").await?;
+        let worker = RemoteWindowsServicer::new();
+        let capabilities = worker.capabilities(request.worker.clone()).await?;
+        if !capabilities.available || !capabilities.elevated || !capabilities.iscsi_volume_servicing {
+            bail!("install the updated helper on an elevated Windows worker with iSCSI volume servicing support");
+        }
+        if request.driver_install_strategy == WindowsDriverInstallStrategy::NexbootBootTime
+            && !capabilities.nexboot_boot_time
+        {
+            bail!("the Windows worker does not advertise NexBoot boot-time support; install helper protocol version 3 or select Offline DISM");
+        }
+        let created = images
+            .clone_image(&source.id, &request.source_snapshot, &request.new_name)
+            .await?;
+        let clone_id = created.id.clone();
+        let clone_path = created.path.clone();
+        clone = Some(created);
+        set_status(&images, &clone_id, "preparing").await?;
         let chap = ChapCredentials::generate(&format!("servicing-{job}"))?;
-        let mut spec = IscsiTargetSpec::new(&target, &backstore, &clone.path, 0);
+        let mut spec = IscsiTargetSpec::new(&target, &backstore, &clone_path, 0);
         spec.chap = Some(chap.clone());
         if iscsi.target_exists(&target)? {
             bail!("servicing target already exists");
         }
-        let size = images.get_info(&clone.id).await?.virtual_size;
+        let size = images.get_info(&clone_id).await?.virtual_size;
         iscsi.create_target_transaction(&spec)?;
         let reporter = if request.commit {
             Some(crate::infrastructure::pxe::windows_image_preparation::WindowsReporterInstallConfig {
@@ -264,12 +272,12 @@ pub async fn prepare_managed(
         iscsi.remove_target(&target)?;
         let (image, snapshot) = if request.commit {
             let snapshot = images
-                .create_snapshot(&clone.id, &format!("serviced-{}", job.simple()))
+                .create_snapshot(&clone_id, &format!("serviced-{}", job.simple()))
                 .await?;
-            let image = images.publish_serviced_clone(&clone.id).await?;
+            let image = images.publish_serviced_clone(&clone_id).await?;
             (Some(image), Some(snapshot))
         } else {
-            images.delete(&clone.id).await?;
+            images.delete(&clone_id).await?;
             (None, None)
         };
         // Record the candidate only after the worker disconnected and all
@@ -295,14 +303,36 @@ pub async fn prepare_managed(
     match operation {
         Ok(result) => Ok(result),
         Err(error) => {
-            let _ = set_status(&images, &clone.id, "servicing-failed").await;
+            if let Some(clone) = clone.as_ref() {
+                if let Err(status_error) = set_status(&images, &clone.id, "servicing-failed").await
+                {
+                    log::warn!(
+                        "Failed to mark servicing clone '{}' as failed: {status_error:#}",
+                        clone.name
+                    );
+                }
+            }
             // A failed build must not publish: mark the candidate failed so a
             // retry starts a fresh attempt instead of reusing a stale record.
-            if let Some(record) = revision {
-                let _ = fail_managed_revision(&pool, &record.id).await;
+            if let Some(record) = revision.as_ref() {
+                if let Err(mark_error) = fail_managed_revision(&pool, &record.id).await {
+                    log::warn!(
+                        "Failed to abandon driver revision '{}': {mark_error:#}",
+                        record.id
+                    );
+                }
             }
             // An interrupted worker may still be writing. Retain the target and clone for recovery.
-            Err(error.context(format!("servicing failed; retained clone '{}' and any remaining target '{}' for inspection", clone.name, target)))
+            Err(match clone.as_ref() {
+                Some(clone) => error.context(format!(
+                    "servicing failed; retained clone '{}' and any remaining target '{}' for inspection",
+                    clone.name, target
+                )),
+                None => error.context(format!(
+                    "servicing failed before the image clone was created; no servicing target '{}' was created",
+                    target
+                )),
+            })
         }
     }
 }
@@ -436,6 +466,25 @@ pub async fn fail_managed_revision(
     repository
         .transition_driver_revision(revision_id, DriverRevisionStatus::Failed, None)
         .await
+}
+
+/// Abandon driver revisions a previous process left `preparing`.
+///
+/// A restart cannot resume a servicing worker and every build holds the
+/// workflow mutation lock, so no `preparing` record can be live at startup.
+/// Leaving one behind makes the idempotency lookup treat the build as in
+/// flight and reject every identical assignment until someone edits the
+/// database, so they are failed here instead.
+pub async fn recover_interrupted_revisions(pool: &sqlx::SqlitePool) -> Result<u64> {
+    let abandoned = sqlx::query(
+        "UPDATE windows_image_driver_revisions SET status = 'failed', updated_at = ? WHERE status = 'preparing'",
+    )
+    .bind(chrono::Utc::now().to_rfc3339())
+    .execute(pool)
+    .await
+    .context("failed to abandon interrupted Windows driver revisions")?
+    .rows_affected();
+    Ok(abandoned)
 }
 
 /// Record a successfully serviced candidate as `awaiting-test` with its
@@ -939,6 +988,74 @@ mod tests {
             )
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn interrupted_preparation_is_abandoned_so_a_retry_is_not_blocked() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let repo = ImageRepository::new(pool.clone());
+        let now = chrono::Utc::now();
+        repo.insert(&Image {
+            id: "img".into(),
+            name: "tank/image/windows".into(),
+            kind: ImageKind::Master,
+            os_type: OsType::Windows,
+            size_gb: 50,
+            path: "/dev/zvol/tank/image/windows".into(),
+            format: crate::core::image::ImageFormat::Raw,
+            status: "ready".into(),
+            description: None,
+            parent_id: None,
+            source_snapshot: None,
+            checksum: None,
+            is_default: false,
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .unwrap();
+        let ids = vec!["pkg-a".to_string()];
+        // A build that died between recording its revision and finishing leaves
+        // a `preparing` record behind; a live candidate must survive recovery.
+        let interrupted = ensure_managed_revision(&pool, "img", "snap", &ids)
+            .await
+            .unwrap();
+        let candidate = ensure_managed_revision(&pool, "img", "other-snap", &["pkg-b".into()])
+            .await
+            .unwrap();
+        let candidate = mark_revision_awaiting_test(&pool, &candidate.id, "rev-image")
+            .await
+            .unwrap();
+
+        assert_eq!(recover_interrupted_revisions(&pool).await.unwrap(), 1);
+
+        let revisions = repo.list_driver_revisions("img").await.unwrap();
+        let recovered = revisions
+            .iter()
+            .find(|revision| revision.id == interrupted.id)
+            .unwrap();
+        assert_eq!(recovered.status, DriverRevisionStatus::Failed);
+        let kept = revisions
+            .iter()
+            .find(|revision| revision.id == candidate.id)
+            .unwrap();
+        assert_eq!(kept.status, DriverRevisionStatus::AwaitingTest);
+        // The abandoned record no longer blocks an identical assignment.
+        assert!(repo
+            .find_driver_revision_by_hash("img", "snap", &interrupted.driver_set_hash)
+            .await
+            .unwrap()
+            .is_none());
+        let retry = ensure_managed_revision(&pool, "img", "snap", &ids)
+            .await
+            .unwrap();
+        assert_ne!(retry.id, interrupted.id);
+        assert_eq!(retry.status, DriverRevisionStatus::Preparing);
     }
 
     async fn boot_test_pool() -> sqlx::SqlitePool {

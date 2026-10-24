@@ -1,5 +1,4 @@
 //! Preboot NIC inventory collected in WinPE before Windows starts.
-//!
 //! A new client boots a small WinPE image that reports the Boot NIC's PnP
 //! hardware IDs keyed by the observed MAC address. The record stays pending
 //! until the client is assigned: MAC is only the lookup key, and matching
@@ -51,6 +50,10 @@ pub struct NicInventoryPayload {
     pub architecture: Option<String>,
     #[serde(default)]
     pub firmware: Option<String>,
+    #[serde(default)]
+    pub subvendor_id: Option<String>,
+    #[serde(default)]
+    pub subdevice_id: Option<String>,
 }
 
 /// Validated inventory ready for storage.
@@ -60,10 +63,11 @@ pub struct ValidatedNicInventory {
     pub secondary_ids: Vec<String>,
     pub architecture: String,
     pub firmware: FirmwareInterface,
+    pub subvendor_id: Option<String>,
+    pub subdevice_id: Option<String>,
 }
 
 /// Normalize and validate an inventory payload.
-///
 /// At least one Boot NIC hardware ID is required; secondary adapters are
 /// recorded as non-boot and never satisfy the Boot NIC requirement. Bounds
 /// keep a misbehaving reporter from bloating the table.
@@ -101,11 +105,33 @@ pub fn parse_inventory_payload(
         .as_deref()
         .unwrap_or_default()
         .parse::<FirmwareInterface>()?;
+    let subvendor_id = payload
+        .subvendor_id
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let subdevice_id = payload
+        .subdevice_id
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
     Ok(ValidatedNicInventory {
         boot_nic_ids,
         secondary_ids,
         architecture,
         firmware,
+        subvendor_id: if subvendor_id.is_empty() {
+            None
+        } else {
+            Some(subvendor_id)
+        },
+        subdevice_id: if subdevice_id.is_empty() {
+            None
+        } else {
+            Some(subdevice_id)
+        },
     })
 }
 
@@ -119,6 +145,8 @@ mod tests {
             secondary_ids: secondary.iter().map(|value| value.to_string()).collect(),
             architecture: Some("AMD64".to_string()),
             firmware: Some("UEFI".to_string()),
+            subvendor_id: None,
+            subdevice_id: None,
         }
     }
 
@@ -156,6 +184,8 @@ mod tests {
             secondary_ids: vec!["PCI\\VEN_10EC&DEV_8168".to_string()],
             architecture: None,
             firmware: None,
+            subvendor_id: None,
+            subdevice_id: None,
         };
         let error = parse_inventory_payload(&payload).unwrap_err();
         assert!(error.to_string().contains("Boot NIC"), "{error:#}");
@@ -169,6 +199,8 @@ mod tests {
             secondary_ids: Vec::new(),
             architecture: None,
             firmware: None,
+            subvendor_id: None,
+            subdevice_id: None,
         })
         .is_err());
     }

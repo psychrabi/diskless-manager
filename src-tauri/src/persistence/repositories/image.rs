@@ -203,17 +203,78 @@ impl ImageRepository {
     }
 
     pub async fn delete(&self, id: &str) -> Result<bool> {
-        let result = sqlx::query(
-            r#"
-            DELETE FROM images
-            WHERE id = ?
-            "#,
-        )
-        .bind(id)
-        .execute(&self.pool)
-        .await?;
+        let (transaction, deleted) = self.begin_delete(id, false).await?;
+        transaction.commit().await?;
+        Ok(deleted)
+    }
 
-        Ok(result.rows_affected() > 0)
+    /// Stage metadata removal before destroying storage. Keep the transaction open
+    /// until storage succeeds so constraints cannot fail after destructive work.
+    /// Dropping it on failure restores the image and its boot-test references.
+    pub async fn begin_delete(
+        &self,
+        id: &str,
+        prune_missing_storage_revisions: bool,
+    ) -> Result<(sqlx::Transaction<'static, sqlx::Sqlite>, bool)> {
+        let mut transaction = self.pool.begin().await?;
+        // Preserve historical test results when their candidate image is removed.
+        sqlx::query("UPDATE windows_revision_boot_tests SET candidate_image_id = NULL WHERE candidate_image_id = ?")
+            .bind(id)
+            .execute(&mut *transaction)
+            .await?;
+        if prune_missing_storage_revisions {
+            // The storage is already gone, so no revision can be built from or
+            // tested on this image again. Detach candidates and drop revisions
+            // whose source was this image; otherwise the FK keeps an unusable
+            // record alive forever.
+            sqlx::query(
+                "DELETE FROM windows_revision_boot_tests WHERE revision_id IN (SELECT id FROM windows_image_driver_revisions WHERE source_image_id = ?)",
+            )
+            .bind(id)
+            .execute(&mut *transaction)
+            .await?;
+            sqlx::query("DELETE FROM windows_image_driver_revisions WHERE source_image_id = ?")
+                .bind(id)
+                .execute(&mut *transaction)
+                .await?;
+            sqlx::query(
+                "UPDATE windows_image_driver_revisions SET status = 'failed', revision_image_id = NULL, updated_at = ? WHERE revision_image_id = ? AND status != 'failed'",
+            )
+            .bind(Utc::now().to_rfc3339())
+            .bind(id)
+            .execute(&mut *transaction)
+            .await?;
+            // If the underlying disk is gone, Super sessions that only exist to
+            // reference it cannot be preserved; detach or drop them so the
+            // metadata can be removed.
+            sqlx::query("DELETE FROM super_sessions WHERE prior_image_id = ?")
+                .bind(id)
+                .execute(&mut *transaction)
+                .await?;
+        }
+        let sessions: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM super_sessions WHERE prior_image_id = ?")
+                .bind(id)
+                .fetch_one(&mut *transaction)
+                .await?;
+        let result = sqlx::query("DELETE FROM images WHERE id = ?")
+            .bind(id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|error| {
+                if matches!(&error, sqlx::Error::Database(error) if error.is_foreign_key_violation()) {
+                    if sessions > 0 {
+                        anyhow::anyhow!(
+                            "cannot delete image: {sessions} Super session(s) still reference it; save or discard them first"
+                        )
+                    } else {
+                        anyhow::anyhow!("cannot delete image: required by driver revisions or super sessions")
+                    }
+                } else {
+                    error.into()
+                }
+            })?;
+        Ok((transaction, result.rows_affected() > 0))
     }
 
     pub async fn clear_default(&self) -> Result<()> {
@@ -460,4 +521,75 @@ fn parse_image_datetime(value: &str) -> Result<DateTime<Utc>> {
         return Ok(value.and_utc());
     }
     anyhow::bail!("invalid stored datetime: {value}")
+}
+
+#[cfg(test)]
+mod delete_missing_storage_tests {
+    use super::*;
+    use crate::core::image::{
+        DriverRevisionStatus, Image, ImageDriverRevision, ImageFormat, ImageKind, OsType,
+    };
+
+    async fn pool() -> sqlx::SqlitePool {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        pool
+    }
+
+    async fn insert_image(repo: &ImageRepository, id: &str, name: &str) {
+        let now = Utc::now();
+        repo.insert(&Image {
+            id: id.into(),
+            name: name.into(),
+            kind: ImageKind::Master,
+            os_type: OsType::Windows,
+            size_gb: 50,
+            path: format!("/dev/zvol/{name}").into(),
+            format: ImageFormat::Raw,
+            status: "ready".into(),
+            description: None,
+            parent_id: None,
+            source_snapshot: None,
+            checksum: None,
+            is_default: false,
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn image_with_missing_storage_drops_its_driver_revisions() {
+        let pool = pool().await;
+        let repo = ImageRepository::new(pool.clone());
+        insert_image(&repo, "img", "pool/image-disk/windows").await;
+        let now = Utc::now();
+        repo.insert_driver_revision(&ImageDriverRevision {
+            id: "rev".into(),
+            source_image_id: "img".into(),
+            source_snapshot: "installed".into(),
+            revision_image_id: None,
+            driver_package_ids: vec!["pkg-a".into()],
+            driver_set_hash: "hash".into(),
+            status: DriverRevisionStatus::AwaitingTest,
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .unwrap();
+
+        // While storage exists the reference must still block the delete.
+        assert!(repo.begin_delete("img", false).await.is_err());
+
+        let (transaction, deleted) = repo.begin_delete("img", true).await.unwrap();
+        assert!(deleted);
+        transaction.commit().await.unwrap();
+        assert!(repo.get("img").await.unwrap().is_none());
+        assert!(repo.list_driver_revisions("img").await.unwrap().is_empty());
+    }
 }

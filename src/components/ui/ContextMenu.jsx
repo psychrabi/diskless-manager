@@ -113,6 +113,7 @@ export const ContextMenu = ({
   const mediaType = targetImage?.os_type === "linux" ? "linux_live" : targetImage?.os_type === "windows" ? "winpe" : null;
   const matchingMedia = superMedia.filter((media) => media.media_type === mediaType && media.validation_state === "valid");
   const defaultMedia = matchingMedia.find((media) => media.is_default);
+  const mediaTypeLabel = mediaType === "winpe" ? "Windows" : mediaType === "linux_live" ? "Linux" : "this";
   const firmwareVerified = targetClient?.pxe_mode === "bios" ? defaultMedia?.bios_verified : defaultMedia?.uefi_verified;
   const hasReadyAssignment = !!targetImage && targetImage.status === "ready" && !!targetClient?.master && targetClient.master !== "pending";
   const hasPendingRecovery = targetClient?.recovery_required || superStatus?.storage_recovery;
@@ -214,7 +215,13 @@ export const ContextMenu = ({
                 {!superLoading && !superError && hasPendingRecovery && <p className="px-3 pb-2 text-xs text-destructive">Client storage recovery is pending; retry recovery before starting a session.</p>}
                 {!superLoading && superError && <p className="px-3 pb-2 text-xs text-destructive">Unable to load Super-session or installer-media status. Reopen the menu to retry.</p>}
                 {!superLoading && !superError && !hasReadyAssignment && <p className="px-3 pb-2 text-xs text-muted-foreground">An assigned ready image revision is required.</p>}
-                {!superLoading && !superError && hasReadyAssignment && !defaultMedia && <p className="px-3 pb-2 text-xs text-muted-foreground">No valid default installer ISO matches this image.</p>}
+                {!superLoading && !superError && hasReadyAssignment && !defaultMedia && (
+                  <p className="px-3 pb-2 text-xs text-muted-foreground">
+                    {matchingMedia.length > 0
+                      ? `A valid ${mediaTypeLabel} installer ISO exists but none is marked default; set one as default in Installer Media.`
+                      : "No valid installer ISO matches this image."}
+                  </p>
+                )}
                 {!superLoading && defaultMedia && !firmwareVerified && <p className="px-3 pb-2 text-xs text-muted-foreground">Default ISO is not boot-verified for {targetClient?.pxe_mode || "this firmware mode"}; use verification-only first.</p>}
               </>
             )}

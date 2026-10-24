@@ -86,6 +86,7 @@ pub async fn render_client_menu(
     client: &crate::domain::Client,
     settings: &crate::core::config::Settings,
     super_boot: Option<crate::infrastructure::dhcp::SuperBootReservation>,
+    assigned_windows: bool,
 ) -> Result<String> {
     if super_boot.is_none() {
         if let Some(contents) = clients.boot_menu_backup(client.id.as_str()).await? {
@@ -131,6 +132,7 @@ pub async fn render_client_menu(
         server_ip: boot_server_ip(settings),
         chap,
         super_boot,
+        assigned_windows,
     };
     Ok(crate::infrastructure::dhcp::render_client_ipxe(
         &reservation,
@@ -157,6 +159,7 @@ pub async fn ensure_client_boot_ready(
     requesting_mac: &str,
 ) -> Result<String> {
     let id = ClientId::from_string(id.to_owned()).map_err(|error| anyhow::anyhow!(error))?;
+    let readiness_started = std::time::Instant::now();
     let clients = ClientRepository::new(state.db_pool.clone());
     let client = clients
         .find_by_id(&id)
@@ -345,8 +348,14 @@ pub async fn ensure_client_boot_ready(
         _ => {
             let storage = state.application.storage.clone();
             let desired = spec.clone();
+            let storage_started = std::time::Instant::now();
             tokio::task::spawn_blocking(move || storage.ensure_client_storage_for_boot(&desired))
                 .await??;
+            tracing::info!(
+                client_id = id.as_str(),
+                elapsed_ms = storage_started.elapsed().as_millis(),
+                "PXE storage readiness ensured"
+            );
             installer_media.map(|media| {
                 crate::infrastructure::dhcp::SuperBootReservation::Installer {
                     media_type: media.media_type,
@@ -363,7 +372,15 @@ pub async fn ensure_client_boot_ready(
         .await?
         .context("client disappeared after boot storage readiness")?;
     let settings = state.settings.read().await.clone();
-    let script = render_client_menu(&clients, &client, &settings, super_boot).await?;
+    let assigned_windows = state
+        .application
+        .images
+        .get(&client.master)
+        .await
+        .map(|image| image.os_type == crate::core::image::OsType::Windows)
+        .unwrap_or(false);
+    let script =
+        render_client_menu(&clients, &client, &settings, super_boot, assigned_windows).await?;
     let fingerprint =
         crate::application::client_lifecycle::lifecycle_fingerprint(state, &client).await?;
     sqlx::query("INSERT INTO client_offline_resets(client_id, fingerprint, offline_since, completed, failures, retry_after, last_error) VALUES (?, ?, NULL, 0, 0, 0, NULL) ON CONFLICT(client_id) DO UPDATE SET fingerprint = excluded.fingerprint, offline_since = NULL, completed = 0, failures = 0, retry_after = 0, last_error = NULL")
@@ -375,6 +392,11 @@ pub async fn ensure_client_boot_ready(
         .bind(id.as_str())
         .execute(&state.db_pool)
         .await?;
+    tracing::info!(
+        client_id = id.as_str(),
+        elapsed_ms = readiness_started.elapsed().as_millis(),
+        "PXE boot readiness completed"
+    );
     Ok(script)
 }
 
@@ -493,7 +515,7 @@ mod tests {
             tokio::fs::write(&menu, "#!ipxe\necho custom boot menu\n")
                 .await
                 .unwrap();
-            let script = super::render_client_menu(&clients, &client, &settings, Some(boot))
+            let script = super::render_client_menu(&clients, &client, &settings, Some(boot), false)
                 .await
                 .unwrap();
             let custom = tokio::fs::read_to_string(&menu).await.unwrap();

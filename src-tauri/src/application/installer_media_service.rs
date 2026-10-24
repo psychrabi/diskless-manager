@@ -230,6 +230,13 @@ impl InstallerMediaService {
             .await
             .context("failed to sync installer media")?;
         drop(output);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            tokio::fs::set_permissions(temporary_path, std::fs::Permissions::from_mode(0o644))
+                .await
+                .context("failed to make published installer media readable")?;
+        }
         tokio::fs::rename(temporary_path, managed_path)
             .await
             .context("failed to publish installer media")?;
@@ -263,7 +270,7 @@ impl InstallerMediaService {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            tokio::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).await?;
+            tokio::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o755)).await?;
         }
         Ok(directory)
     }
@@ -623,7 +630,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn uploads_bounded_iso_and_persists_size_checksum_and_private_file() {
+    async fn uploads_bounded_iso_and_persists_size_checksum_and_public_file() {
         let root = tempfile::tempdir().unwrap();
         let bytes = bootable_iso(b"LINUX LIVE");
         let (service, _) = service(root.path(), bytes.len() as u64).await;
@@ -660,7 +667,7 @@ mod tests {
                     .permissions()
                     .mode()
                     & 0o777,
-                0o700
+                0o755
             );
             assert_eq!(
                 std::fs::metadata(service.list().await.unwrap()[0].managed_path.clone())
@@ -668,7 +675,7 @@ mod tests {
                     .permissions()
                     .mode()
                     & 0o777,
-                0o600
+                0o644
             );
         }
     }

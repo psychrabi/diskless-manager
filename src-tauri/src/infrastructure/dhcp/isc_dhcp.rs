@@ -17,6 +17,9 @@ pub struct BootReservation {
     pub chap: Option<crate::infrastructure::iscsi::ChapCredentials>,
     /// Durable Super-session choice, resolved by server-side boot readiness.
     pub super_boot: Option<SuperBootReservation>,
+    /// True when the client's assigned image is Windows, which is booted
+    /// directly instead of behind the interactive iPXE menu.
+    pub assigned_windows: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -63,6 +66,7 @@ pub(crate) fn render_client_ipxe(reservation: &BootReservation) -> String {
             80,
             true,
             reservation.chap.as_ref(),
+            reservation.assigned_windows,
         ),
     }
 }

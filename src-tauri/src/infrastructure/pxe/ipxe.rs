@@ -98,7 +98,7 @@ pub fn render_super_client_script(
         crate::persistence::InstallerMediaType::LinuxLive => "Linux live installer",
     };
     format!(
-        "#!ipxe\ndhcp\n# Super installer boot for {slug} ({}, {label})\nset initiator-iqn {initiator_iqn}\nset target-iqn {target_iqn}\nset keep-san 1\n{chap_settings}sanhook --drive 0x81 iscsi:{server_ip}:::0:{target_iqn} || goto failed\nsanboot --no-describe iscsi:{server_ip}:::1:{target_iqn} || goto failed\n:failed\necho Super installer boot failed.\nshell\n",
+        "#!ipxe\ndhcp\n# Super installer boot for {slug} ({}, {label})\nset initiator-iqn {initiator_iqn}\nset target-iqn {target_iqn}\nset keep-san 1\n{chap_settings}sanhook --drive 0x81 iscsi:{server_ip}:::0:{target_iqn} || goto failed\nsanboot --no-describe iscsi:{server_ip}:::2:{target_iqn} || goto failed\n:failed\necho Super installer boot failed.\nshell\n",
         firmware.as_str(),
     )
 }
@@ -261,7 +261,7 @@ pub fn render_client_script_with_mode(
     ready: bool,
     chap: Option<&crate::infrastructure::iscsi::ChapCredentials>,
 ) -> String {
-    render_client_script_for_boot(client_name, target_iqn, http_port, ready, chap)
+    render_client_script_for_boot(client_name, target_iqn, http_port, ready, chap, false)
 }
 
 #[must_use]
@@ -271,6 +271,7 @@ pub fn render_client_script_for_boot(
     http_port: u16,
     ready: bool,
     chap: Option<&crate::infrastructure::iscsi::ChapCredentials>,
+    boot_assigned_windows: bool,
 ) -> String {
     let slug = client_script_slug(client_name);
     let port_suffix = if http_port == 80 {
@@ -334,6 +335,26 @@ shell
     let root = format!("/dev/disk/by-path/ip-${{next-server}}:3260-iscsi-{target_iqn}-lun-0");
     let initiator_iqn = client_initiator_iqn(client_name);
     let nvme_nqn = format!("nqn.2026-09.local.diskless:client.{slug}");
+    // A client with an assigned Windows image boots it directly: the assignment
+    // is authoritative, so a menu would only add its timeout to every boot.
+    // Other OS choices keep the menu because they need a kernel/initrd pair.
+    let menu = if boot_assigned_windows {
+        "goto boot_windows".to_string()
+    } else {
+        r#"menu Diskless Boot Menu (Client: ${client} - Server IP: ${next-server})
+item --key b boot_ubuntu    Diskless boot Ubuntu 25.10
+item --key a boot_anduinos  Diskless boot Anduin OS 25.04
+item --key d boot_debian    Diskless boot Debian 13.2
+item --key w boot_windows   Diskless boot Windows 11 (iSCSI)
+item --key n boot_windows_nvme Windows Server NVMe/TCP (Experimental)
+item --key i boot_pe       Boot from WinPE (WIM)
+item --gap --             ------------------------- Advanced options ------------------------------
+item shell               Drop to iPXE shell
+item reboot              Reboot computer
+choose --timeout 5000 --default boot_windows selected || goto cancel
+goto ${selected}"#
+            .to_string()
+    };
 
     format!(
         r##"#!ipxe
@@ -348,18 +369,7 @@ set keep-san 1
 {chap_settings}
 {auto_pnp}
 :start
-menu Diskless Boot Menu (Client: ${{client}} - Server IP: ${{next-server}})
-item --key b boot_ubuntu    Diskless boot Ubuntu 25.10
-item --key a boot_anduinos  Diskless boot Anduin OS 25.04
-item --key d boot_debian    Diskless boot Debian 13.2
-item --key w boot_windows   Diskless boot Windows 11 (iSCSI)
-item --key n boot_windows_nvme Windows Server NVMe/TCP (Experimental)
-item --key i boot_pe       Boot from WinPE (WIM)
-item --gap --             ------------------------- Advanced options ------------------------------
-item shell               Drop to iPXE shell
-item reboot              Reboot computer
-choose --timeout 5000 --default boot_windows selected || goto cancel
-goto ${{selected}}
+{menu}
 
 :cancel
 goto shell
@@ -377,7 +387,9 @@ reboot
 
 :boot_windows
 set keep-san 1
+set net0/keep-san 1
 set net0/gateway 0.0.0.0
+echo Booting Windows from iSCSI via sanboot...
 sanboot ${{root-path}} || goto failed
 
 :boot_windows_nvme
@@ -524,7 +536,7 @@ mod tests {
                 Some(&chap),
             );
             let working = "sanhook --drive 0x81 iscsi:192.0.2.10:::0:iqn.example:client.pc001";
-            let installer = "sanboot --no-describe iscsi:192.0.2.10:::1:iqn.example:client.pc001";
+            let installer = "sanboot --no-describe iscsi:192.0.2.10:::2:iqn.example:client.pc001";
             assert!(script.contains("set username chap-pc001"));
             assert!(script.contains("set password Secret123"));
             assert!(script.find(working).unwrap() < script.find(installer).unwrap());
@@ -668,8 +680,31 @@ mod tests {
     }
 
     #[test]
+    fn assigned_windows_boot_skips_the_menu_and_its_timeout() {
+        let script =
+            render_client_script_for_boot("PC001", "iqn.example:pc001", 80, true, None, true);
+        assert!(script.contains(":start\ngoto boot_windows\n"), "{script}");
+        assert!(!script.contains("menu Diskless Boot Menu"), "{script}");
+        assert!(!script.contains("choose --timeout"), "{script}");
+        assert!(script.contains(":boot_windows\n"), "{script}");
+        assert!(script.contains("sanboot ${root-path}"), "{script}");
+    }
+
+    #[test]
+    fn unassigned_or_non_windows_boot_still_offers_the_menu() {
+        let script =
+            render_client_script_for_boot("PC001", "iqn.example:pc001", 80, true, None, false);
+        assert!(script.contains("menu Diskless Boot Menu"), "{script}");
+        assert!(
+            script.contains("choose --timeout 5000 --default boot_windows"),
+            "{script}"
+        );
+    }
+
+    #[test]
     fn boot_scripts_use_http_only() {
-        let script = render_client_script_for_boot("PC001", "iqn.example:pc001", 80, true, None);
+        let script =
+            render_client_script_for_boot("PC001", "iqn.example:pc001", 80, true, None, false);
         assert!(script.contains("set boot-url http://${next-server}"));
         assert!(!script.contains("https://"));
     }

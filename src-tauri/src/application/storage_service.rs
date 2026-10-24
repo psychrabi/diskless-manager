@@ -86,6 +86,13 @@ pub struct GameCloneRecord {
     pub clone_dataset: String,
 }
 
+/// Milliseconds since `stage` was last sampled, resetting the sample point.
+fn stage_ms(stage: &mut std::time::Instant) -> u128 {
+    let ms = stage.elapsed().as_millis();
+    *stage = std::time::Instant::now();
+    ms
+}
+
 /// Make a client id safe for use in ZFS dataset and backstore names.
 fn sanitize_client_id(client_id: &str) -> String {
     let sanitized: String = client_id
@@ -424,7 +431,7 @@ impl StorageService {
     }
 
     /// Build the temporary Super target: writable working image at LUN 0 and
-    /// a read-only installer ISO at LUN 1, with game disks omitted.
+    /// a read-only installer ISO at LUN 2, with game disks omitted.
     pub fn build_super_session_iscsi_spec(
         spec: &ClientStorageSpec,
         installer_iso: impl Into<PathBuf>,
@@ -434,7 +441,7 @@ impl StorageService {
             vec![
                 IscsiLunSpec::new(0, &spec.backstore, spec.block_device()),
                 IscsiLunSpec::readonly_file(
-                    1,
+                    2,
                     format!("installer_{}", sanitize_client_id(&spec.client_id)),
                     installer_iso,
                 ),
@@ -918,6 +925,7 @@ impl StorageService {
         spec: &ClientStorageSpec,
     ) -> Result<ClientStorage> {
         let mut spec = spec.clone();
+        let mut stage = std::time::Instant::now();
         let original_source = spec.source.clone();
         let expected_origin = match &original_source {
             StorageSource::Snapshot(snapshot) => Some(snapshot.as_str()),
@@ -939,6 +947,7 @@ impl StorageService {
             bail!("configured client volume is missing: {}", spec.dataset);
         }
 
+        let checks_ms = stage_ms(&mut stage);
         if spec.use_game_disk {
             let discovered = self.discover_game_masters()?;
             let names = discovered
@@ -993,6 +1002,7 @@ impl StorageService {
             );
         }
         self.image_backend.settle_device_changes()?;
+        let settle_ms = stage_ms(&mut stage);
         if exists && !self.image_backend.verify(&spec.dataset)? {
             bail!("configured client volume is unavailable: {}", spec.dataset);
         }
@@ -1002,15 +1012,29 @@ impl StorageService {
                 bail!("selected game clone is unavailable: {clone}");
             }
         }
+        let verify_ms = stage_ms(&mut stage);
 
         let desired = self.desired_iscsi_spec(&spec)?;
         let current = self.iscsi.inspect_target(&desired)?;
+        let inspect_ms = stage_ms(&mut stage);
         if exists && current.is_ready() {
             self.iscsi.ensure_initiator_acl(&desired)?;
             self.set_target_chap(&spec.target_iqn, spec.chap.as_ref())?;
+            let acl_chap_ms = stage_ms(&mut stage);
             let mut storage = self.storage_from_spec(&spec);
             storage.source = original_source;
-            self.verify_boot_target(&desired)?;
+            // Target already inspected as ready; avoid a second inspect in boot path
+            let boot_target_ms = stage_ms(&mut stage);
+            tracing::info!(
+                client_id = %spec.client_id,
+                checks_ms,
+                settle_ms,
+                verify_ms,
+                inspect_ms,
+                acl_chap_ms,
+                boot_target_ms,
+                "boot storage readiness stages (existing volume)"
+            );
             return Ok(storage);
         }
         if current.exists {
@@ -1192,7 +1216,7 @@ impl StorageService {
                 "installer media cannot share the game-disk LUN range"
             );
             luns.push(IscsiLunSpec::readonly_file(
-                1,
+                2,
                 format!("installer_{}", sanitize_client_id(&spec.client_id)),
                 installer_iso.clone(),
             ));
@@ -1555,7 +1579,7 @@ impl StorageService {
                 "installer media cannot share the game-disk LUN range"
             );
             iscsi_spec.luns.push(IscsiLunSpec::readonly_file(
-                1,
+                2,
                 format!("installer_{}", sanitize_client_id(&spec.client_id)),
                 installer_iso.clone(),
             ));
@@ -1777,7 +1801,7 @@ mod game_storage_tests {
     }
 
     #[test]
-    fn super_session_target_uses_lun_zero_and_readonly_iso_lun_one_without_games() {
+    fn super_session_target_uses_lun_zero_and_readonly_iso_lun_two_without_games() {
         let spec = crate::domain::storage::ClientStorageSpec {
             installer_iso: None,
             client_id: "pc001".into(),
@@ -1795,7 +1819,7 @@ mod game_storage_tests {
             StorageService::build_super_session_iscsi_spec(&spec, "/srv/iso/install.iso").unwrap();
         assert_eq!(target.luns.len(), 2);
         assert_eq!(target.luns[0].lun, 0);
-        assert_eq!(target.luns[1].lun, 1);
+        assert_eq!(target.luns[1].lun, 2);
         assert_eq!(
             target.luns[1].backing,
             crate::infrastructure::iscsi::IscsiLunBacking::File

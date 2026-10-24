@@ -3,7 +3,7 @@ use crate::application::ApplicationServices;
 use crate::core::config::Settings;
 use crate::metrics::MetricsCollector;
 use crate::ssh_executor::SshExecutor;
-use log::info;
+use log::{info, warn};
 use sqlx::sqlite::SqlitePool;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -152,6 +152,12 @@ impl AppState {
             .await
             .recover_incomplete()
             .await?;
+        let interrupted =
+            crate::application::windows_servicing::recover_interrupted_revisions(&state.db_pool)
+                .await?;
+        if interrupted > 0 {
+            warn!("Abandoned {interrupted} interrupted Windows driver revision(s)");
+        }
         Ok(state)
     }
 

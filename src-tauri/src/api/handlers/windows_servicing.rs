@@ -128,6 +128,35 @@ fn select_assignment_driver_ids(
     )
 }
 
+/// True when the selected image is a prepared revision whose recorded driver set
+/// already covers every package chosen for the target client.
+///
+/// Coverage, not hash equality, decides reuse: one prepared image serves every
+/// machine whose Boot NIC it covers, and only an uncovered NIC triggers another
+/// revision build. Unprepared images have no revision row and are never reused.
+async fn existing_revision_covers_driver_set(
+    pool: &sqlx::SqlitePool,
+    image_id: &str,
+    required_package_ids: &[String],
+) -> anyhow::Result<bool> {
+    let rows: Vec<String> = sqlx::query_scalar(
+        "SELECT driver_package_ids FROM windows_image_driver_revisions WHERE revision_image_id = ? AND status IN ('awaiting-test', 'ready')",
+    )
+    .bind(image_id)
+    .fetch_all(pool)
+    .await
+    .context("failed to inspect existing Windows image revisions")?;
+    for json_ids in rows {
+        let existing: BTreeSet<String> = serde_json::from_str(&json_ids).with_context(|| {
+            format!("driver package list recorded for image '{image_id}' is invalid JSON")
+        })?;
+        if required_package_ids.iter().all(|id| existing.contains(id)) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 #[derive(Debug, Serialize)]
 pub struct WindowsServicingCapabilities {
     pub available: bool,
@@ -486,35 +515,24 @@ pub async fn prepare_windows_assignment(
         .await
         .context("driver catalog selection worker failed")??;
 
-        // Reuse a selected managed revision when it already includes this
-        // complete package set. Unmanaged images are prepared once per hash.
+        // One prepared image serves every client whose Boot NIC its driver set
+        // covers, so a matching client is assigned that image as-is instead of
+        // cloning and servicing another near-identical revision per machine.
+        if existing_revision_covers_driver_set(&state.db_pool, &source.id, &package_ids).await? {
+            return Ok(WindowsAssignmentPreparation {
+                master: source.name,
+                snapshot: request.snapshot,
+                prepared: false,
+                reused: false,
+                already_covered: true,
+            });
+        }
         let planned = crate::application::windows_servicing::plan_driver_revision_with_strategy(
             &source.id,
             snapshot_name,
             &package_ids,
             strategy,
         );
-        let candidate_rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT driver_package_ids, driver_set_hash FROM windows_image_driver_revisions WHERE revision_image_id = ? AND status IN ('awaiting-test', 'ready')",
-        )
-        .bind(&source.id)
-        .fetch_all(&state.db_pool)
-        .await
-        .context("failed to inspect existing Windows image revisions")?;
-        for (json_ids, existing_hash) in candidate_rows {
-            let existing_ids: BTreeSet<String> = serde_json::from_str(&json_ids)?;
-            if existing_hash == planned.driver_set_hash
-                && package_ids.iter().all(|id| existing_ids.contains(id))
-            {
-                return Ok(WindowsAssignmentPreparation {
-                    master: source.name,
-                    snapshot: request.snapshot,
-                    prepared: false,
-                    reused: false,
-                    already_covered: true,
-                });
-            }
-        }
 
         let repository = crate::persistence::repositories::image::ImageRepository::new(
             state.db_pool.clone(),
@@ -552,7 +570,10 @@ pub async fn prepare_windows_assignment(
                     });
                 }
                 crate::core::image::DriverRevisionStatus::Preparing => {
-                    anyhow::bail!("an identical Windows driver revision is already being prepared; retry assignment shortly");
+                    anyhow::bail!(
+                        "an identical Windows driver revision has been preparing since {}; wait for that build to finish, or restart the diskless-manager service to abandon an interrupted one",
+                        existing.updated_at.to_rfc3339()
+                    );
                 }
                 crate::core::image::DriverRevisionStatus::Failed => {}
             }
@@ -919,10 +940,62 @@ pub async fn list_revisions(
 #[cfg(test)]
 mod automatic_assignment_tests {
     use super::{
-        load_assignment_boot_inventory, load_managed_driver_inventory, select_assignment_driver_ids,
+        existing_revision_covers_driver_set, load_assignment_boot_inventory,
+        load_managed_driver_inventory, select_assignment_driver_ids,
     };
     use crate::infrastructure::pxe::NetworkDriverPackage;
     use sqlx::sqlite::SqlitePoolOptions;
+
+    /// A prepared image is shared: a client whose Boot NIC packages are already
+    /// injected boots it unchanged, so a mixed fleet does not need one cloned
+    /// and serviced image per machine.
+    #[tokio::test]
+    async fn prepared_image_is_reused_by_every_covered_client() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query("INSERT INTO images (id, name, kind, os_type, size_gb, path, format, status, created_at, updated_at) VALUES ('base', 'tank/image/windows', 'master', 'windows', 50, '/dev/zvol/tank/image/windows', 'raw', 'ready', ?, ?)")
+            .bind(&now)
+            .bind(&now)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO windows_image_driver_revisions (id, source_image_id, source_snapshot, revision_image_id, driver_package_ids, driver_set_hash, status, created_at, updated_at) VALUES ('rev', 'base', 'installed', 'shared', '[\"nic-a\",\"nic-b\"]', 'hash', 'ready', ?, ?)")
+            .bind(&now)
+            .bind(&now)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let covered = existing_revision_covers_driver_set(&pool, "shared", &["nic-a".to_string()])
+            .await
+            .unwrap();
+        assert!(covered, "a superset of the client's packages is enough");
+        let covered = existing_revision_covers_driver_set(
+            &pool,
+            "shared",
+            &["nic-a".to_string(), "nic-b".to_string()],
+        )
+        .await
+        .unwrap();
+        assert!(covered, "an identical package set is covered");
+        let uncovered = existing_revision_covers_driver_set(
+            &pool,
+            "shared",
+            &["nic-a".to_string(), "nic-c".to_string()],
+        )
+        .await
+        .unwrap();
+        assert!(!uncovered, "a missing package needs a new revision");
+        let unprepared = existing_revision_covers_driver_set(&pool, "base", &["nic-a".to_string()])
+            .await
+            .unwrap();
+        assert!(!unprepared, "the unprotected source image is never reused");
+    }
 
     #[test]
     fn automatic_assignment_ignores_other_clients_with_unmatched_nics() {

@@ -125,6 +125,17 @@ it("blocks controls for storage recovery but ignores boot-failure recovery rows"
   expect(screen.getByText(/storage recovery is pending/i)).toBeInTheDocument();
 });
 
+it("explains that a matching ISO exists but is not the default", () => {
+  show({ id: "c1", name: "PC001", ip: "192.0.2.1", mac: "02:00:00:00:00:01", status: "Offline", master: "tank/image/linux", snapshot: "tank/image/linux@clean", pxe_mode: "uefi" }, {
+    superStatus: { mode: "normal", legacy: false, session: null },
+    targetImage: { os_type: "linux", status: "ready" },
+    superMedia: [{ media_type: "linux_live", validation_state: "valid", is_default: false }],
+  });
+  expect(screen.getByRole("button", { name: "Super session unavailable" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Verification session unavailable" })).toBeDisabled();
+  expect(screen.getByText(/none is marked default/i)).toBeInTheDocument();
+});
+
 it("shows legacy exit only to admins and invokes its handler", () => {
   const client = {
     name: "PC002", ip: "192.0.2.2", mac: "02:00:00:00:00:02", status: "Offline",

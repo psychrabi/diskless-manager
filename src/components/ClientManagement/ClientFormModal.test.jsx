@@ -8,6 +8,11 @@ import { prepareWindowsAssignment } from "@/api/modules/windowsServicing";
 import { useAppStore } from "@/store/useAppStore";
 import { listGameDisks } from "@/api/modules/zfs";
 import ClientFormModal from "./ClientFormModal";
+import { listInstallerMedia } from "@/api/modules/installerMedia";
+import { readConfig } from "@/api/modules/config";
+
+vi.mock("@/api/modules/installerMedia", () => ({ listInstallerMedia: vi.fn().mockResolvedValue([]) }));
+vi.mock("@/api/modules/config", () => ({ readConfig: vi.fn() }));
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -38,6 +43,11 @@ vi.mock("@/api/modules/zfs", () => ({
 
 beforeEach(() => {
   useAuth.mockReturnValue({ user: { role: "admin" } });
+  // Live settings mirror the store unless a test overrides them, so the modal's
+  // config refresh does not hide the store setup each test relies on.
+  readConfig.mockImplementation(async () => ({
+    settings: useAppStore.getState().appConfig?.settings ?? {},
+  }));
   confirm.mockReset();
   deleteClientWriteback.mockReset();
   addClient.mockReset();
@@ -71,6 +81,48 @@ it("saves an unchecked keep-writeback setting as false", async () => {
   await user.click(screen.getByRole("button", { name: "Save" }));
 
   expect(updateClient).toHaveBeenCalledWith("six", { keep_writeback: false });
+});
+
+it.each([false, true])("clears installation media with a full OS-boot assignment (change image: %s)", async (changeImage) => {
+  const user = userEvent.setup();
+  const client = {
+    id: "pc002", name: "pc002", mac: "52:54:00:11:00:02", ip: "192.168.123.10",
+    master: "linux", installer_media_id: "live-iso", snapshot: null,
+  };
+  render(<ClientFormModal client={client} masters={[
+    { name: "linux", os_type: "linux", snapshots: [] },
+    { name: "other-linux", os_type: "linux", snapshots: [] },
+  ]} isOpen onClose={() => {}} refresh={() => {}} />);
+  await user.click(screen.getByRole("radio", { name: "OS boot" }));
+  if (changeImage) {
+    fireEvent.change(screen.getByLabelText("Select Image"), { target: { value: "other-linux" } });
+  }
+  await user.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(updateClient).toHaveBeenCalledWith("pc002", expect.objectContaining({
+    master: changeImage ? "other-linux" : "linux", snapshot: null, installer_media_id: null,
+  })));
+});
+
+it("sends the selected installer together with its image when entering installation mode", async () => {
+  const user = userEvent.setup();
+  listInstallerMedia.mockResolvedValueOnce([
+    { id: "live-iso", display_name: "Linux Live", media_type: "linux_live", validation_state: "valid" },
+  ]);
+  confirm.mockResolvedValueOnce(true);
+  const client = {
+    id: "pc002", name: "pc002", mac: "52:54:00:11:00:02", ip: "192.168.123.10",
+    master: "linux", snapshot: null,
+  };
+  render(<ClientFormModal client={client} masters={[
+    { name: "linux", os_type: "linux", snapshots: [] },
+  ]} isOpen onClose={() => {}} refresh={() => {}} />);
+  await user.click(screen.getByRole("radio", { name: "OS installation" }));
+  await screen.findByRole("option", { name: "Linux Live" });
+  await user.selectOptions(screen.getByLabelText("Installation image"), "live-iso");
+  await user.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(updateClient).toHaveBeenCalledWith("pc002", expect.objectContaining({
+    master: "linux", snapshot: null, installer_media_id: "live-iso",
+  })));
 });
 
 it("ignores an earlier client's status response after switching clients", async () => {
@@ -221,6 +273,145 @@ it("prepares Windows NIC drivers before assigning a Windows image", async () => 
     master: "windows11-serviced",
     snapshot: "windows11-serviced@serviced-1",
   }));
+});
+
+const windowsServicingConfigured = {
+  appConfig: {
+    settings: {
+      windows_servicing: {
+        worker_host: "192.0.2.50",
+        worker_username: "Administrator",
+        iscsi_portal: "192.0.2.1",
+        report_server_url: "http://192.0.2.1:8080",
+      },
+    },
+  },
+};
+
+const windowsMasters = [
+  { name: "windows11", os_type: "windows", snapshots: [{ name: "windows11@installed" }] },
+];
+
+it("renames a Windows client without asking the servicing worker to prepare drivers", async () => {
+  getClientNvmeOfStatus.mockResolvedValue(null);
+  updateClient.mockResolvedValue({});
+  useAppStore.setState(windowsServicingConfigured);
+  const client = {
+    id: "pc012", name: "PC012", mac: "02:00:00:00:00:12", ip: "192.0.2.12",
+    master: "windows11", snapshot: "windows11@installed", keep_writeback: false,
+  };
+  render(<ClientFormModal client={client} masters={windowsMasters} isOpen onClose={() => {}} refresh={() => {}} />);
+
+  fireEvent.change(screen.getByLabelText("Client Name"), { target: { value: "PC012-renamed" } });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+  await waitFor(() => expect(updateClient).toHaveBeenCalledWith("pc012", { name: "PC012-renamed" }));
+  expect(prepareWindowsAssignment).not.toHaveBeenCalled();
+  expect(confirm).not.toHaveBeenCalled();
+});
+
+it("keeps a client's current image when only its IP address changes", async () => {
+  getClientNvmeOfStatus.mockResolvedValue(null);
+  updateClient.mockResolvedValue({});
+  useAppStore.setState(windowsServicingConfigured);
+  const client = {
+    id: "pc016", name: "PC016", mac: "02:00:00:00:00:16", ip: "192.0.2.16",
+    master: "windows11", snapshot: "windows11@installed", keep_writeback: false,
+  };
+  render(<ClientFormModal client={client} masters={windowsMasters} isOpen onClose={() => {}} refresh={() => {}} />);
+
+  fireEvent.change(screen.getByLabelText("IP Address"), { target: { value: "192.0.2.96" } });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+  await waitFor(() => expect(updateClient).toHaveBeenCalledWith("pc016", { ip: "192.0.2.96" }));
+  expect(prepareWindowsAssignment).not.toHaveBeenCalled();
+});
+
+it("keeps the prepared image when driver preparation reuses an existing revision", async () => {
+  getClientNvmeOfStatus.mockResolvedValue(null);
+  updateClient.mockResolvedValue({});
+  useAppStore.setState(windowsServicingConfigured);
+  prepareWindowsAssignment.mockResolvedValue({
+    master: "auto-serviced-2",
+    snapshot: "auto-serviced-2@serviced-2",
+    prepared: true,
+    reused: true,
+    already_covered: false,
+  });
+  const client = {
+    id: "pc013", name: "PC013", mac: "02:00:00:00:00:13", ip: "192.0.2.13",
+    master: "windows11", snapshot: "windows11@installed", keep_writeback: false,
+  };
+  render(<ClientFormModal client={client} masters={windowsMasters} isOpen onClose={() => {}} refresh={() => {}} />);
+
+  fireEvent.change(screen.getByLabelText("MAC Address"), { target: { value: "02:00:00:00:00:98" } });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+  await waitFor(() => expect(updateClient).toHaveBeenCalledWith("pc013", expect.objectContaining({
+    master: "auto-serviced-2",
+    snapshot: "auto-serviced-2@serviced-2",
+  })));
+});
+
+it("prepares drivers when only the live server settings know the worker", async () => {
+  getClientNvmeOfStatus.mockResolvedValue(null);
+  addClient.mockResolvedValue({ id: "new-client" });
+  useAppStore.setState({ appConfig: { settings: {} } });
+  readConfig.mockResolvedValue({ settings: windowsServicingConfigured.appConfig.settings });
+  prepareWindowsAssignment.mockResolvedValue({
+    master: "auto-serviced-3",
+    snapshot: "auto-serviced-3@serviced-3",
+    prepared: true,
+    reused: false,
+    already_covered: false,
+  });
+  render(<ClientFormModal client={null} masters={windowsMasters} isOpen onClose={() => {}} refresh={() => {}} />);
+
+  fireEvent.change(screen.getByLabelText("Client Name"), { target: { value: "PC015" } });
+  fireEvent.change(screen.getByLabelText("MAC Address"), { target: { value: "02:00:00:00:00:15" } });
+  fireEvent.change(screen.getByLabelText("IP Address"), { target: { value: "192.0.2.15" } });
+  fireEvent.change(screen.getByLabelText("Select Image"), { target: { value: "windows11" } });
+  fireEvent.change(screen.getByLabelText("Select Snapshot"), { target: { value: "windows11@installed" } });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+  await waitFor(() => expect(prepareWindowsAssignment).toHaveBeenCalledWith({
+    image_name: "windows11",
+    snapshot: "windows11@installed",
+    mac: "02:00:00:00:00:15",
+  }));
+  await waitFor(() => expect(addClient).toHaveBeenCalledWith(expect.objectContaining({
+    master: "auto-serviced-3",
+    snapshot: "auto-serviced-3@serviced-3",
+  })));
+});
+
+it("leaves an already covered image assignment untouched", async () => {
+  getClientNvmeOfStatus.mockResolvedValue(null);
+  updateClient.mockResolvedValue({});
+  useAppStore.setState(windowsServicingConfigured);
+  prepareWindowsAssignment.mockResolvedValue({
+    master: "auto-serviced-1",
+    snapshot: "auto-serviced-1@serviced-1",
+    prepared: false,
+    reused: false,
+    already_covered: true,
+  });
+  const client = {
+    id: "pc014", name: "PC014", mac: "02:00:00:00:00:14", ip: "192.0.2.14",
+    master: "auto-serviced-1", snapshot: "auto-serviced-1@serviced-1", keep_writeback: false,
+  };
+  render(<ClientFormModal client={client} masters={[{ name: "auto-serviced-1", os_type: "windows", snapshots: [{ name: "auto-serviced-1@serviced-1" }] }]} isOpen onClose={() => {}} refresh={() => {}} />);
+
+  fireEvent.change(screen.getByLabelText("IP Address"), { target: { value: "192.0.2.97" } });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+  await waitFor(() => expect(updateClient).toHaveBeenCalledWith("pc014", { ip: "192.0.2.97" }));
+  expect(confirm).not.toHaveBeenCalled();
 });
 
 const deletableClient = { id: "writeback-1", name: "PC010", mac: "00:11:22:33:44:70", ip: "192.168.1.110", master: "windows", snapshot: "windows@ready", writeback: "diskless/clients/PC010/writeback", status: "Offline" };

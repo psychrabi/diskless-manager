@@ -71,9 +71,15 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
   const nvmeFeatureEnabled = useAppStore(
     (state) => state.appConfig?.settings?.client_features?.enable_experimental_nvme_target === true,
   );
-  const windowsServicingProfile = useAppStore(
+  // The persisted store copy goes stale as soon as the worker is configured
+  // elsewhere, and a stale profile silently skips driver preparation. Read the
+  // live settings whenever the dialog opens instead of trusting the cache.
+  const storedWindowsServicingProfile = useAppStore(
     (state) => state.appConfig?.settings?.windows_servicing,
   );
+  const [liveWindowsServicingProfile, setLiveWindowsServicingProfile] = useState(null);
+  const windowsServicingProfile =
+    liveWindowsServicingProfile ?? storedWindowsServicingProfile;
   const windowsServicingConfigured = Boolean(
     windowsServicingProfile?.worker_host?.trim() &&
     windowsServicingProfile?.worker_username?.trim() &&
@@ -136,6 +142,18 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
     return () => {
       cancelled = true;
     };
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    readConfig().then(
+      (config) => {
+        if (!cancelled) setLiveWindowsServicingProfile(config?.settings?.windows_servicing ?? {});
+      },
+      () => {},
+    );
+    return () => { cancelled = true; };
   }, [isOpen]);
 
   useEffect(() => {
@@ -277,8 +295,22 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
     };
     try {
       let driverMessage = "";
+      // Driver preparation can hand back a different image than the one the form
+      // shows. It must be part of the update even when the image fields were not
+      // edited, or the client keeps booting an image without its Boot NIC driver.
+      let preparedAssignment = false;
       const selectedImage = masters?.find((image) => image.name === data.master);
+      // A rename, IP or writeback change cannot alter which Boot NIC drivers
+      // the image needs, so only a new client or a changed image/snapshot/MAC
+      // asks the worker to prepare one. Preparing on every save made an
+      // offline servicing worker block edits that had nothing to do with it.
+      const assignmentChanged =
+        !client?.id ||
+        Boolean(dirtyFields.master) ||
+        Boolean(dirtyFields.snapshot) ||
+        Boolean(dirtyFields.mac);
       if (
+        assignmentChanged &&
         !installationMode &&
         windowsServicingConfigured &&
         selectedImage?.os_type === "windows"
@@ -292,8 +324,13 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
           });
           if (prepared.prepared) {
             request = { ...request, master: prepared.master, snapshot: prepared.snapshot };
-            driverMessage = ` Windows NIC drivers were prepared in '${prepared.master}'.`;
-          } else if (!prepared.already_covered) {
+            preparedAssignment = true;
+            driverMessage = prepared.reused
+              ? ` Reused prepared Windows image '${prepared.master}' with matching NIC drivers.`
+              : ` Windows NIC drivers were prepared in '${prepared.master}'.`;
+          } else if (prepared.already_covered) {
+            driverMessage = ` '${prepared.master}' already includes this client’s Boot NIC drivers.`;
+          } else {
             throw new Error("The selected Windows image was not prepared with this client’s catalog drivers.");
           }
         } catch (prepareError) {
@@ -328,11 +365,17 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
         const update = Object.fromEntries(
           editableFields
             .filter((field) => dirtyFields[field])
-            .map((field) => [field, data[field]]),
+            .map((field) => [field, request[field]]),
         );
-        if (dirtyFields.master || dirtyFields.snapshot) {
-          update.master = data.master;
-          update.snapshot = data.snapshot || null;
+        if (
+          preparedAssignment ||
+          dirtyFields.master ||
+          dirtyFields.snapshot ||
+          dirtyFields.installer_media_id
+        ) {
+          update.master = request.master;
+          update.snapshot = request.snapshot;
+          update.installer_media_id = request.installer_media_id;
         }
         await updateClient(client.id, update);
         success(

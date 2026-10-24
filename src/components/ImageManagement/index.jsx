@@ -11,6 +11,7 @@ import { useToastStore } from "@/store/useToastStore";
 import CreateImageModal from "./CreateImageModal";
 import { ImagesList } from "./ImagesList";
 import WindowsServicingModal from "./WindowsServicingModal";
+import { DriverCatalog } from "./DriverCatalog";
 
 const ImageManagement = () => {
   // Use a more specific selector to ensure re-renders
@@ -112,8 +113,7 @@ const ImageManagement = () => {
               </Button>
             )}
           </div>
-        }
-      />
+        }/>
       <div className="space-y-6 min-h-[50vh]">
         {masters.length === 0 ? (
           <ShadcnCard className="shadow-sm border border-border/50">
@@ -157,6 +157,7 @@ const ImageManagement = () => {
         onClose={() => setWindowsServicingOpen(false)}
         onPrepared={() => Promise.all([fetchMasters(), fetchImages()])}
       />
+      {user?.role === "admin" && <DriverCatalog />}
     </div>
   );
 };
