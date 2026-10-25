@@ -67,7 +67,7 @@ fn service_sections_for_architecture<'a>(
     architecture: &str,
 ) -> Result<Vec<&'a InfSection>> {
     let target = architecture_token(architecture)?;
-    let mut ranked = Vec::new();
+    let mut groups: BTreeMap<String, Vec<(u8, &InfSection)>> = BTreeMap::new();
     for section in sections
         .values()
         .filter(|section| section.name.to_ascii_lowercase().ends_with(".services"))
@@ -78,25 +78,29 @@ fn service_sections_for_architecture<'a>(
             .split('.')
             .map(str::to_owned)
             .collect::<Vec<_>>();
-        let platform = decorators
+        let platform_index = decorators
             .iter()
             .take(decorators.len().saturating_sub(1))
-            .find(|part| part.starts_with("nt"));
-        let rank = match platform.map(String::as_str) {
+            .position(|part| part.starts_with("nt"));
+        let rank = match platform_index.map(|index| decorators[index].as_str()) {
             Some(value) if value == target => 0,
             Some("nt") => 1,
             Some("ntamd64" | "ntx86" | "ntarm64") => continue,
             Some(_) => continue,
             None => 2,
         };
-        ranked.push((rank, section));
+        let install = decorators[..platform_index.unwrap_or(decorators.len() - 1)].join(".");
+        groups.entry(install).or_default().push((rank, section));
     }
-    let Some(best_rank) = ranked.iter().map(|(rank, _)| *rank).min() else {
-        return Ok(Vec::new());
-    };
-    Ok(ranked
-        .into_iter()
-        .filter_map(|(rank, section)| (rank == best_rank).then_some(section))
+    // A decorated section overrides only its own install model's fallback.
+    Ok(groups
+        .into_values()
+        .flat_map(|ranked| {
+            let best_rank = ranked.iter().map(|(rank, _)| *rank).min();
+            ranked
+                .into_iter()
+                .filter_map(move |(rank, section)| (Some(rank) == best_rank).then_some(section))
+        })
         .collect())
 }
 
@@ -147,7 +151,8 @@ pub fn associated_service_names_for_architecture(
     Ok(selected)
 }
 
-pub fn boot_service_profiles(path: &Path) -> Result<Vec<InfBootService>> {
+#[cfg(test)]
+fn boot_service_profiles(path: &Path) -> Result<Vec<InfBootService>> {
     boot_service_profiles_impl(path, None)
 }
 
@@ -1017,6 +1022,47 @@ ServiceBinary=%13%\legacy.sys
                 .map(|profile| profile.name.as_str())
                 .collect::<Vec<_>>(),
             vec!["NetKvm"]
+        );
+    }
+
+    #[test]
+    fn architecture_precedence_is_scoped_to_each_install_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let inf = dir.path().join("models.inf");
+        fs::write(
+            &inf,
+            r#"[ModelA.Services]
+AddService=GenericA,2,GenericService
+[ModelA.NTamd64.Services]
+AddService=ArchA,2,ArchService
+[ModelB.Services]
+AddService=GenericB,2,GenericService
+[ModelB.NTx86.Services]
+AddService=X86B,2,GenericService
+[GenericService]
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%13%\generic.sys
+[ArchService]
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%13%\arch.sys
+"#,
+        )
+        .unwrap();
+
+        // An unrelated model must not disappear just because another has an
+        // architecture-specific section: choosing a single service is unsafe.
+        assert!(associated_service_names_for_architecture(&inf, "x64").is_err());
+        let profiles = boot_service_profiles_for_architecture(&inf, "x64").unwrap();
+        assert_eq!(
+            profiles
+                .iter()
+                .map(|profile| profile.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ArchA", "GenericB"]
         );
     }
 

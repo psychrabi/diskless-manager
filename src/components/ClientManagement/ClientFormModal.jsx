@@ -413,9 +413,8 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
 
   const selectedInstallerMediaId = useWatch({ control, name: "installer_media_id" });
   const selectedMasterOs = masters?.find((master) => master.name === selectedMaster)?.os_type;
-  const expectedInstallerType = selectedMasterOs === "windows" ? "winpe" : "linux_live";
   const availableInstallerMedia = (installerMedia ?? []).filter(
-    (media) => media.validation_state === "valid" && media.media_type === expectedInstallerType,
+    (media) => media.validation_state === "valid",
   );
 
   const keepWriteback = useWatch({
@@ -679,7 +678,7 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
                     {installerMedia === null
                       ? "Loading installer catalog…"
                       : availableInstallerMedia.length === 0
-                        ? `No validated ${expectedInstallerType === "winpe" ? "WinPE" : "Linux live"} images are available for this image type.`
+                        ? "No validated installer ISO is available."
                         : "The selected ISO will be attached as read-only LUN 1."}
                   </FieldDescription>
                 </FieldContent>

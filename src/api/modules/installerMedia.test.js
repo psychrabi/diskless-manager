@@ -8,29 +8,93 @@ import {
   uploadInstallerMedia,
 } from "./installerMedia";
 
+class FakeXMLHttpRequest {
+  static instances = [];
+
+  constructor() {
+    this.upload = {};
+    this.headers = {};
+    this.status = 0;
+    this.statusText = "";
+    this.responseText = "";
+    FakeXMLHttpRequest.instances.push(this);
+  }
+
+  open(method, url) {
+    this.method = method;
+    this.url = url;
+  }
+
+  setRequestHeader(name, value) {
+    this.headers[name] = value;
+  }
+
+  getResponseHeader(name) {
+    return name.toLowerCase() === "content-type" ? "application/json" : null;
+  }
+
+  send(body) {
+    this.body = body;
+  }
+
+  respond({ status = 201, statusText = "Created", body = {} } = {}) {
+    this.status = status;
+    this.statusText = statusText;
+    this.responseText = JSON.stringify(body);
+    this.onload();
+  }
+}
+
 beforeEach(() => {
+  FakeXMLHttpRequest.instances = [];
   setAuthToken("admin-token");
   vi.stubGlobal("fetch", vi.fn().mockImplementation(() => Promise.resolve(new Response("{}"))));
 });
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe("installer media API", () => {
-  it("uploads a file with the selected media type and browser multipart boundary", async () => {
+  it("uploads a file with live progress and the selected media type", async () => {
+    vi.stubGlobal("XMLHttpRequest", FakeXMLHttpRequest);
     const file = new File(["iso-bytes"], "winpe.iso", { type: "application/octet-stream" });
-    fetch.mockResolvedValueOnce(new Response(JSON.stringify({ id: "media-1", media_type: "winpe" }), {
-      headers: { "Content-Type": "application/json" },
-    }));
-    const result = await uploadInstallerMedia({ displayName: "WinPE", mediaType: "winpe", file });
+    const onProgress = vi.fn();
+    const result = uploadInstallerMedia({ displayName: "WinPE", mediaType: "winpe", file, onProgress });
 
-    const [url, request] = fetch.mock.calls[0];
-    expect(url).toBe("/api/installer-media/upload");
+    const request = FakeXMLHttpRequest.instances[0];
     expect(request.method).toBe("POST");
-    expect(request.headers["Content-Type"]).toBeUndefined();
+    expect(request.url).toBe("/api/installer-media/upload");
+    expect(request.headers.Authorization).toBe("Bearer admin-token");
     expect(request.body.get("display_name")).toBe("WinPE");
     expect(request.body.get("media_type")).toBe("winpe");
     expect(request.body.get("file")).toBe(file);
-    expect(result).toMatchObject({ id: "media-1", media_type: "winpe" });
+
+    request.upload.onprogress({ lengthComputable: true, loaded: 512, total: 2048 });
+    expect(onProgress).toHaveBeenLastCalledWith(0.25);
+    request.upload.onload();
+    expect(onProgress).toHaveBeenLastCalledWith(1);
+
+    request.respond({ body: { id: "media-1", media_type: "winpe" } });
+    await expect(result).resolves.toMatchObject({ id: "media-1", media_type: "winpe" });
+  });
+
+  it("surfaces the API error message for a rejected upload", async () => {
+    vi.stubGlobal("XMLHttpRequest", FakeXMLHttpRequest);
+    const file = new File(["iso-bytes"], "winpe.iso", { type: "application/octet-stream" });
+    const result = uploadInstallerMedia({ displayName: "WinPE", mediaType: "winpe", file });
+
+    FakeXMLHttpRequest.instances[0].respond({
+      status: 409,
+      statusText: "Conflict",
+      body: { code: "media_in_use", message: "Media is selected or in use" },
+    });
+
+    await expect(result).rejects.toMatchObject({
+      message: "Media is selected or in use",
+      status: 409,
+    });
   });
 
   it("uses catalog routes for default, delete, and boot-verification results", async () => {

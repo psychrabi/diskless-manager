@@ -3,10 +3,7 @@ use crate::{
         image_service::ImageService, installer_media_service::InstallerMediaService, StorageService,
     },
     config::RuntimeConfig,
-    core::{
-        config::Settings,
-        image::{ImageKind, OsType},
-    },
+    core::{config::Settings, image::ImageKind},
     domain::{
         client::{BootMode, Client, ClientId, ClientStatus},
         storage::{ClientStorageSpec, StorageSource},
@@ -667,19 +664,11 @@ impl SuperClientService {
             image.status == "ready" && matches!(image.kind, ImageKind::Master | ImageKind::Clone),
             "assigned image is not a ready image revision"
         );
-        let media_type = match image.os_type {
-            OsType::Windows => crate::persistence::InstallerMediaType::WinPe,
-            OsType::Linux => crate::persistence::InstallerMediaType::LinuxLive,
-        };
         let media = self
             .media
-            .get_default(media_type)
+            .get_default()
             .await?
-            .context("no default installer media is configured for this image OS")?;
-        anyhow::ensure!(
-            media.media_type == media_type,
-            "installer media type does not match assigned image OS"
-        );
+            .context("no default installer media is configured")?;
         let media = self.media_service.verify_integrity(&media.id).await?;
         crate::application::client_boot::backup_custom_client_menu(
             &self.clients,
@@ -1218,7 +1207,7 @@ fn session_working_clone_path(source_image: &str, working_clone: &str) -> Result
 mod tests {
     use super::*;
     use crate::{
-        core::image::{Image, ImageFormat},
+        core::image::{Image, ImageFormat, OsType},
         domain::client::{CreateClient, MacAddress, PxeMode},
         infrastructure::{
             image::{ImageBackend, ImageBackendInfo},
@@ -1586,8 +1575,8 @@ mod tests {
         tokio::fs::write(&media_path, iso_bytes).await.unwrap();
         let iso = InstallerMedia {
             id: "media-1".into(),
-            display_name: "Linux ISO".into(),
-            media_type: InstallerMediaType::LinuxLive,
+            display_name: "Installer ISO".into(),
+            media_type: InstallerMediaType::WindowsIso,
             managed_path: media_path,
             byte_size: iso_bytes.len() as u64,
             checksum: format!("{:x}", Sha256::digest(iso_bytes)),

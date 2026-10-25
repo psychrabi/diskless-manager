@@ -1,15 +1,15 @@
-import { apiRequest } from "../client";
+import { apiRequest, apiUpload } from "../client";
 
 export function listInstallerMedia() {
   return apiRequest("/api/installer-media");
 }
 
-export function uploadInstallerMedia({ displayName, mediaType, file }) {
+export function uploadInstallerMedia({ displayName, mediaType, file, onProgress }) {
   const body = new FormData();
   body.append("display_name", displayName);
   body.append("media_type", mediaType);
   body.append("file", file);
-  return apiRequest("/api/installer-media/upload", { method: "POST", body });
+  return apiUpload("/api/installer-media/upload", body, { onProgress });
 }
 
 export function setDefaultInstallerMedia(id) {

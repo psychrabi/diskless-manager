@@ -7,15 +7,19 @@ use crate::domain::client::PxeMode;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstallerMediaType {
+    WindowsIso,
     WinPe,
-    LinuxLive,
+    LinuxIso,
+    OtherIso,
 }
 
 impl InstallerMediaType {
     fn as_str(self) -> &'static str {
         match self {
+            Self::WindowsIso => "windows_iso",
             Self::WinPe => "winpe",
-            Self::LinuxLive => "linux_live",
+            Self::LinuxIso => "linux_iso",
+            Self::OtherIso => "other_iso",
         }
     }
 }
@@ -25,8 +29,10 @@ impl FromStr for InstallerMediaType {
 
     fn from_str(value: &str) -> Result<Self> {
         match value {
+            "windows_iso" => Ok(Self::WindowsIso),
             "winpe" => Ok(Self::WinPe),
-            "linux_live" => Ok(Self::LinuxLive),
+            "linux_iso" => Ok(Self::LinuxIso),
+            "other_iso" => Ok(Self::OtherIso),
             _ => anyhow::bail!("invalid installer media type '{value}'"),
         }
     }
@@ -129,29 +135,24 @@ impl InstallerMediaRepository {
         row.map(Self::map_row).transpose()
     }
 
-    pub async fn get_default(
-        &self,
-        media_type: InstallerMediaType,
-    ) -> Result<Option<InstallerMedia>> {
-        let row = sqlx::query_as::<_, InstallerMediaRow>("SELECT id, display_name, media_type, managed_path, byte_size, checksum, validation_state, is_default, created_at, updated_at FROM installer_media WHERE media_type = ? AND is_default = 1")
-            .bind(media_type.as_str()).fetch_optional(&self.pool).await?;
+    pub async fn get_default(&self) -> Result<Option<InstallerMedia>> {
+        let row = sqlx::query_as::<_, InstallerMediaRow>("SELECT id, display_name, media_type, managed_path, byte_size, checksum, validation_state, is_default, created_at, updated_at FROM installer_media WHERE is_default = 1")
+            .fetch_optional(&self.pool).await?;
         row.map(Self::map_row).transpose()
     }
 
-    /// Select a default atomically; the partial unique index is the final guard.
+    /// Select the single default atomically; the partial unique index is the final guard.
     pub async fn set_default(&self, id: &str) -> Result<bool> {
         let mut transaction = self.pool.begin().await?;
-        let media_type: Option<String> =
-            sqlx::query_scalar("SELECT media_type FROM installer_media WHERE id = ?")
-                .bind(id)
-                .fetch_optional(&mut *transaction)
-                .await?;
-        let Some(media_type) = media_type else {
+        let exists: Option<i64> = sqlx::query_scalar("SELECT 1 FROM installer_media WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&mut *transaction)
+            .await?;
+        if exists.is_none() {
             transaction.rollback().await?;
             return Ok(false);
-        };
-        sqlx::query("UPDATE installer_media SET is_default = 0 WHERE media_type = ?")
-            .bind(&media_type)
+        }
+        sqlx::query("UPDATE installer_media SET is_default = 0 WHERE is_default = 1")
             .execute(&mut *transaction)
             .await?;
         let updated =
@@ -596,7 +597,7 @@ mod tests {
         let pool = database().await;
         let repository = InstallerMediaRepository::new(pool);
         repository
-            .insert(&media("linux-a", InstallerMediaType::LinuxLive, false))
+            .insert(&media("linux-a", InstallerMediaType::LinuxIso, false))
             .await
             .unwrap();
         let verification = BootVerification {
@@ -649,7 +650,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn defaults_are_unique_per_media_type_and_can_be_changed() {
+    async fn one_global_default_can_be_changed_across_media_types() {
         let pool = database().await;
         let repository = InstallerMediaRepository::new(pool);
         repository
@@ -657,37 +658,25 @@ mod tests {
             .await
             .unwrap();
         repository
-            .insert(&media("linux-a", InstallerMediaType::LinuxLive, true))
-            .await
-            .unwrap();
-        repository
-            .insert(&media("win-b", InstallerMediaType::WinPe, false))
+            .insert(&media("linux-a", InstallerMediaType::LinuxIso, false))
             .await
             .unwrap();
         assert!(repository
-            .insert(&media("win-c", InstallerMediaType::WinPe, true))
+            .insert(&media("win-b", InstallerMediaType::WindowsIso, true))
             .await
             .is_err());
 
-        assert!(repository.set_default("win-b").await.unwrap());
+        assert!(repository.set_default("linux-a").await.unwrap());
         assert_eq!(
-            repository
-                .get_default(InstallerMediaType::WinPe)
-                .await
-                .unwrap()
-                .unwrap()
-                .id,
-            "win-b"
-        );
-        assert_eq!(
-            repository
-                .get_default(InstallerMediaType::LinuxLive)
-                .await
-                .unwrap()
-                .unwrap()
-                .id,
+            repository.get_default().await.unwrap().unwrap().id,
             "linux-a"
         );
+        let previous_is_default: i64 =
+            sqlx::query_scalar("SELECT is_default FROM installer_media WHERE id = 'win-a'")
+                .fetch_one(&repository.pool)
+                .await
+                .unwrap();
+        assert_eq!(previous_is_default, 0);
     }
 
     #[tokio::test]
@@ -696,7 +685,7 @@ mod tests {
         seed_client_and_image(&pool).await;
         let media_repository = InstallerMediaRepository::new(pool.clone());
         media_repository
-            .insert(&media("linux-a", InstallerMediaType::LinuxLive, true))
+            .insert(&media("linux-a", InstallerMediaType::LinuxIso, true))
             .await
             .unwrap();
         let repository = SuperSessionRepository::new(pool);
@@ -748,7 +737,7 @@ mod tests {
         let pool = database().await;
         seed_client_and_image(&pool).await;
         InstallerMediaRepository::new(pool.clone())
-            .insert(&media("linux-a", InstallerMediaType::LinuxLive, false))
+            .insert(&media("linux-a", InstallerMediaType::LinuxIso, false))
             .await
             .unwrap();
         let repository = SuperSessionRepository::new(pool);
@@ -791,7 +780,7 @@ mod tests {
         let pool = database().await;
         seed_client_and_image(&pool).await;
         InstallerMediaRepository::new(pool.clone())
-            .insert(&media("linux-a", InstallerMediaType::LinuxLive, false))
+            .insert(&media("linux-a", InstallerMediaType::LinuxIso, false))
             .await
             .unwrap();
         let repository = SuperSessionRepository::new(pool);
@@ -852,7 +841,7 @@ mod tests {
         let pool = database().await;
         seed_client_and_image(&pool).await;
         InstallerMediaRepository::new(pool.clone())
-            .insert(&media("linux-a", InstallerMediaType::LinuxLive, false))
+            .insert(&media("linux-a", InstallerMediaType::LinuxIso, false))
             .await
             .unwrap();
         let repository = SuperSessionRepository::new(pool.clone());
@@ -901,12 +890,137 @@ mod tests {
         );
     }
 
+    #[test]
+    fn media_type_codes_are_stable() {
+        for (code, expected) in [
+            ("windows_iso", InstallerMediaType::WindowsIso),
+            ("winpe", InstallerMediaType::WinPe),
+            ("linux_iso", InstallerMediaType::LinuxIso),
+            ("other_iso", InstallerMediaType::OtherIso),
+        ] {
+            assert_eq!(code.parse::<InstallerMediaType>().unwrap(), expected);
+        }
+        assert!("linux_live".parse::<InstallerMediaType>().is_err());
+    }
+
+    #[tokio::test]
+    async fn migration_maps_legacy_media_and_clears_ambiguous_defaults() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query("PRAGMA foreign_keys = ON")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE installer_media (
+                id TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL,
+                media_type TEXT NOT NULL CHECK (media_type IN ('winpe', 'linux_live')),
+                managed_path TEXT NOT NULL UNIQUE,
+                byte_size INTEGER NOT NULL CHECK (byte_size > 0),
+                checksum TEXT NOT NULL,
+                validation_state TEXT NOT NULL CHECK (validation_state IN ('pending', 'valid', 'invalid')),
+                is_default INTEGER NOT NULL DEFAULT 0 CHECK (is_default IN (0, 1)),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("CREATE UNIQUE INDEX idx_installer_media_default_type ON installer_media(media_type) WHERE is_default = 1")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE client_media_refs (id TEXT PRIMARY KEY, media_id TEXT REFERENCES installer_media(id))")
+            .execute(&pool)
+            .await
+            .unwrap();
+        for (id, media_type, is_default) in [
+            ("win-a", "winpe", 1),
+            ("linux-a", "linux_live", 1),
+            ("linux-b", "linux_live", 0),
+        ] {
+            sqlx::query("INSERT INTO installer_media (id, display_name, media_type, managed_path, byte_size, checksum, validation_state, is_default, created_at, updated_at) VALUES (?, ?, ?, ?, 1024, 'sha', 'valid', ?, 'now', 'now')")
+                .bind(id)
+                .bind(id)
+                .bind(media_type)
+                .bind(format!("/managed/{id}.iso"))
+                .bind(is_default)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query("INSERT INTO client_media_refs (id, media_id) VALUES ('ref-1', 'linux-a')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let mut transaction = pool.begin().await.unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/0022_installer_media_types.sql"
+        ))
+        .execute(&mut *transaction)
+        .await
+        .unwrap();
+        transaction.rollback().await.unwrap();
+        let original_type: String =
+            sqlx::query_scalar("SELECT media_type FROM installer_media WHERE id = 'linux-a'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            original_type, "linux_live",
+            "migration must roll back atomically"
+        );
+
+        let mut transaction = pool.begin().await.unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/0022_installer_media_types.sql"
+        ))
+        .execute(&mut *transaction)
+        .await
+        .unwrap();
+        transaction.commit().await.unwrap();
+
+        let rows: Vec<(String, String, i64)> =
+            sqlx::query_as("SELECT id, media_type, is_default FROM installer_media ORDER BY id")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                ("linux-a".into(), "linux_iso".into(), 0),
+                ("linux-b".into(), "linux_iso".into(), 0),
+                ("win-a".into(), "winpe".into(), 0),
+            ]
+        );
+        let refs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM client_media_refs")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(refs, 1);
+        let violations = sqlx::query("PRAGMA foreign_key_check")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert!(violations.is_empty());
+        assert!(sqlx::query("INSERT INTO installer_media (id, display_name, media_type, managed_path, byte_size, checksum, validation_state, is_default, created_at, updated_at) VALUES ('old', 'old', 'linux_live', '/managed/old.iso', 1024, 'sha', 'valid', 0, 'now', 'now')")
+            .execute(&pool)
+            .await
+            .is_err());
+    }
+
     #[tokio::test]
     async fn repositories_enforce_client_image_and_media_foreign_keys() {
         let pool = database().await;
         seed_client_and_image(&pool).await;
         InstallerMediaRepository::new(pool.clone())
-            .insert(&media("media-1", InstallerMediaType::LinuxLive, false))
+            .insert(&media("media-1", InstallerMediaType::LinuxIso, false))
             .await
             .unwrap();
         let repository = SuperSessionRepository::new(pool);

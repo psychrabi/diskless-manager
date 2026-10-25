@@ -237,7 +237,6 @@ fn storage_configuration_changed(client: &Client, request: &UpdateClientRequest)
 
 async fn installer_media_for_assignment(
     state: &AppState,
-    master: &str,
     media_id: Option<&str>,
     verify_checksum: bool,
 ) -> anyhow::Result<Option<crate::persistence::InstallerMedia>> {
@@ -261,15 +260,6 @@ async fn installer_media_for_assignment(
     anyhow::ensure!(
         media.validation_state == crate::persistence::StructuralValidationState::Valid,
         "installer media has not passed structural validation"
-    );
-    let image = image_service(state).get(master).await?;
-    let expected_type = match image.os_type {
-        crate::core::image::OsType::Windows => crate::persistence::InstallerMediaType::WinPe,
-        crate::core::image::OsType::Linux => crate::persistence::InstallerMediaType::LinuxLive,
-    };
-    anyhow::ensure!(
-        media.media_type == expected_type,
-        "installer media type does not match the selected image OS"
     );
     Ok(Some(media))
 }
@@ -537,22 +527,18 @@ pub async fn create_client(
 
     let settings = state.settings.read().await.clone();
 
-    let installer_media = installer_media_for_assignment(
-        &state,
-        &request.master,
-        request.installer_media_id.as_deref(),
-        true,
-    )
-    .await
-    .map_err(|error| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                status: 400,
-                error: format!("Invalid installation media: {error:#}"),
-            }),
-        )
-    })?;
+    let installer_media =
+        installer_media_for_assignment(&state, request.installer_media_id.as_deref(), true)
+            .await
+            .map_err(|error| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        status: 400,
+                        error: format!("Invalid installation media: {error:#}"),
+                    }),
+                )
+            })?;
     let _installation_master_guard = if installer_media.is_some() {
         let resource = format!("installation-master:{}", request.master);
         Some(state.client_mutations.lock_resource(&resource).await)
@@ -824,18 +810,17 @@ pub async fn update_client(
         existing_client.installer_media_id.as_deref()
     };
     let media_changed = effective_media_id != existing_client.installer_media_id.as_deref();
-    let installer_media =
-        installer_media_for_assignment(&state, effective_master, effective_media_id, media_changed)
-            .await
-            .map_err(|error| {
-                (
-                    StatusCode::BAD_REQUEST,
-                    Json(ErrorResponse {
-                        status: 400,
-                        error: format!("Invalid installation media: {error:#}"),
-                    }),
-                )
-            })?;
+    let installer_media = installer_media_for_assignment(&state, effective_media_id, media_changed)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    status: 400,
+                    error: format!("Invalid installation media: {error:#}"),
+                }),
+            )
+        })?;
     let _installation_master_guard = if installer_media.is_some() {
         let resource = format!("installation-master:{effective_master}");
         Some(state.client_mutations.lock_resource(&resource).await)
@@ -2350,6 +2335,34 @@ mod error_contract_tests {
             metrics_collector: std::sync::Arc::new(crate::metrics::MetricsCollector::default()),
             ssh_executor: std::sync::Arc::new(crate::ssh_executor::SshExecutor::new()),
             application: std::sync::Arc::new(crate::application::ApplicationServices::new(pool)),
+        }
+    }
+
+    #[tokio::test]
+    async fn installer_media_assignment_accepts_every_catalog_media_type() {
+        let state = test_state().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        for (index, media_type) in ["windows_iso", "winpe", "linux_iso", "other_iso"]
+            .into_iter()
+            .enumerate()
+        {
+            let id = format!("media-{index}");
+            sqlx::query("INSERT INTO installer_media (id, display_name, media_type, managed_path, byte_size, checksum, validation_state, is_default, created_at, updated_at) VALUES (?, ?, ?, ?, 2048, 'sha', 'valid', 0, ?, ?)")
+                .bind(&id)
+                .bind(&id)
+                .bind(media_type)
+                .bind(format!("/managed/{id}.iso"))
+                .bind(&now)
+                .bind(&now)
+                .execute(&state.db_pool)
+                .await
+                .unwrap();
+
+            let selected = super::installer_media_for_assignment(&state, Some(&id), false)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(selected.id, id);
         }
     }
 

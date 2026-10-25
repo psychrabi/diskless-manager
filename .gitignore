@@ -38,6 +38,9 @@ docs/
 docs/*
 !docs/adr/
 !docs/adr/**
+!docs/architecture/
+docs/architecture/*
+!docs/architecture/NEXBOOT-UPSTREAM-REVIEW-2026-10-25.md
 !docs/superpowers/
 docs/superpowers/*
 !docs/superpowers/specs/

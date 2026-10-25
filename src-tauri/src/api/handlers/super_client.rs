@@ -11,7 +11,6 @@ use uuid::Uuid;
 
 use crate::{
     api::handlers::clients::ErrorResponse,
-    core::image::OsType,
     domain::ClientId,
     persistence::repositories::installer_media::{
         BootVerification, InstallerMedia, InstallerMediaType,
@@ -114,7 +113,12 @@ impl MediaDto {
     fn new(m: InstallerMedia, bios_verified: bool, uefi_verified: bool) -> Self {
         Self {
         id: m.id, display_name: m.display_name,
-        media_type: match m.media_type { InstallerMediaType::WinPe => "winpe", InstallerMediaType::LinuxLive => "linux_live" },
+        media_type: match m.media_type {
+            InstallerMediaType::WindowsIso => "windows_iso",
+            InstallerMediaType::WinPe => "winpe",
+            InstallerMediaType::LinuxIso => "linux_iso",
+            InstallerMediaType::OtherIso => "other_iso",
+        },
         byte_size: m.byte_size, checksum: m.checksum,
         validation_state: match m.validation_state { crate::persistence::repositories::installer_media::StructuralValidationState::Valid => "valid", crate::persistence::repositories::installer_media::StructuralValidationState::Pending => "pending", crate::persistence::repositories::installer_media::StructuralValidationState::Invalid => "invalid" },
         is_default: m.is_default, created_at: m.created_at, updated_at: m.updated_at,
@@ -206,8 +210,10 @@ pub async fn upload_media(
     let name = next_text(&mut multipart, "display_name").await?;
     let media_type = next_text(&mut multipart, "media_type").await?;
     let kind = match media_type.as_str() {
+        "windows_iso" => InstallerMediaType::WindowsIso,
         "winpe" => InstallerMediaType::WinPe,
-        "linux_live" => InstallerMediaType::LinuxLive,
+        "linux_iso" => InstallerMediaType::LinuxIso,
+        "other_iso" => InstallerMediaType::OtherIso,
         _ => {
             return Err((
                 StatusCode::BAD_REQUEST,
@@ -346,16 +352,10 @@ pub struct VerificationRequest {
 
 fn verification_matches(
     req: &VerificationRequest,
-    media_type: InstallerMediaType,
     current_checksum: &str,
     current_revision: &str,
     firmware: &crate::domain::PxeMode,
-    os_type: OsType,
 ) -> bool {
-    let expected_type = match os_type {
-        OsType::Windows => InstallerMediaType::WinPe,
-        OsType::Linux => InstallerMediaType::LinuxLive,
-    };
     let mut observed_luns = req.observed_luns.clone();
     observed_luns.sort_unstable();
     observed_luns.dedup();
@@ -368,7 +368,6 @@ fn verification_matches(
         && req.firmware_mode == firmware.as_str()
         && observed_luns_valid
         && matches!(req.boot_result.as_str(), "passed" | "failed")
-        && media_type == expected_type
 }
 
 fn verification_session_matches(
@@ -461,11 +460,9 @@ pub async fn record_verification(
         client.snapshot.as_deref(),
     ) || !verification_matches(
         &req,
-        media.media_type,
         &media.checksum,
         client.snapshot.as_deref().unwrap_or(&client.master),
         &client.pxe_mode,
-        image.os_type,
     ) {
         return Err((StatusCode::UNPROCESSABLE_ENTITY, Json(ErrorResponse { status: 422, error: "Verification does not match current media, client assignment, firmware, or observed LUNs".into() })));
     }
@@ -642,83 +639,61 @@ mod tests {
     }
 
     #[test]
-    fn verification_claims_must_match_current_assignment_media_and_firmware() {
+    fn verification_claims_must_match_current_assignment_and_firmware() {
         let valid = verification();
         assert!(verification_matches(
             &valid,
-            InstallerMediaType::WinPe,
             "current-sha",
             "pool/image@revision-7",
             &crate::domain::PxeMode::Uefi,
-            OsType::Windows
         ));
         let mut bad = verification();
         bad.assigned_image_revision = "pool/image@stale".into();
         assert!(!verification_matches(
             &bad,
-            InstallerMediaType::WinPe,
             "current-sha",
             "pool/image@revision-7",
             &crate::domain::PxeMode::Uefi,
-            OsType::Windows
         ));
         let mut bad = verification();
         bad.checksum = "old-sha".into();
         assert!(!verification_matches(
             &bad,
-            InstallerMediaType::WinPe,
             "current-sha",
             "pool/image@revision-7",
             &crate::domain::PxeMode::Uefi,
-            OsType::Windows
         ));
         let mut bad = verification();
         bad.firmware_mode = "bios".into();
         assert!(!verification_matches(
             &bad,
-            InstallerMediaType::WinPe,
             "current-sha",
             "pool/image@revision-7",
             &crate::domain::PxeMode::Uefi,
-            OsType::Windows
-        ));
-        assert!(!verification_matches(
-            &valid,
-            InstallerMediaType::WinPe,
-            "current-sha",
-            "pool/image@revision-7",
-            &crate::domain::PxeMode::Uefi,
-            OsType::Linux
         ));
         let mut failed = valid.clone();
         failed.boot_result = "failed".into();
         failed.observed_luns = vec![0];
         assert!(verification_matches(
             &failed,
-            InstallerMediaType::WinPe,
             "current-sha",
             "pool/image@revision-7",
             &crate::domain::PxeMode::Uefi,
-            OsType::Windows
         ));
         let mut fabricated_pass = failed.clone();
         fabricated_pass.boot_result = "passed".into();
         assert!(!verification_matches(
             &fabricated_pass,
-            InstallerMediaType::WinPe,
             "current-sha",
             "pool/image@revision-7",
             &crate::domain::PxeMode::Uefi,
-            OsType::Windows
         ));
         failed.observed_luns = vec![0, 0];
         assert!(!verification_matches(
             &failed,
-            InstallerMediaType::WinPe,
             "current-sha",
             "pool/image@revision-7",
             &crate::domain::PxeMode::Uefi,
-            OsType::Windows
         ));
     }
 

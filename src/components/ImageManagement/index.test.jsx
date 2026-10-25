@@ -10,6 +10,7 @@ vi.mock("@/contexts/auth", () => ({ useAuth: () => ({ user: { role: "admin" } })
 vi.mock("@/store/useToastStore", () => ({ useToastStore: () => ({ error: vi.fn(), success: vi.fn() }) }));
 vi.mock("react-router-dom", () => ({ Link: ({ children }) => <a>{children}</a> }));
 vi.mock("./ImagesList", () => ({ ImagesList: () => null }));
+vi.mock("./DriverCatalog", () => ({ DriverCatalog: () => null }));
 vi.mock("./CreateImageModal", () => ({ default: () => null }));
 vi.mock("./WindowsServicingModal", () => ({ default: () => null }));
 it("loads image datasets when opened directly", async () => {

@@ -9,6 +9,14 @@ $exit = 0
 $rebootRequired = $false
 function Log($m) { $m | Out-File (Join-Path $work 'adapt.log') -Append -Encoding utf8 }
 
+function Get-CriticalDeviceId([string]$hardwareId) {
+  $id = $hardwareId.Trim().ToUpperInvariant()
+  if ($id -notmatch '^PCI\\VEN_[0-9A-F]{4}&DEV_[0-9A-F]{4}(?:&(?:SUBSYS_[0-9A-F]{8}|REV_[0-9A-F]{2}|CC_[0-9A-F]{4}(?:[0-9A-F]{2})?))*$') {
+    throw "unsupported PCI hardware ID '$hardwareId'"
+  }
+  return $id.Replace('\', '#')
+}
+
 function Get-InfBindings([string]$path) {
   $sections = @{}
   $current = ''
@@ -117,13 +125,11 @@ try {
     }
 
     foreach ($binding in $bindings) {
-      $cddbId = ($binding.Hwid -replace '\\', '#').ToUpper()
-      if ($cddbId -match '^(PCI#VEN_[0-9A-F]{4}&DEV_[0-9A-F]{4})') {
-        $cddbKey = "HKLM:\SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\$($Matches[1])"
-        if (-not (Test-Path $cddbKey)) { New-Item -Path $cddbKey -Force | Out-Null }
-        Set-ItemProperty -Path $cddbKey -Name Service -Value $binding.Service -Type String
-        Set-ItemProperty -Path $cddbKey -Name ClassGUID -Value '{4d36e972-e325-11ce-bfc1-08002be10318}' -Type String
-      }
+      $cddbId = Get-CriticalDeviceId $binding.Hwid
+      $cddbKey = "HKLM:\SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\$cddbId"
+      if (-not (Test-Path $cddbKey)) { New-Item -Path $cddbKey -Force | Out-Null }
+      Set-ItemProperty -Path $cddbKey -Name Service -Value $binding.Service -Type String
+      Set-ItemProperty -Path $cddbKey -Name ClassGUID -Value '{4d36e972-e325-11ce-bfc1-08002be10318}' -Type String
     }
   }
 } catch {

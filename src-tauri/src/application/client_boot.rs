@@ -258,15 +258,6 @@ pub async fn ensure_client_boot_ready(
             media.validation_state == crate::persistence::StructuralValidationState::Valid,
             "client installer media has not passed structural validation"
         );
-        let image = state.application.images.get(&client.master).await?;
-        let expected_type = match image.os_type {
-            crate::core::image::OsType::Windows => crate::persistence::InstallerMediaType::WinPe,
-            crate::core::image::OsType::Linux => crate::persistence::InstallerMediaType::LinuxLive,
-        };
-        anyhow::ensure!(
-            media.media_type == expected_type,
-            "installer media does not match the assigned image OS"
-        );
         spec.installer_iso = Some(media.managed_path.clone());
         Some(media)
     } else {
@@ -289,23 +280,6 @@ pub async fn ensure_client_boot_ready(
                             .context("active Super session has no installer media")?,
                     )
                     .await?;
-                let image = state
-                    .application
-                    .images
-                    .get(&session.prior_image_id)
-                    .await?;
-                let expected_type = match image.os_type {
-                    crate::core::image::OsType::Windows => {
-                        crate::persistence::InstallerMediaType::WinPe
-                    }
-                    crate::core::image::OsType::Linux => {
-                        crate::persistence::InstallerMediaType::LinuxLive
-                    }
-                };
-                anyhow::ensure!(
-                    media.media_type == expected_type,
-                    "Super installer media does not match the assigned image OS"
-                );
                 spec.dataset = session.working_clone.clone();
                 spec.source = crate::domain::storage::StorageSource::ExistingVolume(
                     session.working_clone.clone(),
@@ -506,7 +480,7 @@ mod tests {
             ),
             (
                 crate::infrastructure::dhcp::SuperBootReservation::Installer {
-                    media_type: crate::persistence::InstallerMediaType::LinuxLive,
+                    media_type: crate::persistence::InstallerMediaType::LinuxIso,
                     firmware: crate::domain::PxeMode::Uefi,
                 },
                 "Super installer boot for client",

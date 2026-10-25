@@ -106,7 +106,7 @@ it.each([false, true])("clears installation media with a full OS-boot assignment
 it("sends the selected installer together with its image when entering installation mode", async () => {
   const user = userEvent.setup();
   listInstallerMedia.mockResolvedValueOnce([
-    { id: "live-iso", display_name: "Linux Live", media_type: "linux_live", validation_state: "valid" },
+    { id: "live-iso", display_name: "Linux Live", media_type: "linux_iso", validation_state: "valid" },
   ]);
   confirm.mockResolvedValueOnce(true);
   const client = {
@@ -122,6 +122,30 @@ it("sends the selected installer together with its image when entering installat
   await user.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(updateClient).toHaveBeenCalledWith("pc002", expect.objectContaining({
     master: "linux", snapshot: null, installer_media_id: "live-iso",
+  })));
+});
+
+it("offers any valid installer ISO regardless of the selected image OS", async () => {
+  const user = userEvent.setup();
+  listInstallerMedia.mockResolvedValueOnce([
+    { id: "windows-iso", display_name: "Windows Setup", media_type: "windows_iso", validation_state: "valid" },
+    { id: "other-iso", display_name: "Other Tool", media_type: "other_iso", validation_state: "valid" },
+  ]);
+  confirm.mockResolvedValueOnce(true);
+  const client = {
+    id: "pc002", name: "pc002", mac: "52:54:00:11:00:02", ip: "192.168.123.10",
+    master: "linux", snapshot: null,
+  };
+  render(<ClientFormModal client={client} masters={[
+    { name: "linux", os_type: "linux", snapshots: [] },
+  ]} isOpen onClose={() => {}} refresh={() => {}} />);
+  await user.click(screen.getByRole("radio", { name: "OS installation" }));
+  expect(await screen.findByRole("option", { name: "Windows Setup" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "Other Tool" })).toBeInTheDocument();
+  await user.selectOptions(screen.getByLabelText("Installation image"), "windows-iso");
+  await user.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(updateClient).toHaveBeenCalledWith("pc002", expect.objectContaining({
+    master: "linux", snapshot: null, installer_media_id: "windows-iso",
   })));
 });
 

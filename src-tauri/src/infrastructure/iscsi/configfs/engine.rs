@@ -19,6 +19,26 @@ enum Undo {
     Link(PathBuf),
 }
 
+/// Compare LIO's FILEIO `info` attribute with the desired backing file.
+///
+/// The kernel prints `File: <path>  Size: <bytes>` (two spaces) and appends
+/// transport attributes, so match the fields rather than one exact layout.
+fn file_backing_matches(info: &str, device: &str, size: u64) -> bool {
+    let Some(rest) = info
+        .split_once(&format!("File: {device}"))
+        .map(|(_, rest)| rest)
+    else {
+        return false;
+    };
+    let Some(rest) = rest.trim_start().strip_prefix("Size: ") else {
+        return false;
+    };
+    rest.split_whitespace()
+        .next()
+        .and_then(|value| value.parse::<u64>().ok())
+        == Some(size)
+}
+
 impl<F: ConfigFs> Engine<F> {
     pub fn new(fs: F, root: PathBuf) -> Self {
         Self { fs, root }
@@ -216,10 +236,11 @@ impl<F: ConfigFs> Engine<F> {
         if lun.backing == IscsiLunBacking::File {
             let device = lun.block_device.to_str().context("invalid file path")?;
             let size = std::fs::metadata(&lun.block_device)?.len();
-            return Ok(self
-                .fs
-                .read(&path.join("info"))?
-                .contains(&format!("File: {device} Size: {size}")));
+            return Ok(file_backing_matches(
+                &self.fs.read(&path.join("info"))?,
+                device,
+                size,
+            ));
         }
         let device = self.fs.read(&path.join("udev_path"))?;
         let info = self.fs.read(&path.join("info"))?;
@@ -723,5 +744,35 @@ impl<F: ConfigFs> Engine<F> {
         }
         self.fs.rmdir(&tpg)?;
         self.fs.rmdir(&self.target(target))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::file_backing_matches;
+
+    #[test]
+    fn fileio_info_matches_kernel_layout() {
+        let info = "Status: DEACTIVATED  Max Queue Depth: 0  SectorSize: 512  HwMaxSectors: 16384\n        TCM FILEIO ID: 0        File: /srv/tftp/installer-media/installer.iso  Size: 6615449600  Mode: O_DSYNC Async: 0\n";
+        assert!(file_backing_matches(
+            info,
+            "/srv/tftp/installer-media/installer.iso",
+            6_615_449_600
+        ));
+        assert!(!file_backing_matches(
+            info,
+            "/srv/tftp/installer-media/installer.iso",
+            1
+        ));
+        assert!(!file_backing_matches(
+            info,
+            "/srv/tftp/installer-media/installer",
+            6_615_449_600
+        ));
+        assert!(!file_backing_matches(
+            info,
+            "/srv/tftp/installer-media/other.iso",
+            6_615_449_600
+        ));
     }
 }

@@ -382,6 +382,56 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(windows),
+        ignore = "requires Windows PowerShell; tests only the pure ID helper"
+    )]
+    fn cddb_identity_preserves_subsystem_and_rejects_registry_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("adapt.ps1");
+        fs::write(&script, ADAPT_SCRIPT).unwrap();
+        // Extract the pure function through the AST so the startup script's
+        // installation and registry operations are never executed by this test.
+        let output = std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", r#"
+$tokens = $null; $errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($env:DISKLESS_ADAPT_TEST_SCRIPT, [ref]$tokens, [ref]$errors)
+if ($errors.Count -ne 0) { throw 'Invalid adaptation script' }
+$helper = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-CriticalDeviceId' }, $false)
+if ($null -eq $helper) { throw 'ID helper missing' }
+. ([scriptblock]::Create($helper.Extent.Text))
+foreach ($id in @('pci\ven_8086&dev_15f3', 'PCI\VEN_8086&DEV_15F3&SUBSYS_00018086&REV_03', 'PCI\VEN_8086&DEV_15F3&SUBSYS_00028086&REV_03', 'PCI\VEN_8086&DEV_15F3&CC_020000')) {
+    Get-CriticalDeviceId $id
+}
+foreach ($id in @('PCI\VEN_8086&DEV_15F3\..\Other', 'PCI\VEN_8086&DEV_15F3&SUBSYS_BAD')) {
+    $rejected = $false
+    try { Get-CriticalDeviceId $id | Out-Null } catch { $rejected = $true }
+    if (-not $rejected) { throw 'Malformed ID was accepted' }
+}
+"#])
+            .env("DISKLESS_ADAPT_TEST_SCRIPT", &script)
+            .output()
+            .expect("Windows PowerShell is required");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8(output.stdout)
+                .unwrap()
+                .lines()
+                .collect::<Vec<_>>(),
+            vec![
+                "PCI#VEN_8086&DEV_15F3",
+                "PCI#VEN_8086&DEV_15F3&SUBSYS_00018086&REV_03",
+                "PCI#VEN_8086&DEV_15F3&SUBSYS_00028086&REV_03",
+                "PCI#VEN_8086&DEV_15F3&CC_020000",
+            ]
+        );
+    }
+
+    #[test]
     fn preserves_utf16le_group_policy_encoding() {
         let root = tempfile::tempdir().unwrap();
         let drivers = tempfile::tempdir().unwrap();

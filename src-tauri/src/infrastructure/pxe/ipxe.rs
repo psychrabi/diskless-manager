@@ -94,8 +94,10 @@ pub fn render_super_client_script(
         None => String::new(),
     };
     let label = match media_type {
+        crate::persistence::InstallerMediaType::WindowsIso => "Windows installer",
         crate::persistence::InstallerMediaType::WinPe => "Windows WinPE installer",
-        crate::persistence::InstallerMediaType::LinuxLive => "Linux live installer",
+        crate::persistence::InstallerMediaType::LinuxIso => "Linux installer",
+        crate::persistence::InstallerMediaType::OtherIso => "Other installer",
     };
     format!(
         "#!ipxe\ndhcp\n# Super installer boot for {slug} ({}, {label})\nset initiator-iqn {initiator_iqn}\nset target-iqn {target_iqn}\nset keep-san 1\n{chap_settings}sanhook --drive 0x81 iscsi:{server_ip}:::0:{target_iqn} || goto failed\nsanboot --no-describe iscsi:{server_ip}:::2:{target_iqn} || goto failed\n:failed\necho Super installer boot failed.\nshell\n",
@@ -514,7 +516,7 @@ mod tests {
     #[test]
     fn super_installer_boot_attaches_working_disk_before_verified_iso_for_each_media_and_firmware()
     {
-        use crate::persistence::InstallerMediaType::{LinuxLive, WinPe};
+        use crate::persistence::InstallerMediaType::{LinuxIso, OtherIso, WinPe, WindowsIso};
         use crate::{domain::PxeMode, infrastructure::iscsi::ChapCredentials};
 
         let chap = ChapCredentials {
@@ -522,10 +524,14 @@ mod tests {
             password: "Secret123".into(),
         };
         for (media, firmware) in [
+            (WindowsIso, PxeMode::Uefi),
+            (WindowsIso, PxeMode::Bios),
             (WinPe, PxeMode::Uefi),
             (WinPe, PxeMode::Bios),
-            (LinuxLive, PxeMode::Uefi),
-            (LinuxLive, PxeMode::Bios),
+            (LinuxIso, PxeMode::Uefi),
+            (LinuxIso, PxeMode::Bios),
+            (OtherIso, PxeMode::Uefi),
+            (OtherIso, PxeMode::Bios),
         ] {
             let script = render_super_client_script(
                 "PC001",
@@ -542,8 +548,10 @@ mod tests {
             assert!(script.find(working).unwrap() < script.find(installer).unwrap());
             assert!(script.contains("set keep-san 1"));
             assert!(script.contains(match media {
+                WindowsIso => "Windows installer",
                 WinPe => "Windows WinPE installer",
-                LinuxLive => "Linux live installer",
+                LinuxIso => "Linux installer",
+                OtherIso => "Other installer",
             }));
         }
     }

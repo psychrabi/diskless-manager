@@ -638,7 +638,7 @@ mod tests {
         let media = service
             .upload(
                 "Linux installer",
-                InstallerMediaType::LinuxLive,
+                InstallerMediaType::LinuxIso,
                 bytes.as_slice(),
             )
             .await
@@ -749,7 +749,7 @@ mod tests {
             assert!(service
                 .upload(
                     "invalid catalog",
-                    InstallerMediaType::LinuxLive,
+                    InstallerMediaType::LinuxIso,
                     image.as_slice()
                 )
                 .await
@@ -774,7 +774,7 @@ mod tests {
         image[17 * 2048 + 71..17 * 2048 + 75].copy_from_slice(&15u32.to_le_bytes());
 
         assert!(service
-            .upload("trailing", InstallerMediaType::LinuxLive, image.as_slice())
+            .upload("trailing", InstallerMediaType::LinuxIso, image.as_slice())
             .await
             .is_err());
         assert!(service.list().await.unwrap().is_empty());
@@ -787,7 +787,7 @@ mod tests {
         let changed = service
             .upload(
                 "changed",
-                InstallerMediaType::LinuxLive,
+                InstallerMediaType::LinuxIso,
                 bootable_iso(b"CHANGED").as_slice(),
             )
             .await
@@ -820,7 +820,7 @@ mod tests {
         let (mut writer, reader) = tokio::io::duplex(8);
         let upload = tokio::spawn(async move {
             service
-                .upload("interrupted", InstallerMediaType::LinuxLive, reader)
+                .upload("interrupted", InstallerMediaType::LinuxIso, reader)
                 .await
         });
         let partial = bootable_iso(b"PARTIAL");
@@ -840,7 +840,7 @@ mod tests {
         let (mut writer, reader) = tokio::io::duplex(8);
         let upload = tokio::spawn(async move {
             service
-                .upload("cancelled", InstallerMediaType::LinuxLive, reader)
+                .upload("cancelled", InstallerMediaType::LinuxIso, reader)
                 .await
         });
         let partial = bootable_iso(b"CANCELLED");
@@ -878,7 +878,7 @@ mod tests {
             service
                 .upload(
                     "cancelled after publish",
-                    InstallerMediaType::LinuxLive,
+                    InstallerMediaType::LinuxIso,
                     bootable_iso(b"PUBLISHED").as_slice(),
                 )
                 .await
@@ -923,7 +923,7 @@ mod tests {
         let media = service
             .upload(
                 "kept",
-                InstallerMediaType::LinuxLive,
+                InstallerMediaType::LinuxIso,
                 bootable_iso(b"KEPT").as_slice(),
             )
             .await
@@ -962,7 +962,7 @@ mod tests {
         assert!(service
             .upload(
                 "Linux",
-                InstallerMediaType::LinuxLive,
+                InstallerMediaType::LinuxIso,
                 bootable_iso(b"LINUX").as_slice()
             )
             .await
@@ -977,7 +977,7 @@ mod tests {
         let first = service
             .upload(
                 "Linux one",
-                InstallerMediaType::LinuxLive,
+                InstallerMediaType::LinuxIso,
                 bootable_iso(b"LINUX ONE").as_slice(),
             )
             .await
@@ -985,7 +985,7 @@ mod tests {
         let second = service
             .upload(
                 "Linux two",
-                InstallerMediaType::LinuxLive,
+                InstallerMediaType::LinuxIso,
                 bootable_iso(b"LINUX TWO").as_slice(),
             )
             .await
@@ -996,7 +996,7 @@ mod tests {
         let third = service
             .upload(
                 "Linux three",
-                InstallerMediaType::LinuxLive,
+                InstallerMediaType::LinuxIso,
                 bootable_iso(b"LINUX THREE").as_slice(),
             )
             .await

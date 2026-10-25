@@ -83,7 +83,8 @@ impl ConfigFs for FixtureFs {
                 .split_whitespace()
                 .next()
                 .unwrap_or("0");
-            self.attribute(info, &format!("File: {path} Size: {size}\n"))?;
+            // LIO separates the path and size with two spaces.
+            self.attribute(info, &format!("File: {path}  Size: {size}\n"))?;
         }
         if path.file_name().and_then(|s| s.to_str()) == Some("control")
             && value.starts_with("fd_dev_size=")
@@ -94,13 +95,13 @@ impl ConfigFs for FixtureFs {
                 .split("File: ")
                 .nth(1)
                 .unwrap_or_default()
-                .split(" Size:")
+                .split("  Size:")
                 .next()
                 .unwrap_or_default();
             self.attribute(
                 info,
                 &format!(
-                    "File: {device} Size: {}\n",
+                    "File: {device}  Size: {}\n",
                     value.trim_start_matches("fd_dev_size=")
                 ),
             )?;
@@ -459,7 +460,7 @@ fn named_file_lun_inspection_rejects_missing_wrong_or_writable_mappings() {
         } else if scenario == "wrong_backstore" {
             let other = dir.path().join("core/fileio_9/other");
             std::fs::create_dir_all(&other).unwrap();
-            std::fs::write(other.join("info"), "File: /tmp/other.iso Size: 10").unwrap();
+            std::fs::write(other.join("info"), "File: /tmp/other.iso  Size: 10").unwrap();
             let lun = tpg.join("lun/lun_1");
             std::fs::remove_file(lun.join("diskless")).unwrap();
             symlink(other, lun.join("diskless")).unwrap();
@@ -897,10 +898,17 @@ fn partial_owned_removal_is_persisted_and_remaining_resources_are_retained() {
 #[test]
 #[ignore = "requires root, initialized LIO, and DISKLESS_TEST_ZVOL pointing to a disposable, unexported ZFS volume"]
 fn real_lio_create_inspect_and_remove() {
+    use std::io::Write;
+
     let device = std::env::var("DISKLESS_TEST_ZVOL").expect("set disposable test ZVOL");
     let name = format!("diskless_test_{}", uuid::Uuid::new_v4().simple());
     let mut spec =
         IscsiTargetSpec::new(format!("iqn.2024-01.com.diskless:{name}"), &name, device, 0);
+    let mut iso = tempfile::NamedTempFile::new().unwrap();
+    iso.write_all(b"synthetic installer media").unwrap();
+    spec.luns
+        .push(IscsiLunSpec::readonly_file(1, "installer_test", iso.path()));
+    spec.initiator_iqn = Some("iqn.2026-01.client:client.selftest".into());
     spec.portal_address = "127.0.0.1".into();
     spec.portal_port = 43260;
     validate_spec(&spec).unwrap();
@@ -910,11 +918,14 @@ fn real_lio_create_inspect_and_remove() {
     engine
         .execute(Operation::Create(spec.clone()), &mut || Ok(()))
         .unwrap();
+    engine
+        .execute(Operation::VerifyFileMappings(spec.clone()), &mut || Ok(()))
+        .unwrap();
     let inspected = engine.execute(Operation::Inspect(spec.clone()), &mut || Ok(()));
     let cleanup = engine.execute(
         Operation::RemoveOwned {
             target: spec.target_iqn.clone(),
-            backstores: vec![name],
+            backstores: vec![name, "installer_test".into()],
         },
         &mut || Ok(()),
     );
