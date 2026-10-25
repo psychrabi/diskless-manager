@@ -1,4 +1,4 @@
-//! Headless Windows servicing helper for Diskless Manager.
+//! Windows servicing helper for Diskless Manager.
 //!
 //! Protocol:
 //!   diskless-windows-servicer.exe capabilities
@@ -9,6 +9,10 @@
 //! The prepare command reads WindowsImagePreparationRequest JSON from stdin and
 //! writes a versioned JSON response to stdout.
 
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
+#[cfg(windows)]
+mod gui;
 #[path = "../../../src-tauri/src/infrastructure/pxe/windows_boot_arming.rs"]
 mod windows_boot_arming;
 mod windows_client_report;
@@ -171,6 +175,17 @@ fn main() {
             eprintln!("unknown command: {other}");
             eprintln!("usage: diskless-windows-servicer <capabilities|prepare|report-client|collect-nic|install-nic-drivers|report-service>");
             2
+        }
+        None if cfg!(windows) => {
+            #[cfg(windows)]
+            {
+                gui::run().map(|_| 0).unwrap_or_else(|error| {
+                    eprintln!("GUI failed: {error:#}");
+                    1
+                })
+            }
+            #[cfg(not(windows))]
+            unreachable!();
         }
         None => {
             eprintln!("usage: diskless-windows-servicer <capabilities|prepare|report-client|collect-nic|install-nic-drivers|report-service>");

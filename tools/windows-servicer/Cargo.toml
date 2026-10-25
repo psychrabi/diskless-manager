@@ -14,6 +14,7 @@ zip = "2.2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Services"] }
+eframe = "0.29"
 
 [profile.release]
 codegen-units = 1
