@@ -70,6 +70,42 @@ impl ConfigFs for FixtureFs {
                 &value.replace("readonly=", "readonly: "),
             )?;
         }
+        if path.file_name().and_then(|s| s.to_str()) == Some("control")
+            && value.starts_with("fd_dev_name=")
+        {
+            let info = path.with_file_name("info");
+            let previous = std::fs::read_to_string(&info).unwrap_or_default();
+            let path = value.trim_start_matches("fd_dev_name=");
+            let size = previous
+                .split("Size: ")
+                .nth(1)
+                .unwrap_or_default()
+                .split_whitespace()
+                .next()
+                .unwrap_or("0");
+            // LIO separates the path and size with two spaces.
+            self.attribute(info, &format!("File: {path}  Size: {size}\n"))?;
+        }
+        if path.file_name().and_then(|s| s.to_str()) == Some("control")
+            && value.starts_with("fd_dev_size=")
+        {
+            let info = path.with_file_name("info");
+            let previous = std::fs::read_to_string(&info).unwrap_or_default();
+            let device = previous
+                .split("File: ")
+                .nth(1)
+                .unwrap_or_default()
+                .split("  Size:")
+                .next()
+                .unwrap_or_default();
+            self.attribute(
+                info,
+                &format!(
+                    "File: {device}  Size: {}\n",
+                    value.trim_start_matches("fd_dev_size=")
+                ),
+            )?;
+        }
         KernelFs.write(path, value)
     }
     fn mkdir(&self, path: &Path) -> Result<()> {
@@ -94,7 +130,18 @@ impl ConfigFs for FixtureFs {
             ] {
                 self.attribute(path.join(attr), value)?;
             }
-        } else if name.starts_with("iblock_") {
+        } else if path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|s| s.to_str())
+            == Some("iscsi")
+        {
+            for dir in ["param", "fabric_statistics"] {
+                let directory = path.join(dir);
+                std::fs::create_dir(&directory)?;
+                self.implicit.borrow_mut().insert(directory);
+            }
+        } else if name.starts_with("iblock_") || name.starts_with("fileio_") {
             self.attribute(path.join("hba_info"), "")?;
             self.attribute(path.join("hba_mode"), "0")?;
         } else if path
@@ -104,6 +151,13 @@ impl ConfigFs for FixtureFs {
             .unwrap()
             .to_string_lossy()
             .starts_with("iblock_")
+            || path
+                .parent()
+                .unwrap()
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("fileio_")
         {
             for attr in [
                 "udev_path",
@@ -114,6 +168,16 @@ impl ConfigFs for FixtureFs {
             ] {
                 self.attribute(path.join(attr), "")?;
             }
+        } else if path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|s| s.to_str())
+            == Some("acls")
+        {
+            for attr in ["auth/userid", "auth/password"] {
+                self.attribute(path.join(attr), "")?;
+            }
+            self.attribute(path.join("info"), "No active iSCSI Session")?;
         } else if name.starts_with("lun_") {
             self.attribute(path.join("write_protect"), "0")?;
         }
@@ -169,6 +233,372 @@ fn fixture() -> (tempfile::TempDir, Engine<FixtureFs>, IscsiTargetSpec) {
     )
     .unwrap();
     (dir, engine, spec)
+}
+
+#[test]
+fn named_acl_chap_survives_promotion_and_rotation() {
+    let (dir, engine, mut spec) = fixture();
+    spec.chap = Some(ChapCredentials {
+        username: "chap-test".into(),
+        password: "syntheticsecret1".into(),
+    });
+    engine
+        .execute(Operation::Create(spec.clone()), &mut || Ok(()))
+        .unwrap();
+    let tpg = dir
+        .path()
+        .join("iscsi/iqn.2024-01.com.diskless:test/tpgt_1");
+    std::fs::write(tpg.join("dynamic_sessions"), "active session\n").unwrap();
+    for initiator in ["iqn.test:first", "iqn.test:second"] {
+        spec.initiator_iqn = Some(initiator.into());
+        engine
+            .execute(Operation::EnsureAcl(spec.clone()), &mut || Ok(()))
+            .unwrap();
+        let acl = tpg.join("acls").join(initiator);
+        assert_eq!(
+            std::fs::read_to_string(acl.join("auth/userid")).unwrap(),
+            "chap-test"
+        );
+        assert_eq!(
+            std::fs::read_to_string(acl.join("auth/password")).unwrap(),
+            "syntheticsecret1"
+        );
+    }
+    let rotated = ChapCredentials {
+        username: "chap-test".into(),
+        password: "syntheticsecret2".into(),
+    };
+    engine
+        .execute(
+            Operation::SetChap {
+                target: spec.target_iqn.clone(),
+                chap: Some(rotated),
+            },
+            &mut || Ok(()),
+        )
+        .unwrap();
+    for directory in [
+        &tpg,
+        &tpg.join("acls/iqn.test:first"),
+        &tpg.join("acls/iqn.test:second"),
+    ] {
+        assert_eq!(
+            std::fs::read_to_string(directory.join("auth/password")).unwrap(),
+            "syntheticsecret2"
+        );
+    }
+    assert_eq!(
+        std::fs::read_to_string(tpg.join("dynamic_sessions")).unwrap(),
+        "active session\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(tpg.join("attrib/generate_node_acls")).unwrap(),
+        "1"
+    );
+    engine
+        .execute(
+            Operation::SetChap {
+                target: spec.target_iqn,
+                chap: None,
+            },
+            &mut || Ok(()),
+        )
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(tpg.join("attrib/authentication")).unwrap(),
+        "0"
+    );
+}
+
+#[test]
+fn named_acl_is_added_to_active_target_without_changing_dynamic_acl_mode() {
+    let (dir, engine, mut spec) = fixture();
+    engine
+        .execute(Operation::Create(spec.clone()), &mut || Ok(()))
+        .unwrap();
+    spec.initiator_iqn = Some("iqn.2026-01.client:client.pc001".into());
+    let tpg = dir
+        .path()
+        .join("iscsi/iqn.2024-01.com.diskless:test/tpgt_1");
+    std::fs::write(tpg.join("dynamic_sessions"), "active session\n").unwrap();
+    engine
+        .execute(Operation::EnsureAcl(spec.clone()), &mut || Ok(()))
+        .unwrap();
+    let acl = tpg.join("acls/iqn.2026-01.client:client.pc001");
+    assert!(acl.join("lun_0/diskless").is_symlink());
+    assert!(acl.join("lun_1/diskless").is_symlink());
+    assert_eq!(
+        std::fs::read_to_string(tpg.join("attrib/generate_node_acls")).unwrap(),
+        "1"
+    );
+    engine
+        .execute(Operation::EnsureAcl(spec), &mut || Ok(()))
+        .unwrap();
+    assert!(engine
+        .execute(
+            Operation::Create(IscsiTargetSpec::new(
+                "iqn.2024-01.com.diskless:test",
+                "block_test",
+                "/dev/zvol/diskless/test",
+                0
+            )),
+            &mut || Ok(())
+        )
+        .is_err());
+}
+
+#[test]
+fn failed_named_acl_mapping_keeps_promoted_live_acl_for_retry() {
+    let (dir, engine, mut spec) = fixture();
+    engine
+        .execute(Operation::Create(spec.clone()), &mut || Ok(()))
+        .unwrap();
+    spec.initiator_iqn = Some("iqn.2026-01.client:client.pc001".into());
+    let tpg = dir
+        .path()
+        .join("iscsi/iqn.2024-01.com.diskless:test/tpgt_1");
+    std::fs::write(tpg.join("dynamic_sessions"), "active session\n").unwrap();
+    *engine.fs.fail.borrow_mut() = Some("lun_1/write_protect".into());
+    assert!(engine
+        .execute(Operation::EnsureAcl(spec.clone()), &mut || Ok(()))
+        .is_err());
+    let acl = tpg.join("acls/iqn.2026-01.client:client.pc001");
+    assert!(
+        acl.exists(),
+        "live ACL must never be deleted during rollback"
+    );
+    assert_eq!(
+        std::fs::read_to_string(tpg.join("dynamic_sessions")).unwrap(),
+        "active session\n"
+    );
+    *engine.fs.fail.borrow_mut() = None;
+    engine
+        .execute(Operation::EnsureAcl(spec), &mut || Ok(()))
+        .unwrap();
+    assert!(acl.join("lun_1/diskless").is_symlink());
+}
+
+#[test]
+fn fileio_iso_is_mapped_readonly_and_dynamic_acls_are_write_protected() {
+    let (dir, engine, mut spec) = fixture();
+    let iso = dir.path().join("installer.iso");
+    std::fs::write(&iso, b"test iso").unwrap();
+    spec.luns = vec![
+        IscsiLunSpec::new(0, "block_test", "/dev/zvol/diskless/test"),
+        IscsiLunSpec::readonly_file(1, "installer_iso", &iso),
+    ];
+    spec.initiator_iqn = Some("iqn.test:client".into());
+
+    engine
+        .execute(Operation::Create(spec.clone()), &mut || Ok(()))
+        .unwrap();
+    engine
+        .execute(Operation::Create(spec.clone()), &mut || Ok(()))
+        .unwrap();
+
+    let core = dir.path().join("core");
+    let fileio = std::fs::read_dir(core)
+        .unwrap()
+        .map(Result::unwrap)
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("fileio_")
+        })
+        .unwrap();
+    let info = std::fs::read_to_string(fileio.join("installer_iso/info")).unwrap();
+    assert!(info.contains(iso.to_str().unwrap()));
+    assert!(info.contains("Size: 8"));
+    let tpg = dir
+        .path()
+        .join("iscsi/iqn.2024-01.com.diskless:test/tpgt_1");
+    assert_eq!(
+        std::fs::read_to_string(tpg.join("attrib/demo_mode_write_protect")).unwrap(),
+        "1"
+    );
+    assert_eq!(
+        std::fs::read_to_string(tpg.join("acls/iqn.test:client/lun_1/write_protect")).unwrap(),
+        "1"
+    );
+    assert_eq!(std::fs::read(&iso).unwrap(), b"test iso");
+}
+
+#[test]
+fn named_file_lun_inspection_rejects_missing_wrong_or_writable_mappings() {
+    use std::os::unix::fs::symlink;
+    for scenario in [
+        "valid",
+        "missing",
+        "wrong_lun",
+        "wrong_backstore",
+        "writable",
+    ] {
+        let (dir, engine, mut spec) = fixture();
+        let iso = dir.path().join("installer.iso");
+        std::fs::write(&iso, b"test iso").unwrap();
+        spec.luns = vec![
+            IscsiLunSpec::new(0, "block_test", "/dev/zvol/diskless/test"),
+            IscsiLunSpec::readonly_file(1, "installer_iso", &iso),
+        ];
+        spec.initiator_iqn = Some("iqn.test:client".into());
+        engine
+            .execute(Operation::Create(spec.clone()), &mut || Ok(()))
+            .unwrap();
+        let tpg = dir
+            .path()
+            .join("iscsi/iqn.2024-01.com.diskless:test/tpgt_1");
+        let mapping = tpg.join("acls/iqn.test:client/lun_1");
+        if scenario == "missing" {
+            std::fs::remove_dir_all(&mapping).unwrap();
+        } else if scenario == "writable" {
+            std::fs::write(mapping.join("write_protect"), "0").unwrap();
+        } else if scenario == "wrong_lun" {
+            std::fs::remove_file(mapping.join("diskless")).unwrap();
+            symlink(tpg.join("lun/lun_0"), mapping.join("diskless")).unwrap();
+        } else if scenario == "wrong_backstore" {
+            let other = dir.path().join("core/fileio_9/other");
+            std::fs::create_dir_all(&other).unwrap();
+            std::fs::write(other.join("info"), "File: /tmp/other.iso  Size: 10").unwrap();
+            let lun = tpg.join("lun/lun_1");
+            std::fs::remove_file(lun.join("diskless")).unwrap();
+            symlink(other, lun.join("diskless")).unwrap();
+        }
+        let result = engine.execute(Operation::VerifyFileMappings(spec), &mut || Ok(()));
+        assert_eq!(result.is_ok(), scenario == "valid", "{scenario}");
+    }
+}
+
+#[test]
+fn block_only_reconcile_keeps_dynamic_acls_protected_while_fileio_lun_remains() {
+    let (dir, engine, mut spec) = fixture();
+    let iso = dir.path().join("installer.iso");
+    std::fs::write(&iso, b"test iso").unwrap();
+    spec.luns = vec![
+        IscsiLunSpec::new(0, "block_test", "/dev/zvol/diskless/test"),
+        IscsiLunSpec::readonly_file(1, "installer_iso", &iso),
+    ];
+    engine
+        .execute(Operation::Create(spec.clone()), &mut || Ok(()))
+        .unwrap();
+
+    spec.luns = vec![IscsiLunSpec::new(
+        0,
+        "block_test",
+        "/dev/zvol/diskless/test",
+    )];
+    engine
+        .execute(Operation::Create(spec), &mut || Ok(()))
+        .unwrap();
+
+    let attribute = dir
+        .path()
+        .join("iscsi/iqn.2024-01.com.diskless:test/tpgt_1/attrib/demo_mode_write_protect");
+    assert_eq!(std::fs::read_to_string(attribute).unwrap(), "1");
+}
+
+#[test]
+fn preexisting_acl_with_writable_fileio_mapping_fails_closed() {
+    let (dir, engine, mut spec) = fixture();
+    let iso = dir.path().join("installer.iso");
+    std::fs::write(&iso, b"test iso").unwrap();
+    spec.luns = vec![IscsiLunSpec::readonly_file(1, "installer_iso", &iso)];
+    engine
+        .execute(Operation::Create(spec.clone()), &mut || Ok(()))
+        .unwrap();
+
+    let tpg = dir
+        .path()
+        .join("iscsi/iqn.2024-01.com.diskless:test/tpgt_1");
+    let acl = tpg.join("acls/iqn.test:second");
+    engine.fs.mkdir(&acl).unwrap();
+    let mapping = acl.join("lun_1");
+    engine.fs.mkdir(&mapping).unwrap();
+    std::os::unix::fs::symlink(tpg.join("lun/lun_1"), mapping.join("diskless")).unwrap();
+    std::fs::write(mapping.join("write_protect"), "0").unwrap();
+
+    assert!(engine
+        .execute(Operation::Create(spec), &mut || Ok(()))
+        .is_err());
+}
+
+#[test]
+fn fileio_rejects_symlinks_and_directories_before_target_creation() {
+    let (dir, engine, mut spec) = fixture();
+    let source = dir.path().join("source.iso");
+    let link = dir.path().join("linked.iso");
+    std::fs::write(&source, b"fake ISO").unwrap();
+    std::os::unix::fs::symlink(&source, &link).unwrap();
+    for path in [&link, dir.path()] {
+        spec.luns = vec![IscsiLunSpec::readonly_file(1, "installer_iso", path)];
+        assert!(engine
+            .execute(Operation::Create(spec.clone()), &mut || Ok(()))
+            .is_err());
+        assert!(!dir
+            .path()
+            .join("iscsi/iqn.2024-01.com.diskless:test")
+            .exists());
+    }
+}
+
+#[test]
+fn failed_fileio_acl_creation_rolls_back_lio_objects_without_deleting_iso() {
+    let (dir, engine, mut spec) = fixture();
+    let iso = dir.path().join("installer.iso");
+    std::fs::write(&iso, b"fake ISO").unwrap();
+    spec.luns = vec![IscsiLunSpec::readonly_file(1, "installer_iso", &iso)];
+    spec.initiator_iqn = Some("iqn.test:client".into());
+    *engine.fs.fail.borrow_mut() = Some("lun_1/write_protect".into());
+
+    assert!(engine
+        .execute(Operation::Create(spec), &mut || Ok(()))
+        .is_err());
+    assert_eq!(std::fs::read(&iso).unwrap(), b"fake ISO");
+    assert!(std::fs::read_dir(dir.path().join("core"))
+        .unwrap()
+        .next()
+        .is_none());
+}
+
+#[test]
+fn named_acl_rejects_wrong_backstore_and_readonly_without_changing_live_target() {
+    let (dir, engine, mut spec) = fixture();
+    engine
+        .execute(Operation::Create(spec.clone()), &mut || Ok(()))
+        .unwrap();
+    spec.initiator_iqn = Some("iqn.2026-01.client:client.pc001".into());
+    let tpg = dir
+        .path()
+        .join("iscsi/iqn.2024-01.com.diskless:test/tpgt_1");
+    std::fs::write(tpg.join("dynamic_sessions"), "active session\n").unwrap();
+    let correct = spec.clone();
+    spec.luns[0].backstore = "other".into();
+    assert!(engine
+        .execute(Operation::EnsureAcl(spec.clone()), &mut || Ok(()))
+        .is_err());
+    assert!(!tpg.join("acls/iqn.2026-01.client:client.pc001").exists());
+    spec = correct.clone();
+    spec.luns[0].readonly = true;
+    assert!(engine
+        .execute(Operation::EnsureAcl(spec), &mut || Ok(()))
+        .is_err());
+    assert!(!tpg.join("acls/iqn.2026-01.client:client.pc001").exists());
+    engine
+        .execute(Operation::EnsureAcl(correct.clone()), &mut || Ok(()))
+        .unwrap();
+    std::fs::write(
+        tpg.join("acls/iqn.2026-01.client:client.pc001/lun_0/write_protect"),
+        "1",
+    )
+    .unwrap();
+    assert!(engine
+        .execute(Operation::EnsureAcl(correct), &mut || Ok(()))
+        .is_err());
+    assert_eq!(
+        std::fs::read_to_string(tpg.join("dynamic_sessions")).unwrap(),
+        "active session\n"
+    );
 }
 
 #[test]
@@ -307,6 +737,26 @@ fn save_delegates_persistence_to_caller() {
 }
 
 #[test]
+fn removing_missing_target_is_idempotent_and_persists_state() {
+    let (_dir, engine, spec) = fixture();
+    let mut saves = 0;
+    let reply = engine
+        .execute(
+            Operation::RemoveTarget {
+                target: spec.target_iqn,
+            },
+            &mut || {
+                saves += 1;
+                Ok(())
+            },
+        )
+        .unwrap();
+
+    assert!(matches!(reply, Reply::Unit));
+    assert_eq!(saves, 1);
+}
+
+#[test]
 fn traversal_and_device_escape_are_rejected_before_mutation() {
     let (dir, engine, spec) = fixture();
     for bad in ["../outside", "a/b", ".", "..", "bad\nname"] {
@@ -391,12 +841,74 @@ fn owned_removal_preserves_game_disk_and_target() {
 }
 
 #[test]
+fn owned_removal_cleans_explicit_acl_mappings() {
+    let (dir, engine, spec) = fixture();
+    engine
+        .execute(Operation::Create(spec.clone()), &mut || Ok(()))
+        .unwrap();
+    let tpg = dir
+        .path()
+        .join("iscsi")
+        .join(&spec.target_iqn)
+        .join("tpgt_1");
+    let acl_lun = tpg.join("acls/iqn.client/lun_0");
+    std::fs::create_dir_all(&acl_lun).unwrap();
+    std::fs::write(tpg.join("acls/iqn.client/info"), "No active iSCSI Session").unwrap();
+    std::os::unix::fs::symlink(tpg.join("lun/lun_0"), acl_lun.join("diskless")).unwrap();
+
+    engine
+        .execute(
+            Operation::RemoveOwned {
+                target: spec.target_iqn.clone(),
+                backstores: vec!["block_test".into()],
+            },
+            &mut || Ok(()),
+        )
+        .unwrap();
+
+    assert!(!acl_lun.exists());
+    assert!(tpg.join("acls/iqn.client").exists());
+}
+
+#[test]
+fn partial_owned_removal_is_persisted_and_remaining_resources_are_retained() {
+    let (dir, engine, spec) = fixture();
+    engine
+        .execute(Operation::Create(spec.clone()), &mut || Ok(()))
+        .unwrap();
+    *engine.fs.fail.borrow_mut() = Some("block_test".into());
+    let mut saves = 0;
+
+    let result = engine.execute(
+        Operation::RemoveOwned {
+            target: spec.target_iqn.clone(),
+            backstores: vec!["block_test".into()],
+        },
+        &mut || {
+            saves += 1;
+            Ok(())
+        },
+    );
+
+    assert!(result.is_err());
+    assert_eq!(saves, 1);
+    assert!(dir.path().join("core/iblock_0/block_test").exists());
+}
+
+#[test]
 #[ignore = "requires root, initialized LIO, and DISKLESS_TEST_ZVOL pointing to a disposable, unexported ZFS volume"]
 fn real_lio_create_inspect_and_remove() {
+    use std::io::Write;
+
     let device = std::env::var("DISKLESS_TEST_ZVOL").expect("set disposable test ZVOL");
     let name = format!("diskless_test_{}", uuid::Uuid::new_v4().simple());
     let mut spec =
         IscsiTargetSpec::new(format!("iqn.2024-01.com.diskless:{name}"), &name, device, 0);
+    let mut iso = tempfile::NamedTempFile::new().unwrap();
+    iso.write_all(b"synthetic installer media").unwrap();
+    spec.luns
+        .push(IscsiLunSpec::readonly_file(1, "installer_test", iso.path()));
+    spec.initiator_iqn = Some("iqn.2026-01.client:client.selftest".into());
     spec.portal_address = "127.0.0.1".into();
     spec.portal_port = 43260;
     validate_spec(&spec).unwrap();
@@ -406,11 +918,14 @@ fn real_lio_create_inspect_and_remove() {
     engine
         .execute(Operation::Create(spec.clone()), &mut || Ok(()))
         .unwrap();
+    engine
+        .execute(Operation::VerifyFileMappings(spec.clone()), &mut || Ok(()))
+        .unwrap();
     let inspected = engine.execute(Operation::Inspect(spec.clone()), &mut || Ok(()));
     let cleanup = engine.execute(
         Operation::RemoveOwned {
             target: spec.target_iqn.clone(),
-            backstores: vec![name],
+            backstores: vec![name, "installer_test".into()],
         },
         &mut || Ok(()),
     );
@@ -426,4 +941,49 @@ fn real_lio_create_inspect_and_remove() {
         panic!()
     };
     assert!(state.is_ready());
+}
+
+#[test]
+fn target_removal_allows_kernel_attributes_but_preserves_other_portal_groups() {
+    let (dir, engine, spec) = fixture();
+    engine
+        .execute(Operation::Create(spec.clone()), &mut || Ok(()))
+        .unwrap();
+    let target = dir.path().join("iscsi").join(&spec.target_iqn);
+    assert!(target.join("fabric_statistics").exists());
+    std::fs::create_dir(target.join("tpgt_2")).unwrap();
+    assert!(engine
+        .execute(
+            Operation::RemoveTarget {
+                target: spec.target_iqn.clone()
+            },
+            &mut || Ok(())
+        )
+        .is_err());
+    assert!(target.join("tpgt_1").exists());
+    std::fs::remove_dir(target.join("tpgt_2")).unwrap();
+    engine
+        .execute(
+            Operation::RemoveTarget {
+                target: spec.target_iqn,
+            },
+            &mut || Ok(()),
+        )
+        .unwrap();
+    assert!(!target.exists());
+}
+
+#[test]
+fn hidden_cli_rejects_malformed_oversized_and_wrong_version_requests() {
+    let malformed = b"chap-secret=synthetic-test-secret";
+    let error = match super::decode_request(malformed) {
+        Ok(_) => panic!("malformed request unexpectedly decoded"),
+        Err(error) => error,
+    };
+    assert_eq!(error.to_string(), "invalid iSCSI request");
+    assert!(!error.to_string().contains("synthetic-test-secret"));
+    assert!(super::decode_request(&vec![b' '; (super::MAX_REQUEST + 1) as usize]).is_err());
+    assert!(super::decode_request(br#"{"version":99,"operation":"probe"}"#).is_err());
+    assert!(super::decode_request(br#"{"version":1,"operation":"probe","extra":true}"#).is_err());
+    assert!(super::decode_request(br#"{"version":1,"operation":"probe"}"#).is_ok());
 }

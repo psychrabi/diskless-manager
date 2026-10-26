@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 use crate::infrastructure::command::{run_command, run_command_input_redacted, run_command_output};
 
 use super::model::{
-    ChapCredentials, IscsiLunSpec, IscsiLunState, IscsiProvisionResult, IscsiTargetSpec,
-    IscsiTargetState,
+    ChapCredentials, IscsiLunBacking, IscsiLunSpec, IscsiLunState, IscsiProvisionResult,
+    IscsiTargetSpec, IscsiTargetState,
 };
 
 fn tree_has_node(output: &str, name: &str) -> bool {
@@ -24,7 +24,11 @@ fn parse_luns(output: &str) -> Vec<(u32, &str)> {
             let mut tokens = line.split_whitespace();
             while tokens.next()? != "o-" {}
             let lun = tokens.next()?.strip_prefix("lun")?.parse().ok()?;
-            let backstore = tokens.next()?.strip_prefix('[')?.rsplit('/').next()?;
+            let backstore = tokens
+                .find(|token| token.starts_with('['))?
+                .strip_prefix('[')?
+                .rsplit('/')
+                .next()?;
             Some((lun, backstore))
         })
         .collect()
@@ -37,7 +41,9 @@ fn parse_backstore<'a>(output: &'a str, name: &str) -> Option<(&'a str, bool)> {
         if tokens.next()? != name {
             return None;
         }
-        let device = tokens.next()?.strip_prefix('[')?;
+        let device = tokens
+            .find(|token| token.starts_with('['))?
+            .strip_prefix('[')?;
         Some((device, line.contains(") ro ")))
     })
 }
@@ -57,8 +63,22 @@ fn lock_mutations() -> Result<MutexGuard<'static, ()>> {
 /// `create_target_transaction()` is used by application provisioning
 /// when ownership information is required for safe rollback.
 pub trait IscsiProvisioner: Send + Sync {
+    /// Active peer addresses from this client's named ACL.
+    fn active_session_peer_ips(
+        &self,
+        target_iqn: &str,
+        client_name: &str,
+    ) -> Result<Vec<std::net::IpAddr>> {
+        super::reconcile::active_session_peer_ips(target_iqn, client_name)
+    }
     /// Create or reconcile the desired target configuration.
     fn create_target(&self, spec: &IscsiTargetSpec) -> Result<()>;
+
+    /// Add or repair only the managed client's named ACL and mappings.
+    /// The target and requested LUNs must already exist.
+    fn ensure_initiator_acl(&self, _spec: &IscsiTargetSpec) -> Result<()> {
+        Ok(())
+    }
 
     /// Create/reconcile an iSCSI target and report resources created
     /// by this particular transaction.
@@ -111,6 +131,11 @@ pub trait IscsiProvisioner: Send + Sync {
 
     /// Inspect actual target state.
     fn inspect_target(&self, spec: &IscsiTargetSpec) -> Result<IscsiTargetState>;
+
+    /// Verify the named initiator's requested file LUN mappings without changing LIO state.
+    fn verify_named_file_lun_mappings(&self, _spec: &IscsiTargetSpec) -> Result<()> {
+        bail!("named file LUN mapping inspection is unsupported")
+    }
 
     /// Reconcile actual infrastructure with desired state.
     fn reconcile(&self, spec: &IscsiTargetSpec) -> Result<()>;
@@ -167,8 +192,16 @@ impl TargetCliProvisioner {
         format!("{}/portals", Self::tpg_path(target_iqn))
     }
 
-    fn backstore_path(backstore: &str) -> String {
-        format!("/backstores/block/{backstore}")
+    fn backstore_root(lun: &IscsiLunSpec) -> &'static str {
+        if lun.backing == IscsiLunBacking::File {
+            "/backstores/fileio"
+        } else {
+            "/backstores/block"
+        }
+    }
+
+    fn backstore_path_for(lun: &IscsiLunSpec) -> String {
+        format!("{}/{}", Self::backstore_root(lun), lun.backstore)
     }
 
     fn wait_for_block_device(path: &Path) -> bool {
@@ -188,6 +221,7 @@ impl TargetCliProvisioner {
     }
 
     fn validate_spec(spec: &IscsiTargetSpec) -> Result<()> {
+        Self::validate_acl_spec(spec)?;
         if spec.target_iqn.trim().is_empty() {
             bail!("iSCSI target IQN cannot be empty");
         }
@@ -208,6 +242,7 @@ impl TargetCliProvisioner {
         let mut seen_backstores = std::collections::HashSet::new();
 
         for lun in &spec.luns {
+            lun.validate()?;
             if !seen_luns.insert(lun.lun) {
                 bail!("duplicate LUN {} in target '{}'", lun.lun, spec.target_iqn);
             }
@@ -231,14 +266,39 @@ impl TargetCliProvisioner {
                 );
             }
 
-            if !Self::wait_for_block_device(&lun.block_device) {
+            let is_file = lun.backing == IscsiLunBacking::File;
+            let valid = if is_file {
+                std::fs::symlink_metadata(&lun.block_device)
+                    .is_ok_and(|metadata| metadata.file_type().is_file())
+            } else {
+                Self::wait_for_block_device(&lun.block_device)
+            };
+            if !valid {
                 bail!(
-                    "iSCSI block device does not exist: {}",
+                    "iSCSI backing path is missing or has the wrong type: {}",
                     lun.block_device.display()
                 );
             }
         }
 
+        Ok(())
+    }
+
+    fn validate_acl_spec(spec: &IscsiTargetSpec) -> Result<()> {
+        let Some(initiator) = spec.initiator_iqn.as_deref() else {
+            return Ok(());
+        };
+        for iqn in [&spec.target_iqn, initiator] {
+            anyhow::ensure!(
+                iqn.starts_with("iqn.")
+                    && iqn.len() <= 223
+                    && iqn
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || b"._:-".contains(&c)),
+                "invalid iSCSI IQN"
+            );
+        }
+        anyhow::ensure!(!spec.luns.is_empty(), "iSCSI target must contain a LUN");
         Ok(())
     }
 
@@ -256,8 +316,13 @@ impl TargetCliProvisioner {
             .with_context(|| format!("failed to remove iSCSI target '{target_iqn}'"))
     }
 
-    fn configure_tpg(&self, spec: &IscsiTargetSpec) -> Result<()> {
+    fn configure_tpg(&self, spec: &IscsiTargetSpec, attached_luns: &str) -> Result<()> {
         let tpg = Self::tpg_path(&spec.target_iqn);
+        let protect_dynamic_acls = spec
+            .luns
+            .iter()
+            .any(|lun| lun.backing == IscsiLunBacking::File)
+            || attached_luns.lines().any(|line| line.contains("[fileio/"));
 
         let mut attributes = vec![
             "targetcli",
@@ -266,7 +331,11 @@ impl TargetCliProvisioner {
             "attribute",
             "generate_node_acls=1",
             "cache_dynamic_acls=1",
-            "demo_mode_write_protect=0",
+            if protect_dynamic_acls {
+                "demo_mode_write_protect=1"
+            } else {
+                "demo_mode_write_protect=0"
+            },
         ];
         if spec.chap.is_none() {
             attributes.push("authentication=0");
@@ -292,9 +361,13 @@ impl TargetCliProvisioner {
         Ok(())
     }
 
-    fn backstore_exists(&self, name: &str) -> Result<bool> {
-        let output = self.output(["targetcli", "/backstores/block", "ls"])?;
+    fn backstore_exists_at(&self, root: &str, name: &str) -> Result<bool> {
+        let output = self.output(["targetcli", root, "ls"])?;
         Ok(tree_has_node(&output, name))
+    }
+
+    fn backstore_exists(&self, lun: &IscsiLunSpec) -> Result<bool> {
+        self.backstore_exists_at(Self::backstore_root(lun), &lun.backstore)
     }
 
     fn create_backstore(&self, lun: &IscsiLunSpec, exists: bool) -> Result<()> {
@@ -306,15 +379,27 @@ impl TargetCliProvisioner {
                 )
             })?;
 
-            self.execute([
-                "targetcli",
-                "/backstores/block",
-                "create",
-                &lun.backstore,
-                device,
-                &format!("readonly={}", lun.readonly),
-            ])
-            .with_context(|| {
+            let args = if lun.backing == IscsiLunBacking::File {
+                let size = std::fs::metadata(&lun.block_device)?.len().to_string();
+                vec![
+                    "targetcli".to_string(),
+                    "/backstores/fileio".into(),
+                    "create".into(),
+                    lun.backstore.clone(),
+                    device.into(),
+                    size,
+                ]
+            } else {
+                vec![
+                    "targetcli".to_string(),
+                    "/backstores/block".into(),
+                    "create".into(),
+                    lun.backstore.clone(),
+                    device.into(),
+                    format!("readonly={}", lun.readonly),
+                ]
+            };
+            self.execute(args).with_context(|| {
                 format!(
                     "failed to create iSCSI backstore '{}' for '{}'",
                     lun.backstore, device
@@ -326,19 +411,38 @@ impl TargetCliProvisioner {
     }
 
     fn remove_backstore(&self, backstore: &str) -> Result<()> {
-        if !self.backstore_exists(backstore)? {
+        let block_exists = self.backstore_exists_at("/backstores/block", backstore)?;
+        let file_exists = self.backstore_exists_at("/backstores/fileio", backstore)?;
+        anyhow::ensure!(
+            !(block_exists && file_exists),
+            "backstore name '{backstore}' exists under both block and fileio"
+        );
+        let root = if block_exists {
+            "/backstores/block"
+        } else if file_exists {
+            "/backstores/fileio"
+        } else {
             return Ok(());
-        }
-
-        self.execute(["targetcli", "/backstores/block", "delete", backstore])
+        };
+        self.execute(["targetcli", root, "delete", backstore])
             .with_context(|| format!("failed to remove iSCSI backstore '{}'", backstore))
     }
 
     fn backstore_matches(&self, lun: &IscsiLunSpec) -> Result<bool> {
-        let backstore = &lun.backstore;
-        let output = self.output(["targetcli", &Self::backstore_path(backstore), "ls"])?;
-        Ok(parse_backstore(&output, backstore)
-            == lun.block_device.to_str().map(|p| (p, lun.readonly)))
+        let output = self.output(["targetcli", &Self::backstore_path_for(lun), "ls"])?;
+        Ok(Self::backstore_matches_output(lun, &output))
+    }
+
+    fn backstore_matches_output(lun: &IscsiLunSpec, output: &str) -> bool {
+        if lun.backing == IscsiLunBacking::BlockDevice {
+            parse_backstore(output, &lun.backstore)
+                == lun.block_device.to_str().map(|p| (p, lun.readonly))
+        } else {
+            output.lines().any(|line| {
+                line.contains(&lun.backstore)
+                    && line.contains(lun.block_device.to_str().unwrap_or_default())
+            })
+        }
     }
 
     fn lun_exists(&self, target_iqn: &str, lun_number: u32) -> Result<bool> {
@@ -353,7 +457,7 @@ impl TargetCliProvisioner {
             return Ok(());
         }
 
-        let backstore = Self::backstore_path(&lun.backstore);
+        let backstore = Self::backstore_path_for(lun);
         let lun_number = lun.lun.to_string();
 
         self.execute([
@@ -369,6 +473,133 @@ impl TargetCliProvisioner {
                 lun.backstore, lun.lun
             )
         })
+    }
+
+    fn ensure_acl_inner(&self, spec: &IscsiTargetSpec) -> Result<bool> {
+        let Some(initiator) = spec.initiator_iqn.as_deref() else {
+            return Ok(false);
+        };
+        let tpg_luns = self.output(["targetcli", &Self::lun_path(&spec.target_iqn), "ls"])?;
+        let present = parse_luns(&tpg_luns);
+        for lun in &spec.luns {
+            anyhow::ensure!(
+                present
+                    .iter()
+                    .any(|(number, backstore)| *number == lun.lun && *backstore == lun.backstore),
+                "requested LUN is missing or points to another backstore"
+            );
+        }
+        let acls = format!("{}/acls", Self::tpg_path(&spec.target_iqn));
+        let mut changed = false;
+        if !tree_has_node(&self.output(["targetcli", &acls, "ls"])?, initiator) {
+            self.execute([
+                "targetcli",
+                &acls,
+                "create",
+                initiator,
+                "add_mapped_luns=false",
+            ])
+            .context("failed to create named iSCSI ACL")?;
+            changed = true;
+        }
+        let acl = format!("{acls}/{initiator}");
+        // Promoted ACLs use node_auth rather than the TPG's dynamic credentials.
+        if let Some(chap) = spec.chap.as_ref() {
+            self.set_chap(&acl, chap)?;
+            changed = true;
+        }
+        let mappings = self.output(["targetcli", &acl, "ls"])?;
+        for lun in &spec.luns {
+            let mapped = format!("mapped_lun{}", lun.lun);
+            if tree_has_node(&mappings, &mapped) {
+                let store_type = if lun.backing == IscsiLunBacking::File {
+                    "fileio"
+                } else {
+                    "block"
+                };
+                let expected = format!(
+                    "[lun{} {store_type}/{} ({})]",
+                    lun.lun,
+                    lun.backstore,
+                    if lun.readonly { "ro" } else { "rw" }
+                );
+                anyhow::ensure!(
+                    mappings
+                        .lines()
+                        .any(|line| line.contains(&mapped) && line.contains(&expected)),
+                    "existing ACL mapping conflicts with desired LUN"
+                );
+            } else {
+                let number = lun.lun.to_string();
+                let readonly = if lun.readonly { "1" } else { "0" };
+                self.execute(["targetcli", &acl, "create", &number, &number, readonly])
+                    .context("failed to map named iSCSI ACL LUN")?;
+                changed = true;
+            }
+        }
+        Ok(changed)
+    }
+
+    fn ensure_fileio_acl_mappings_readonly(
+        &self,
+        spec: &IscsiTargetSpec,
+        known_attached_luns: Option<&str>,
+    ) -> Result<()> {
+        let mut file_luns: Vec<_> = spec
+            .luns
+            .iter()
+            .filter(|lun| lun.backing == IscsiLunBacking::File)
+            .map(|lun| (lun.lun, lun.backstore.as_str()))
+            .collect();
+        let mut stale_file_luns = Vec::new();
+        let queried_attached_luns;
+        let attached_luns = if let Some(attached_luns) = known_attached_luns {
+            attached_luns
+        } else {
+            queried_attached_luns =
+                self.output(["targetcli", &Self::lun_path(&spec.target_iqn), "ls"])?;
+            &queried_attached_luns
+        };
+        for line in attached_luns.lines() {
+            let Some((lun, backing)) = parse_luns(line).first().copied() else {
+                continue;
+            };
+            if line.contains("[fileio/") && !file_luns.iter().any(|(number, _)| *number == lun) {
+                let name = backing.to_owned();
+                // Keep the discovered name alive while the validation loop runs.
+                // Existing requested names borrow from `spec`; stale ones are stored below.
+                stale_file_luns.push((lun, name));
+            }
+        }
+        file_luns.extend(
+            stale_file_luns
+                .iter()
+                .map(|(lun, name)| (*lun, name.as_str())),
+        );
+        if file_luns.is_empty() {
+            return Ok(());
+        }
+        let acls = format!("{}/acls", Self::tpg_path(&spec.target_iqn));
+        for initiator in self
+            .output(["targetcli", &acls, "ls"])?
+            .lines()
+            .filter_map(|line| line.strip_prefix("  o- ")?.split_whitespace().next())
+        {
+            let acl = format!("{acls}/{initiator}");
+            let mappings = self.output(["targetcli", &acl, "ls"])?;
+            for (lun_number, backstore) in &file_luns {
+                let mapped = format!("mapped_lun{lun_number}");
+                let line = mappings.lines().find(|line| line.contains(&mapped));
+                if let Some(line) = line {
+                    let expected = format!("[lun{lun_number} fileio/{backstore} (ro)]");
+                    anyhow::ensure!(
+                        line.contains(&expected),
+                        "file LUN ACL mapping is not read-only"
+                    );
+                }
+            }
+        }
+        Ok(())
     }
 
     fn remove_lun(&self, target_iqn: &str, lun_number: u32) -> Result<()> {
@@ -461,7 +692,7 @@ impl TargetCliProvisioner {
             .into_iter()
             .find_map(|(number, backstore)| (number == lun.lun).then_some(backstore));
         let exists = mapped_backstore.is_some();
-        let backstore_exists = self.backstore_exists(&lun.backstore)?;
+        let backstore_exists = self.backstore_exists(lun)?;
         let block_device_matches = if backstore_exists && mapped_backstore == Some(&lun.backstore) {
             self.backstore_matches(lun)?
         } else {
@@ -553,6 +784,24 @@ impl TargetCliProvisioner {
 }
 
 impl IscsiProvisioner for TargetCliProvisioner {
+    fn ensure_initiator_acl(&self, spec: &IscsiTargetSpec) -> Result<()> {
+        if spec.initiator_iqn.is_none() {
+            return Ok(());
+        }
+        let _guard = lock_mutations()?;
+        Self::validate_acl_spec(spec)?;
+        let operation = self
+            .ensure_acl_inner(spec)
+            .and_then(|_| self.ensure_fileio_acl_mappings_readonly(spec, None));
+        // Even a failed promotion can have retained a live ACL that must survive reboot.
+        match (operation, self.save()) {
+            (Err(error), Err(save)) => {
+                Err(error).context(format!("also failed to persist iSCSI ACL state: {save:#}"))
+            }
+            (Err(error), _) => Err(error),
+            (_, saved) => saved,
+        }
+    }
     fn create_target(&self, spec: &IscsiTargetSpec) -> Result<()> {
         self.create_target_transaction(spec).map(|_| ())
     }
@@ -566,24 +815,40 @@ impl IscsiProvisioner for TargetCliProvisioner {
         let operation = (|| -> Result<()> {
             let target_existed = self.target_exists(&spec.target_iqn)?;
 
+            if target_existed && spec.initiator_iqn.is_some() {
+                anyhow::ensure!(
+                    !super::reconcile::target_has_active_sessions(&spec.target_iqn)?,
+                    "cannot provision target while an initiator is connected"
+                );
+            }
+
             self.create_target_object(spec, target_existed)?;
 
             if !target_existed {
                 created.target_created = true;
             }
 
-            self.configure_tpg(spec)?;
+            let output = self.output(["targetcli", &Self::lun_path(&spec.target_iqn), "ls"])?;
+            self.configure_tpg(spec, &output)?;
 
             // Specs have unique backstores/LUNs and mutations are serialized, so
             // each inventory is needed only once for this transaction.
-            let backstores = self.output(["targetcli", "/backstores/block", "ls"])?;
+            let block_backstores = self.output(["targetcli", "/backstores/block", "ls"])?;
+            let file_backstores = self.output(["targetcli", "/backstores/fileio", "ls"])?;
             for lun in &spec.luns {
-                let existed = tree_has_node(&backstores, &lun.backstore);
+                let (inventory, other_inventory) = if lun.backing == IscsiLunBacking::File {
+                    (&file_backstores, &block_backstores)
+                } else {
+                    (&block_backstores, &file_backstores)
+                };
+                let existed = tree_has_node(inventory, &lun.backstore);
+                anyhow::ensure!(
+                    !tree_has_node(other_inventory, &lun.backstore),
+                    "backstore name '{}' already exists with a different backing type",
+                    lun.backstore
+                );
 
-                if existed
-                    && parse_backstore(&backstores, &lun.backstore)
-                        != lun.block_device.to_str().map(|p| (p, lun.readonly))
-                {
+                if existed && !Self::backstore_matches_output(lun, inventory) {
                     bail!(
                         "existing iSCSI backstore '{}' has a different device or readonly state",
                         lun.backstore
@@ -596,7 +861,6 @@ impl IscsiProvisioner for TargetCliProvisioner {
                 }
             }
 
-            let output = self.output(["targetcli", &Self::lun_path(&spec.target_iqn), "ls"])?;
             let luns = parse_luns(&output);
             for lun in &spec.luns {
                 let existing_backstore = luns
@@ -626,6 +890,9 @@ impl IscsiProvisioner for TargetCliProvisioner {
             if !portal_existed {
                 created.portal_created = true;
             }
+
+            self.ensure_acl_inner(spec)?;
+            self.ensure_fileio_acl_mappings_readonly(spec, Some(&output))?;
 
             self.save()?;
             Ok(())
@@ -727,6 +994,15 @@ impl IscsiProvisioner for TargetCliProvisioner {
                         chap.username
                     )
                 })?;
+                let acls = format!("{tpg}/acls");
+                let output = self.output(["targetcli", &acls, "ls"])?;
+                for initiator in output
+                    .lines()
+                    .filter_map(|line| line.strip_prefix("  o- ")?.split_whitespace().next())
+                {
+                    self.set_chap(&format!("{acls}/{initiator}"), chap)
+                        .context("failed to update named iSCSI ACL credentials")?;
+                }
             }
             None => {
                 self.execute(["targetcli", &tpg, "set", "attribute", "authentication=0"])
@@ -760,7 +1036,12 @@ impl IscsiProvisioner for TargetCliProvisioner {
                 lun: number,
                 backstore: backstore.to_string(),
                 exists: true,
-                backstore_exists: self.backstore_exists(backstore).unwrap_or(false),
+                backstore_exists: self
+                    .backstore_exists_at("/backstores/block", backstore)
+                    .unwrap_or(false)
+                    || self
+                        .backstore_exists_at("/backstores/fileio", backstore)
+                        .unwrap_or(false),
                 block_device_matches: false,
             });
         }
@@ -812,6 +1093,45 @@ impl IscsiProvisioner for TargetCliProvisioner {
         ))
     }
 
+    fn verify_named_file_lun_mappings(&self, spec: &IscsiTargetSpec) -> Result<()> {
+        let file_luns: Vec<_> = spec
+            .luns
+            .iter()
+            .filter(|lun| lun.backing == IscsiLunBacking::File)
+            .collect();
+        if file_luns.is_empty() {
+            return Ok(());
+        }
+        let initiator = spec
+            .initiator_iqn
+            .as_deref()
+            .context("file LUN mapping verification requires a named initiator")?;
+        let acls = format!("{}/acls", Self::tpg_path(&spec.target_iqn));
+        let acl_listing = self.output(["targetcli", &acls, "ls"])?;
+        anyhow::ensure!(
+            tree_has_node(&acl_listing, initiator),
+            "named initiator ACL is missing"
+        );
+        let mappings = self.output(["targetcli", &format!("{acls}/{initiator}"), "ls"])?;
+        for lun in file_luns {
+            let name = format!("mapped_lun{}", lun.lun);
+            let matches: Vec<_> = mappings
+                .lines()
+                .filter(|line| tree_has_node(line, &name))
+                .collect();
+            anyhow::ensure!(
+                matches.len() == 1,
+                "named initiator file LUN mapping is missing or ambiguous"
+            );
+            let expected = format!("[lun{} fileio/{} (ro)]", lun.lun, lun.backstore);
+            anyhow::ensure!(
+                matches[0].contains(&expected),
+                "named initiator file LUN mapping does not match the expected read-only LUN"
+            );
+        }
+        Ok(())
+    }
+
     fn reconcile(&self, spec: &IscsiTargetSpec) -> Result<()> {
         Self::validate_spec(spec)?;
 
@@ -819,6 +1139,8 @@ impl IscsiProvisioner for TargetCliProvisioner {
 
         if !state.is_ready() {
             self.create_target(spec)?;
+        } else {
+            self.ensure_initiator_acl(spec)?;
         }
 
         Ok(())
@@ -827,6 +1149,187 @@ impl IscsiProvisioner for TargetCliProvisioner {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn named_file_lun_inspection_rejects_missing_wrong_or_writable_acl_mappings() {
+        use crate::infrastructure::iscsi::{IscsiLunSpec, IscsiProvisioner, IscsiTargetSpec};
+        use std::{fs, os::unix::fs::PermissionsExt};
+        const CHILD: &str = "DISKLESS_FILE_ACL_INSPECTION";
+        if std::env::var_os(CHILD).is_some() {
+            let scenario = std::env::var("DISKLESS_ACL_SCENARIO").unwrap();
+            let mut spec = IscsiTargetSpec::with_luns(
+                "iqn.test:client-target",
+                vec![IscsiLunSpec::readonly_file(
+                    1,
+                    "installer",
+                    "/tmp/installer.iso",
+                )],
+            )
+            .unwrap();
+            spec.initiator_iqn = Some("iqn.test:client".into());
+            let result = super::TargetCliProvisioner::new().verify_named_file_lun_mappings(&spec);
+            assert_eq!(
+                result.is_ok(),
+                scenario == "valid",
+                "{scenario}: {result:?}"
+            );
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let sudo = dir.path().join("sudo");
+        fs::write(&sudo, r#"#!/bin/sh
+case "$*" in
+  *'/tpg1/acls ls') if test "$DISKLESS_ACL_SCENARIO" != missing_acl; then printf '  o- iqn.test:client [Mapped LUNs: 1]\n'; fi;;
+  *'/tpg1/acls/iqn.test:client ls') case "$DISKLESS_ACL_SCENARIO" in missing_mapping) :;; wrong_lun) printf '  o- mapped_lun1 [lun0 fileio/installer (ro)]\n';; wrong_backstore) printf '  o- mapped_lun1 [lun1 fileio/other (ro)]\n';; writable) printf '  o- mapped_lun1 [lun1 fileio/installer (rw)]\n';; *) printf '  o- mapped_lun1 [lun1 fileio/installer (ro)]\n';; esac;;
+esac
+exit 0
+"#).unwrap();
+        fs::set_permissions(&sudo, fs::Permissions::from_mode(0o755)).unwrap();
+        for scenario in [
+            "valid",
+            "missing_acl",
+            "missing_mapping",
+            "wrong_lun",
+            "wrong_backstore",
+            "writable",
+        ] {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "infrastructure::iscsi::targetcli::tests::named_file_lun_inspection_rejects_missing_wrong_or_writable_acl_mappings"])
+                .env(CHILD, "1").env("DISKLESS_ACL_SCENARIO", scenario).env("PATH", dir.path())
+                .output().unwrap();
+            assert!(
+                output.status.success(),
+                "{scenario}: {}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+
+    #[test]
+    fn named_acl_chap_survives_promotion_and_rotation() {
+        use crate::infrastructure::iscsi::{ChapCredentials, IscsiProvisioner, IscsiTargetSpec};
+        use std::{fs, os::unix::fs::PermissionsExt};
+        const CHILD: &str = "DISKLESS_ACL_CHAP_TEST";
+        if std::env::var_os(CHILD).is_some() {
+            let mut spec = IscsiTargetSpec::new("iqn.test:custom", "block_pc001", "/dev/null", 0);
+            spec.initiator_iqn = Some("iqn.test:first".into());
+            spec.chap = Some(ChapCredentials {
+                username: "chap-test".into(),
+                password: "syntheticsecret1".into(),
+            });
+            let backend = super::TargetCliProvisioner::new();
+            backend.ensure_initiator_acl(&spec).unwrap();
+            spec.chap.as_mut().unwrap().password = "syntheticsecret2".into();
+            backend
+                .set_chap_auth(&spec.target_iqn, spec.chap.as_ref())
+                .unwrap();
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let sudo = dir.path().join("sudo");
+        fs::write(&sudo, r#"#!/bin/sh
+printf '%s\n' "$*" >> "$DISKLESS_COMMAND_LOG"
+case "$*" in
+  '-n targetcli') while IFS= read -r line; do printf '%s\n' "$line" >> "$DISKLESS_COMMAND_LOG.stdin"; done;;
+  *'/tpg1/luns ls') printf '  o- lun0 [block/block_pc001 (/dev/null)]\n';;
+  *'/tpg1/acls ls') if test -f "$DISKLESS_COMMAND_LOG.acl"; then printf '  o- iqn.test:first [Mapped LUNs: 1]\n  o- iqn.test:second [Mapped LUNs: 1]\n'; fi;;
+  *'/tpg1/acls create '*) : > "$DISKLESS_COMMAND_LOG.acl";;
+esac
+exit 0
+"#).unwrap();
+        fs::set_permissions(&sudo, fs::Permissions::from_mode(0o755)).unwrap();
+        let log = dir.path().join("commands");
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "infrastructure::iscsi::targetcli::tests::named_acl_chap_survives_promotion_and_rotation"])
+            .env(CHILD, "1").env("PATH", dir.path()).env("DISKLESS_COMMAND_LOG", &log)
+            .output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let input = fs::read_to_string(log.with_extension("stdin")).unwrap();
+        assert!(
+            input.contains(
+                "/tpg1/acls/iqn.test:first set auth userid=chap-test password=syntheticsecret1"
+            ),
+            "{input}"
+        );
+        for path in [
+            "/tpg1",
+            "/tpg1/acls/iqn.test:first",
+            "/tpg1/acls/iqn.test:second",
+        ] {
+            assert!(
+                input.contains(&format!(
+                    "{path} set auth userid=chap-test password=syntheticsecret2"
+                )),
+                "{input}"
+            );
+        }
+        let commands = fs::read_to_string(log).unwrap();
+        assert!(
+            !commands.contains("syntheticsecret"),
+            "credentials must not be command arguments"
+        );
+        assert!(!commands.contains("delete"), "{commands}");
+    }
+
+    #[test]
+    fn named_acl_only_adds_requested_existing_luns_and_is_idempotent() {
+        use crate::infrastructure::iscsi::{IscsiProvisioner, IscsiTargetSpec};
+        use std::{fs, os::unix::fs::PermissionsExt};
+        const CHILD: &str = "DISKLESS_ACL_TEST";
+        if std::env::var_os(CHILD).is_some() {
+            let mut spec = IscsiTargetSpec::new("iqn.test:custom", "block_pc001", "/dev/null", 0);
+            spec.initiator_iqn = Some("iqn.2026-01.client:client.pc001".into());
+            let backend = super::TargetCliProvisioner::new();
+            backend.ensure_initiator_acl(&spec).unwrap();
+            backend.ensure_initiator_acl(&spec).unwrap();
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let sudo = dir.path().join("sudo");
+        fs::write(&sudo, r#"#!/bin/sh
+printf '%s\n' "$*" >> "$DISKLESS_COMMAND_LOG"
+case "$*" in
+  *'/tpg1/luns ls') printf '  o- lun0 [block/block_pc001 (/dev/null)]\n  o- lun1 [block/other (/dev/null)]\n';;
+  *'/tpg1/acls ls') if test -f "$DISKLESS_COMMAND_LOG.acl"; then printf '  o- iqn.2026-01.client:client.pc001 [Mapped LUNs: 1]\n'; fi;;
+  *'/tpg1/acls/iqn.2026-01.client:client.pc001 ls') if test -f "$DISKLESS_COMMAND_LOG.map"; then printf '  o- mapped_lun0 [lun0 block/block_pc001 (rw)]\n'; fi;;
+  *'/tpg1/acls create '*) : > "$DISKLESS_COMMAND_LOG.acl";;
+  *'/tpg1/acls/iqn.2026-01.client:client.pc001 create '*) : > "$DISKLESS_COMMAND_LOG.map";;
+esac
+exit 0
+"#).unwrap();
+        fs::set_permissions(&sudo, fs::Permissions::from_mode(0o755)).unwrap();
+        let log = dir.path().join("commands");
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "infrastructure::iscsi::targetcli::tests::named_acl_only_adds_requested_existing_luns_and_is_idempotent"])
+            .env(CHILD, "1").env("PATH", dir.path()).env("DISKLESS_COMMAND_LOG", &log)
+            .output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let commands = fs::read_to_string(log).unwrap();
+        assert_eq!(
+            commands.matches("/tpg1/acls create ").count(),
+            1,
+            "{commands}"
+        );
+        assert_eq!(
+            commands
+                .matches("/tpg1/acls/iqn.2026-01.client:client.pc001 create ")
+                .count(),
+            1,
+            "{commands}"
+        );
+        assert!(!commands.contains("attribute"), "{commands}");
+        assert!(!commands.contains("delete"), "{commands}");
+    }
     use super::{parse_backstore, parse_luns, tree_has_node, TargetCliProvisioner};
     use crate::infrastructure::iscsi::IscsiTargetSpec;
     use std::{fs, thread, time::Duration};
@@ -851,16 +1354,94 @@ mod tests {
                 );
                 return;
             }
-            let spec = IscsiTargetSpec::with_luns(
-                "iqn.2024-01.com.diskless:client.test",
-                vec![
-                    IscsiLunSpec::new(0, "boot", "/dev/null"),
-                    IscsiLunSpec::new(1, "game", "/dev/null"),
-                ],
-            )
-            .unwrap();
+            if scenario == "dual_backstore_cleanup" {
+                let error = TargetCliProvisioner::new()
+                    .remove_target_with_backstores(
+                        "iqn.2024-01.com.diskless:client.test",
+                        &["duplicate".into()],
+                    )
+                    .unwrap_err();
+                assert!(format!("{error:#}").contains("both block and fileio"));
+                assert!(
+                    !fs::read_to_string(std::env::var("DISKLESS_COMMAND_LOG").unwrap())
+                        .unwrap()
+                        .contains(" delete duplicate")
+                );
+                return;
+            }
+            let mut spec = if scenario == "stale_fileio" {
+                IscsiTargetSpec::with_luns(
+                    "iqn.2024-01.com.diskless:client.test",
+                    vec![IscsiLunSpec::new(0, "boot", "/dev/null")],
+                )
+                .unwrap()
+            } else if scenario == "fileio" || scenario == "fileio_acl_conflict" {
+                IscsiTargetSpec::with_luns(
+                    "iqn.2024-01.com.diskless:client.test",
+                    vec![
+                        IscsiLunSpec::new(0, "boot", "/dev/null"),
+                        IscsiLunSpec::readonly_file(
+                            1,
+                            "installer",
+                            std::env::var("DISKLESS_ISO_PATH").unwrap(),
+                        ),
+                    ],
+                )
+                .unwrap()
+            } else {
+                IscsiTargetSpec::with_luns(
+                    "iqn.2024-01.com.diskless:client.test",
+                    vec![
+                        IscsiLunSpec::new(0, "boot", "/dev/null"),
+                        IscsiLunSpec::new(1, "game", "/dev/null"),
+                    ],
+                )
+                .unwrap()
+            };
+            if scenario == "fileio" || scenario == "fileio_acl_conflict" {
+                spec.initiator_iqn = Some("iqn.test:client".into());
+            }
             let result = TargetCliProvisioner::new().create_target_transaction(&spec);
-            if scenario == "mismatch" || scenario == "failure" {
+            if scenario == "fileio_acl_conflict" {
+                let error = format!("{:#}", result.unwrap_err());
+                assert!(
+                    error.contains("file LUN ACL mapping is not read-only"),
+                    "{error}"
+                );
+            } else if scenario == "fileio" {
+                assert!(result.is_ok(), "{result:?}");
+                let commands =
+                    fs::read_to_string(std::env::var("DISKLESS_COMMAND_LOG").unwrap()).unwrap();
+                assert!(
+                    commands.contains("/backstores/fileio create installer "),
+                    "{commands}"
+                );
+                assert!(commands.contains("demo_mode_write_protect=1"), "{commands}");
+                assert!(
+                    commands.contains(&format!(
+                        "installer {} 8",
+                        std::env::var("DISKLESS_ISO_PATH").unwrap()
+                    )),
+                    "{commands}"
+                );
+                assert!(
+                    commands.contains("/acls/iqn.test:client create 1 1 1"),
+                    "{commands}"
+                );
+                assert!(
+                    !commands.contains("/acls/iqn.test:client create 1 1 0"),
+                    "{commands}"
+                );
+            } else if scenario == "stale_fileio" {
+                let error = format!("{:#}", result.unwrap_err());
+                assert!(
+                    error.contains("file LUN ACL mapping is not read-only"),
+                    "{error}"
+                );
+                let commands =
+                    fs::read_to_string(std::env::var("DISKLESS_COMMAND_LOG").unwrap()).unwrap();
+                assert!(commands.contains("demo_mode_write_protect=1"), "{commands}");
+            } else if scenario == "mismatch" || scenario == "failure" {
                 let error = format!("{:#}", result.unwrap_err());
                 assert!(
                     error.contains(if scenario == "mismatch" {
@@ -891,26 +1472,46 @@ case "$*" in
   *'/iscsi ls') if test "$DISKLESS_INVENTORY_TEST" != missing; then printf '  o- iqn.2024-01.com.diskless:client.test [...]\n'; fi;;
   *'/backstores/block ls')
     case "$DISKLESS_INVENTORY_TEST" in
+      dual_backstore_cleanup) printf '  o- duplicate [/dev/null (1GiB) write-thru activated]\n';;
       existing) printf '  o- boot [/dev/null (1GiB) write-thru activated]\n  o- game [/dev/null (1GiB) write-thru activated]\n';;
       mismatch) printf '  o- boot [/dev/other (1GiB) write-thru activated]\n';;
       failure) if test -f "$DISKLESS_COMMAND_LOG.created"; then printf '  o- boot [/dev/null (1GiB) write-thru activated]\n'; fi;;
     esac;;
-  *'/tpg1/luns ls') case "$DISKLESS_INVENTORY_TEST" in existing|prune) printf '  o- lun0 [block/boot (/dev/null)]\n  o- lun1 [block/game (/dev/null)]\n';; esac;;
+  *'/backstores/fileio ls') case "$DISKLESS_INVENTORY_TEST" in dual_backstore_cleanup) printf '  o- duplicate (fileio) %s (8.0KiB) write-back activated\n' "$DISKLESS_ISO_PATH";; stale_fileio) printf '  o- installer (fileio) %s (8.0KiB) write-back activated\n' "$DISKLESS_ISO_PATH";; esac; if test -f "$DISKLESS_COMMAND_LOG.fileio"; then printf '  o- installer (fileio) %s (8.0KiB) write-back activated\n' "$DISKLESS_ISO_PATH"; fi;;
+  *'/tpg1/luns ls') case "$DISKLESS_INVENTORY_TEST" in existing|prune) printf '  o- lun0 [block/boot (/dev/null)]\n  o- lun1 [block/game (/dev/null)]\n';; fileio|fileio_acl_conflict) printf '  o- lun0 [block/boot (/dev/null)]\n  o- lun1 [fileio/installer (%s)]\n' "$DISKLESS_ISO_PATH";; stale_fileio) printf '  o- lun0 [block/boot (/dev/null)]\n  o- lun1 [fileio/installer (%s)]\n' "$DISKLESS_ISO_PATH";; esac;;
+  *'/tpg1/acls ls') if test "$DISKLESS_INVENTORY_TEST" = fileio_acl_conflict || test "$DISKLESS_INVENTORY_TEST" = stale_fileio; then printf '  o- iqn.test:second [...]\n'; if test -f "$DISKLESS_COMMAND_LOG.client_mapping"; then printf '  o- iqn.test:client [...]\n'; fi; fi;;
+  *'/acls/iqn.test:second ls') printf '  o- mapped_lun1 [lun1 fileio/installer (rw)]\n';;
+  *'/acls/iqn.test:client ls') if test -f "$DISKLESS_COMMAND_LOG.client_mapping"; then printf '  o- mapped_lun1 [lun1 fileio/installer (ro)]\n'; fi;;
   *'/backstores/block create boot '*) : > "$DISKLESS_COMMAND_LOG.created";;
   *'/backstores/block create game '*) if test "$DISKLESS_INVENTORY_TEST" = failure; then exit 1; fi;;
+  *'/backstores/fileio create installer '*) : > "$DISKLESS_COMMAND_LOG.fileio";;
+  *'/acls/iqn.test:client create 1 1 1') : > "$DISKLESS_COMMAND_LOG.client_mapping";;
 esac
 exit 0
 "#).unwrap();
         fs::set_permissions(&sudo, fs::Permissions::from_mode(0o755)).unwrap();
         let log = dir.path().join("commands");
+        fs::write(dir.path().join("installer.iso"), b"fake ISO").unwrap();
         for scenario in [
-            "fresh", "existing", "mismatch", "failure", "prune", "missing",
+            "fresh",
+            "existing",
+            "mismatch",
+            "failure",
+            "prune",
+            "missing",
+            "fileio",
+            "stale_fileio",
+            "fileio_acl_conflict",
+            "dual_backstore_cleanup",
         ] {
             fs::write(&log, "").unwrap();
             let _ = fs::remove_file(dir.path().join("commands.created"));
+            let _ = fs::remove_file(dir.path().join("commands.fileio"));
+            let _ = fs::remove_file(dir.path().join("commands.client_mapping"));
             let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "infrastructure::iscsi::targetcli::tests::provisioning_reads_each_inventory_once", "--nocapture"])
             .env(CHILD, scenario).env("PATH", dir.path()).env("DISKLESS_COMMAND_LOG", &log)
+            .env("DISKLESS_ISO_PATH", dir.path().join("installer.iso"))
             .output().unwrap();
             assert!(
                 output.status.success(),

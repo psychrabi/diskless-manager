@@ -33,8 +33,8 @@ if [ "${SKIP_DEPS:-0}" != "1" ]; then
 fi
 
 install -m 0755 diskless-manager /usr/bin/diskless-manager
-mkdir -p /opt/diskless-manager
-cp -r dist /opt/diskless-manager/dist
+mkdir -p /opt/diskless-manager/dist
+cp -r dist/. /opt/diskless-manager/dist/
 if [ -d /usr/lib/systemd/system ]; then UNIT_DIR=/usr/lib/systemd/system; else UNIT_DIR=/lib/systemd/system; fi
 install -m 0644 diskless-manager.service "$UNIT_DIR/diskless-manager.service"
 systemctl daemon-reload 2>/dev/null || true

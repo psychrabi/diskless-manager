@@ -98,7 +98,12 @@ impl WindowsDriverInjector {
         self.mount_index(image_path, mount_path, 1)
     }
 
-    pub fn mount_index(&self, image_path: &Path, mount_path: &Path, image_index: u32) -> Result<()> {
+    pub fn mount_index(
+        &self,
+        image_path: &Path,
+        mount_path: &Path,
+        image_index: u32,
+    ) -> Result<()> {
         if image_index == 0 {
             bail!("Windows image index must be greater than zero");
         }
@@ -121,22 +126,18 @@ impl WindowsDriverInjector {
         driver_root: &Path,
         recursive: bool,
     ) -> Result<usize> {
-        let inf_files = collect_inf_files(driver_root)?;
+        let inf_files = collect_inf_files_with_recursion(driver_root, recursive)?;
         if inf_files.is_empty() {
             bail!("no INF files found under {}", driver_root.display());
         }
 
         let mut count = 0usize;
         for inf in inf_files {
-            let mut args = vec![
+            let args = vec![
                 "/Image:".to_string() + &mount_path.display().to_string(),
                 "/Add-Driver".to_string(),
                 format!("/Driver:{}", inf.display()),
             ];
-            if recursive {
-                args.push("/Recurse".to_string());
-            }
-
             run_dism(&self.dism, args)
                 .with_context(|| format!("failed to inject driver {}", inf.display()))?;
             count += 1;
@@ -193,15 +194,22 @@ fn validate_request(request: &WindowsDriverInjectionRequest) -> Result<()> {
     {
         bail!(
             "mount path is not a directory: {}",
-            request.mount_root.as_ref().unwrap().display()
+            request
+                .mount_root
+                .as_ref()
+                .expect("mount root was validated as present")
+                .display()
         );
     }
     Ok(())
 }
 
-fn collect_inf_files(root: &Path) -> Result<Vec<PathBuf>> {
+pub(super) fn collect_inf_files_with_recursion(
+    root: &Path,
+    recursive: bool,
+) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
-    collect_files(root, &mut |path| {
+    collect_files(root, recursive, &mut |path| {
         if path
             .extension()
             .and_then(|value| value.to_str())
@@ -214,11 +222,13 @@ fn collect_inf_files(root: &Path) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-fn collect_files(root: &Path, callback: &mut impl FnMut(&Path)) -> Result<()> {
+fn collect_files(root: &Path, recursive: bool, callback: &mut impl FnMut(&Path)) -> Result<()> {
     for entry in fs::read_dir(root)? {
         let path = entry?.path();
         if path.is_dir() {
-            collect_files(&path, callback)?;
+            if recursive {
+                collect_files(&path, recursive, callback)?;
+            }
         } else {
             callback(&path);
         }
@@ -238,8 +248,9 @@ where
 
     if !output.status.success() {
         bail!(
-            "DISM failed (exit {}): {}",
+            "DISM failed (exit {}): {} {}",
             output.status,
+            String::from_utf8_lossy(&output.stdout).trim(),
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
@@ -252,4 +263,28 @@ fn find_command(name: &str) -> Option<PathBuf> {
     std::env::split_paths(&path)
         .map(|directory| directory.join(name))
         .find(|candidate| candidate.is_file())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn windows_driver_search_respects_recursive_option() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("nested")).unwrap();
+        fs::write(root.path().join("one.inf"), "").unwrap();
+        fs::write(root.path().join("nested/two.INF"), "").unwrap();
+        assert_eq!(
+            collect_inf_files_with_recursion(root.path(), false)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            collect_inf_files_with_recursion(root.path(), true)
+                .unwrap()
+                .len(),
+            2
+        );
+    }
 }

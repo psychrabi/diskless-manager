@@ -153,6 +153,7 @@ pub async fn start_service(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Json<String>, StatusCode> {
+    let _guard = state.client_mutations.lock().await;
     let settings = state.settings.read().await;
     let service_manager = ServiceManager::new(settings.clone(), state.db_pool.clone());
     service_manager.start(&name).await.map_err(|error| {
@@ -181,6 +182,7 @@ pub async fn restart_service(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Json<String>, StatusCode> {
+    let _guard = state.client_mutations.lock().await;
     let settings = state.settings.read().await;
     let service_manager = ServiceManager::new(settings.clone(), state.db_pool.clone());
     service_manager.reload(&name).await.map_err(|error| {
@@ -221,6 +223,7 @@ pub async fn disable_service_boot(
 }
 
 pub async fn start_all_services(State(state): State<AppState>) -> Result<Json<String>, StatusCode> {
+    let _guard = state.client_mutations.lock().await;
     let settings = state.settings.read().await;
     let service_manager = ServiceManager::new(settings.clone(), state.db_pool.clone());
     service_manager
@@ -243,6 +246,7 @@ pub async fn stop_all_services(State(state): State<AppState>) -> Result<Json<Str
 pub async fn restart_all_services(
     State(state): State<AppState>,
 ) -> Result<Json<String>, StatusCode> {
+    let _guard = state.client_mutations.lock().await;
     let settings = state.settings.read().await;
     let service_manager = ServiceManager::new(settings.clone(), state.db_pool.clone());
     service_manager
@@ -354,7 +358,9 @@ pub async fn configure_service(
 
     // Reload the service to pick up new config
     let settings = state.settings.read().await;
-    let service_manager = ServiceManager::new(settings.clone(), state.db_pool.clone());
+    let mut active_settings = settings.clone();
+    active_settings.iscsi.backend = state.application.iscsi_backend;
+    let service_manager = ServiceManager::new(active_settings, state.db_pool.clone());
     if requires_dhcp_validation(&name) {
         service_manager.dhcp.validate_config().await.map_err(|e| {
             log::error!(
@@ -391,6 +397,10 @@ pub async fn install_service(
         .get("service")
         .and_then(|v| v.as_str())
         .ok_or(StatusCode::BAD_REQUEST)?;
+
+    if !crate::platform::is_setup_package(service) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
 
     log::info!(
         "Dependency install: install request received for '{}'",

@@ -24,13 +24,13 @@ export const Input = ({
   const id = providedId || generatedId;
   const errorMessage = typeof error === "string" ? error : error?.message || (error ? "This field is required" : undefined);
   const sizeClasses = {
-    sm: "h-7 text-sm",
-    md: "h-8",
+    sm: "h-8 text-sm",
+    md: "h-10",
     lg: "h-10",
   };
 
   return (
-    <div className={cn("flex flex-col gap-1.5", className)}>
+    <div className={cn("flex flex-col gap-2", className)}>
       {label && (
         <Label htmlFor={id}>
           {label}
@@ -58,12 +58,12 @@ export const Input = ({
         )}
       />
       {error && (
-        <span id={`${id}-error`} role="alert" className="text-sm text-destructive">
+        <span id={`${id}-error`} role="alert" className="text-xs leading-relaxed text-destructive">
           {errorMessage}
         </span>
       )}
       {helperText && !error && (
-        <span id={`${id}-helper`} className="text-sm text-muted-foreground">
+        <span id={`${id}-helper`} className="text-xs leading-relaxed text-muted-foreground">
           {helperText}
         </span>
       )}

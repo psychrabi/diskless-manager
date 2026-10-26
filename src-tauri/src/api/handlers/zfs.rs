@@ -305,9 +305,7 @@ pub async fn delete_dataset(
     // clients) first.
     {
         let mut dependents: Vec<String> = Vec::new();
-        if let Ok(clones) =
-            crate::application::storage_service::StorageService::list_game_clones()
-        {
+        if let Ok(clones) = state.application.storage.list_game_clones() {
             dependents.extend(
                 clones
                     .into_iter()
@@ -394,26 +392,31 @@ pub async fn delete_dataset(
 pub async fn list_game_disks(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    use crate::application::storage_service::StorageService;
-
-    let masters = StorageService::discover_game_masters().map_err(|error| {
-        tracing::error!("Failed to list game disks: {}", error);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-    let clones = StorageService::list_game_clones().map_err(|error| {
-        tracing::error!("Failed to list game clones: {}", error);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-    let selections: Vec<(String, String)> =
-        sqlx::query_as::<_, (String, String)>(
-            "SELECT client_id, master_dataset FROM client_game_disks",
-        )
-        .fetch_all(&state.db_pool)
-        .await
+    let masters = state
+        .application
+        .storage
+        .discover_game_masters()
         .map_err(|error| {
-            tracing::error!("Failed to list game selections: {}", error);
+            tracing::error!("Failed to list game disks: {}", error);
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
+    let clones = state
+        .application
+        .storage
+        .list_game_clones()
+        .map_err(|error| {
+            tracing::error!("Failed to list game clones: {}", error);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    let selections: Vec<(String, String)> = sqlx::query_as::<_, (String, String)>(
+        "SELECT client_id, master_dataset FROM client_game_disks",
+    )
+    .fetch_all(&state.db_pool)
+    .await
+    .map_err(|error| {
+        tracing::error!("Failed to list game selections: {}", error);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     let disks: Vec<serde_json::Value> = masters
         .into_iter()

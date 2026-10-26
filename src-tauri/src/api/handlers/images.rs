@@ -10,8 +10,38 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+type ImageDeleteError = (
+    StatusCode,
+    Json<crate::api::handlers::clients::ErrorResponse>,
+);
+
+fn image_delete_error(status: StatusCode, message: impl Into<String>) -> ImageDeleteError {
+    (
+        status,
+        Json(crate::api::handlers::clients::ErrorResponse {
+            status: status.as_u16(),
+            error: message.into(),
+        }),
+    )
+}
+
+async fn image_reserved(state: &AppState, image_id: &str) -> anyhow::Result<bool> {
+    let reserved: i64 = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM installation_sessions WHERE image_id=? AND state!='completed')",
+    )
+    .bind(image_id)
+    .fetch_one(&state.db_pool)
+    .await?;
+    Ok(reserved != 0)
+}
+
 fn image_service(state: &AppState) -> ImageService {
-    ImageService::new(ImageRepository::new(state.db_pool.clone()))
+    ImageService::with_backend(
+        ImageRepository::new(state.db_pool.clone()),
+        std::sync::Arc::new(crate::infrastructure::image::ZfsImageBackend::with_config(
+            state.config.clone(),
+        )),
+    )
 }
 
 fn images_to_snapshots(images: &[Image], parent_id: &str) -> Vec<crate::types::image::Snapshot> {
@@ -84,6 +114,62 @@ pub async fn list_masters(
     Ok(Json(masters_with_snapshots))
 }
 
+/// Driver readiness summary for one source image, plus candidate/failed
+/// counts for the servicing and boot-test workflow. Readiness is diagnostic;
+/// it does not determine which image a client can be assigned.
+#[derive(Debug, Serialize)]
+pub struct DriverReadiness {
+    pub image_id: String,
+    pub latest_ready_revision: Option<crate::core::image::ImageDriverRevision>,
+    pub candidate_count: usize,
+    pub failed_count: usize,
+}
+
+pub async fn get_driver_readiness(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<DriverReadiness>, StatusCode> {
+    let repository = ImageRepository::new(state.db_pool.clone());
+    let image = repository.get(&id).await.map_err(|error| {
+        log::error!("Failed to get image '{id}': {error}");
+        StatusCode::NOT_FOUND
+    })?;
+    let image = image.ok_or(StatusCode::NOT_FOUND)?;
+    let mut revisions = repository
+        .list_driver_revisions(&image.id)
+        .await
+        .map_err(|error| {
+            log::error!("Failed to list driver revisions for '{id}': {error:#}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    revisions.sort_by_key(|revision| revision.created_at);
+    let latest_ready_revision = revisions
+        .iter()
+        .rev()
+        .find(|revision| revision.status == crate::core::image::DriverRevisionStatus::Ready)
+        .cloned();
+    let candidate_count = revisions
+        .iter()
+        .filter(|revision| {
+            matches!(
+                revision.status,
+                crate::core::image::DriverRevisionStatus::Preparing
+                    | crate::core::image::DriverRevisionStatus::AwaitingTest
+            )
+        })
+        .count();
+    let failed_count = revisions
+        .iter()
+        .filter(|revision| revision.status == crate::core::image::DriverRevisionStatus::Failed)
+        .count();
+    Ok(Json(DriverReadiness {
+        image_id: image.id,
+        latest_ready_revision,
+        candidate_count,
+        failed_count,
+    }))
+}
+
 pub async fn get_image(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -128,6 +214,12 @@ pub async fn update_image(
     Path(id): Path<String>,
     Json(request): Json<crate::core::image::UpdateImageRequest>,
 ) -> Result<Json<Image>, StatusCode> {
+    if image_reserved(&state, &id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    {
+        return Err(StatusCode::CONFLICT);
+    }
     log::info!(
         "Received update request for image id '{}', request: {:?}",
         id,
@@ -157,6 +249,12 @@ pub async fn rename_image(
     Path(id): Path<String>,
     Json(request): Json<RenameImageRequest>,
 ) -> Result<Json<Image>, StatusCode> {
+    if image_reserved(&state, &id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    {
+        return Err(StatusCode::CONFLICT);
+    }
     let service = image_service(&state);
 
     service
@@ -173,16 +271,25 @@ pub async fn rename_image(
 pub async fn delete_image(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<(), StatusCode> {
+) -> Result<(), ImageDeleteError> {
+    if image_reserved(&state, &id)
+        .await
+        .map_err(|error| image_delete_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
+    {
+        return Err(image_delete_error(
+            StatusCode::CONFLICT,
+            "Image storage is reserved by an unfinished client installation session",
+        ));
+    }
     let service = image_service(&state);
 
     match service.delete(&id).await {
         Ok(()) => Ok(()),
 
         Err(error) => {
-            let message = error.to_string();
+            let message = format!("{error:#}");
 
-            log::error!("Failed to delete image '{}': {}", id, message);
+            log::error!("Failed to delete image '{}': {message}", id);
 
             /*
              * Image lifecycle conflicts are expected application-level
@@ -196,18 +303,19 @@ pub async fn delete_image(
              * - image is marked as default
              */
             if message.contains("while dependent snapshots or clones exist") {
-                return Err(StatusCode::CONFLICT);
+                return Err(image_delete_error(StatusCode::CONFLICT, message));
             }
 
-            if message.contains("cannot delete the default image") {
-                return Err(StatusCode::CONFLICT);
+            if message.contains("cannot delete the default image")
+                || message.contains("required by driver revisions or super sessions")
+            {
+                return Err(image_delete_error(StatusCode::CONFLICT, message));
             }
 
-            /*
-             * Everything else remains an internal error until we
-             * introduce a typed application error hierarchy.
-             */
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
+            Err(image_delete_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                message,
+            ))
         }
     }
 }
@@ -285,7 +393,7 @@ pub async fn create_snapshot(
         .map(Json)
         .map_err(|error| {
             log::error!(
-                "Failed to create snapshot '{}': {}",
+                "Failed to create snapshot '{}': {:#}",
                 request.snapshot_name,
                 error
             );
@@ -317,6 +425,12 @@ pub async fn resize_image(
     Path(id): Path<String>,
     Json(request): Json<ResizeImageRequest>,
 ) -> Result<Json<Image>, StatusCode> {
+    if image_reserved(&state, &id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    {
+        return Err(StatusCode::CONFLICT);
+    }
     let service = image_service(&state);
 
     service
@@ -347,32 +461,78 @@ pub async fn verify_image(
     })))
 }
 
+pub async fn get_image_health(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<crate::core::image::ImageHealth>, StatusCode> {
+    let service = image_service(&state);
+
+    service.health(&id).await.map(Json).map_err(|error| {
+        let message = format!("{error:#}");
+        log::error!("Failed to inspect health of image '{}': {}", id, message);
+        if message.contains("Image not found") {
+            StatusCode::NOT_FOUND
+        } else if message.contains("health inspection requires") {
+            StatusCode::BAD_REQUEST
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    })
+}
+
 pub async fn delete_snapshot(
     State(state): State<AppState>,
     Path((master_name, snapshot_name)): Path<(String, String)>,
-) -> Result<(), StatusCode> {
+) -> Result<(), ImageDeleteError> {
     let service = image_service(&state);
 
-    let master = service
-        .get(&master_name)
-        .await
-        .map_err(|_| StatusCode::NOT_FOUND)?;
+    let master = service.get(&master_name).await.map_err(|error| {
+        let message = format!("{error:#}");
+        let status = if message.starts_with("Image not found:") {
+            StatusCode::NOT_FOUND
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        };
+        log::error!(
+            "Failed to find image '{}' for snapshot deletion: {message}",
+            master_name
+        );
+        image_delete_error(status, message)
+    })?;
 
     let snapshots = service.snapshots(&master.id).await.map_err(|error| {
-        log::error!("Failed to list snapshots for '{}': {}", master.name, error);
+        let message = format!("{error:#}");
+        log::error!("Failed to list snapshots for '{}': {message}", master.name);
 
-        StatusCode::INTERNAL_SERVER_ERROR
+        image_delete_error(StatusCode::INTERNAL_SERVER_ERROR, message)
     })?;
 
     let snapshot = snapshots
         .into_iter()
         .find(|image| image.name == snapshot_name)
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .ok_or_else(|| {
+            image_delete_error(
+                StatusCode::NOT_FOUND,
+                format!(
+                    "Snapshot '{}' was not found for image '{}'",
+                    snapshot_name, master.name
+                ),
+            )
+        })?;
 
     service.delete(&snapshot.id).await.map_err(|error| {
-        log::error!("Failed to delete snapshot '{}': {}", snapshot_name, error);
+        let message = format!("{error:#}");
+        log::error!("Failed to delete snapshot '{}': {message}", snapshot_name);
 
-        StatusCode::INTERNAL_SERVER_ERROR
+        let status = if message.contains("dependent clones")
+            || message.contains("has clones")
+            || message.contains("required by driver revisions or super sessions")
+        {
+            StatusCode::CONFLICT
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        };
+        image_delete_error(status, message)
     })
 }
 
@@ -381,7 +541,6 @@ pub async fn set_default_image(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let service = image_service(&state);
-
     let image = service.set_default(&id).await.map_err(|error| {
         log::error!("Failed to set default image '{}': {}", id, error);
 
@@ -398,94 +557,59 @@ pub async fn rollback_snapshot(
     State(state): State<AppState>,
     axum::Extension(claims): axum::Extension<crate::types::Claims>,
     Path((master_name, snapshot_name)): Path<(String, String)>,
+    body: axum::body::Bytes,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     if claims.role != "admin" {
         return Err(StatusCode::FORBIDDEN);
     }
-    /*
-     * Rollback is intentionally left as a legacy operation
-     * for this stage.
-     *
-     * Stage 3D should move this into ImageService/ImageBackend
-     * so the HTTP handler contains no direct ZFS or SQL logic.
-     */
-
-    log::info!(
-        "Received rollback request: master='{}', snapshot='{}'",
-        master_name,
-        snapshot_name
-    );
-
+    let request = if body.is_empty() {
+        RollbackSnapshotRequest::default()
+    } else {
+        serde_json::from_slice::<RollbackSnapshotRequest>(&body)
+            .map_err(|_| StatusCode::BAD_REQUEST)?
+    };
+    let _client_mutations = state.client_mutations.lock().await;
     let service = image_service(&state);
-
-    let images = service.list().await.map_err(|error| {
-        log::error!("Failed to list images: {}", error);
-
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    let master = images
-        .iter()
-        .find(|image| image.id == master_name || image.name == master_name)
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    let target_snapshot = images
-        .iter()
-        .find(|image| image.name == snapshot_name && image.parent_id.as_deref() == Some(&master.id))
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    let newer_snapshots: Vec<String> = images
-        .iter()
-        .filter(|image| {
-            image.parent_id.as_deref() == Some(&master.id)
-                && image.created_at > target_snapshot.created_at
-        })
-        .map(|image| image.id.clone())
-        .collect();
-
-    let snapshot_full_path = format!("{}@{}", master.name, snapshot_name);
-
-    crate::infrastructure::command::run_command(&["zfs", "rollback", "-r", &snapshot_full_path])
+    let removed = service
+        .rollback_snapshot(
+            &master_name,
+            &snapshot_name,
+            request.prune_newer_snapshots,
+            &request.expected_newer_snapshots,
+        )
+        .await
         .map_err(|error| {
             log::error!(
-                "Failed to rollback snapshot '{}': {}",
-                snapshot_full_path,
+                "Failed to rollback snapshot '{}@{}': {:#}",
+                master_name,
+                snapshot_name,
                 error
             );
-
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-
-    if !newer_snapshots.is_empty() {
-        let placeholders = newer_snapshots
-            .iter()
-            .map(|_| "?")
-            .collect::<Vec<_>>()
-            .join(",");
-
-        let query = format!("DELETE FROM images WHERE id IN ({})", placeholders);
-
-        let mut query_builder = sqlx::query(&query);
-
-        for id in &newer_snapshots {
-            query_builder = query_builder.bind(id);
-        }
-
-        query_builder
-            .execute(&state.db_pool)
-            .await
-            .map_err(|error| {
-                log::error!("Failed to delete newer snapshots from database: {}", error);
-
+            if error.to_string().contains("cannot rollback")
+                || error.to_string().contains("explicit prune approval")
+                || error.to_string().contains("changed since confirmation")
+            {
+                StatusCode::CONFLICT
+            } else if error.to_string().contains("not found") {
+                StatusCode::NOT_FOUND
+            } else {
                 StatusCode::INTERNAL_SERVER_ERROR
-            })?;
-    }
+            }
+        })?;
 
     Ok(Json(serde_json::json!({
         "message": format!(
             "Successfully rolled back to snapshot '{}' and removed {} newer snapshots",
             snapshot_name,
-            newer_snapshots.len()
+            removed
         )
     })))
+}
+
+#[derive(Default, Deserialize)]
+pub struct RollbackSnapshotRequest {
+    #[serde(default)]
+    pub prune_newer_snapshots: bool,
+    #[serde(default)]
+    pub expected_newer_snapshots: Vec<String>,
 }

@@ -6,8 +6,7 @@ use crate::{
     infrastructure::{
         image::ImageBackend,
         iscsi::{
-            ChapCredentials, IscsiLunSpec, IscsiProvisionResult, IscsiProvisioner,
-            IscsiTargetSpec,
+            ChapCredentials, IscsiLunSpec, IscsiProvisionResult, IscsiProvisioner, IscsiTargetSpec,
         },
     },
 };
@@ -17,6 +16,9 @@ use std::sync::Arc;
 
 mod offline_replacement;
 pub use offline_replacement::OfflineReplacement;
+mod offline_deletion;
+pub use offline_deletion::OfflineDeletion;
+pub use offline_deletion::{DeletionSafety, OwnedGameClone};
 
 /// Application-level storage orchestration.
 ///
@@ -34,9 +36,15 @@ pub use offline_replacement::OfflineReplacement;
 ///     └── IscsiProvisioner
 ///            └── TargetCliProvisioner
 /// ```
+#[derive(Clone)]
 pub struct StorageService {
+    config: crate::config::RuntimeConfig,
     image_backend: Arc<dyn ImageBackend>,
     iscsi: Arc<dyn IscsiProvisioner>,
+    #[cfg(test)]
+    test_game_masters: Option<Vec<GameMaster>>,
+    #[cfg(test)]
+    test_game_clones: Option<Arc<std::sync::Mutex<Vec<GameCloneRecord>>>>,
 }
 
 /// A game "master" volume: an administrator-managed ZVOL holding game
@@ -76,6 +84,13 @@ pub struct GameCloneRecord {
     pub client_id: String,
     /// Full clone dataset.
     pub clone_dataset: String,
+}
+
+/// Milliseconds since `stage` was last sampled, resetting the sample point.
+fn stage_ms(stage: &mut std::time::Instant) -> u128 {
+    let ms = stage.elapsed().as_millis();
+    *stage = std::time::Instant::now();
+    ms
 }
 
 /// Make a client id safe for use in ZFS dataset and backstore names.
@@ -141,10 +156,7 @@ pub fn parse_game_master_datasets(zfs_list_output: &str) -> Vec<String> {
 
 /// Describe the per-client writable clones for every game master in a
 /// `zfs list` output. Pure metadata: creates nothing.
-pub fn game_disks_from_zfs_list(
-    zfs_list_output: &str,
-    client_id: &str,
-) -> Vec<GameDiskClone> {
+pub fn game_disks_from_zfs_list(zfs_list_output: &str, client_id: &str) -> Vec<GameDiskClone> {
     parse_game_master_datasets(zfs_list_output)
         .into_iter()
         .map(|master| {
@@ -190,10 +202,49 @@ pub fn resolve_game_selection(
 
 impl StorageService {
     pub fn new(image_backend: Arc<dyn ImageBackend>, iscsi: Arc<dyn IscsiProvisioner>) -> Self {
-        Self {
+        Self::with_config(
             image_backend,
             iscsi,
+            crate::config::RuntimeConfig::default(),
+        )
+    }
+
+    pub fn with_config(
+        image_backend: Arc<dyn ImageBackend>,
+        iscsi: Arc<dyn IscsiProvisioner>,
+        config: crate::config::RuntimeConfig,
+    ) -> Self {
+        Self {
+            config,
+            image_backend,
+            iscsi,
+            #[cfg(test)]
+            test_game_masters: None,
+            #[cfg(test)]
+            test_game_clones: None,
         }
+    }
+
+    #[cfg(test)]
+    pub fn with_test_game_masters(mut self, masters: Vec<GameMaster>) -> Self {
+        self.test_game_masters = Some(masters);
+        self.test_game_clones = Some(Arc::new(std::sync::Mutex::new(Vec::new())));
+        self
+    }
+
+    /// Return a shared handle to the startup-selected iSCSI provisioner.
+    pub fn iscsi_provisioner(&self) -> Arc<dyn IscsiProvisioner> {
+        Arc::clone(&self.iscsi)
+    }
+
+    pub fn validate_unmounted(&self, dataset: &str) -> Result<()> {
+        self.image_backend
+            .validate_unmounted(dataset)
+            .with_context(|| format!("storage volume '{dataset}' must be unmounted"))
+    }
+
+    pub fn clone_origin(&self, dataset: &str) -> Result<Option<String>> {
+        self.image_backend.clone_origin(dataset)
     }
 
     /// Validate a Super-mode master before removing any existing client storage.
@@ -203,7 +254,7 @@ impl StorageService {
     pub fn validate_existing_dataset(&self, dataset: &str) -> Result<()> {
         crate::validation::validate_managed_dataset(
             dataset,
-            &crate::config::get_zpool_name(),
+            &crate::config::get_zpool_name(&self.config),
         )
         .map_err(|error| anyhow::anyhow!("invalid existing volume: {error}"))?;
         if !self.image_backend.exists(dataset)? {
@@ -227,11 +278,15 @@ impl StorageService {
     /// Masters are volumes tagged `game`/`game_disk`, plus untagged
     /// volumes under a `/games/` path (older installations). Per-client
     /// clones are always tagged `client_game` and are excluded here.
-    pub fn discover_game_masters() -> Result<Vec<GameMaster>> {
+    pub fn discover_game_masters(&self) -> Result<Vec<GameMaster>> {
+        #[cfg(test)]
+        if let Some(masters) = &self.test_game_masters {
+            return Ok(masters.clone());
+        }
         use crate::config::get_zpool_name;
         use crate::infrastructure::command::run_command_output_no_sudo;
 
-        let zpool = get_zpool_name();
+        let zpool = get_zpool_name(&self.config);
         let output = run_command_output_no_sudo([
             "zfs",
             "list",
@@ -259,8 +314,7 @@ impl StorageService {
                 if disk_type == Self::GAME_CLONE_TYPE {
                     return None;
                 }
-                if !(matches!(disk_type, "game" | "game_disk") || dataset.contains("/games/"))
-                {
+                if !(matches!(disk_type, "game" | "game_disk") || dataset.contains("/games/")) {
                     return None;
                 }
                 Some(GameMaster {
@@ -277,11 +331,18 @@ impl StorageService {
     }
 
     /// List every per-client game clone on the pool with its owner.
-    pub fn list_game_clones() -> Result<Vec<GameCloneRecord>> {
+    pub fn list_game_clones(&self) -> Result<Vec<GameCloneRecord>> {
+        #[cfg(test)]
+        if let Some(records) = &self.test_game_clones {
+            return Ok(records
+                .lock()
+                .map_err(|_| anyhow::anyhow!("test clone registry lock poisoned"))?
+                .clone());
+        }
         use crate::config::get_zpool_name;
         use crate::infrastructure::command::run_command_output_no_sudo;
 
-        let zpool = get_zpool_name();
+        let zpool = get_zpool_name(&self.config);
         let output = run_command_output_no_sudo([
             "zfs",
             "list",
@@ -369,32 +430,192 @@ impl StorageService {
             .collect()
     }
 
-    fn set_game_clone_props(
-        client_id: &str,
-        master: &str,
-        clone: &str,
-    ) -> Result<()> {
-        // The image backend has no generic property setter; tag clones the
-        // same way the dataset API tags masters (sudo -n zfs set).
-        for (property, value) in [
-            ("org.diskless:type", Self::GAME_CLONE_TYPE),
-            ("org.diskless:client", client_id),
-            ("org.diskless:master", master),
-        ] {
-            let output = std::process::Command::new("sudo")
-                .args(["-n", "zfs", "set", &format!("{property}={value}"), clone])
-                .output()
-                .with_context(|| {
-                    format!("failed to tag game clone '{clone}' ({property}={value})")
-                })?;
-            if !output.status.success() {
-                bail!(
-                    "failed to tag game clone '{clone}' ({property}={value}): {}",
-                    String::from_utf8_lossy(&output.stderr).trim()
-                );
-            }
-        }
+    /// Build the temporary Super target: writable working image at LUN 0 and
+    /// a read-only installer ISO at LUN 2, with game disks omitted.
+    pub fn build_super_session_iscsi_spec(
+        spec: &ClientStorageSpec,
+        installer_iso: impl Into<PathBuf>,
+    ) -> Result<IscsiTargetSpec> {
+        let mut target = IscsiTargetSpec::with_luns(
+            &spec.target_iqn,
+            vec![
+                IscsiLunSpec::new(0, &spec.backstore, spec.block_device()),
+                IscsiLunSpec::readonly_file(
+                    2,
+                    format!("installer_{}", sanitize_client_id(&spec.client_id)),
+                    installer_iso,
+                ),
+            ],
+        )?;
+        target.initiator_iqn = Some(spec.initiator_iqn());
+        target.chap = spec.chap.clone();
+        Ok(target)
+    }
+
+    pub fn super_session_working_backstore(working_clone: &str) -> String {
+        let working_name = working_clone.rsplit('/').next().unwrap_or(working_clone);
+        format!("super_{working_name}")
+    }
+
+    pub fn super_session_backstores(client_id: &str, working_clone: &str) -> Vec<String> {
+        vec![
+            Self::super_session_working_backstore(working_clone),
+            format!("installer_{}", sanitize_client_id(client_id)),
+        ]
+    }
+
+    pub fn verify_super_session_target(&self, desired: &IscsiTargetSpec) -> Result<()> {
+        self.iscsi.verify_named_file_lun_mappings(desired)?;
+        let actual = self.iscsi.list_target_luns(&desired.target_iqn)?;
+        anyhow::ensure!(
+            actual.len() == desired.luns.len()
+                && desired.luns.iter().all(|expected| {
+                    actual
+                        .iter()
+                        .any(|lun| lun.lun == expected.lun && lun.backstore == expected.backstore)
+                }),
+            "Super-session target must expose exactly the working disk and installer LUNs"
+        );
+        anyhow::ensure!(
+            self.iscsi.inspect_target(desired)?.is_ready(),
+            "Super-session target is incomplete"
+        );
         Ok(())
+    }
+
+    /// Replace the client's current target with an isolated Super-session target.
+    /// The old target object is removed while its normal and game backstores remain owned by the client.
+    pub fn create_super_session_target(
+        &self,
+        spec: &ClientStorageSpec,
+        installer_iso: impl Into<PathBuf>,
+    ) -> Result<()> {
+        self.image_backend
+            .validate_unmounted(&spec.dataset)
+            .context("Super working image must be unmounted before export")?;
+        self.iscsi
+            .remove_target(&spec.target_iqn)
+            .context("failed to remove the prior client target")?;
+        let target = Self::build_super_session_iscsi_spec(spec, installer_iso)?;
+        self.iscsi
+            .create_target_transaction(&target)
+            .context("failed to create the Super-session target")?;
+        self.verify_super_session_target(&target)
+            .context("Super-session target did not reach the requested LUN state")
+    }
+
+    /// Refuse to replace a target unless every current LUN matches this client's normal storage.
+    pub fn validate_client_target_for_replacement(&self, spec: &ClientStorageSpec) -> Result<()> {
+        self.validate_spec(spec)?;
+        if !self.iscsi.target_exists(&spec.target_iqn)? {
+            return Ok(());
+        }
+        let desired = self.desired_iscsi_spec(spec)?;
+        let actual = self.iscsi.list_target_luns(&spec.target_iqn)?;
+        anyhow::ensure!(
+            actual.len() == desired.luns.len()
+                && desired.luns.iter().all(|expected| {
+                    actual
+                        .iter()
+                        .any(|lun| lun.lun == expected.lun && lun.backstore == expected.backstore)
+                }),
+            "existing client target contains unexpected or missing LUN mappings"
+        );
+        self.iscsi.verify_named_file_lun_mappings(&desired)?;
+        anyhow::ensure!(
+            self.iscsi.inspect_target(&desired)?.is_ready(),
+            "existing client target does not match its assigned storage"
+        );
+        Ok(())
+    }
+
+    /// Accept only the expected LUN subset left by an interrupted Super target creation.
+    pub fn validate_super_session_target_for_replacement(
+        &self,
+        desired: &IscsiTargetSpec,
+    ) -> Result<()> {
+        if !self.iscsi.target_exists(&desired.target_iqn)? {
+            return Ok(());
+        }
+        let actual = self.iscsi.list_target_luns(&desired.target_iqn)?;
+        anyhow::ensure!(
+            actual.len() <= desired.luns.len(),
+            "existing Super-session target contains unexpected LUN mappings"
+        );
+        let mut present = desired.clone();
+        present.luns.clear();
+        for lun in actual {
+            let expected = desired
+                .lun(lun.lun)
+                .filter(|expected| expected.backstore == lun.backstore)
+                .context("existing Super-session target contains unexpected LUN mappings")?;
+            anyhow::ensure!(
+                lun.exists && lun.backstore_exists,
+                "existing Super-session target contains an invalid LUN mapping"
+            );
+            anyhow::ensure!(
+                !present.luns.iter().any(|mapped| mapped.lun == lun.lun),
+                "existing Super-session target contains duplicate LUN mappings"
+            );
+            present.luns.push(expected.clone());
+        }
+        if present.luns.is_empty() {
+            // The target may have been created immediately before an interrupted LUN transaction.
+            return Ok(());
+        }
+        self.iscsi.verify_named_file_lun_mappings(&present)?;
+        let state = self.iscsi.inspect_target(&present)?;
+        anyhow::ensure!(
+            state.exists
+                && state.luns.len() == present.luns.len()
+                && state.luns.iter().all(|lun| lun.is_ready()),
+            "existing Super-session target contains an invalid LUN mapping"
+        );
+        Ok(())
+    }
+
+    /// Remove the target and backstores uniquely owned by one Super session.
+    /// Normal client and game backstores are intentionally left untouched.
+    pub fn remove_super_session_target(
+        &self,
+        target_iqn: &str,
+        owned_backstores: &[String],
+    ) -> Result<()> {
+        self.iscsi
+            .remove_target_with_backstores(target_iqn, owned_backstores)
+            .context("failed to remove session-owned target resources")
+    }
+
+    fn set_game_clone_props(client_id: &str, master: &str, clone: &str) -> Result<()> {
+        #[cfg(test)]
+        {
+            let _ = (client_id, master, clone);
+            Ok(())
+        }
+        #[cfg(not(test))]
+        {
+            // The image backend has no generic property setter; tag clones the
+            // same way the dataset API tags masters (sudo -n zfs set).
+            for (property, value) in [
+                ("org.diskless:type", Self::GAME_CLONE_TYPE),
+                ("org.diskless:client", client_id),
+                ("org.diskless:master", master),
+            ] {
+                let output = std::process::Command::new("sudo")
+                    .args(["-n", "zfs", "set", &format!("{property}={value}"), clone])
+                    .output()
+                    .with_context(|| {
+                        format!("failed to tag game clone '{clone}' ({property}={value})")
+                    })?;
+                if !output.status.success() {
+                    bail!(
+                        "failed to tag game clone '{clone}' ({property}={value}): {}",
+                        String::from_utf8_lossy(&output.stderr).trim()
+                    );
+                }
+            }
+            Ok(())
+        }
     }
 
     /// Ensure the base snapshot a client's clone is created from.
@@ -404,18 +625,18 @@ impl StorageService {
     fn ensure_game_base_snapshot(&self, master: &str) -> Result<String> {
         self.image_backend
             .create_snapshot(master, Self::GAME_BASE_SNAPSHOT)
-            .with_context(|| {
-                format!("failed to ensure game base snapshot for '{master}'")
-            })?;
+            .with_context(|| format!("failed to ensure game base snapshot for '{master}'"))?;
         Ok(format!("{master}@{}", Self::GAME_BASE_SNAPSHOT))
     }
 
     /// Ensure a client's writable clone of a master exists and return it.
     pub fn ensure_game_clone(&self, client_id: &str, master: &str) -> Result<String> {
         let clone = game_clone_dataset(client_id, master);
-        if !self.image_backend.exists(&clone).with_context(|| {
-            format!("failed to inspect game clone '{clone}'")
-        })? {
+        if !self
+            .image_backend
+            .exists(&clone)
+            .with_context(|| format!("failed to inspect game clone '{clone}'"))?
+        {
             let snapshot = self.ensure_game_base_snapshot(master)?;
             self.image_backend
                 .clone_image(&snapshot, &clone)
@@ -423,10 +644,23 @@ impl StorageService {
                     format!("failed to clone game master '{master}' for client '{client_id}'")
                 })?;
             Self::set_game_clone_props(client_id, master, &clone)?;
+            #[cfg(test)]
+            if let Some(records) = &self.test_game_clones {
+                records
+                    .lock()
+                    .expect("test clone registry lock")
+                    .push(GameCloneRecord {
+                        master_dataset: master.to_string(),
+                        client_id: client_id.to_string(),
+                        clone_dataset: clone.clone(),
+                    });
+            }
         }
-        if !self.image_backend.verify(&clone).with_context(|| {
-            format!("failed to verify game clone '{clone}'")
-        })? {
+        if !self
+            .image_backend
+            .verify(&clone)
+            .with_context(|| format!("failed to verify game clone '{clone}'"))?
+        {
             bail!("game clone is unavailable after provisioning: '{clone}'");
         }
         Ok(clone)
@@ -438,17 +672,13 @@ impl StorageService {
     /// unaffected. Skips targets that were never provisioned (their first
     /// provision enforces). Used by auth flips and secret rotation to
     /// avoid a full storage rebuild.
-    pub fn set_target_chap(
-        &self,
-        target_iqn: &str,
-        chap: Option<&ChapCredentials>,
-    ) -> Result<()> {
+    pub fn set_target_chap(&self, target_iqn: &str, chap: Option<&ChapCredentials>) -> Result<()> {
         if !self.iscsi.target_exists(target_iqn)? {
             return Ok(());
         }
-        self.iscsi.set_chap_auth(target_iqn, chap).with_context(|| {
-            format!("failed to apply CHAP change on target '{target_iqn}'")
-        })
+        self.iscsi
+            .set_chap_auth(target_iqn, chap)
+            .with_context(|| format!("failed to apply CHAP change on target '{target_iqn}'"))
     }
 
     /// Remove every `game_*` LUN/backstore on a target that is not desired.
@@ -457,18 +687,13 @@ impl StorageService {
     /// backstore (`block_*`) and anything else are left intact. This both
     /// migrates legacy shared read-only attachments and enforces
     /// deselection.
-    pub fn prune_game_luns(
-        &self,
-        target_iqn: &str,
-        desired_backstores: &[String],
-    ) -> Result<()> {
+    pub fn prune_game_luns(&self, target_iqn: &str, desired_backstores: &[String]) -> Result<()> {
         let stale: Vec<String> = self
             .iscsi
             .list_target_backstores(target_iqn)?
             .into_iter()
             .filter(|backstore| {
-                backstore.starts_with("game_")
-                    && !desired_backstores.contains(backstore)
+                backstore.starts_with("game_") && !desired_backstores.contains(backstore)
             })
             .collect();
         if stale.is_empty() {
@@ -481,9 +706,7 @@ impl StorageService {
         );
         self.iscsi
             .remove_target_with_backstores(target_iqn, &stale)
-            .with_context(|| {
-                format!("failed to prune game LUNs from target '{target_iqn}'")
-            })?;
+            .with_context(|| format!("failed to prune game LUNs from target '{target_iqn}'"))?;
         Ok(())
     }
 
@@ -499,8 +722,7 @@ impl StorageService {
             self.ensure_game_clone(client_id, master)?;
         }
         let luns = Self::build_game_luns(client_id, masters);
-        let desired: Vec<String> =
-            luns.iter().map(|lun| lun.backstore.clone()).collect();
+        let desired: Vec<String> = luns.iter().map(|lun| lun.backstore.clone()).collect();
         self.prune_game_luns(target_iqn, &desired)?;
         Ok(luns)
     }
@@ -516,6 +738,7 @@ impl StorageService {
     pub fn reset_game_clones(
         &self,
         client_id: &str,
+        client_name: &str,
         target_iqn: &str,
         masters: &[String],
         chap: Option<&ChapCredentials>,
@@ -528,9 +751,9 @@ impl StorageService {
                     clone = %clone,
                     "resetting per-client game clone"
                 );
-                self.image_backend.destroy(&clone).with_context(|| {
-                    format!("failed to destroy game clone '{clone}' for reset")
-                })?;
+                self.image_backend
+                    .destroy(&clone)
+                    .with_context(|| format!("failed to destroy game clone '{clone}' for reset"))?;
             }
             self.ensure_game_clone(client_id, master)?;
         }
@@ -546,6 +769,9 @@ impl StorageService {
         let luns = Self::build_game_luns(client_id, masters);
         if !luns.is_empty() {
             let mut spec = IscsiTargetSpec::with_luns(target_iqn, luns)?;
+            spec.initiator_iqn = Some(crate::infrastructure::pxe::client_initiator_iqn(
+                client_name,
+            ));
             spec.chap = chap.cloned();
             self.iscsi.create_target(&spec).with_context(|| {
                 format!("failed to re-expose game LUNs for client '{client_id}'")
@@ -569,7 +795,8 @@ impl StorageService {
             // Prune with an empty desired set: every game LUN goes away.
             self.prune_game_luns(target_iqn, &[])?;
         }
-        let owned: Vec<GameCloneRecord> = Self::list_game_clones()?
+        let owned: Vec<GameCloneRecord> = self
+            .list_game_clones()?
             .into_iter()
             .filter(|record| record.client_id == client_id)
             .collect();
@@ -599,6 +826,7 @@ impl StorageService {
     pub fn sync_game_storage(
         &self,
         client_id: &str,
+        client_name: &str,
         target_iqn: &str,
         masters: &[String],
         chap: Option<&ChapCredentials>,
@@ -607,18 +835,20 @@ impl StorageService {
             self.ensure_game_clone(client_id, master)?;
         }
         let luns = Self::build_game_luns(client_id, masters);
-        let desired: Vec<String> =
-            luns.iter().map(|lun| lun.backstore.clone()).collect();
+        let desired: Vec<String> = luns.iter().map(|lun| lun.backstore.clone()).collect();
         // Prune before exposing: stale LUNs occupying desired numbers are
         // removed first so `create_target` attaches the fresh clones.
         self.prune_game_luns(target_iqn, &desired)?;
         if !luns.is_empty() {
             let mut spec = IscsiTargetSpec::with_luns(target_iqn, luns)?;
+            spec.initiator_iqn = Some(crate::infrastructure::pxe::client_initiator_iqn(
+                client_name,
+            ));
             spec.chap = chap.cloned();
             // Additive and idempotent: existing LUNs are left alone.
-            self.iscsi.create_target(&spec).with_context(|| {
-                format!("failed to expose game LUNs for client '{client_id}'")
-            })?;
+            self.iscsi
+                .create_target(&spec)
+                .with_context(|| format!("failed to expose game LUNs for client '{client_id}'"))?;
         }
 
         // Destroy clone datasets that are no longer selected. Their LUNs
@@ -640,7 +870,8 @@ impl StorageService {
             .iter()
             .map(|master| game_clone_dataset(client_id, master))
             .collect();
-        for record in Self::list_game_clones()?
+        for record in self
+            .list_game_clones()?
             .into_iter()
             .filter(|record| record.client_id == client_id)
         {
@@ -683,6 +914,173 @@ impl StorageService {
     pub fn create_client_storage_transaction(
         &self,
         spec: &ClientStorageSpec,
+    ) -> Result<(ClientStorage, IscsiProvisionResult)> {
+        self.create_client_storage_transaction_inner(spec, true, false)
+    }
+
+    /// Ensure boot storage additively. Existing client data is never removed;
+    /// missing target pieces are created and conflicting pieces fail safely.
+    pub fn ensure_client_storage_for_boot(
+        &self,
+        spec: &ClientStorageSpec,
+    ) -> Result<ClientStorage> {
+        let mut spec = spec.clone();
+        let mut stage = std::time::Instant::now();
+        let original_source = spec.source.clone();
+        let expected_origin = match &original_source {
+            StorageSource::Snapshot(snapshot) => Some(snapshot.as_str()),
+            _ => None,
+        };
+        let exists = self.image_backend.exists(&spec.dataset)?;
+        if exists {
+            self.image_backend.validate_unmounted(&spec.dataset)?;
+            if let Some(origin) = expected_origin {
+                let actual = self.image_backend.clone_origin(&spec.dataset)?;
+                anyhow::ensure!(
+                    actual.as_deref() == Some(origin),
+                    "client clone '{}' has unexpected origin",
+                    spec.dataset
+                );
+                spec.source = StorageSource::ExistingVolume(spec.dataset.clone());
+            }
+        } else if !matches!(spec.source, StorageSource::Snapshot(_)) {
+            bail!("configured client volume is missing: {}", spec.dataset);
+        }
+
+        let checks_ms = stage_ms(&mut stage);
+        if spec.use_game_disk {
+            let discovered = self.discover_game_masters()?;
+            let names = discovered
+                .into_iter()
+                .map(|master| master.dataset)
+                .collect::<Vec<_>>();
+            let selected = resolve_game_selection(true, &spec.game_disks, &names);
+            for master in &selected {
+                let clone = game_clone_dataset(&spec.client_id, master);
+                if self.image_backend.exists(&clone)? {
+                    let owned = self.list_game_clones()?;
+                    anyhow::ensure!(
+                        owned.iter().any(|record| {
+                            record.client_id == spec.client_id
+                                && record.master_dataset == *master
+                                && record.clone_dataset == clone
+                        }),
+                        "existing game clone '{}' is not recorded as owned by this client",
+                        clone
+                    );
+                    self.image_backend.validate_unmounted(&clone)?;
+                    let origin = self.image_backend.clone_origin(&clone)?;
+                    let expected = format!("{master}@{}", Self::GAME_BASE_SNAPSHOT);
+                    anyhow::ensure!(
+                        origin.as_deref() == Some(expected.as_str()),
+                        "game clone '{}' has unexpected origin",
+                        clone
+                    );
+                }
+            }
+        }
+
+        let discovered = if spec.use_game_disk {
+            let masters = self.discover_game_masters()?;
+            masters
+                .into_iter()
+                .map(|master| master.dataset)
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        let selected = resolve_game_selection(spec.use_game_disk, &spec.game_disks, &discovered);
+        for master in &selected {
+            let clone = self.ensure_game_clone(&spec.client_id, master)?;
+            self.image_backend.validate_unmounted(&clone)?;
+            let origin = self.image_backend.clone_origin(&clone)?;
+            let expected = format!("{master}@{}", Self::GAME_BASE_SNAPSHOT);
+            anyhow::ensure!(
+                origin.as_deref() == Some(expected.as_str()),
+                "game clone '{}' has unexpected origin",
+                clone
+            );
+        }
+        self.image_backend.settle_device_changes()?;
+        let settle_ms = stage_ms(&mut stage);
+        if exists && !self.image_backend.verify(&spec.dataset)? {
+            bail!("configured client volume is unavailable: {}", spec.dataset);
+        }
+        for master in &selected {
+            let clone = game_clone_dataset(&spec.client_id, master);
+            if !self.image_backend.verify(&clone)? {
+                bail!("selected game clone is unavailable: {clone}");
+            }
+        }
+        let verify_ms = stage_ms(&mut stage);
+
+        let desired = self.desired_iscsi_spec(&spec)?;
+        let current = self.iscsi.inspect_target(&desired)?;
+        let inspect_ms = stage_ms(&mut stage);
+        if exists && current.is_ready() {
+            self.iscsi.ensure_initiator_acl(&desired)?;
+            self.set_target_chap(&spec.target_iqn, spec.chap.as_ref())?;
+            let acl_chap_ms = stage_ms(&mut stage);
+            let mut storage = self.storage_from_spec(&spec);
+            storage.source = original_source;
+            // Target already inspected as ready; avoid a second inspect in boot path
+            let boot_target_ms = stage_ms(&mut stage);
+            tracing::info!(
+                client_id = %spec.client_id,
+                checks_ms,
+                settle_ms,
+                verify_ms,
+                inspect_ms,
+                acl_chap_ms,
+                boot_target_ms,
+                "boot storage readiness stages (existing volume)"
+            );
+            return Ok(storage);
+        }
+        if current.exists {
+            anyhow::ensure!(
+                !self.target_connected_if_present(&spec.target_iqn)?,
+                "client storage is incomplete while the client is connected"
+            );
+        }
+        let (mut storage, _) = self.create_client_storage_transaction_inner(&spec, false, true)?;
+        // Keep ownership/source metadata authoritative for callers even though
+        // the additive transaction treated a pre-existing clone as shared.
+        storage.source = original_source;
+        let desired = self.desired_iscsi_spec(&spec)?;
+        self.iscsi.ensure_initiator_acl(&desired)?;
+        self.set_target_chap(&spec.target_iqn, spec.chap.as_ref())?;
+        self.image_backend.settle_device_changes()?;
+        anyhow::ensure!(
+            self.image_backend.verify(&spec.dataset)?,
+            "configured client volume is unavailable: {}",
+            spec.dataset
+        );
+        for master in &selected {
+            let clone = game_clone_dataset(&spec.client_id, master);
+            anyhow::ensure!(
+                self.image_backend.verify(&clone)?,
+                "selected game clone is unavailable: {clone}"
+            );
+        }
+        self.verify_boot_target(&desired)?;
+        Ok(storage)
+    }
+
+    fn verify_boot_target(&self, desired: &IscsiTargetSpec) -> Result<()> {
+        let actual = self.iscsi.inspect_target(desired)?;
+        anyhow::ensure!(
+            actual.is_ready(),
+            "iSCSI target is not ready after provisioning"
+        );
+        Ok(())
+    }
+
+    fn create_client_storage_transaction_inner(
+        &self,
+        spec: &ClientStorageSpec,
+        prune_stale_game_luns: bool,
+        settle_devices: bool,
     ) -> Result<(ClientStorage, IscsiProvisionResult)> {
         let started = std::time::Instant::now();
         self.validate_spec(spec)?;
@@ -791,22 +1189,20 @@ impl StorageService {
         let mut desired_game_backstores: Vec<String> = Vec::new();
 
         if spec.use_game_disk {
-            let discovered = Self::discover_game_masters()?;
-            let discovered_names: Vec<String> =
-                discovered.into_iter().map(|master| master.dataset).collect();
-            let selected = resolve_game_selection(
-                spec.use_game_disk,
-                &spec.game_disks,
-                &discovered_names,
-            );
+            let discovered = self.discover_game_masters()?;
+            let discovered_names: Vec<String> = discovered
+                .into_iter()
+                .map(|master| master.dataset)
+                .collect();
+            let selected =
+                resolve_game_selection(spec.use_game_disk, &spec.game_disks, &discovered_names);
             for master in &selected {
                 // Clones must exist before the target transaction
                 // validates the LUN device paths.
                 self.ensure_game_clone(&spec.client_id, master)?;
             }
             let game_luns = Self::build_game_luns(&spec.client_id, &selected);
-            desired_game_backstores =
-                game_luns.iter().map(|lun| lun.backstore.clone()).collect();
+            desired_game_backstores = game_luns.iter().map(|lun| lun.backstore.clone()).collect();
             tracing::info!(
                 client_id = %spec.client_id,
                 game_disk_count = game_luns.len(),
@@ -814,8 +1210,26 @@ impl StorageService {
             );
             luns.extend(game_luns);
         }
+        if let Some(installer_iso) = &spec.installer_iso {
+            anyhow::ensure!(
+                !spec.use_game_disk,
+                "installer media cannot share the game-disk LUN range"
+            );
+            luns.push(IscsiLunSpec::readonly_file(
+                2,
+                format!("installer_{}", sanitize_client_id(&spec.client_id)),
+                installer_iso.clone(),
+            ));
+        }
+
+        if settle_devices {
+            self.image_backend
+                .settle_device_changes()
+                .context("failed to settle client ZVOL devices before iSCSI provisioning")?;
+        }
 
         let mut iscsi_spec = IscsiTargetSpec::with_luns(&spec.target_iqn, luns)?;
+        iscsi_spec.initiator_iqn = Some(spec.initiator_iqn());
         // Enforcement travels with every provision: configure_tpg applies
         // (or explicitly clears) target authentication from this field.
         iscsi_spec.chap = spec.chap.clone();
@@ -831,15 +1245,15 @@ impl StorageService {
         // but does not fail provisioning: the transaction below still
         // converges the desired state, and the next provision or repair
         // retries the prune.
-        if let Err(error) =
-            self.prune_game_luns(&spec.target_iqn, &desired_game_backstores)
-        {
-            tracing::error!(
-                client_id = %spec.client_id,
-                target_iqn = %spec.target_iqn,
-                error = %error,
-                "failed to prune stale game LUNs before provisioning"
-            );
+        if prune_stale_game_luns {
+            if let Err(error) = self.prune_game_luns(&spec.target_iqn, &desired_game_backstores) {
+                tracing::error!(
+                    client_id = %spec.client_id,
+                    target_iqn = %spec.target_iqn,
+                    error = %error,
+                    "failed to prune stale game LUNs before provisioning"
+                );
+            }
         }
 
         // ---------------------------------------------------------------
@@ -936,7 +1350,10 @@ impl StorageService {
             "destroying client storage"
         );
 
-        let owned_backstores = vec![storage.backstore().to_string()];
+        let owned_backstores = vec![
+            storage.backstore().to_string(),
+            format!("installer_{}", sanitize_client_id(&storage.client_id)),
+        ];
 
         self.iscsi
             .remove_target_with_backstores(storage.target_iqn(), &owned_backstores)
@@ -991,7 +1408,10 @@ impl StorageService {
             "resetting client storage"
         );
 
-        let owned_backstores = vec![current.backstore().to_string()];
+        let owned_backstores = vec![
+            current.backstore().to_string(),
+            format!("installer_{}", sanitize_client_id(&current.client_id)),
+        ];
 
         self.iscsi
             .remove_target_with_backstores(current.target_iqn(), &owned_backstores)
@@ -1051,6 +1471,39 @@ impl StorageService {
         }
     }
 
+    /// Replace a legacy direct-master mapping with the selected client-owned clone.
+    /// The old assignment is only an iSCSI mapping; this never destroys its ZVOL.
+    pub fn exit_legacy_super(
+        &self,
+        target_iqn: &str,
+        old_backstore: &str,
+        spec: &ClientStorageSpec,
+        selected_snapshot: &str,
+    ) -> Result<ClientStorage> {
+        let StorageSource::Snapshot(snapshot) = &spec.source else {
+            bail!("legacy Super exit requires a snapshot-backed assignment");
+        };
+        anyhow::ensure!(
+            snapshot == selected_snapshot
+                && snapshot.split('@').next() != Some(spec.dataset.as_str()),
+            "selected snapshot does not match the client clone assignment"
+        );
+        self.remove_client_target(target_iqn, &[old_backstore.to_owned()])?;
+        let mut desired = spec.clone();
+        if self.image_backend.exists(&desired.dataset)? {
+            self.image_backend.validate_unmounted(&desired.dataset)?;
+            anyhow::ensure!(
+                self.image_backend
+                    .clone_origin(&desired.dataset)?
+                    .as_deref()
+                    == Some(selected_snapshot),
+                "existing recovery clone has unexpected snapshot origin"
+            );
+            desired.source = StorageSource::ExistingClientVolume(desired.dataset.clone());
+        }
+        self.create_client_storage(&desired)
+    }
+
     // ====================================================================
     // RECONCILIATION
     // ====================================================================
@@ -1067,35 +1520,7 @@ impl StorageService {
             .exists(&spec.dataset)
             .context("failed to inspect ZFS client storage")?;
 
-        let iscsi_spec = if spec.use_game_disk {
-            let mut luns = vec![IscsiLunSpec::new(
-                spec.lun,
-                &spec.backstore,
-                spec.block_device(),
-            )];
-
-            // Desired state only: clone dataset names are deterministic,
-            // so missing clones inspect as not-ready and repair creates
-            // them. Inspect never mutates storage.
-            let discovered = Self::discover_game_masters()?;
-            let discovered_names: Vec<String> =
-                discovered.into_iter().map(|master| master.dataset).collect();
-            let selected = resolve_game_selection(
-                spec.use_game_disk,
-                &spec.game_disks,
-                &discovered_names,
-            );
-            luns.extend(Self::build_game_luns(&spec.client_id, &selected));
-
-            IscsiTargetSpec::with_luns(&spec.target_iqn, luns)?
-        } else {
-            IscsiTargetSpec::new(
-                &spec.target_iqn,
-                &spec.backstore,
-                spec.block_device(),
-                spec.lun,
-            )
-        };
+        let iscsi_spec = self.desired_iscsi_spec(spec)?;
 
         let iscsi_state = self
             .iscsi
@@ -1119,6 +1544,52 @@ impl StorageService {
         })
     }
 
+    fn desired_iscsi_spec(&self, spec: &ClientStorageSpec) -> Result<IscsiTargetSpec> {
+        let mut iscsi_spec = if spec.use_game_disk {
+            let mut luns = vec![IscsiLunSpec::new(
+                spec.lun,
+                &spec.backstore,
+                spec.block_device(),
+            )];
+
+            // Desired state only: clone dataset names are deterministic,
+            // so missing clones inspect as not-ready and repair creates
+            // them. Inspect never mutates storage.
+            let discovered = self.discover_game_masters()?;
+            let discovered_names: Vec<String> = discovered
+                .into_iter()
+                .map(|master| master.dataset)
+                .collect();
+            let selected =
+                resolve_game_selection(spec.use_game_disk, &spec.game_disks, &discovered_names);
+            luns.extend(Self::build_game_luns(&spec.client_id, &selected));
+
+            IscsiTargetSpec::with_luns(&spec.target_iqn, luns)?
+        } else {
+            IscsiTargetSpec::new(
+                &spec.target_iqn,
+                &spec.backstore,
+                spec.block_device(),
+                spec.lun,
+            )
+        };
+        if let Some(installer_iso) = &spec.installer_iso {
+            anyhow::ensure!(
+                !spec.use_game_disk,
+                "installer media cannot share the game-disk LUN range"
+            );
+            iscsi_spec.luns.push(IscsiLunSpec::readonly_file(
+                2,
+                format!("installer_{}", sanitize_client_id(&spec.client_id)),
+                installer_iso.clone(),
+            ));
+        }
+        iscsi_spec.initiator_iqn = Some(spec.initiator_iqn());
+        iscsi_spec.chap = spec.chap.clone();
+
+        Ok(iscsi_spec)
+    }
+
     /// Reconcile actual infrastructure to desired state.
     pub fn reconcile_client_storage_in_place(
         &self,
@@ -1127,7 +1598,11 @@ impl StorageService {
         let state = self.reconcile_client_storage(spec)?;
 
         match state.state {
-            StorageState::Ready => Ok(self.storage_from_spec(spec)),
+            StorageState::Ready => {
+                self.iscsi
+                    .ensure_initiator_acl(&self.desired_iscsi_spec(spec)?)?;
+                Ok(self.storage_from_spec(spec))
+            }
 
             StorageState::Missing => self.create_client_storage(spec),
 
@@ -1217,6 +1692,10 @@ impl StorageService {
             bail!("client ID cannot be empty");
         }
 
+        if spec.client_name.trim().is_empty() {
+            bail!("client name cannot be empty");
+        }
+
         if spec.dataset.trim().is_empty() {
             bail!("ZFS client dataset cannot be empty");
         }
@@ -1259,7 +1738,10 @@ impl StorageService {
 
 #[cfg(test)]
 mod game_storage_tests {
-    use super::{game_clone_dataset, game_disks_from_zfs_list, parse_game_master_datasets};
+    use super::{
+        game_clone_dataset, game_disks_from_zfs_list, parse_game_master_datasets, StorageService,
+    };
+    use crate::domain::storage::StorageSource;
     use std::path::PathBuf;
 
     #[test]
@@ -1316,5 +1798,40 @@ mod game_storage_tests {
             PathBuf::from("/dev/zvol/diskless/games/client-01-steam-games")
         );
         assert!(disks[0].writable);
+    }
+
+    #[test]
+    fn super_session_target_uses_lun_zero_and_readonly_iso_lun_two_without_games() {
+        let spec = crate::domain::storage::ClientStorageSpec {
+            installer_iso: None,
+            client_id: "pc001".into(),
+            client_name: "pc001".into(),
+            source: StorageSource::ExistingClientVolume("pool/pc001".into()),
+            dataset: "pool/pc001".into(),
+            backstore: "block_pc001".into(),
+            target_iqn: "iqn.test:pc001".into(),
+            lun: 0,
+            use_game_disk: true,
+            game_disks: vec!["pool/game".into()],
+            chap: None,
+        };
+        let target =
+            StorageService::build_super_session_iscsi_spec(&spec, "/srv/iso/install.iso").unwrap();
+        assert_eq!(target.luns.len(), 2);
+        assert_eq!(target.luns[0].lun, 0);
+        assert_eq!(target.luns[1].lun, 2);
+        assert_eq!(
+            target.luns[1].backing,
+            crate::infrastructure::iscsi::IscsiLunBacking::File
+        );
+        assert!(target.luns[1].readonly);
+    }
+
+    #[test]
+    fn super_session_cleanup_names_only_session_owned_luns() {
+        assert_eq!(
+            StorageService::super_session_backstores("PC 001", "pool/super-session-123"),
+            vec!["super_super-session-123", "installer_pc_001"]
+        );
     }
 }

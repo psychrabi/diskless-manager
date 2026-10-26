@@ -9,7 +9,7 @@ const ClientTableHeader = ({ fixed = false }) => {
   return (
     <TableRow
       className={cn(
-        "border-border hover:bg-transparent",
+        "hidden border-border hover:bg-transparent xl:table-row",
         fixed && "z-10 bg-card shadow-sm"
       )}
     >

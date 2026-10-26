@@ -24,9 +24,10 @@ pub struct ActivateLicenseResponse {
     pub message: String,
 }
 
-pub async fn get_license_info_handler() -> Result<Json<LicenseInfoResponse>, axum::http::StatusCode>
-{
-    match get_license_info() {
+pub async fn get_license_info_handler(
+    State(state): State<AppState>,
+) -> Result<Json<LicenseInfoResponse>, axum::http::StatusCode> {
+    match get_license_info(&state.config) {
         Ok(info) => {
             info!("license info retrieved");
             Ok(Json(LicenseInfoResponse {

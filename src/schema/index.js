@@ -4,6 +4,20 @@ export const clientLifecycleSchema = z.object({
   non_persistent_reset_delay_minutes: z.coerce.number().int().min(1).max(1440).default(5),
 });
 
+export const clientFeaturesSchema = z.object({
+  enable_chap_authentication: z.boolean().default(false),
+  enable_experimental_nvme_target: z.boolean().default(false),
+});
+
+export const windowsServicingSchema = z.object({
+  worker_host: z.string().default(""),
+  worker_username: z.string().default(""),
+  helper_executable_path: z.string().default(""),
+  iscsi_portal: z.string().default(""),
+  report_server_url: z.string().default(""),
+  driver_install_strategy: z.enum(["offline_dism", "nexboot_boot_time"]).default("offline_dism"),
+});
+
 // Helper for IP address validation
 const ipSchema = z.ipv4();
 
@@ -84,6 +98,7 @@ export const clientSchema = z.object({
   ip: ipSchema,
   master: z.string().min(1, "Image selection is required"),
   snapshot: z.string().optional().nullable(),
+  installer_media_id: z.string().optional().nullable(),
   keep_writeback: z.boolean().default(false),
   use_game_disk: z.boolean().default(false),
   game_disks: z.array(z.string()).default([]),

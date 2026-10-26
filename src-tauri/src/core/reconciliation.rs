@@ -5,7 +5,7 @@ use crate::domain::{
     Client, ClientId,
 };
 use crate::infrastructure::iscsi::target_has_active_sessions;
-use crate::persistence::ClientRepository;
+use crate::persistence::{ClientRepository, InstallerMediaRepository};
 use crate::state::AppState;
 use serde::Serialize;
 
@@ -72,12 +72,21 @@ impl ReconciliationSummary {
 ///
 /// Inspection never changes infrastructure. Repair is a separate operation.
 pub async fn inspect_storage(state: &AppState) -> anyhow::Result<ReconciliationSummary> {
-    let clients = ClientRepository::new(state.db_pool.clone()).find_all().await?;
+    let clients = ClientRepository::new(state.db_pool.clone())
+        .find_all()
+        .await?;
 
     let mut summary = ReconciliationSummary::new();
 
     for client in clients {
-        match storage_spec_for_client(&state.db_pool, &client).await {
+        match storage_spec_for_client(
+            &state.config,
+            &state.application.storage,
+            &state.db_pool,
+            &client,
+        )
+        .await
+        {
             Ok(Some(spec)) => match state.application.storage.reconcile_client_storage(&spec) {
                 Ok(result) => summary.push(entry_from_result(&client, &spec, result)),
                 Err(error) => summary.push(ReconciliationEntry {
@@ -144,7 +153,14 @@ pub async fn repair_client_storage(
         .find_by_id(&id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("client '{}' not found", client_id))?;
-    let spec = storage_spec_for_client(&state.db_pool, &client).await?.ok_or_else(|| {
+    let spec = storage_spec_for_client(
+        &state.config,
+        &state.application.storage,
+        &state.db_pool,
+        &client,
+    )
+    .await?
+    .ok_or_else(|| {
         anyhow::anyhow!(
             "client '{}' has no storage configuration to reconcile",
             client_id
@@ -189,19 +205,21 @@ pub(crate) async fn stored_game_selection(
 /// empty selection. See `StorageService::resolve_game_selection`.
 pub(crate) async fn resolved_game_selection(
     pool: &sqlx::SqlitePool,
+    storage: &StorageService,
     client_id: &str,
     use_game_disk: bool,
 ) -> anyhow::Result<Vec<String>> {
+    if !use_game_disk {
+        return Ok(Vec::new());
+    }
     let stored = stored_game_selection(pool, client_id).await?;
-    let discovered = StorageService::discover_game_masters()?
+    let storage = storage.clone();
+    let discovered = tokio::task::spawn_blocking(move || storage.discover_game_masters())
+        .await??
         .into_iter()
         .map(|master| master.dataset)
         .collect::<Vec<_>>();
-    Ok(resolve_game_selection(
-        use_game_disk,
-        &stored,
-        &discovered,
-    ))
+    Ok(resolve_game_selection(use_game_disk, &stored, &discovered))
 }
 
 /// Stored CHAP state: (enabled, username, secret).
@@ -209,12 +227,11 @@ pub(crate) async fn stored_chap_state(
     pool: &sqlx::SqlitePool,
     client_id: &str,
 ) -> anyhow::Result<(bool, Option<String>, Option<String>)> {
-    let row: Option<(Option<i64>, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT chap_enabled, chap_user, chap_secret FROM clients WHERE id = ?",
-    )
-    .bind(client_id)
-    .fetch_optional(pool)
-    .await?;
+    let row: Option<(Option<i64>, Option<String>, Option<String>)> =
+        sqlx::query_as("SELECT chap_enabled, chap_user, chap_secret FROM clients WHERE id = ?")
+            .bind(client_id)
+            .fetch_optional(pool)
+            .await?;
     Ok(match row {
         Some((enabled, user, secret)) => (enabled.unwrap_or(0) != 0, user, secret),
         None => (false, None, None),
@@ -230,9 +247,7 @@ pub(crate) async fn read_chap_credentials(
 ) -> anyhow::Result<Option<crate::infrastructure::iscsi::ChapCredentials>> {
     let (_, user, secret) = stored_chap_state(pool, client_id).await?;
     Ok(match (user, secret) {
-        (Some(username), Some(password))
-            if !username.trim().is_empty() && !password.is_empty() =>
-        {
+        (Some(username), Some(password)) if !username.trim().is_empty() && !password.is_empty() => {
             Some(crate::infrastructure::iscsi::ChapCredentials { username, password })
         }
         _ => None,
@@ -267,7 +282,9 @@ pub(crate) async fn ensure_chap_credentials(
     Ok(Some(creds))
 }
 
-async fn storage_spec_for_client(
+pub(crate) async fn storage_spec_for_client(
+    config: &crate::config::RuntimeConfig,
+    storage: &StorageService,
     pool: &sqlx::SqlitePool,
     client: &Client,
 ) -> anyhow::Result<Option<ClientStorageSpec>> {
@@ -275,7 +292,7 @@ async fn storage_spec_for_client(
         return Ok(None);
     }
 
-    let defaults = ClientStoragePaths::new(&client.name, client.mac.as_str());
+    let defaults = ClientStoragePaths::new(config, &client.name, client.mac.as_str()).await;
 
     let target_iqn = client
         .target_iqn
@@ -288,20 +305,33 @@ async fn storage_spec_for_client(
         .unwrap_or_else(|| defaults.backstore.clone());
 
     let use_game_disk = client.use_game_disk;
-    let game_disks = resolved_game_selection(pool, client.id.as_str(), use_game_disk).await?;
+    let game_disks =
+        resolved_game_selection(pool, storage, client.id.as_str(), use_game_disk).await?;
     // Enforced targets converge here too: generate on first repair so an
     // enabled-but-credless client (e.g. pre-CHAP record) heals instead of
     // provisioning open. Inspect gains an idempotent one-time write; the
     // alternative is silently skipping enforcement.
-    let chap = ensure_chap_credentials(
-        pool,
-        client.id.as_str(),
-        &client.name,
-        client.chap_enabled,
-    )
-    .await?;
+    let chap = ensure_chap_credentials(pool, client.id.as_str(), &client.name, client.chap_enabled)
+        .await?;
+    let installer_iso = if let Some(media_id) = client.installer_media_id.as_deref() {
+        let media = InstallerMediaRepository::new(pool.clone())
+            .get(media_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("client installer media '{media_id}' is missing"))?;
+        anyhow::ensure!(
+            media.validation_state == crate::persistence::StructuralValidationState::Valid,
+            "client installer media has not passed structural validation"
+        );
+        Some(media.managed_path)
+    } else {
+        None
+    };
 
-    let source = match client.snapshot.as_deref().map(str::trim) {
+    let identity_source =
+        crate::application::hardware_identity_service::cached_source_for_client(pool, client)
+            .await?;
+    let source_revision = identity_source.as_deref().or(client.snapshot.as_deref());
+    let source = match source_revision.map(str::trim) {
         Some(snapshot) if !snapshot.is_empty() => {
             let dataset = client.writeback.clone().ok_or_else(|| {
                 anyhow::anyhow!(
@@ -312,6 +342,7 @@ async fn storage_spec_for_client(
 
             return Ok(Some(ClientStorageSpec {
                 client_id: client.id.to_string(),
+                client_name: client.name.clone(),
                 source: StorageSource::Snapshot(snapshot.to_string()),
                 dataset,
                 backstore,
@@ -320,6 +351,7 @@ async fn storage_spec_for_client(
                 use_game_disk,
                 game_disks,
                 chap: chap.clone(),
+                installer_iso: installer_iso.clone(),
             }));
         }
         _ => StorageSource::ExistingVolume(client.master.clone()),
@@ -327,6 +359,7 @@ async fn storage_spec_for_client(
 
     Ok(Some(ClientStorageSpec {
         client_id: client.id.to_string(),
+        client_name: client.name.clone(),
         dataset: client.master.clone(),
         backstore,
         target_iqn,
@@ -334,6 +367,7 @@ async fn storage_spec_for_client(
         use_game_disk,
         game_disks,
         chap,
+        installer_iso,
         source,
     }))
 }
@@ -413,10 +447,7 @@ mod tests {
 
     #[tokio::test]
     async fn chap_credentials_generate_once_and_read_back() {
-        let path = std::env::temp_dir().join(format!(
-            "diskless-chap-{}.db",
-            uuid::Uuid::new_v4()
-        ));
+        let path = std::env::temp_dir().join(format!("diskless-chap-{}.db", uuid::Uuid::new_v4()));
         let url = format!("sqlite:{}?mode=rwc", path.display());
         let pool = sqlx::SqlitePool::connect(&url).await.unwrap();
         sqlx::migrate!("./migrations").run(&pool).await.unwrap();
@@ -430,7 +461,10 @@ mod tests {
             .await
             .unwrap()
             .is_none());
-        assert!(read_chap_credentials(&pool, "client").await.unwrap().is_none());
+        assert!(read_chap_credentials(&pool, "client")
+            .await
+            .unwrap()
+            .is_none());
 
         // Enabled: generated once, then stable.
         let first = ensure_chap_credentials(&pool, "client", "PC001", true)
@@ -449,10 +483,7 @@ mod tests {
 
     #[tokio::test]
     async fn missing_master_skips_storage_reconciliation() {
-        let path = std::env::temp_dir().join(format!(
-            "diskless-recon-{}.db",
-            uuid::Uuid::new_v4()
-        ));
+        let path = std::env::temp_dir().join(format!("diskless-recon-{}.db", uuid::Uuid::new_v4()));
         let url = format!("sqlite:{}?mode=rwc", path.display());
         let pool = sqlx::SqlitePool::connect(&url).await.unwrap();
         sqlx::migrate!("./migrations").run(&pool).await.unwrap();
@@ -480,9 +511,17 @@ mod tests {
             chap_user: None,
             chap_secret: None,
             chap_enabled: false,
+            installer_media_id: None,
         };
 
-        let spec = storage_spec_for_client(&pool, &client).await.unwrap();
+        let spec = storage_spec_for_client(
+            &crate::config::RuntimeConfig::default(),
+            &crate::application::ApplicationServices::new(pool.clone()).storage,
+            &pool,
+            &client,
+        )
+        .await
+        .unwrap();
         assert!(spec.is_none());
         let _ = std::fs::remove_file(&path);
     }

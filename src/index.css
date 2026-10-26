@@ -179,3 +179,29 @@
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
 }
+
+@media (any-pointer: coarse) {
+  :where(
+    button:not([role="checkbox"]),
+    [role="button"],
+    [role^="menuitem"],
+    [role="tab"],
+    [role="switch"],
+    [data-sidebar="menu-button"],
+    [data-slot="native-select"],
+    input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
+    select,
+    textarea
+  ) {
+    min-inline-size: 2.75rem;
+    min-block-size: 2.75rem;
+  }
+
+  :where(
+    input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
+    select,
+    textarea
+  ) {
+    font-size: 1rem;
+  }
+}

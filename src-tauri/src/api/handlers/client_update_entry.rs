@@ -1,12 +1,12 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    Json,
+    Extension, Json,
 };
 
 use super::clients::ErrorResponse;
 use crate::{
-    application::storage_service::{resolve_game_selection, StorageService},
+    application::storage_service::resolve_game_selection,
     core::client::{Client, UpdateClientRequest},
     domain::{BootMode, ClientStatus, PxeMode, UpdateClient},
     state::AppState,
@@ -14,6 +14,7 @@ use crate::{
 
 fn is_game_only_candidate(request: &UpdateClientRequest) -> bool {
     (request.use_game_disk.is_some() || request.game_disks.is_some())
+        && request.installer_media_id.is_none()
         && request.action.is_none()
         && request.make_super.is_none()
         && request.name.is_none()
@@ -50,6 +51,7 @@ fn is_actual_game_only_update(
 
 fn domain_to_legacy(client: crate::domain::Client) -> Client {
     Client {
+        installer_media_id: client.installer_media_id,
         id: client.id.to_string(),
         name: client.name,
         mac: client.mac.to_string(),
@@ -100,10 +102,14 @@ fn domain_to_legacy(client: crate::domain::Client) -> Client {
 }
 
 fn resolve_effective_game_selection(
+    state: &AppState,
     use_game_disk: bool,
     stored_or_requested: &[String],
 ) -> anyhow::Result<Vec<String>> {
-    let discovered = StorageService::discover_game_masters()?
+    let discovered = state
+        .application
+        .storage
+        .discover_game_masters()?
         .into_iter()
         .map(|master| master.dataset)
         .collect::<Vec<_>>();
@@ -115,68 +121,36 @@ fn resolve_effective_game_selection(
     ))
 }
 
-async fn publish_boot_menu(
-    settings: &crate::core::config::Settings,
-    client: &crate::domain::Client,
-    chap: Option<&crate::infrastructure::iscsi::ChapCredentials>,
-) {
-    if !client.enabled {
-        return;
-    }
-
-    let Some(target_iqn) = client
-        .target_iqn
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return;
-    };
-
-    let next_server = settings.dhcp.next_server_ip.trim();
-    let server_ip = if next_server.is_empty() {
-        settings.server.ip_address.trim()
-    } else {
-        next_server
-    };
-
-    let reservation = crate::infrastructure::dhcp::BootReservation {
-        client_name: client.name.clone(),
-        mac: client.mac.to_string(),
-        ip: client.ip.to_string(),
-        target_iqn: target_iqn.to_string(),
-        server_ip: server_ip.to_string(),
-        chap: chap.cloned(),
-    };
-
-    if let Err(error) = crate::infrastructure::dhcp::publish_client_ipxe(&reservation).await {
-        tracing::warn!(client_id = %client.id, %error, "failed to regenerate boot menu during game-disk update");
-    }
-}
-
 pub async fn update_client(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Extension(claims): Extension<crate::types::Claims>,
     Json(request): Json<UpdateClientRequest>,
 ) -> Result<Json<Client>, (StatusCode, Json<ErrorResponse>)> {
     if !is_game_only_candidate(&request) {
-        return super::client_update_base::update_client(State(state), Path(id), Json(request))
-            .await;
+        return super::client_update_base::update_client(
+            State(state),
+            Path(id),
+            Extension(claims),
+            Json(request),
+        )
+        .await;
     }
 
-    let client_guard = state.client_mutations.lock().await;
+    let client_guard = state.client_mutations.lock_client(&id).await;
 
     let existing = state
         .application
         .clients
         .get_by_string(&id)
         .await
-        .map_err(|_| {
+        .map_err(|error| {
+            tracing::error!(client_id = %id, %error, "failed to load client for game-disk update");
             (
-                StatusCode::NOT_FOUND,
+                StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
-                    status: StatusCode::NOT_FOUND.as_u16(),
-                    error: "Client not found".to_string(),
+                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                    error: "Failed to load client".to_string(),
                 }),
             )
         })?
@@ -192,8 +166,35 @@ pub async fn update_client(
 
     if !is_actual_game_only_update(&request, &existing) {
         drop(client_guard);
-        return super::client_update_base::update_client(State(state), Path(id), Json(request))
-            .await;
+        return super::client_update_base::update_client(
+            State(state),
+            Path(id),
+            Extension(claims),
+            Json(request),
+        )
+        .await;
+    }
+
+    if crate::application::client_storage_reservations::has_storage_reservation(&state.db_pool, &id)
+        .await
+        .map_err(|error| {
+            tracing::error!(client_id = %id, %error, "failed to check client storage reservation");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    status: 500,
+                    error: "Failed to check client storage reservation".into(),
+                }),
+            )
+        })?
+    {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(ErrorResponse {
+                status: 409,
+                error: "Client storage is reserved by an installer session or hardware profile; close recovery or remove the profile before changing it".into(),
+            }),
+        ));
     }
 
     let recovering: i64 = sqlx::query_scalar(
@@ -227,8 +228,8 @@ pub async fn update_client(
         .game_disks
         .clone()
         .unwrap_or_else(|| existing.game_disks.clone());
-    let resolved =
-        resolve_effective_game_selection(effective_flag, &effective_stored).map_err(|error| {
+    let resolved = resolve_effective_game_selection(&state, effective_flag, &effective_stored)
+        .map_err(|error| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
@@ -259,8 +260,6 @@ pub async fn update_client(
         None
     };
 
-    publish_boot_menu(&settings, &existing, chap.as_ref()).await;
-
     let target_iqn = existing.target_iqn.clone().unwrap_or_else(|| {
         format!(
             "{}:client.{}",
@@ -272,7 +271,7 @@ pub async fn update_client(
     state
         .application
         .storage
-        .sync_game_storage(&id, &target_iqn, &resolved, chap.as_ref())
+        .sync_game_storage(&id, &existing.name, &target_iqn, &resolved, chap.as_ref())
         .map_err(|error| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -337,6 +336,7 @@ mod tests {
 
     fn request() -> UpdateClientRequest {
         UpdateClientRequest {
+            installer_media_id: None,
             name: None,
             mac: None,
             ip: None,
@@ -358,6 +358,8 @@ mod tests {
 
     fn client(snapshot: Option<&str>) -> Client {
         let mut client = Client::create(CreateClient {
+            installer_media_id: None,
+            enabled: None,
             name: "PC001".into(),
             mac: "00:11:22:33:44:55".into(),
             ip: "192.168.1.10".into(),

@@ -5,6 +5,7 @@ import { updateClient } from "@/api/modules/clients";
 import { useToastStore } from "@/store/useToastStore";
 import PowerActionModal from "./PowerActionModal";
 import RemoteDesktopModal from "./RemoteDesktopModal";
+import { isOnlineStatus } from "@/lib/clientStatus";
 
 const ControlActionButtons = ({ client, onActionComplete }) => {
   const [powerAction, setPowerAction] = useState(null);
@@ -12,7 +13,7 @@ const ControlActionButtons = ({ client, onActionComplete }) => {
   const [waking, setWaking] = useState(false);
   const { success, error } = useToastStore();
 
-  const isOnline = client?.status === "Online";
+  const isOnline = isOnlineStatus(client?.status);
 
   const handleActionComplete = () => {
     if (onActionComplete) {

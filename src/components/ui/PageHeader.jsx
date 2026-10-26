@@ -10,7 +10,7 @@ export const PageHeader = ({
   return (
     <div
       className={cn(
-        "flex flex-wrap items-end justify-between gap-3",
+        "flex flex-col items-stretch justify-between gap-3 sm:flex-row sm:items-end",
         className
       )}
     >
@@ -19,7 +19,7 @@ export const PageHeader = ({
         {description && <CardDescription>{description}</CardDescription>}
       </div>
       {actions && (
-        <div className="flex flex-wrap items-center gap-2">{actions}</div>
+        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto [&>button]:flex-1 sm:[&>button]:flex-none">{actions}</div>
       )}
     </div>
   );

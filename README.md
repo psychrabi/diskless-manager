@@ -33,6 +33,11 @@ For a source build, install Bun, a current stable Rust toolchain, and native bui
 tools including `pkg-config` and OpenSSL development headers. React 19 and Vite 8
 are installed through `bun install`; they are not separate server prerequisites.
 
+Package installation is restricted to administrators and the setup dependency list.
+Account passwords must be 8-72 bytes and include uppercase, lowercase, and a digit.
+Client API responses omit CHAP credentials; administrators can see new credentials
+once after rotating them. Failed storage cleanup retains the client record for retry.
+
 The setup wizard checks distribution-specific packages and can install them
 through the authorized backend account. Core tools include OpenZFS, `targetcli`,
 `qemu-img`, ISC DHCP, TFTP, Apache, and Samba. NFS tools are required when NFS is
@@ -144,6 +149,28 @@ The default network settings target server `192.168.1.250/24`, gateway
 `192.168.1.254`, and DHCP range `192.168.1.100–192.168.1.200`. Review them for your
 LAN before applying service configuration. HTTP boot files and TFTP default to
 `/srv/tftp`; the Samba share defaults to `/srv/shared`.
+
+### iSCSI backend selection
+
+The configured iSCSI backend is checked at server startup. If native configfs is
+configured but its non-mutating preflight fails, the server selects `targetcli`
+before making changes. The effective backend is shown in the dashboard's system
+information. Selection remains fixed until restart. A later native operation
+failure is reported without retrying through `targetcli`, because the first
+operation may already have changed kernel state. After fixing a preflight issue
+or changing the configured backend, restart the server to apply the selection.
+
+The real-LIO integration test is ignored by default and requires root, initialized
+LIO, and `DISKLESS_TEST_ZVOL` set to a disposable, unexported ZFS volume. It creates
+and removes a uniquely named target and backstore. Never point it at a client or
+production volume. Run it only in an isolated test host:
+
+```bash
+DISKLESS_TEST_ZVOL=diskless/test/iscsi-smoke \
+  cargo test --manifest-path src-tauri/Cargo.toml \
+  infrastructure::iscsi::configfs::tests::real_lio_create_inspect_and_remove \
+  -- --ignored --exact
+```
 
 ### Environment variables
 

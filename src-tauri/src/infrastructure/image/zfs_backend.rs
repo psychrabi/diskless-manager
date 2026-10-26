@@ -6,7 +6,7 @@ use super::backend::{ImageBackend, ImageBackendInfo};
 
 use crate::{
     config::get_zpool_name,
-    core::image::ImageFormat,
+    core::image::{BootPartition, BootProbe, ImageFormat},
     infrastructure::{
         nvmeof::remove_exports_for_block_device,
         zfs::{
@@ -18,6 +18,7 @@ use crate::{
 
 #[derive(Clone)]
 pub struct ZfsImageBackend {
+    config: crate::config::RuntimeConfig,
     command: ZfsCommand,
     datasets: ZfsDatasetOperations,
     volumes: ZfsVolumeOperations,
@@ -38,9 +39,14 @@ impl ZfsImageBackend {
     }
 
     pub fn new() -> Self {
+        Self::with_config(crate::config::RuntimeConfig::default())
+    }
+
+    pub fn with_config(config: crate::config::RuntimeConfig) -> Self {
         let command = ZfsCommand::new();
 
         Self {
+            config,
             command,
 
             datasets: ZfsDatasetOperations::new(command),
@@ -96,6 +102,57 @@ impl ZfsImageBackend {
 
         Ok((number * multiplier) as u64)
     }
+
+    fn collect_partitions(node: &serde_json::Value, partitions: &mut Vec<BootPartition>) {
+        if node.get("type").and_then(serde_json::Value::as_str) == Some("part") {
+            let text = |key: &str| {
+                node.get(key)
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+            };
+            partitions.push(BootPartition {
+                name: text("name").unwrap_or_default(),
+                size: node
+                    .get("size")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0),
+                filesystem: text("fstype"),
+                part_type: text("parttypename"),
+                part_flags: text("partflags"),
+            });
+        }
+
+        if let Some(children) = node.get("children").and_then(serde_json::Value::as_array) {
+            for child in children {
+                Self::collect_partitions(child, partitions);
+            }
+        }
+    }
+
+    fn parse_lsblk_partitions(output: &str) -> Result<Vec<BootPartition>> {
+        let document: serde_json::Value =
+            serde_json::from_str(output).context("failed to parse lsblk output")?;
+        let mut partitions = Vec::new();
+        if let Some(devices) = document
+            .get("blockdevices")
+            .and_then(serde_json::Value::as_array)
+        {
+            for device in devices {
+                Self::collect_partitions(device, &mut partitions);
+            }
+        }
+        Ok(partitions)
+    }
+
+    fn cleanup_failed_import(&self, destination: &str, error: anyhow::Error) -> Result<()> {
+        match self.destroy(destination) {
+            Ok(()) => Err(error),
+            Err(cleanup_error) => Err(error.context(format!(
+                "cleanup of partial image '{destination}' failed: {cleanup_error:#}"
+            ))),
+        }
+    }
 }
 
 impl Default for ZfsImageBackend {
@@ -136,9 +193,18 @@ impl ImageBackend for ZfsImageBackend {
         self.command.get_property("origin", name)
     }
     fn exists(&self, name: &str) -> Result<bool> {
-        // `zfs list` matches any dataset type (filesystem, volume,
-        // snapshot), so one query covers both datasets and volumes.
-        self.datasets.exists(name)
+        Ok(self.check_presence(&[name.to_owned()])?[0])
+    }
+
+    fn check_presence(&self, names: &[String]) -> Result<Vec<bool>> {
+        let output = self
+            .command
+            .execute_output(["zfs", "list", "-H", "-t", "all", "-o", "name"])?;
+        let existing: std::collections::HashSet<&str> = output.lines().collect();
+        Ok(names
+            .iter()
+            .map(|name| existing.contains(name.as_str()))
+            .collect())
     }
 
     fn create_volume(&self, name: &str, size_gb: u64) -> Result<()> {
@@ -207,6 +273,12 @@ impl ImageBackend for ZfsImageBackend {
         })
     }
 
+    fn promote_clone(&self, name: &str) -> Result<()> {
+        self.command
+            .execute(["zfs", "promote", name])
+            .with_context(|| format!("failed to promote ZFS clone '{name}'"))
+    }
+
     fn create_snapshot(&self, dataset: &str, snapshot: &str) -> Result<()> {
         self.snapshots.create(dataset, snapshot)
     }
@@ -224,33 +296,56 @@ impl ImageBackend for ZfsImageBackend {
     }
 
     fn import_raw(&self, source: &Path, destination: &str, size_bytes: u64) -> Result<()> {
-        let size_gb = size_bytes.div_ceil(1024 * 1024 * 1024);
-
-        self.create_volume(destination, size_gb.max(1))?;
-
         let source = source
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("source path is not valid UTF-8"))?;
+        let size_gb = size_bytes.div_ceil(1024 * 1024 * 1024);
 
+        self.create_volume(destination, size_gb.max(1))?;
         let device = format!("/dev/zvol/{}", destination);
+        let result = (|| {
+            self.settle_device_changes()?;
+            let output = std::process::Command::new("dd")
+                .args([
+                    &format!("if={source}"),
+                    &format!("of={device}"),
+                    "bs=16M",
+                    "conv=fdatasync",
+                    "status=progress",
+                ])
+                .output()
+                .context("failed to execute dd")?;
+            if !output.status.success() {
+                bail!(
+                    "failed to import raw image: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                );
+            }
+            Ok(())
+        })();
 
-        let output = std::process::Command::new("dd")
-            .args([
-                &format!("if={}", source),
-                &format!("of={}", device),
-                "bs=16M",
-                "conv=fdatasync",
-                "status=progress",
-            ])
-            .output()
-            .context("failed to execute dd")?;
+        if let Err(error) = result {
+            return self.cleanup_failed_import(destination, error);
+        }
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+        Ok(())
+    }
 
-            let _ = self.destroy(destination);
+    fn import_converted(&self, source: &Path, destination: &str, size_bytes: u64) -> Result<()> {
+        use crate::infrastructure::image::conversion::{ImageConversionBackend, QemuImgBackend};
 
-            bail!("failed to import raw image: {}", stderr.trim());
+        let size_gb = size_bytes.div_ceil(1024 * 1024 * 1024);
+        self.create_volume(destination, size_gb.max(1))?;
+        let device_path = format!("/dev/zvol/{destination}");
+        let device = Path::new(&device_path);
+        let result = self
+            .settle_device_changes()
+            .and_then(|()| QemuImgBackend::new().convert_to_raw(source, device));
+
+        if let Err(error) = result {
+            return self
+                .cleanup_failed_import(destination, error)
+                .context("failed to convert source image into ZVOL");
         }
 
         Ok(())
@@ -296,12 +391,59 @@ impl ImageBackend for ZfsImageBackend {
         })
     }
 
+    fn probe_boot(&self, name: &str) -> Result<BootProbe> {
+        let device = format!("/dev/zvol/{name}");
+        let mut probe = BootProbe::default();
+
+        // `blkid -p` reads the device without mounting it. An unrecognised
+        // filesystem or partition table is a normal health result, so only
+        // the partition listing is treated as a hard probe failure.
+        if let Ok(output) = crate::infrastructure::command::run_command_output_no_sudo([
+            "blkid",
+            "-p",
+            "-o",
+            "export",
+            "--",
+            device.as_str(),
+        ]) {
+            for line in output.lines() {
+                let Some((key, value)) = line.split_once('=') else {
+                    continue;
+                };
+                let value = value.trim().trim_matches('"');
+                if value.is_empty() {
+                    continue;
+                }
+                match key {
+                    "PTTYPE" => probe.partition_table = Some(value.to_string()),
+                    "TYPE" => probe.filesystem = Some(value.to_string()),
+                    _ => {}
+                }
+            }
+        }
+
+        let output = crate::infrastructure::command::run_command_output_no_sudo([
+            "lsblk",
+            "--json",
+            "--bytes",
+            "--output",
+            "NAME,SIZE,TYPE,FSTYPE,PARTTYPENAME,PARTFLAGS",
+            "--",
+            device.as_str(),
+        ])
+        .map_err(anyhow::Error::from)
+        .context("failed to inspect image partitions")?;
+        probe.partitions = Self::parse_lsblk_partitions(&output)?;
+
+        Ok(probe)
+    }
+
     fn set_os_type(&self, name: &str, os_type: &str) -> Result<()> {
         self.command.set_property("org.diskless:os", os_type, name)
     }
 
     fn image_parent(&self) -> Result<String> {
-        let zpool = get_zpool_name();
+        let zpool = get_zpool_name(&self.config);
 
         let root = format!("{}/image-disk", zpool);
 
@@ -373,5 +515,43 @@ mod tests {
     #[test]
     fn parse_empty_size_as_zero() {
         assert_eq!(ZfsImageBackend::parse_size("-").unwrap(), 0);
+    }
+
+    #[test]
+    fn parse_lsblk_partitions_keeps_boot_metadata() {
+        let output = r#"{
+            "blockdevices": [{
+                "name": "zd0",
+                "size": 53687091200,
+                "type": "disk",
+                "fstype": null,
+                "parttypename": null,
+                "partflags": null,
+                "children": [{
+                    "name": "zd0p1",
+                    "size": 104857600,
+                    "type": "part",
+                    "fstype": "vfat",
+                    "parttypename": "EFI System",
+                    "partflags": "0x80"
+                }, {
+                    "name": "zd0p2",
+                    "size": 53582233600,
+                    "type": "part",
+                    "fstype": "ntfs",
+                    "parttypename": "Microsoft basic data",
+                    "partflags": null
+                }]
+            }]
+        }"#;
+
+        let partitions = ZfsImageBackend::parse_lsblk_partitions(output).unwrap();
+
+        assert_eq!(partitions.len(), 2);
+        assert_eq!(partitions[0].name, "zd0p1");
+        assert_eq!(partitions[0].filesystem.as_deref(), Some("vfat"));
+        assert_eq!(partitions[0].part_type.as_deref(), Some("EFI System"));
+        assert_eq!(partitions[1].filesystem.as_deref(), Some("ntfs"));
+        assert_eq!(partitions[1].size, 53_582_233_600);
     }
 }

@@ -6,8 +6,8 @@ import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import Sidebar from "./Sidebar";
 import Header from "./Header";
 
-const { logout, setTheme } = vi.hoisted(() => ({ logout: vi.fn(), setTheme: vi.fn() }));
-vi.mock("@/contexts/auth", () => ({ useAuth: () => ({ user: { username: "operator", role: "user" }, logout }) }));
+const { logout, setTheme, authState } = vi.hoisted(() => ({ logout: vi.fn(), setTheme: vi.fn(), authState: { role: "user" } }));
+vi.mock("@/contexts/auth", () => ({ useAuth: () => ({ user: { username: "operator", role: authState.role }, logout }) }));
 vi.mock("@/contexts/theme", () => ({ useTheme: () => ({ theme: "light", setTheme }) }));
 vi.mock("@/contexts/confirmDialog", () => ({ useConfirm: () => vi.fn() }));
 
@@ -75,5 +75,16 @@ describe("sidebar-07 workspace", () => {
     await user.click(screen.getByRole("button", { name: "Account menu for operator" }));
     await user.click(await screen.findByRole("menuitem", { name: "Sign out" }));
     expect(logout).toHaveBeenCalledOnce();
+  });
+
+  it("shows Installer Media only in the admin navigation", () => {
+    const { unmount } = render(<Workspace />);
+    expect(screen.queryByRole("link", { name: "Installer Media" })).not.toBeInTheDocument();
+    unmount();
+
+    authState.role = "admin";
+    render(<Workspace />);
+    expect(screen.getByRole("link", { name: "Installer Media" })).toHaveAttribute("href", "/installer-media");
+    authState.role = "user";
   });
 });

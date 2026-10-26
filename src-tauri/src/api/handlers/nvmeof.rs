@@ -30,6 +30,22 @@ fn client_id(value: String) -> Result<ClientId, NvmeOfApiError> {
     })
 }
 
+async fn require_nvme_enabled(state: &AppState) -> Result<(), NvmeOfApiError> {
+    if state
+        .settings
+        .read()
+        .await
+        .client_features
+        .enable_experimental_nvme_target
+    {
+        Ok(())
+    } else {
+        Err(NvmeOfApiError {
+            error: "Experimental NVMe target is disabled in System Settings".to_string(),
+        })
+    }
+}
+
 /// POST /api/clients/{id}/nvmeof/prepare
 ///
 /// Creates an unauthenticated experimental NVMe/TCP export for the client's
@@ -39,7 +55,8 @@ pub async fn prepare_nvmeof_boot(
     Path(id): Path<String>,
     Json(request): Json<PrepareNvmeOfBootRequest>,
 ) -> Result<Json<crate::application::NvmeOfBootPreparation>, NvmeOfApiError> {
-    let _client_guard = state.client_mutations.lock().await;
+    require_nvme_enabled(&state).await?;
+    let _client_guard = state.client_mutations.lock_client(&id).await;
     let id = client_id(id)?;
     let server_ip = request.server_ip.trim();
     if server_ip.is_empty() {
@@ -67,6 +84,7 @@ pub async fn inspect_nvmeof_boot(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<crate::infrastructure::nvmeof::NvmeOfExportStatus>, NvmeOfApiError> {
+    require_nvme_enabled(&state).await?;
     let id = client_id(id)?;
     state
         .application

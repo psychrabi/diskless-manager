@@ -11,9 +11,8 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use uuid::Uuid;
 
-const PROTOCOL_VERSION: u32 = 2;
-const DEFAULT_HELPER: &str =
-    r"C:\Program Files\Diskless Manager\diskless-windows-servicer.exe";
+const PROTOCOL_VERSION: u32 = 3;
+const DEFAULT_HELPER: &str = r"C:\Program Files\Diskless Manager\diskless-windows-servicer.exe";
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RemoteWindowsServicingRequest {
@@ -43,6 +42,16 @@ pub struct RemoteWindowsServicingCapabilities {
     pub available: bool,
     #[serde(default)]
     pub elevated: bool,
+    #[serde(default)]
+    pub iscsi_volume_servicing: bool,
+    #[serde(default)]
+    pub volume_safety: bool,
+    #[serde(default)]
+    pub nexboot_boot_time: bool,
+    #[serde(default)]
+    pub nic_collection: bool,
+    #[serde(default)]
+    pub local_nic_installation: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -101,19 +110,17 @@ impl RemoteWindowsServicer {
         request: RemoteWindowsCapabilitiesRequest,
     ) -> Result<RemoteWindowsServicingCapabilities> {
         validate_remote_identity(&request.host, &request.username)?;
-        let executable = validate_helper_path(
-            request
-                .executable_path
-                .as_deref()
-                .unwrap_or(DEFAULT_HELPER),
-        )?;
+        let executable =
+            validate_helper_path(request.executable_path.as_deref().unwrap_or(DEFAULT_HELPER))?;
         let executor = self.executor(request.username, request.password);
         let command = powershell_helper_command(&executable, "capabilities");
 
         let output = executor
             .execute_command(&request.host, &command)
             .await
-            .map_err(|error| anyhow::anyhow!("remote Windows servicing capability check failed: {error}"))?;
+            .map_err(|error| {
+                anyhow::anyhow!("remote Windows servicing capability check failed: {error}")
+            })?;
 
         if output.exit_code != 0 {
             bail!(
@@ -130,17 +137,82 @@ impl RemoteWindowsServicer {
         Ok(capabilities)
     }
 
+    pub async fn check_volume(
+        &self,
+        worker: RemoteWindowsCapabilitiesRequest,
+        connection: super::windows_iscsi_servicing::WindowsIscsiConnection,
+    ) -> Result<super::windows_volume_safety::WindowsVolumeSafetyResult> {
+        connection.validate()?;
+        let capabilities = self.capabilities(worker.clone()).await?;
+        if !capabilities.available
+            || !capabilities.elevated
+            || !capabilities.iscsi_volume_servicing
+            || !capabilities.volume_safety
+        {
+            bail!("update the elevated Windows servicing worker: native volume_safety capability is required before saving Windows");
+        }
+        let executable =
+            validate_helper_path(worker.executable_path.as_deref().unwrap_or(DEFAULT_HELPER))?;
+        let payload = serde_json::to_vec(&connection)?;
+        let output = self
+            .executor(worker.username, worker.password)
+            .execute_command_with_input(
+                &worker.host,
+                &powershell_helper_command(&executable, "check-volume"),
+                &payload,
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!("Windows volume safety check failed: {error}"))?;
+        #[derive(Deserialize)]
+        struct Response {
+            protocol_version: u32,
+            ok: bool,
+            result: Option<super::windows_volume_safety::WindowsVolumeSafetyResult>,
+            error: Option<String>,
+        }
+        let response: Response = serde_json::from_str(output.stdout.trim()).context(
+            "invalid Windows volume safety response; retain candidate and inspect worker lease",
+        )?;
+        validate_protocol(response.protocol_version)?;
+        if output.exit_code != 0 || !response.ok {
+            bail!(
+                "{}",
+                response
+                    .error
+                    .unwrap_or_else(|| "Windows volume check failed; retain candidate".into())
+            );
+        }
+        let result = response
+            .result
+            .context("Windows volume safety response omitted result")?;
+        if !result.disk_released {
+            bail!("Windows worker did not confirm candidate disk release");
+        }
+        Ok(result)
+    }
+
     pub async fn prepare(
         &self,
         request: RemoteWindowsServicingRequest,
     ) -> Result<WindowsImagePreparationResult> {
         validate_remote_identity(&request.host, &request.username)?;
-        let executable = validate_helper_path(
-            request
-                .executable_path
-                .as_deref()
-                .unwrap_or(DEFAULT_HELPER),
-        )?;
+        if request.preparation.driver_install_strategy
+            == super::windows_image_preparation::WindowsDriverInstallStrategy::NexbootBootTime
+        {
+            let capabilities = self
+                .capabilities(RemoteWindowsCapabilitiesRequest {
+                    host: request.host.clone(),
+                    username: request.username.clone(),
+                    password: request.password.clone(),
+                    executable_path: request.executable_path.clone(),
+                })
+                .await?;
+            if !capabilities.nexboot_boot_time {
+                bail!("the Windows worker does not advertise NexBoot boot-time support; install helper protocol version 3");
+            }
+        }
+        let executable =
+            validate_helper_path(request.executable_path.as_deref().unwrap_or(DEFAULT_HELPER))?;
         let payload = serde_json::to_vec(&request.preparation)
             .context("failed to serialize Windows servicing request")?;
 
@@ -190,20 +262,18 @@ impl RemoteWindowsServicer {
         }
 
         let staging_id = Uuid::new_v4().to_string();
-        let remote_base =
-            format!(r"C:\ProgramData\Diskless Manager\staging\{staging_id}");
+        let remote_base = format!(r"C:\ProgramData\Diskless Manager\staging\{staging_id}");
         let remote_driver_root = format!(r"{remote_base}\drivers");
         let remote_driver_root_sftp = remote_driver_root.replace('\\', "/");
 
         let executor = self.executor(username.clone(), password.clone());
-        let create_command = powershell_statement(&format!(
-            "[void](New-Item -ItemType Directory -Force -LiteralPath {})",
-            powershell_literal(&remote_driver_root)
-        ));
+        let create_command = powershell_create_directory_command(&remote_driver_root);
         let created = executor
             .execute_command(&host, &create_command)
             .await
-            .map_err(|error| anyhow::anyhow!("failed to create remote driver staging directory: {error}"))?;
+            .map_err(|error| {
+                anyhow::anyhow!("failed to create remote driver staging directory: {error}")
+            })?;
         if created.exit_code != 0 {
             bail!(
                 "failed to create remote driver staging directory: {}",
@@ -214,8 +284,11 @@ impl RemoteWindowsServicer {
         let staging_result = async {
             let mut uploaded_bytes = 0u64;
             for package in &packages {
-                let remote_package_root =
-                    format!("{}/{}", remote_driver_root_sftp.trim_end_matches('/'), package.id);
+                let remote_package_root = format!(
+                    "{}/{}",
+                    remote_driver_root_sftp.trim_end_matches('/'),
+                    package.id
+                );
                 uploaded_bytes += executor
                     .upload_directory(&host, &package.source_dir, &remote_package_root)
                     .await
@@ -328,8 +401,17 @@ fn powershell_literal(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
+fn powershell_create_directory_command(path: &str) -> String {
+    powershell_statement(&format!(
+        "[void](New-Item -ItemType Directory -Force -Path {})",
+        powershell_literal(path)
+    ))
+}
+
 fn powershell_statement(statement: &str) -> String {
-    debug_assert!(!statement.chars().any(|ch| matches!(ch, '\r' | '\n' | '\0' | '"')));
+    debug_assert!(!statement
+        .chars()
+        .any(|ch| matches!(ch, '\r' | '\n' | '\0' | '"')));
     format!(
         "powershell.exe -NoProfile -NonInteractive -Command \"{}\"",
         statement
@@ -339,6 +421,28 @@ fn powershell_statement(statement: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn old_worker_does_not_implicitly_advertise_volume_safety() {
+        let capabilities: RemoteWindowsServicingCapabilities =
+            serde_json::from_value(serde_json::json!({
+                "protocol_version": 3, "platform": "windows", "available": true,
+                "elevated": true, "iscsi_volume_servicing": true,
+            }))
+            .unwrap();
+        assert!(!capabilities.volume_safety);
+    }
+
+    #[test]
+    fn staging_directory_uses_supported_powershell_parameters_and_quoted_paths() {
+        let command = powershell_create_directory_command(
+            r"C:\ProgramData\Diskless Manager\staging\job's\drivers",
+        );
+        assert_eq!(
+            command,
+            r#"powershell.exe -NoProfile -NonInteractive -Command "[void](New-Item -ItemType Directory -Force -Path 'C:\ProgramData\Diskless Manager\staging\job''s\drivers')""#
+        );
+    }
 
     #[test]
     fn helper_path_is_safely_single_quoted_for_powershell() {

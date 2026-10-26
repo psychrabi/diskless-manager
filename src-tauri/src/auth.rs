@@ -1,6 +1,6 @@
 //! Authentication module for JWT-based authentication
 use crate::types::User;
-use bcrypt::{hash, verify, DEFAULT_COST};
+use bcrypt::DEFAULT_COST;
 use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use log::{info, warn};
@@ -22,6 +22,31 @@ pub enum BootstrapAdminError {
     Database(#[source] sqlx::Error),
 }
 
+/// Check account passwords before bcrypt hashing: 8-72 bytes, with ASCII upper/lowercase and a digit.
+pub fn valid_password(password: &str) -> bool {
+    (8..=72).contains(&password.len())
+        && password
+            .chars()
+            .any(|character| character.is_ascii_lowercase())
+        && password
+            .chars()
+            .any(|character| character.is_ascii_uppercase())
+        && password.chars().any(|character| character.is_ascii_digit())
+}
+
+/// Hash passwords on the blocking pool rather than the HTTP runtime.
+pub async fn hash_password(password: &str) -> anyhow::Result<String> {
+    let password = password.to_owned();
+    Ok(tokio::task::spawn_blocking(move || bcrypt::hash(password, DEFAULT_COST)).await??)
+}
+
+/// Verify passwords without blocking unrelated requests.
+pub async fn verify_password(password: &str, password_hash: &str) -> anyhow::Result<bool> {
+    let password = password.to_owned();
+    let password_hash = password_hash.to_owned();
+    Ok(tokio::task::spawn_blocking(move || bcrypt::verify(password, &password_hash)).await??)
+}
+
 pub async fn bootstrap_admin(
     pool: &SqlitePool,
     username: &str,
@@ -31,21 +56,14 @@ pub async fn bootstrap_admin(
         && username
             .chars()
             .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'));
-    let valid_password = password.len() >= 8
-        && password
-            .chars()
-            .any(|character| character.is_ascii_lowercase())
-        && password
-            .chars()
-            .any(|character| character.is_ascii_uppercase())
-        && password.chars().any(|character| character.is_ascii_digit());
 
-    if !valid_username || !valid_password {
+    if !valid_username || !valid_password(password) {
         return Err(BootstrapAdminError::InvalidCredentials);
     }
 
-    let password_hash =
-        hash(password, DEFAULT_COST).map_err(|_| BootstrapAdminError::PasswordHash)?;
+    let password_hash = hash_password(password)
+        .await
+        .map_err(|_| BootstrapAdminError::PasswordHash)?;
     let now = Utc::now().to_rfc3339();
     let result = sqlx::query(
         r#"
@@ -191,9 +209,11 @@ pub async fn authenticate_user(
     let user = get_user_by_username(pool, username).await?;
 
     // Verify password against the hash from database
-    let valid = verify(password, &user.password_hash).map_err(|_| AuthError {
-        message: "Invalid username or password".to_string(),
-    })?;
+    let valid = verify_password(password, &user.password_hash)
+        .await
+        .map_err(|_| AuthError {
+            message: "Invalid username or password".to_string(),
+        })?;
 
     if !valid {
         return Err(AuthError {
@@ -286,8 +306,25 @@ pub async fn validate_session(pool: &SqlitePool, claims: &Claims) -> Result<Clai
 
 #[cfg(test)]
 mod bootstrap_tests {
+    #[tokio::test(flavor = "current_thread")]
+    async fn password_work_yields_and_round_trips() {
+        let hash = super::hash_password("SyntheticPass1");
+        tokio::pin!(hash);
+        tokio::select! {
+            biased;
+            _ = &mut hash => panic!("bcrypt blocked the async worker"),
+            _ = tokio::task::yield_now() => {}
+        }
+        let hash = hash.await.unwrap();
+        assert!(super::verify_password("SyntheticPass1", &hash)
+            .await
+            .unwrap());
+        assert!(!super::verify_password("WrongPass1", &hash).await.unwrap());
+    }
+
     use super::{
-        authenticate_user, bootstrap_admin, load_or_create_jwt_secret, BootstrapAdminError,
+        authenticate_user, bootstrap_admin, load_or_create_jwt_secret, valid_password,
+        BootstrapAdminError,
     };
     use sqlx::sqlite::SqlitePoolOptions;
     use std::path::PathBuf;
@@ -397,5 +434,21 @@ mod bootstrap_tests {
 
         assert_eq!(secret, configured.as_bytes());
         assert!(!path.exists());
+    }
+    #[test]
+    fn passwords_meet_policy_without_bcrypt_truncation() {
+        assert!(valid_password("StrongPass1"));
+        assert!(valid_password(&format!("Aa1{}", "x".repeat(69))));
+        for password in [
+            "".to_string(),
+            "short".into(),
+            "lowercase1".into(),
+            "UPPERCASE1".into(),
+            "NoDigitsHere".into(),
+            format!("Aa1{}", "x".repeat(70)),
+            format!("Aa1{}", "é".repeat(35)),
+        ] {
+            assert!(!valid_password(&password));
+        }
     }
 }

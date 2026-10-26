@@ -8,7 +8,10 @@ import { createBrowserRouter } from "react-router-dom";
 
 const Adminlayout = lazy(() => import("@/components/layouts/AdminLayout"));
 const ClientManagement = lazy(() => import("@/components/ClientManagement"));
+const PendingRecovery = lazy(() => import("@/components/PendingRecovery"));
 const ImageManagement = lazy(() => import("@/components/ImageManagement"));
+const InstallerMedia = lazy(() => import("@/components/InstallerMedia"));
+const ClientProvisioning = lazy(() => import("@/components/ClientProvisioning"));
 const Dashboard = lazy(() => import("@/components/Dashboard"));
 const Setup = lazy(() => import("@/components/Setup"));
 const SettingManagement = lazy(() => import("@/components/SettingsManagement"));
@@ -74,12 +77,24 @@ export const router = createBrowserRouter([
         element: <ClientManagement />,
       },
       {
+        path: "/pending-recovery",
+        element: <PendingRecovery />,
+      },
+      {
         path: "/disks",
         element: <DisksManagement />,
       },
       {
         path: "/images",
         element: <ImageManagement />,
+      },
+      {
+        path: "/installer-media",
+        element: <InstallerMedia />,
+      },
+      {
+        path: "/client-provisioning",
+        element: <ClientProvisioning />,
       },
       {
         path: "/services",

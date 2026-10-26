@@ -1,0 +1,77 @@
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { beforeEach, expect, it, vi } from "vitest";
+import WindowsServicingModal from "./WindowsServicingModal";
+const mocks = vi.hoisted(() => ({ capabilities: vi.fn(), prepare: vi.fn(), success: vi.fn(), error: vi.fn(), confirm: vi.fn() }));
+vi.mock("@/api/modules/images", () => ({ listMasters: async () => [{id:"win",name:"diskless/image-disk/windows11",os_type:"windows",status:"ready",snapshots:[{name:"installed"}]}], getDriverReadiness: async () => ({image_id:"win",latest_ready_revision:{id:"rev-ready-1"},candidate_count:1,failed_count:0}) }));
+vi.mock("@/api/modules/networkDrivers", () => ({listNetworkDrivers: async () => [{id:"netkvm",name:"VirtIO Ethernet"}], listDriverRevisions: async () => [{id:"rev-candidate-1",status:"awaiting-test"}], listBootTests: async () => [{id:"test-1",status:"candidate"}]}));
+vi.mock("@/api/modules/windowsServicing", () => ({getRemoteWindowsServicingCapabilities: mocks.capabilities, prepareWindowsImageManaged: mocks.prepare, prepareWindowsImageRemote: vi.fn(), prepareWindowsImageRemoteCatalog: vi.fn()}));
+vi.mock("@/store/useToastStore", () => ({useToastStore: () => ({success:mocks.success,error:mocks.error})}));
+vi.mock("@/store/useAppStore", () => ({useAppStore: (selector) => selector({appConfig:{settings:{windows_servicing:{driver_install_strategy:"offline_dism"}}}})}));
+vi.mock("@/contexts/confirmDialog", () => ({useConfirm: () => mocks.confirm}));
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.capabilities.mockResolvedValue({available:true,elevated:true,platform:"windows",protocol_version:2,iscsi_volume_servicing:true});
+  mocks.confirm.mockResolvedValue(true);
+  mocks.prepare.mockResolvedValue({preparation:{committed:true,drivers_added:1},image:{name:"windows11-serviced"},snapshot:{name:"serviced-test"},staged_package_count:1,uploaded_bytes:100,staging_cleanup_succeeded:true});
+});
+async function fillForm() {
+  fireEvent.change(screen.getByLabelText("Windows host"),{target:{value:"192.168.123.10"}});
+  fireEvent.change(screen.getByLabelText("SSH username"),{target:{value:"diskless"}});
+  fireEvent.click(screen.getByRole("button",{name:"Check Worker"}));
+  await screen.findByText(/Ready · windows/);
+  await screen.findByText("diskless/image-disk/windows11");
+  fireEvent.change(screen.getByLabelText("Source Windows image"),{target:{value:"win"}});
+  fireEvent.change(screen.getByLabelText("Source snapshot"),{target:{value:"installed"}});
+  fireEvent.change(screen.getByLabelText("New image name"),{target:{value:"windows11-serviced"}});
+  fireEvent.change(screen.getByLabelText("Server iSCSI address"),{target:{value:"192.168.123.1"}});
+  fireEvent.click(await screen.findByRole("checkbox",{name:/VirtIO Ethernet/}));
+}
+it("services a selected managed snapshot and refreshes images after saving",async () => {
+  const onPrepared=vi.fn();
+  render(<WindowsServicingModal isOpen onPrepared={onPrepared}/>);
+  await fillForm();
+  fireEvent.click(screen.getByRole("button",{name:"Prepare and Commit"}));
+  await waitFor(() => expect(mocks.prepare).toHaveBeenCalledWith(expect.objectContaining({host:"192.168.123.10",image_id:"win",source_snapshot:"installed",new_name:"windows11-serviced",portal:"192.168.123.1",driver_ids:["netkvm"],commit:true,report_server_url:window.location.origin})));
+  expect(await screen.findByText(/Saved windows11-serviced@serviced-test/)).toBeInTheDocument();
+  expect(onPrepared).toHaveBeenCalledOnce();
+});
+it("submits the selected NIC installation strategy for managed image preparation", async () => {
+  render(<WindowsServicingModal isOpen/>);
+  await fillForm();
+  fireEvent.change(screen.getByLabelText("Windows NIC installation strategy"), {
+    target: { value: "nexboot_boot_time" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Dry Run" }));
+  await waitFor(() => expect(mocks.prepare).toHaveBeenCalledWith(
+    expect.objectContaining({ driver_install_strategy: "nexboot_boot_time" }),
+  ));
+});
+it("allows managed catalog builds without manual driver selections",async () => {
+  render(<WindowsServicingModal isOpen/>);
+  await fillForm();
+  fireEvent.click(screen.getByRole("checkbox",{name:/VirtIO Ethernet/}));
+  expect(screen.getByRole("button",{name:"Prepare and Commit"})).toBeEnabled();
+  fireEvent.click(screen.getByRole("button",{name:"Prepare and Commit"}));
+  await waitFor(() => expect(mocks.prepare).toHaveBeenCalledWith(expect.objectContaining({driver_ids:[]})));
+});
+it("keeps the reporter URL out of managed dry-run requests",async () => {
+  render(<WindowsServicingModal isOpen/>);
+  await fillForm();
+  fireEvent.click(screen.getByRole("button",{name:"Dry Run"}));
+  await waitFor(() => expect(mocks.prepare).toHaveBeenCalledWith(expect.objectContaining({commit:false})));
+  expect(mocks.prepare.mock.calls[0][0]).not.toHaveProperty("report_server_url");
+});
+it("requires a helper that supports managed volumes",async () => {
+  mocks.capabilities.mockResolvedValue({available:true,elevated:true,platform:"windows",protocol_version:2});
+  render(<WindowsServicingModal isOpen/>);
+  await fillForm();
+  expect(screen.getByRole("button",{name:"Prepare and Commit"})).toBeDisabled();
+  expect(screen.getByRole("alert")).toHaveTextContent("Update the Windows helper");
+  expect(mocks.prepare).not.toHaveBeenCalled();
+});it("shows driver revision readiness for the selected image", async () => {
+  render(<WindowsServicingModal isOpen/>);
+  await screen.findByText("diskless/image-disk/windows11");
+  fireEvent.change(screen.getByLabelText("Source Windows image"),{target:{value:"win"}});
+  expect(await screen.findByTestId("driver-readiness")).toHaveTextContent(/Latest tested revision: rev-read/);
+  expect(await screen.findByText(/Candidate rev-cand.*: boot test candidate/)).toBeInTheDocument();
+});

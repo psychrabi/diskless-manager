@@ -82,6 +82,10 @@ pub struct ClientStorageSpec {
     /// Client identifier.
     pub client_id: String,
 
+    /// Registered name used by iPXE to set the initiator IQN.
+    #[serde(default)]
+    pub client_name: String,
+
     /// Where the client's storage comes from.
     pub source: StorageSource,
 
@@ -113,9 +117,16 @@ pub struct ClientStorageSpec {
     /// `None` preserves the legacy open portal (no authentication).
     #[serde(default)]
     pub chap: Option<ChapCredentials>,
+
+    /// Read-only installer ISO exported as LUN 2 while the client installs an OS.
+    #[serde(default)]
+    pub installer_iso: Option<PathBuf>,
 }
 
 impl ClientStorageSpec {
+    pub fn initiator_iqn(&self) -> String {
+        crate::infrastructure::pxe::client_initiator_iqn(&self.client_name)
+    }
     pub fn block_device(&self) -> PathBuf {
         PathBuf::from(format!("/dev/zvol/{}", self.dataset))
     }
@@ -128,6 +139,32 @@ impl ClientStorageSpec {
     /// Alias used by the application storage service.
     pub fn owns_dataset(&self) -> bool {
         self.source.owns_zfs_resource()
+    }
+}
+
+#[cfg(test)]
+mod initiator_tests {
+    use super::{ClientStorageSpec, StorageSource};
+
+    #[test]
+    fn client_name_controls_initiator_even_with_uuid_id_and_custom_target() {
+        let spec = ClientStorageSpec {
+            installer_iso: None,
+            client_id: "ed336631-0aa1-44b5-a4eb-c9d39d5742b3".into(),
+            client_name: "PC 001/West".into(),
+            source: StorageSource::ExistingVolume("pool/client".into()),
+            dataset: "pool/client".into(),
+            backstore: "unrelated".into(),
+            target_iqn: "iqn.custom:target".into(),
+            lun: 0,
+            use_game_disk: false,
+            game_disks: Vec::new(),
+            chap: None,
+        };
+        assert_eq!(
+            spec.initiator_iqn(),
+            "iqn.2026-01.client:client.pc_001_west"
+        );
     }
 }
 

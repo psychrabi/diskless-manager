@@ -141,6 +141,9 @@ mod tests {
         volumes: Mutex<HashMap<String, String>>,
     }
     impl ImageBackend for FakeDisks {
+        fn validate_unmounted(&self, _: &str) -> Result<()> {
+            Ok(())
+        }
         fn settle_device_changes(&self) -> Result<()> {
             Ok(())
         }
@@ -213,6 +216,7 @@ mod tests {
         fail_next: Mutex<bool>,
         connected: Mutex<bool>,
         attached: Mutex<bool>,
+        report_absent: Mutex<bool>,
     }
     impl IscsiProvisioner for FakeTarget {
         fn create_target(&self, spec: &IscsiTargetSpec) -> Result<()> {
@@ -227,7 +231,11 @@ mod tests {
             bail!("must preserve target")
         }
         fn remove_target_with_backstores(&self, _: &str, backstores: &[String]) -> Result<()> {
-            assert_eq!(backstores, &["block_pc001"]);
+            assert!(
+                backstores == ["block_pc001"]
+                    || backstores == ["block_pc001", "installer_client-1"],
+                "unexpected owned backstores: {backstores:?}"
+            );
             if *self.connected.lock().unwrap() {
                 bail!("client reconnected");
             }
@@ -235,7 +243,7 @@ mod tests {
             Ok(())
         }
         fn target_exists(&self, _: &str) -> Result<bool> {
-            Ok(true)
+            Ok(!*self.report_absent.lock().unwrap())
         }
         fn set_chap_auth(&self, _: &str, _: Option<&ChapCredentials>) -> Result<()> {
             Ok(())
@@ -247,7 +255,7 @@ mod tests {
             let attached = *self.attached.lock().unwrap();
             Ok(IscsiTargetState {
                 target_iqn: spec.target_iqn.clone(),
-                exists: true,
+                exists: !*self.report_absent.lock().unwrap(),
                 backstore_exists: attached,
                 lun_exists: attached,
                 luns: vec![],
@@ -274,7 +282,9 @@ mod tests {
         *target.attached.lock().unwrap() = true;
         let service = StorageService::new(disks.clone(), target.clone());
         let operation = OfflineReplacement::new(ClientStorageSpec {
+            installer_iso: None,
             client_id: "client-1".into(),
+            client_name: "PC001".into(),
             source: StorageSource::Snapshot("pool/master@ready".into()),
             dataset: "pool/pc001".into(),
             backstore: "block_pc001".into(),
@@ -286,6 +296,81 @@ mod tests {
         });
         (service, disks, target, operation)
     }
+
+    #[test]
+    fn legacy_exit_failure_is_retryable_without_destroying_the_shared_master() {
+        let (service, disks, target, operation) = fixture();
+        disks.volumes.lock().unwrap().remove("pool/pc001");
+        disks
+            .volumes
+            .lock()
+            .unwrap()
+            .insert("pool/master".into(), "shared master".into());
+        *target.fail_next.lock().unwrap() = true;
+
+        assert!(service
+            .exit_legacy_super(
+                "iqn.test:pc001",
+                "block_pc001",
+                &operation.spec,
+                "pool/master@ready"
+            )
+            .is_err());
+        assert!(!disks.volumes.lock().unwrap().contains_key("pool/pc001"));
+        assert_eq!(
+            disks
+                .volumes
+                .lock()
+                .unwrap()
+                .get("pool/master")
+                .map(String::as_str),
+            Some("shared master")
+        );
+
+        service
+            .exit_legacy_super(
+                "iqn.test:pc001",
+                "block_pc001",
+                &operation.spec,
+                "pool/master@ready",
+            )
+            .unwrap();
+        // A restarted retry can safely rebuild the target from the existing clone.
+        service
+            .exit_legacy_super(
+                "iqn.test:pc001",
+                "block_pc001",
+                &operation.spec,
+                "pool/master@ready",
+            )
+            .unwrap();
+        assert!(disks.volumes.lock().unwrap().contains_key("pool/pc001"));
+        assert!(*target.attached.lock().unwrap());
+        assert_eq!(
+            disks
+                .volumes
+                .lock()
+                .unwrap()
+                .get("pool/master")
+                .map(String::as_str),
+            Some("shared master")
+        );
+    }
+
+    #[test]
+    fn boot_target_failure_preserves_existing_client_clone() {
+        let (service, disks, target, op) = fixture();
+        *target.report_absent.lock().unwrap() = true;
+        *target.fail_next.lock().unwrap() = true;
+
+        assert!(service.ensure_client_storage_for_boot(&op.spec).is_err());
+
+        assert_eq!(
+            disks.volumes.lock().unwrap().get(&op.spec.dataset).unwrap(),
+            "user changes"
+        );
+    }
+
     #[test]
     fn cleanup_can_be_retried_after_client_clone_is_already_absent() {
         let (service, disks, target, op) = fixture();

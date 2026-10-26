@@ -62,7 +62,7 @@ const RenameDiskModal = ({
         `Failed to rename disk: ${err.message || "An unknown error occurred"}`
       );
     } finally {
-      refresh && refresh();
+      refresh?.();
     }
   };
 

@@ -90,6 +90,7 @@ const ClientTable = ({ handleClientContextMenu }) => {
               <ClientTableRow
                 client={client}
                 clientMetrics={metricsMap[client.ip] || null}
+                onMoreActions={handleClientContextMenu}
               />
             );
           }}

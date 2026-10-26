@@ -75,6 +75,54 @@ pub struct AuditLogFilter {
     pub offset: Option<i64>,
 }
 
+/// An administrative audit event.
+///
+/// Routing metadata is recorded after authentication; request bodies and
+/// credentials are intentionally never stored.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditEvent {
+    pub id: String,
+    pub actor: String,
+    pub actor_role: Option<String>,
+    pub ip: Option<String>,
+    pub module: String,
+    pub action: String,
+    pub method: String,
+    pub path: String,
+    pub status: String,
+    pub status_code: i64,
+    pub details: Option<String>,
+    pub timestamp: String,
+}
+
+/// A new event before the logger assigns its id and timestamp.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewAuditEvent {
+    pub actor: String,
+    pub actor_role: Option<String>,
+    pub ip: Option<String>,
+    pub module: String,
+    pub action: String,
+    pub method: String,
+    pub path: String,
+    pub status: String,
+    pub status_code: i64,
+    pub details: Option<String>,
+}
+
+/// Filter for querying administrative audit events.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AuditEventFilter {
+    pub actor: Option<String>,
+    pub module: Option<String>,
+    pub action: Option<String>,
+    pub status: Option<String>,
+    pub start_date: Option<String>,
+    pub end_date: Option<String>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
 /// Audit logger for control operations
 pub struct AuditLogger {
     db: Arc<SqlitePool>,
@@ -253,6 +301,128 @@ impl AuditLogger {
 
         self.query_logs(&filter).await
     }
+
+    /// Record an administrative audit event.
+    pub async fn log_event(&self, event: &NewAuditEvent) -> anyhow::Result<String> {
+        let id = Uuid::new_v4().to_string();
+        let timestamp = Utc::now().to_rfc3339();
+
+        sqlx::query(
+            r#"
+            INSERT INTO audit_events (
+                id, actor, actor_role, ip, module, action, method, path,
+                status, status_code, details, timestamp
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(&id)
+        .bind(&event.actor)
+        .bind(&event.actor_role)
+        .bind(&event.ip)
+        .bind(&event.module)
+        .bind(&event.action)
+        .bind(&event.method)
+        .bind(&event.path)
+        .bind(&event.status)
+        .bind(event.status_code)
+        .bind(&event.details)
+        .bind(timestamp)
+        .execute(self.db.as_ref())
+        .await?;
+
+        Ok(id)
+    }
+
+    /// Query administrative audit events, newest first.
+    pub async fn query_events(&self, filter: &AuditEventFilter) -> anyhow::Result<Vec<AuditEvent>> {
+        let limit = filter.limit.unwrap_or(100).clamp(1, 500);
+        let offset = filter.offset.unwrap_or(0).max(0);
+
+        let mut query = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+            r#"
+            SELECT id, actor, actor_role, ip, module, action, method, path,
+                   status, status_code, details, timestamp
+            FROM audit_events
+            WHERE 1=1
+            "#,
+        );
+
+        if let Some(actor) = &filter.actor {
+            query.push(" AND actor = ").push_bind(actor);
+        }
+        if let Some(module) = &filter.module {
+            query.push(" AND module = ").push_bind(module);
+        }
+        if let Some(action) = &filter.action {
+            query.push(" AND action = ").push_bind(action);
+        }
+        if let Some(status) = &filter.status {
+            query.push(" AND status = ").push_bind(status);
+        }
+        if let Some(start_date) = &filter.start_date {
+            query.push(" AND timestamp >= ").push_bind(start_date);
+        }
+        if let Some(end_date) = &filter.end_date {
+            query.push(" AND timestamp <= ").push_bind(end_date);
+        }
+
+        query
+            .push(" ORDER BY timestamp DESC LIMIT ")
+            .push_bind(limit)
+            .push(" OFFSET ")
+            .push_bind(offset);
+
+        let rows = query
+            .build_query_as::<(
+                String,
+                String,
+                Option<String>,
+                Option<String>,
+                String,
+                String,
+                String,
+                String,
+                String,
+                i64,
+                Option<String>,
+                String,
+            )>()
+            .fetch_all(self.db.as_ref())
+            .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(
+                |(
+                    id,
+                    actor,
+                    actor_role,
+                    ip,
+                    module,
+                    action,
+                    method,
+                    path,
+                    status,
+                    status_code,
+                    details,
+                    timestamp,
+                )| AuditEvent {
+                    id,
+                    actor,
+                    actor_role,
+                    ip,
+                    module,
+                    action,
+                    method,
+                    path,
+                    status,
+                    status_code,
+                    details,
+                    timestamp,
+                },
+            )
+            .collect())
+    }
 }
 
 #[cfg(test)]
@@ -279,5 +449,68 @@ mod tests {
         );
         assert_eq!(OperationResult::Timeout.details(), None);
         assert_eq!(OperationResult::Cancelled.details(), None);
+    }
+
+    #[tokio::test]
+    async fn audit_events_are_recorded_and_filtered_without_request_bodies() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let logger = AuditLogger::new(Arc::new(pool));
+
+        logger
+            .log_event(&NewAuditEvent {
+                actor: "admin".into(),
+                actor_role: Some("admin".into()),
+                ip: Some("192.0.2.10".into()),
+                module: "clients".into(),
+                action: "shutdown".into(),
+                method: "POST".into(),
+                path: "/api/clients/client-1/shutdown".into(),
+                status: "failed".into(),
+                status_code: 409,
+                details: Some("Conflict".into()),
+            })
+            .await
+            .unwrap();
+        logger
+            .log_event(&NewAuditEvent {
+                actor: "operator".into(),
+                actor_role: Some("user".into()),
+                ip: None,
+                module: "images".into(),
+                action: "rollback".into(),
+                method: "POST".into(),
+                path: "/api/images/pool/image/snapshots/stable/rollback".into(),
+                status: "success".into(),
+                status_code: 200,
+                details: None,
+            })
+            .await
+            .unwrap();
+
+        let events = logger
+            .query_events(&AuditEventFilter {
+                actor: Some("admin".into()),
+                ..AuditEventFilter::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].action, "shutdown");
+        assert_eq!(events[0].status_code, 409);
+        assert_eq!(events[0].ip.as_deref(), Some("192.0.2.10"));
+
+        let none = logger
+            .query_events(&AuditEventFilter {
+                status: Some("timeout".into()),
+                ..AuditEventFilter::default()
+            })
+            .await
+            .unwrap();
+        assert!(none.is_empty());
     }
 }

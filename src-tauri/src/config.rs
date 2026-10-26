@@ -1,6 +1,6 @@
-use once_cell::sync::OnceCell;
 use std::net::IpAddr;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::sync::RwLock;
 
 use crate::domain::{BootMode, ClientId, ClientStatus, MacAddress, PxeMode};
@@ -9,21 +9,24 @@ use crate::types::AppConfig;
 use log::{info, warn};
 use serde_json::{json, Value};
 
-static CONFIG_CACHE: OnceCell<RwLock<AppConfig>> = OnceCell::new();
+/// Instance-owned legacy configuration snapshot shared with storage integrations.
+#[derive(Clone, Default)]
+pub struct RuntimeConfig(Arc<RwLock<AppConfig>>);
 
-pub fn get_config() -> AppConfig {
-    let cache = CONFIG_CACHE.get_or_init(|| {
-        // Initialize with default config - the actual config should be loaded from DB
-        // and cached when the application starts up via read_config_db
-        RwLock::new(AppConfig::default())
-    });
-    cache.read().unwrap_or_else(|e| e.into_inner()).clone()
+impl std::fmt::Debug for RuntimeConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RuntimeConfig { .. }")
+    }
 }
 
-pub fn set_config(config: &AppConfig) {
-    let cache = CONFIG_CACHE.get_or_init(|| RwLock::new(config.clone()));
-    let mut w = cache.write().unwrap_or_else(|e| e.into_inner());
-    *w = config.clone();
+/// Read this server instance's legacy configuration snapshot.
+pub fn get_config(runtime: &RuntimeConfig) -> AppConfig {
+    runtime.0.read().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// Publish a snapshot only after its database changes have succeeded.
+pub fn set_config(runtime: &RuntimeConfig, config: &AppConfig) {
+    *runtime.0.write().unwrap_or_else(|e| e.into_inner()) = config.clone();
 }
 
 /// Helper function to insert or replace a key-value pair in app_config table
@@ -52,8 +55,15 @@ fn parse_legacy_datetime(value: &str) -> anyhow::Result<chrono::DateTime<chrono:
     anyhow::bail!("invalid legacy datetime: {value}")
 }
 
-fn legacy_client_to_domain(client: &crate::core::client::Client) -> anyhow::Result<crate::domain::Client> {
-    let status = match client.status.as_deref().map(str::to_ascii_lowercase).as_deref() {
+fn legacy_client_to_domain(
+    client: &crate::core::client::Client,
+) -> anyhow::Result<crate::domain::Client> {
+    let status = match client
+        .status
+        .as_deref()
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
         None | Some("provisioning") => ClientStatus::Provisioning,
         Some("ready") => ClientStatus::Ready,
         Some("online") => ClientStatus::Online,
@@ -63,7 +73,12 @@ fn legacy_client_to_domain(client: &crate::core::client::Client) -> anyhow::Resu
         Some(value) => anyhow::bail!("unsupported legacy client status: {value}"),
     };
 
-    let mode = match client.mode.as_deref().map(str::to_ascii_lowercase).as_deref() {
+    let mode = match client
+        .mode
+        .as_deref()
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
         None | Some("normal") => BootMode::Normal,
         Some("super") => BootMode::Super,
         Some(value) => anyhow::bail!("unsupported legacy client mode: {value}"),
@@ -87,6 +102,7 @@ fn legacy_client_to_domain(client: &crate::core::client::Client) -> anyhow::Resu
         .transpose()?;
 
     Ok(crate::domain::Client {
+        installer_media_id: client.installer_media_id.clone(),
         id: ClientId::from_string(client.id.clone())?,
         name: client.name.clone(),
         mac: MacAddress::parse(&client.mac)?,
@@ -114,7 +130,8 @@ fn legacy_client_to_domain(client: &crate::core::client::Client) -> anyhow::Resu
     })
 }
 
-async fn persist_config_client(
+/// Persist one explicitly selected client without replaying configuration snapshots.
+pub(crate) async fn persist_config_client(
     pool: &sqlx::SqlitePool,
     client: &crate::core::client::Client,
 ) -> anyhow::Result<()> {
@@ -146,9 +163,8 @@ async fn persist_config_client(
     }
 }
 
+/// Persist application settings; client snapshots are read-only here.
 pub async fn write_config(pool: &sqlx::SqlitePool, config: &AppConfig) -> anyhow::Result<()> {
-    set_config(config);
-
     // 1. Persist masters and services to app_config
     upsert_config_value(pool, "masters", &serde_json::to_string(&config.masters)?).await?;
 
@@ -159,13 +175,6 @@ pub async fn write_config(pool: &sqlx::SqlitePool, config: &AppConfig) -> anyhow
         for (k, v) in obj {
             upsert_config_value(pool, k, &serde_json::to_string(v)?).await?;
         }
-    }
-
-    // 3. Persist domain-compatible clients through the authoritative repository.
-    // Historical rows that cannot yet be represented by the strict domain model
-    // retain the legacy upsert as an explicit compatibility fallback.
-    for client in &config.clients {
-        persist_config_client(pool, client).await?;
     }
 
     Ok(())
@@ -231,6 +240,7 @@ pub async fn read_config_db(pool: &sqlx::SqlitePool) -> anyhow::Result<AppConfig
         chap_user: Option<String>,
         chap_secret: Option<String>,
         chap_enabled: Option<bool>,
+        installer_media_id: Option<String>,
         created_at: Option<String>,
         last_modified: Option<String>,
     }
@@ -242,7 +252,7 @@ pub async fn read_config_db(pool: &sqlx::SqlitePool) -> anyhow::Result<AppConfig
         r#"
         SELECT id, name, mac, ip, master, enabled, snapshot, block_store, target_iqn,
                writeback, block_device, status, mode, pxe_mode, keep_writeback,
-               use_game_disk, chap_user, chap_secret, chap_enabled,
+               use_game_disk, chap_user, chap_secret, chap_enabled, installer_media_id,
                created_at, last_modified
         FROM clients
         "#,
@@ -283,18 +293,17 @@ pub async fn read_config_db(pool: &sqlx::SqlitePool) -> anyhow::Result<AppConfig
             chap_user: c.chap_user,
             chap_secret: c.chap_secret,
             chap_enabled: c.chap_enabled,
+            installer_media_id: c.installer_media_id,
         });
     }
 
-    // Update cache with the loaded config
-    set_config(&config);
     Ok(config)
 }
 
 /// Returns the configured ZFS pool name from config.settings.
 /// Prefers 'zpool_name' and falls back to legacy 'zfsPool'. Defaults to 'diskless'.
-pub fn get_zpool_name() -> String {
-    let cfg = get_config();
+pub fn get_zpool_name(runtime: &RuntimeConfig) -> String {
+    let cfg = get_config(runtime);
     let settings = cfg.settings.as_object();
     let from_new = settings
         .and_then(|s| s.get("zpool_name"))
@@ -308,4 +317,83 @@ pub fn get_zpool_name() -> String {
         .or(from_legacy)
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "diskless".to_string())
+}
+
+#[cfg(test)]
+mod runtime_tests {
+    use super::*;
+
+    #[test]
+    fn independent_servers_do_not_share_configuration() {
+        let first = RuntimeConfig::default();
+        let shared = first.clone();
+        let second = RuntimeConfig::default();
+        let config = AppConfig {
+            settings: json!({"zpool_name": "test-pool"}),
+            ..AppConfig::default()
+        };
+        set_config(&first, &config);
+        assert_eq!(get_zpool_name(&shared), "test-pool");
+        assert_eq!(get_zpool_name(&second), "diskless");
+        assert!(!format!("{first:?}").contains("test-pool"));
+    }
+    #[tokio::test]
+    async fn settings_and_client_saves_do_not_replay_stale_clients() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let client = |name: &str, mac: &str, ip: &str| {
+            crate::core::client::Client::new(
+                serde_json::from_value(
+                    json!({"name":name,"mac":mac,"ip":ip,"master":"diskless/image-disk/test"}),
+                )
+                .unwrap(),
+            )
+            .unwrap()
+        };
+        let first = client("PC001", "00:11:22:33:44:55", "192.168.1.101");
+        let second = client("PC002", "00:11:22:33:44:66", "192.168.1.102");
+        persist_config_client(&pool, &first).await.unwrap();
+        persist_config_client(&pool, &second).await.unwrap();
+        let stale = AppConfig {
+            clients: vec![first.clone(), second.clone()],
+            settings: json!({"zpool_name":"diskless"}),
+            ..AppConfig::default()
+        };
+        let runtime = RuntimeConfig::default();
+        set_config(&runtime, &stale);
+        sqlx::query("DELETE FROM clients WHERE id = ?")
+            .bind(&first.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE clients SET chap_secret = 'rotated-fixture', block_device = '/dev/zvol/diskless/new' WHERE id = ?").bind(&second.id).execute(&pool).await.unwrap();
+        write_config(&pool, &stale).await.unwrap();
+        let third = client("PC003", "00:11:22:33:44:77", "192.168.1.103");
+        assert!(crate::core::provisioning::save_client_config(&runtime, &pool, &third).await);
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM clients WHERE id = ?")
+            .bind(&first.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0, "deleted client must stay deleted");
+        let (secret, device): (String, String) =
+            sqlx::query_as("SELECT chap_secret, block_device FROM clients WHERE id = ?")
+                .bind(&second.id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(secret, "rotated-fixture");
+        assert_eq!(device, "/dev/zvol/diskless/new");
+        assert!(crate::core::provisioning::delete_client_config(&runtime, &pool, &third.id).await);
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM clients WHERE id = ?")
+            .bind(&third.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+    }
 }

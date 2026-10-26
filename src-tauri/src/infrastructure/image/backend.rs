@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::path::Path;
 
-use crate::core::image::{ImageFormat, ImageInfo};
+use crate::core::image::{BootProbe, ImageFormat, ImageInfo};
 
 #[derive(Debug, Clone)]
 pub struct ImageBackendInfo {
@@ -47,6 +47,11 @@ pub trait ImageBackend: Send + Sync {
     }
     fn exists(&self, name: &str) -> Result<bool>;
 
+    /// Check storage presence without treating query failures as missing objects.
+    fn check_presence(&self, names: &[String]) -> Result<Vec<bool>> {
+        names.iter().map(|name| self.exists(name)).collect()
+    }
+
     fn create_volume(&self, name: &str, size_gb: u64) -> Result<()>;
 
     fn destroy(&self, name: &str) -> Result<()>;
@@ -58,6 +63,10 @@ pub trait ImageBackend: Send + Sync {
     /// `source` must identify an immutable snapshot.
     /// `destination` must identify the new writable image.
     fn clone_image(&self, source: &str, destination: &str) -> Result<()>;
+    /// Promote a clone so its data no longer depends on its original dataset.
+    fn promote_clone(&self, _name: &str) -> Result<()> {
+        anyhow::bail!("clone promotion is unavailable")
+    }
     fn create_snapshot(&self, dataset: &str, snapshot: &str) -> Result<()>;
 
     fn destroy_snapshot(&self, dataset: &str, snapshot: &str) -> Result<()>;
@@ -68,9 +77,22 @@ pub trait ImageBackend: Send + Sync {
 
     fn import_raw(&self, source: &Path, destination: &str, size_bytes: u64) -> Result<()>;
 
+    /// Convert a non-raw source directly into the destination image volume.
+    fn import_converted(&self, _source: &Path, _destination: &str, _size_bytes: u64) -> Result<()> {
+        anyhow::bail!("converted image import is unavailable")
+    }
+
     fn verify(&self, name: &str) -> Result<bool>;
 
     fn info(&self, name: &str) -> Result<ImageBackendInfo>;
+
+    /// Read-only block-device metadata for image health inspection.
+    ///
+    /// The default is an empty probe so backends used only for metadata
+    /// operations do not need to implement device inspection.
+    fn probe_boot(&self, _name: &str) -> Result<BootProbe> {
+        Ok(BootProbe::default())
+    }
 
     fn set_os_type(&self, name: &str, os_type: &str) -> Result<()>;
 

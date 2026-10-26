@@ -25,7 +25,7 @@ export const Select = ({
   const { onChange: regOnChange, ...regRest } = register || {};
 
   return (
-    <div className={cn("flex flex-col gap-1.5", className)}>
+    <div className={cn("flex flex-col gap-2", className)}>
       {label && <Label htmlFor={id}>{label}{required && <span className="text-destructive">*</span>}</Label>}
       <NativeSelect
         id={id}
@@ -46,12 +46,12 @@ export const Select = ({
         {children}
       </NativeSelect>
       {error && (
-        <span id={`${id}-error`} role="alert" className="text-sm text-destructive">
+        <span id={`${id}-error`} role="alert" className="text-xs leading-relaxed text-destructive">
           {errorMessage}
         </span>
       )}
       {description && !error && (
-        <span id={`${id}-helper`} className="text-sm text-muted-foreground">
+        <span id={`${id}-helper`} className="text-xs leading-relaxed text-muted-foreground">
           {description}
         </span>
       )}

@@ -1,13 +1,12 @@
 use crate::{
     domain::ClientId,
     infrastructure::{
-        dhcp::{publish_client_ipxe, BootReservation},
         nvmeof::{
             ensure_export, inspect_export, nqn_for_client, remove_export, NvmeOfExportStatus,
         },
         pxe::{nvme_tcp_uri, render_windows_nvmeof_boot},
     },
-    persistence::ClientRepository,
+    persistence::{ClientRepository, SuperSessionRepository},
 };
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
@@ -26,11 +25,12 @@ pub struct NvmeOfBootPreparation {
 #[derive(Clone)]
 pub struct NvmeOfBootService {
     clients: ClientRepository,
+    sessions: SuperSessionRepository,
 }
 
 impl NvmeOfBootService {
-    pub fn new(clients: ClientRepository) -> Self {
-        Self { clients }
+    pub fn new(clients: ClientRepository, sessions: SuperSessionRepository) -> Self {
+        Self { clients, sessions }
     }
 
     /// Prepare an existing client for an experimental Windows NVMe/TCP boot.
@@ -42,12 +42,20 @@ impl NvmeOfBootService {
     pub async fn prepare(&self, id: &ClientId, server_ip: &str) -> Result<NvmeOfBootPreparation> {
         let client = self
             .clients
-            .find_by_id(id)
+            .find_nvmeof_client(id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("client not found: {id}"))?;
 
-        if !client.enabled {
+        if client.enabled == 0 {
             bail!("client is disabled: {}", client.name);
+        }
+
+        let session = self.sessions.get_for_client(client.id.as_str()).await?;
+        if session.as_ref().is_some_and(|session| {
+            session.state != crate::persistence::SuperSessionState::Completed
+        }) || (session.is_none() && client.is_super_mode())
+        {
+            bail!("cannot prepare an ordinary NVMe boot while client '{}' has an active or legacy Super session", client.name);
         }
 
         let block_device = client
@@ -58,30 +66,6 @@ impl NvmeOfBootService {
             .ok_or_else(|| {
                 anyhow::anyhow!("client '{}' has no provisioned block device", client.name)
             })?;
-
-        let target_iqn = client
-            .target_iqn
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| {
-                anyhow::anyhow!("client '{}' has no persisted iSCSI target", client.name)
-            })?;
-
-        // Repair/generate this client's MAC-specific menu as part of NVMe-oF
-        // preparation. This makes existing clients compatible with the new
-        // autoexec dispatcher without requiring recreation.
-        let reservation = BootReservation {
-            client_name: client.name.clone(),
-            mac: client.mac.to_string(),
-            ip: client.ip.to_string(),
-            target_iqn: target_iqn.to_string(),
-            server_ip: server_ip.to_string(),
-            // NVMe path keeps the legacy open menu; CHAP is an iSCSI-plane concern.
-            chap: None,
-        };
-        publish_client_ipxe(&reservation)
-            .await
-            .with_context(|| format!("failed to publish iPXE menu for client '{}'", client.name))?;
 
         let nqn = nqn_for_client(&client.name);
         let export = ensure_export(&nqn, Path::new(block_device))
@@ -105,7 +89,7 @@ impl NvmeOfBootService {
     pub async fn inspect(&self, id: &ClientId) -> Result<NvmeOfExportStatus> {
         let client = self
             .clients
-            .find_by_id(id)
+            .find_nvmeof_client(id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("client not found: {id}"))?;
 
@@ -117,7 +101,7 @@ impl NvmeOfBootService {
     pub async fn remove(&self, id: &ClientId) -> Result<()> {
         let client = self
             .clients
-            .find_by_id(id)
+            .find_nvmeof_client(id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("client not found: {id}"))?;
 

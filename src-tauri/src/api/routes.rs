@@ -12,6 +12,7 @@ use std::time::Duration;
 
 // API routes configuration
 use crate::api::handlers::{
+    alarms::{acknowledge_alarm, list_alarms},
     auth::{
         bootstrap_first_admin, check_admin_exists, login, update_admin_password,
         validate_auth_token,
@@ -19,33 +20,39 @@ use crate::api::handlers::{
     backup::{create_backup, restore_backup},
     client_chap::rotate_client_chap,
     client_delete::delete_client,
+    client_storage::delete_client_writeback,
     client_update::update_client,
-    clients::create_client,
+    clients::{
+        complete_client_installation, create_client, exit_legacy_super, request_inventory_boot,
+    },
     clients_v2::{get_client, get_client_boot_history, list_clients},
     config::get_config,
     control::{
-        cancel_operation, get_audit_logs, get_scheduled_operations, reboot_client,
-        remote_desktop_client, shutdown_client,
+        cancel_operation, get_audit_events, get_audit_logs, get_scheduled_operations,
+        reboot_client, remote_desktop_client, shutdown_client,
     },
     dashboard::{get_client_io_metrics, get_client_overview, get_default_image},
     dhcp_reconciliation::{inspect_dhcp_reconciliation, repair_dhcp_reconciliation},
     disks::{create_pool, list_disks, pool_exists, rename_disk},
     images::{
-        clone_image, create_image, create_snapshot, delete_image, delete_snapshot, get_image,
-        get_image_info, get_snapshots, import_existing_images, import_image, list_images,
-        list_masters, rename_image, resize_image, rollback_snapshot, set_default_image,
-        update_image, verify_image,
+        clone_image, create_image, create_snapshot, delete_image, delete_snapshot,
+        get_driver_readiness, get_image, get_image_health, get_image_info, get_snapshots,
+        import_existing_images, import_image, list_images, list_masters, rename_image,
+        resize_image, rollback_snapshot, set_default_image, update_image, verify_image,
     },
     license::{activate_license_handler, get_license_info_handler},
     logs::{clear_logs, get_logs},
     network_drivers::{
         import as import_network_driver, list as list_network_drivers,
         rebuild as rebuild_network_drivers, remove as remove_network_driver,
-        status as network_driver_status,
+        status as network_driver_status, submit_report as submit_network_driver_report,
     },
     nvmeof::{inspect_nvmeof_boot, prepare_nvmeof_boot, remove_nvmeof_boot},
     pxe::select_network_drivers,
-    reconciliation::{inspect_storage_reconciliation, repair_storage_reconciliation},
+    reconciliation::{
+        inspect_storage_reconciliation, list_pending_client_recoveries,
+        repair_storage_reconciliation, retry_pending_client_recovery,
+    },
     services::{
         configure_service, disable_service_boot, enable_service_boot, get_service_config,
         get_service_status, install_service, list_services, restart_all_services, restart_service,
@@ -53,6 +60,10 @@ use crate::api::handlers::{
     },
     setup::{complete_setup, get_setup_status},
     ssh::{execute_ssh_command, get_windows_system_info, test_ssh_connection},
+    super_client::{
+        delete_media, discard_super, enter_super, list_media, record_verification, save_super,
+        set_media_default, super_status, upload_media,
+    },
     system::{
         apply_network_settings, check_dependencies, check_privileged_access, clear_cache,
         close_enrollment, detect_server_network, get_firewall_status, get_interface_ip,
@@ -63,11 +74,13 @@ use crate::api::handlers::{
     system_reconciliation::inspect_system_reconciliation_handler,
     users::{create_user, delete_user, get_user, list_users, update_user, update_user_password},
     windows_servicing::{
-        capabilities as windows_servicing_capabilities,
-        prepare_image as prepare_windows_image,
+        capabilities as windows_servicing_capabilities, list_boot_tests,
+        list_revisions as list_driver_revisions, prepare_image as prepare_windows_image,
+        prepare_image_managed as prepare_windows_image_managed,
         prepare_image_remote as prepare_windows_image_remote,
         prepare_image_remote_catalog as prepare_windows_image_remote_catalog,
-        remote_capabilities as windows_servicing_remote_capabilities,
+        prepare_windows_assignment, remote_capabilities as windows_servicing_remote_capabilities,
+        start_boot_test,
     },
     ws::ws_metrics_handler,
     zfs::{
@@ -76,6 +89,7 @@ use crate::api::handlers::{
     },
 };
 use crate::api::middleware::{cors_layer, rate_limit_auth, require_auth, AuthRateLimiter};
+use crate::state::AppState;
 use tower::limit::ConcurrencyLimitLayer;
 use tower_http::trace::TraceLayer;
 
@@ -89,22 +103,69 @@ fn request_timeout_for(path: &str) -> Duration {
     match path {
         "/api/pxe/windows/prepare-image"
         | "/api/pxe/windows/prepare-image/remote"
-        | "/api/pxe/windows/prepare-image/remote/catalog" => Duration::from_secs(3900),
+        | "/api/pxe/windows/prepare-image/remote/catalog"
+        | "/api/pxe/windows/prepare-image/managed" => Duration::from_secs(3900),
+        "/api/installer-media/upload" => Duration::from_secs(900),
+        path if path.starts_with("/api/clients/") && path.ends_with("/legacy-super/exit") => {
+            Duration::from_secs(900)
+        }
+        path if path.starts_with("/api/clients/") && path.contains("/super/") => {
+            Duration::from_secs(900)
+        }
         _ => Duration::from_secs(300),
     }
 }
 
-async fn apply_request_timeout(request: Request<Body>, next: Next) -> Response {
-    let timeout = request_timeout_for(request.uri().path());
-    match tokio::time::timeout(timeout, next.run(request)).await {
-        Ok(response) => response,
+async fn await_request(timeout: Duration, task: tokio::task::JoinHandle<Response>) -> Response {
+    // Dropping a JoinHandle detaches work; its mutation guards stay owned by the task.
+    match tokio::time::timeout(timeout, task).await {
+        Ok(Ok(response)) => response,
+        Ok(Err(error)) => {
+            tracing::error!(%error, "API request task failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
         Err(_) => StatusCode::REQUEST_TIMEOUT.into_response(),
     }
 }
 
-pub fn create_app(state: crate::state::AppState) -> Router {
+async fn apply_request_timeout(request: Request<Body>, next: Next) -> Response {
+    let path = request.uri().path();
+    let timeout = request_timeout_for(path);
+    // shortcut: legacy storage handlers mix synchronous integrations with SQLx; migrate
+    // their commands to native async if blocking-pool occupancy becomes a bottleneck.
+    let legacy_storage = [
+        "/api/clients",
+        "/api/disks",
+        "/api/zfs",
+        "/api/services",
+        "/api/system",
+        "/api/reconciliation",
+    ]
+    .iter()
+    .any(|prefix| {
+        path == *prefix
+            || path
+                .strip_prefix(prefix)
+                .is_some_and(|tail| tail.starts_with('/'))
+    });
+    let task = if legacy_storage {
+        let runtime = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || runtime.block_on(next.run(request)))
+    } else {
+        tokio::spawn(next.run(request))
+    };
+    await_request(timeout, task).await
+}
+
+pub fn create_app(state: AppState) -> Router {
     let cors = cors_layer();
     let rate_limiter = AuthRateLimiter::new();
+    let media_body_limit = state
+        .settings
+        .try_read()
+        .expect("settings are available while constructing the API router")
+        .installer_media
+        .request_body_limit();
 
     // Periodically purge stale rate-limit entries.
     {
@@ -141,6 +202,13 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .route("/api/auth/validate", post(validate_auth_token))
         .route("/api/auth/bootstrap", post(bootstrap_first_admin))
         .route("/api/auth/admin/exists", get(check_admin_exists))
+        // Client driver reports carry no bearer token (no shared credential
+        // lives in the common image); trust comes from the active iSCSI
+        // session peer binding verified in the handler.
+        .route(
+            "/api/pxe/network-drivers/reports",
+            post(submit_network_driver_report),
+        )
         .layer(DefaultBodyLimit::max(16 * 1024 * 1024))
         .with_state(state.clone());
 
@@ -153,202 +221,25 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         ));
 
     let api_router = Router::new()
-        .route("/api/clients", get(list_clients).post(create_client))
-        .route("/api/config", get(get_config))
-        .route("/api/license/info", get(get_license_info_handler))
-        .route("/api/disks", get(list_disks))
-        .route("/api/disks/pool/exists", get(pool_exists))
-        .route("/api/system/dependencies", get(check_dependencies))
+        .merge(crate::api::handlers::hardware_identity::router())
         .route(
-            "/api/clients/{id}",
-            get(get_client).put(update_client).delete(delete_client),
+            "/api/clients/{id}/installation-sessions",
+            get(crate::api::handlers::installation::list)
+                .post(crate::api::handlers::installation::create),
         )
         .route(
-            "/api/clients/{id}/boot-history",
-            get(get_client_boot_history),
+            "/api/installation-sessions/{id}/cancel",
+            post(crate::api::handlers::installation::cancel),
         )
         .route(
-            "/api/clients/{id}/nvmeof",
-            get(inspect_nvmeof_boot).delete(remove_nvmeof_boot),
+            "/api/installation-sessions/{id}/close-recovery",
+            post(crate::api::handlers::installation::close_recovery),
         )
-        .route(
-            "/api/clients/{id}/nvmeof/prepare",
-            post(prepare_nvmeof_boot),
-        )
-        .route("/api/clients/{id}/shutdown", post(shutdown_client))
-        .route("/api/clients/{id}/chap/rotate", post(rotate_client_chap))
-        .route("/api/clients/{id}/reboot", post(reboot_client))
-        .route(
-            "/api/clients/{id}/remote-desktop",
-            post(remote_desktop_client),
-        )
-        .route(
-            "/api/operations/{operation_id}/cancel",
-            post(cancel_operation),
-        )
-        .route("/api/audit-logs", get(get_audit_logs))
-        .route("/api/scheduled-operations", get(get_scheduled_operations))
-        .route("/api/images", get(list_images).post(create_image))
-        .route("/api/masters", get(list_masters))
-        .route(
-            "/api/images/{id}",
-            get(get_image).put(update_image).delete(delete_image),
-        )
-        .route("/api/images/{id}/rename", put(rename_image))
-        .route("/api/images/import", post(import_image))
-        .route("/api/images/import-scan", post(import_existing_images))
-        .route("/api/images/{id}/clone", post(clone_image))
-        .route(
-            "/api/images/{id}/snapshots",
-            post(create_snapshot).get(get_snapshots),
-        )
-        .route(
-            "/api/images/{id}/snapshots/{snapshot_name}",
-            delete(delete_snapshot),
-        )
-        .route(
-            "/api/images/{id}/snapshots/{snapshot_name}/rollback",
-            post(rollback_snapshot),
-        )
-        .route("/api/images/{id}/info", get(get_image_info))
-        .route("/api/images/{id}/resize", post(resize_image))
-        .route("/api/images/{id}/verify", post(verify_image))
-        .route("/api/images/{id}/set-default", post(set_default_image))
-        .route("/api/services", get(list_services))
-        .route("/api/services/{name}/status", get(get_service_status))
-        .route("/api/services/{name}/start", post(start_service))
-        .route("/api/services/{name}/stop", post(stop_service))
-        .route("/api/services/{name}/restart", post(restart_service))
-        .route(
-            "/api/services/{name}/boot/enable",
-            post(enable_service_boot),
-        )
-        .route(
-            "/api/services/{name}/boot/disable",
-            post(disable_service_boot),
-        )
-        .route("/api/services/all/start", post(start_all_services))
-        .route("/api/services/all/stop", post(stop_all_services))
-        .route("/api/services/all/restart", post(restart_all_services))
-        .route("/api/services/{name}/config", get(get_service_config))
-        .route("/api/services/{name}/configure", post(configure_service))
-        .route("/api/services/install", post(install_service))
-        .route("/api/system/info", get(get_system_info))
-        .route("/api/system/status", get(get_server_status))
-        .route("/api/system/setup", get(get_setup_status))
-        .route("/api/system/setup/complete", post(complete_setup))
-        .route("/api/system/backup", get(create_backup))
-        .route(
-            "/api/system/restore",
-            post(restore_backup).layer(DefaultBodyLimit::max(64 * 1024 * 1024)),
-        )
-        .route("/api/system/initialize", post(initialize_server))
-        .route("/api/system/cache/clear", post(clear_cache))
-        .route(
-            "/api/system/network/interfaces",
-            get(get_network_interfaces),
-        )
-        .route(
-            "/api/system/network/interfaces/{name}/ip",
-            get(get_interface_ip),
-        )
-        .route("/api/system/network/detect", post(detect_server_network))
-        .route("/api/system/network/apply", post(apply_network_settings))
-        .route("/api/system/settings", get(get_settings).put(save_settings))
-        .route("/api/system/firewall", get(get_firewall_status))
-        .route("/api/system/enrollment/open", post(open_enrollment))
-        .route("/api/system/enrollment/close", post(close_enrollment))
-        .route(
-            "/api/system/privileged-access",
-            get(check_privileged_access).post(setup_privileged_access),
-        )
-        .route("/api/system/ram-usage", get(get_ram_usage))
-        .route("/api/system/zfs-arcstat", get(get_zfs_arcstat))
-        .route(
-            "/api/system/reconciliation",
-            get(inspect_system_reconciliation_handler),
-        )
-        .route(
-            "/api/system/reconciliation/storage",
-            get(inspect_storage_reconciliation),
-        )
-        .route(
-            "/api/system/reconciliation/storage/{id}",
-            post(repair_storage_reconciliation),
-        )
-        .route(
-            "/api/system/reconciliation/dhcp",
-            get(inspect_dhcp_reconciliation),
-        )
-        .route(
-            "/api/system/reconciliation/dhcp/{id}",
-            post(repair_dhcp_reconciliation),
-        )
-        .route("/api/disks/{name}/rename", put(rename_disk))
-        .route("/api/disks/pool", post(create_pool))
-        .route("/api/zfs/pools", get(list_zpools))
-        .route("/api/zfs/pools/stats", get(get_zpool_stats))
-        .route("/api/zfs/datasets", get(list_datasets).post(create_dataset))
-        .route("/api/zfs/game-disks", get(list_game_disks))
-        .route("/api/zfs/datasets/{dataset}", delete(delete_dataset))
-        .route("/api/dashboard/default-image", get(get_default_image))
-        .route("/api/dashboard/clients", get(get_client_overview))
-        .route(
-            "/api/dashboard/clients/io-metrics",
-            get(get_client_io_metrics),
-        )
-        .route("/api/logs", get(get_logs).delete(clear_logs))
-        .route("/api/license/activate", post(activate_license_handler))
-        .route("/api/users", get(list_users).post(create_user))
-        .route(
-            "/api/users/{id}",
-            get(get_user).put(update_user).delete(delete_user),
-        )
-        .route("/api/users/{id}/password", put(update_user_password))
-        .route("/api/auth/admin/password", put(update_admin_password))
-        .route("/api/ssh/test-connection", post(test_ssh_connection))
-        .route("/api/ssh/execute-command", post(execute_ssh_command))
-        .route("/api/ssh/system-info", post(get_windows_system_info))
-        .route(
-            "/api/pxe/network-drivers",
-            get(list_network_drivers).post(import_network_driver),
-        )
-        .route(
-            "/api/pxe/network-drivers/status",
-            get(network_driver_status),
-        )
-        .route(
-            "/api/pxe/network-drivers/rebuild",
-            post(rebuild_network_drivers),
-        )
-        .route(
-            "/api/pxe/network-drivers/select",
-            post(select_network_drivers),
-        )
-        .route(
-            "/api/pxe/network-drivers/{id}",
-            delete(remove_network_driver),
-        )
-        .route(
-            "/api/pxe/windows/servicing",
-            get(windows_servicing_capabilities),
-        )
-        .route(
-            "/api/pxe/windows/prepare-image",
-            post(prepare_windows_image),
-        )
-        .route(
-            "/api/pxe/windows/servicing/remote",
-            post(windows_servicing_remote_capabilities),
-        )
-        .route(
-            "/api/pxe/windows/prepare-image/remote",
-            post(prepare_windows_image_remote),
-        )
-        .route(
-            "/api/pxe/windows/prepare-image/remote/catalog",
-            post(prepare_windows_image_remote_catalog),
-        )
+        .merge(client_routes())
+        .merge(image_routes())
+        .merge(installer_media_routes(media_body_limit))
+        .merge(system_routes())
+        .merge(network_driver_routes())
         .with_state(state.clone())
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
@@ -411,12 +302,292 @@ pub fn create_app(state: crate::state::AppState) -> Router {
         .layer(ConcurrencyLimitLayer::new(100))
         .layer(DefaultBodyLimit::max(16 * 1024 * 1024))
         .layer(axum::middleware::from_fn(apply_request_timeout))
+        .layer(axum::middleware::from_fn(
+            crate::api::error::normalize_api_errors,
+        ))
         .with_state(state)
+}
+
+fn client_routes() -> Router<AppState> {
+    Router::new()
+        .route("/api/clients", get(list_clients).post(create_client))
+        .route(
+            "/api/clients/{id}",
+            get(get_client).put(update_client).delete(delete_client),
+        )
+        .route(
+            "/api/clients/{id}/boot-history",
+            get(get_client_boot_history),
+        )
+        .route(
+            "/api/clients/{id}/installation/complete",
+            post(complete_client_installation),
+        )
+        .route("/api/clients/{id}/super/status", get(super_status))
+        .route("/api/clients/{id}/super/enter", post(enter_super))
+        .route("/api/clients/{id}/super/save", post(save_super))
+        .route("/api/clients/{id}/super/discard", post(discard_super))
+        .route(
+            "/api/clients/{id}/nvmeof",
+            get(inspect_nvmeof_boot).delete(remove_nvmeof_boot),
+        )
+        .route(
+            "/api/clients/{id}/nvmeof/prepare",
+            post(prepare_nvmeof_boot),
+        )
+        .route(
+            "/api/clients/{id}/legacy-super/exit",
+            post(exit_legacy_super),
+        )
+        .route("/api/clients/{id}/shutdown", post(shutdown_client))
+        .route(
+            "/api/clients/{id}/inventory-boot",
+            post(request_inventory_boot),
+        )
+        .route("/api/clients/{id}/chap/rotate", post(rotate_client_chap))
+        .route(
+            "/api/clients/{id}/writeback/delete",
+            post(delete_client_writeback),
+        )
+        .route("/api/clients/{id}/reboot", post(reboot_client))
+        .route(
+            "/api/clients/{id}/remote-desktop",
+            post(remote_desktop_client),
+        )
+        .route(
+            "/api/operations/{operation_id}/cancel",
+            post(cancel_operation),
+        )
+        .route("/api/audit-logs", get(get_audit_logs))
+        .route("/api/audit-events", get(get_audit_events))
+        .route("/api/scheduled-operations", get(get_scheduled_operations))
+}
+
+fn image_routes() -> Router<AppState> {
+    Router::new()
+        .route("/api/images", get(list_images).post(create_image))
+        .route("/api/masters", get(list_masters))
+        .route(
+            "/api/images/{id}",
+            get(get_image).put(update_image).delete(delete_image),
+        )
+        .route("/api/images/{id}/rename", put(rename_image))
+        .route("/api/images/import", post(import_image))
+        .route("/api/images/import-scan", post(import_existing_images))
+        .route("/api/images/{id}/clone", post(clone_image))
+        .route(
+            "/api/images/{id}/snapshots",
+            post(create_snapshot).get(get_snapshots),
+        )
+        .route(
+            "/api/images/{id}/snapshots/{snapshot_name}",
+            delete(delete_snapshot),
+        )
+        .route(
+            "/api/images/{id}/snapshots/{snapshot_name}/rollback",
+            post(rollback_snapshot),
+        )
+        .route("/api/images/{id}/info", get(get_image_info))
+        .route("/api/images/{id}/health", get(get_image_health))
+        .route(
+            "/api/images/{id}/driver-readiness",
+            get(get_driver_readiness),
+        )
+        .route("/api/images/{id}/resize", post(resize_image))
+        .route("/api/images/{id}/verify", post(verify_image))
+        .route("/api/images/{id}/set-default", post(set_default_image))
+        .route("/api/dashboard/default-image", get(get_default_image))
+}
+
+fn installer_media_routes(media_body_limit: usize) -> Router<AppState> {
+    Router::new()
+        .route("/api/installer-media", get(list_media))
+        .route(
+            "/api/installer-media/upload",
+            post(upload_media).layer(DefaultBodyLimit::max(media_body_limit)),
+        )
+        .route("/api/installer-media/{id}/default", post(set_media_default))
+        .route(
+            "/api/installer-media/{id}/verification",
+            post(record_verification),
+        )
+        .route("/api/installer-media/{id}", delete(delete_media))
+}
+
+fn system_routes() -> Router<AppState> {
+    Router::new()
+        .route("/api/config", get(get_config))
+        .route("/api/license/info", get(get_license_info_handler))
+        .route("/api/disks", get(list_disks))
+        .route("/api/disks/pool/exists", get(pool_exists))
+        .route("/api/system/dependencies", get(check_dependencies))
+        .route("/api/services", get(list_services))
+        .route("/api/services/{name}/status", get(get_service_status))
+        .route("/api/services/{name}/start", post(start_service))
+        .route("/api/services/{name}/stop", post(stop_service))
+        .route("/api/services/{name}/restart", post(restart_service))
+        .route(
+            "/api/services/{name}/boot/enable",
+            post(enable_service_boot),
+        )
+        .route(
+            "/api/services/{name}/boot/disable",
+            post(disable_service_boot),
+        )
+        .route("/api/services/all/start", post(start_all_services))
+        .route("/api/services/all/stop", post(stop_all_services))
+        .route("/api/services/all/restart", post(restart_all_services))
+        .route("/api/services/{name}/config", get(get_service_config))
+        .route("/api/services/{name}/configure", post(configure_service))
+        .route("/api/services/install", post(install_service))
+        .route("/api/system/info", get(get_system_info))
+        .route("/api/system/status", get(get_server_status))
+        .route("/api/system/setup", get(get_setup_status))
+        .route("/api/system/setup/complete", post(complete_setup))
+        .route("/api/system/backup", get(create_backup))
+        .route(
+            "/api/system/restore",
+            post(restore_backup).layer(DefaultBodyLimit::max(64 * 1024 * 1024)),
+        )
+        .route("/api/system/initialize", post(initialize_server))
+        .route("/api/system/cache/clear", post(clear_cache))
+        .route(
+            "/api/system/network/interfaces",
+            get(get_network_interfaces),
+        )
+        .route(
+            "/api/system/network/interfaces/{name}/ip",
+            get(get_interface_ip),
+        )
+        .route("/api/system/network/detect", post(detect_server_network))
+        .route("/api/system/network/apply", post(apply_network_settings))
+        .route("/api/system/settings", get(get_settings).put(save_settings))
+        .route("/api/system/firewall", get(get_firewall_status))
+        .route("/api/system/enrollment/open", post(open_enrollment))
+        .route("/api/system/enrollment/close", post(close_enrollment))
+        .route(
+            "/api/system/privileged-access",
+            get(check_privileged_access).post(setup_privileged_access),
+        )
+        .route("/api/system/ram-usage", get(get_ram_usage))
+        .route("/api/system/zfs-arcstat", get(get_zfs_arcstat))
+        .route("/api/alarms", get(list_alarms))
+        .route("/api/alarms/{id}/acknowledge", post(acknowledge_alarm))
+        .route(
+            "/api/system/reconciliation",
+            get(inspect_system_reconciliation_handler),
+        )
+        .route(
+            "/api/system/reconciliation/storage",
+            get(inspect_storage_reconciliation),
+        )
+        .route(
+            "/api/system/reconciliation/storage/{id}",
+            post(repair_storage_reconciliation),
+        )
+        .route(
+            "/api/system/reconciliation/recoveries",
+            get(list_pending_client_recoveries),
+        )
+        .route(
+            "/api/system/reconciliation/recoveries/{id}/retry",
+            post(retry_pending_client_recovery),
+        )
+        .route(
+            "/api/system/reconciliation/dhcp",
+            get(inspect_dhcp_reconciliation),
+        )
+        .route(
+            "/api/system/reconciliation/dhcp/{id}",
+            post(repair_dhcp_reconciliation),
+        )
+        .route("/api/disks/{name}/rename", put(rename_disk))
+        .route("/api/disks/pool", post(create_pool))
+        .route("/api/zfs/pools", get(list_zpools))
+        .route("/api/zfs/pools/stats", get(get_zpool_stats))
+        .route("/api/zfs/datasets", get(list_datasets).post(create_dataset))
+        .route("/api/zfs/game-disks", get(list_game_disks))
+        .route("/api/zfs/datasets/{dataset}", delete(delete_dataset))
+        .route("/api/dashboard/clients", get(get_client_overview))
+        .route(
+            "/api/dashboard/clients/io-metrics",
+            get(get_client_io_metrics),
+        )
+        .route("/api/logs", get(get_logs).delete(clear_logs))
+        .route("/api/license/activate", post(activate_license_handler))
+        .route("/api/users", get(list_users).post(create_user))
+        .route(
+            "/api/users/{id}",
+            get(get_user).put(update_user).delete(delete_user),
+        )
+        .route("/api/users/{id}/password", put(update_user_password))
+        .route("/api/auth/admin/password", put(update_admin_password))
+        .route("/api/ssh/test-connection", post(test_ssh_connection))
+        .route("/api/ssh/execute-command", post(execute_ssh_command))
+        .route("/api/ssh/system-info", post(get_windows_system_info))
+}
+
+fn network_driver_routes() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/api/pxe/network-drivers",
+            get(list_network_drivers).post(import_network_driver),
+        )
+        .route(
+            "/api/pxe/network-drivers/status",
+            get(network_driver_status),
+        )
+        .route(
+            "/api/pxe/network-drivers/rebuild",
+            post(rebuild_network_drivers),
+        )
+        .route(
+            "/api/pxe/network-drivers/select",
+            post(select_network_drivers),
+        )
+        .route(
+            "/api/pxe/network-drivers/{id}",
+            delete(remove_network_driver),
+        )
+        .route(
+            "/api/pxe/windows/servicing",
+            get(windows_servicing_capabilities),
+        )
+        .route("/api/pxe/windows/revisions", get(list_driver_revisions))
+        .route(
+            "/api/pxe/windows/boot-tests",
+            get(list_boot_tests).post(start_boot_test),
+        )
+        .route(
+            "/api/pxe/windows/prepare-image",
+            post(prepare_windows_image),
+        )
+        .route(
+            "/api/pxe/windows/servicing/remote",
+            post(windows_servicing_remote_capabilities),
+        )
+        .route(
+            "/api/pxe/windows/prepare-image/remote",
+            post(prepare_windows_image_remote),
+        )
+        .route(
+            "/api/pxe/windows/prepare-image/managed",
+            post(prepare_windows_image_managed),
+        )
+        .route(
+            "/api/pxe/windows/prepare-assignment",
+            post(prepare_windows_assignment),
+        )
+        .route(
+            "/api/pxe/windows/prepare-image/remote/catalog",
+            post(prepare_windows_image_remote_catalog),
+        )
 }
 
 #[cfg(test)]
 mod tests {
     use super::{is_api_or_ws_path, request_timeout_for};
+    use axum::response::IntoResponse;
     use std::time::Duration;
 
     #[test]
@@ -436,8 +607,35 @@ mod tests {
             Duration::from_secs(3900)
         );
         assert_eq!(
+            request_timeout_for("/api/pxe/windows/prepare-image/managed"),
+            Duration::from_secs(3900)
+        );
+        assert_eq!(
             request_timeout_for("/api/clients"),
             Duration::from_secs(300)
         );
+        assert_eq!(
+            request_timeout_for("/api/clients/client-1/legacy-super/exit"),
+            Duration::from_secs(900)
+        );
+    }
+    #[tokio::test]
+    async fn request_timeout_keeps_the_mutation_lock_until_work_finishes() {
+        let lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+        let guard = lock.clone().lock_owned().await;
+        let finish = std::sync::Arc::new(tokio::sync::Notify::new());
+        let worker_finish = finish.clone();
+        let task = tokio::spawn(async move {
+            let _guard = guard;
+            worker_finish.notified().await;
+            axum::http::StatusCode::OK.into_response()
+        });
+        let response = super::await_request(Duration::from_millis(1), task).await;
+        assert_eq!(response.status(), axum::http::StatusCode::REQUEST_TIMEOUT);
+        assert!(lock.try_lock().is_err());
+        finish.notify_one();
+        let _guard = tokio::time::timeout(Duration::from_secs(1), lock.lock())
+            .await
+            .unwrap();
     }
 }

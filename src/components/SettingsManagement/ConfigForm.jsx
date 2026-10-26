@@ -9,11 +9,29 @@ import { getServiceIcon } from "@/constants/serviceIcons";
 
 const UPDATE_MAP = {
   client_lifecycle: "updateClientLifecycle",
+  client_features: "updateClientFeatures",
+  windows_servicing: "updateWindowsServicing",
   dhcp: "updateDhcp",
   tftp: "updateTftp",
   http: "updateHttp",
   samba: "updateSamba",
   iscsi: "updateIscsi",
+};
+
+const DEFAULT_VALUES = {
+  client_lifecycle: { non_persistent_reset_delay_minutes: 5 },
+  client_features: {
+    enable_chap_authentication: false,
+    enable_experimental_nvme_target: false,
+  },
+  windows_servicing: {
+    worker_host: "",
+    worker_username: "",
+    helper_executable_path: String.raw`C:\Program Files\Diskless Manager\diskless-windows-servicer.exe`,
+    iscsi_portal: "",
+    report_server_url: "",
+    driver_install_strategy: "offline_dism",
+  },
 };
 
 const ConfigForm = ({ schema, section, title, FormComponent }) => {
@@ -30,14 +48,14 @@ const ConfigForm = ({ schema, section, title, FormComponent }) => {
     reset,
   } = useForm({
     resolver: zodResolver(schema),
-    defaultValues: config?.settings?.[section] || (section === "client_lifecycle" ? { non_persistent_reset_delay_minutes: 5 } : {}),
+    defaultValues: config?.settings?.[section] || DEFAULT_VALUES[section] || {},
   });
 
   useEffect(() => {
     if (config?.settings?.[section]) {
       reset(config.settings[section]);
     } else {
-      reset(section === "client_lifecycle" ? { non_persistent_reset_delay_minutes: 5 } : {});
+      reset(DEFAULT_VALUES[section] || {});
     }
   }, [config, section, reset]);
 
@@ -46,7 +64,11 @@ const ConfigForm = ({ schema, section, title, FormComponent }) => {
     await updateFn(data);
   };
 
-  const sectionKey = section === "client_lifecycle" ? "Client Reset" : section.charAt(0).toUpperCase() + section.slice(1);
+  const sectionKey = {
+    client_lifecycle: "Client Reset",
+    client_features: "Client Features",
+    windows_servicing: "Windows Servicing",
+  }[section] || section.charAt(0).toUpperCase() + section.slice(1);
 
   return (
     <Card title={`${title} Configuration`} icon={getServiceIcon(section)} className="h-full xl:col-span-2">

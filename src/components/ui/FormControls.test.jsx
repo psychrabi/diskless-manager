@@ -45,6 +45,10 @@ describe("shadcn form integration", () => {
 
     const name = screen.getByLabelText("Pool name");
     const disk = screen.getByLabelText("Target disk");
+    expect(name.parentElement).toHaveClass("gap-2");
+    expect(name).toHaveClass("h-10");
+    expect(disk.closest("[data-slot='native-select-wrapper']").parentElement).toHaveClass("gap-2");
+    expect(disk).toHaveClass("h-10");
     expect(name).toHaveValue("boot");
     expect(name).toHaveAttribute("maxlength", "12");
     expect(disk).toHaveValue("pool-a");

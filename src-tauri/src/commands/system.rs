@@ -17,6 +17,7 @@ pub struct SystemInfo {
 #[derive(Debug, Clone, Serialize)]
 pub struct ServerStatus {
     pub initialized: bool,
+    pub iscsi_backend: crate::core::config::IscsiBackend,
     pub services_running: u32,
     pub services_total: u32,
     pub clients_count: u32,

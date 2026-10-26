@@ -39,6 +39,7 @@ enum Operation {
     Probe,
     Save,
     Create(IscsiTargetSpec),
+    EnsureAcl(IscsiTargetSpec),
     RemoveOwned {
         target: String,
         backstores: Vec<String>,
@@ -53,6 +54,7 @@ enum Operation {
         target: String,
     },
     Inspect(IscsiTargetSpec),
+    VerifyFileMappings(IscsiTargetSpec),
     SetChap {
         target: String,
         chap: Option<ChapCredentials>,
@@ -90,6 +92,10 @@ fn identifier(value: &str) -> Result<()> {
 fn validate_spec(spec: &IscsiTargetSpec) -> Result<()> {
     identifier(&spec.target_iqn)?;
     ensure!(spec.target_iqn.starts_with("iqn."), "invalid target IQN");
+    if let Some(initiator) = &spec.initiator_iqn {
+        identifier(initiator)?;
+        ensure!(initiator.starts_with("iqn."), "invalid initiator IQN");
+    }
     spec.portal_address
         .parse::<std::net::IpAddr>()
         .context("invalid portal address")?;
@@ -102,19 +108,23 @@ fn validate_spec(spec: &IscsiTargetSpec) -> Result<()> {
     let mut names = std::collections::HashSet::new();
     for lun in &spec.luns {
         identifier(&lun.backstore)?;
+        lun.validate()?;
         ensure!(
             lun.lun <= 65535 && numbers.insert(lun.lun) && names.insert(&lun.backstore),
             "invalid or duplicate LUN/backstore"
         );
         let path = lun.block_device.to_str().context("invalid device path")?;
         ensure!(
-            path.starts_with("/dev/zvol/")
-                && !path.split('/').any(|p| p == "." || p == "..")
-                && path
-                    .bytes()
-                    .all(|c| c.is_ascii_alphanumeric() || b"/_-.:".contains(&c)),
-            "device must be a ZFS block volume"
+            path.bytes()
+                .all(|c| c.is_ascii_alphanumeric() || b"/_-.:".contains(&c)),
+            "invalid backing path"
         );
+        if lun.backing == super::model::IscsiLunBacking::BlockDevice {
+            ensure!(
+                path.starts_with("/dev/zvol/"),
+                "device must be a ZFS block volume"
+            );
+        }
     }
     validate_chap(spec.chap.as_ref())
 }
@@ -156,6 +166,14 @@ fn save() -> Result<()> {
     Ok(())
 }
 
+fn decode_request(input: &[u8]) -> Result<Request> {
+    ensure!(input.len() as u64 <= MAX_REQUEST, "iSCSI request too large");
+    let request: Request =
+        serde_json::from_slice(input).map_err(|_| anyhow::anyhow!("invalid iSCSI request"))?;
+    ensure!(request.version == VERSION, "unsupported iSCSI protocol");
+    Ok(request)
+}
+
 /// Private command entrypoint. No application state, database, or GUI startup.
 pub fn run_command() -> Result<()> {
     let result = (|| -> Result<Reply> {
@@ -170,11 +188,8 @@ pub fn run_command() -> Result<()> {
         std::io::stdin()
             .take(MAX_REQUEST + 1)
             .read_to_end(&mut input)?;
-        ensure!(input.len() as u64 <= MAX_REQUEST, "iSCSI request too large");
         // Never echo malformed input: it may contain CHAP secrets.
-        let request: Request =
-            serde_json::from_slice(&input).map_err(|_| anyhow::anyhow!("invalid iSCSI request"))?;
-        ensure!(request.version == VERSION, "unsupported iSCSI protocol");
+        let request = decode_request(&input)?;
         if matches!(request.operation, Operation::Probe) {
             ensure!(
                 Path::new(ROOT).join("iscsi").is_dir(),

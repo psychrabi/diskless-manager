@@ -734,11 +734,12 @@ mod tests {
     #[tokio::test]
     async fn handlers_deny_non_administrators_before_reading_or_staging() {
         use std::sync::Arc;
-        use tokio::sync::{Mutex, RwLock};
+        use tokio::sync::RwLock;
         let dir = tempfile::tempdir().unwrap();
         let pool = fixture(dir.path()).await;
         let state = AppState {
-            client_mutations: Arc::new(Mutex::new(())),
+            config: Default::default(),
+            client_mutations: crate::state::ClientMutationLocks::default(),
             settings: Arc::new(RwLock::new(crate::core::config::Settings::default())),
             db_pool: pool.clone(),
             config_path: dir.path().join("config.json"),

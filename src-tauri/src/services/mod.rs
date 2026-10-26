@@ -42,7 +42,7 @@ impl ServiceManager {
         Self {
             dhcp: DhcpService {
                 settings: Arc::clone(&shared),
-                db_pool,
+                db_pool: db_pool.clone(),
             },
 
             tftp: TftpService {
@@ -54,6 +54,7 @@ impl ServiceManager {
             },
 
             http: HttpService {
+                db_pool,
                 settings: Arc::clone(&shared),
             },
 
@@ -74,8 +75,16 @@ impl ServiceManager {
     /// iSCSI storage provisioning itself is handled by the application
     /// StorageService. This method only persists the configuration.
     async fn generate_iscsi_config(&self) -> anyhow::Result<()> {
-        crate::infrastructure::iscsi::configfs::ConfigfsProvisioner::save_config()
-            .map_err(|error| anyhow::anyhow!("failed to save iSCSI configuration: {:#}", error))
+        match self.settings.iscsi.backend {
+            crate::core::config::IscsiBackend::Targetcli => {
+                crate::infrastructure::command::run_command(["targetcli", "saveconfig"])
+                    .map_err(|error| anyhow::anyhow!("targetcli saveconfig failed: {error}"))
+            }
+            crate::core::config::IscsiBackend::InternalConfigfs => {
+                crate::infrastructure::iscsi::configfs::ConfigfsProvisioner::save_config()
+                    .map_err(|error| anyhow::anyhow!("native iSCSI save failed: {:#}", error))
+            }
+        }
     }
 
     /// Start the Linux LIO target service.
@@ -375,7 +384,10 @@ fn redact_iscsi_config(config: &str) -> String {
         match value {
             serde_json::Value::Object(object) => {
                 object.retain(|key, _| {
-                    !matches!(key.to_ascii_lowercase().as_str(), "password" | "chap_secret")
+                    !matches!(
+                        key.to_ascii_lowercase().as_str(),
+                        "password" | "chap_secret"
+                    )
                 });
                 for value in object.values_mut() {
                     redact(value);
@@ -420,9 +432,7 @@ pub async fn set_boot_units_enabled(units: &[&str], enabled: bool) -> anyhow::Re
     let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
     run_sudo_command(arg_refs)
         .await
-        .map_err(|error| {
-            anyhow::anyhow!("failed to {} boot units {:?}: {}", action, units, error)
-        })
+        .map_err(|error| anyhow::anyhow!("failed to {} boot units {:?}: {}", action, units, error))
 }
 
 /// Check whether a systemd service is running.
@@ -524,9 +534,8 @@ mod config_tests {
 
     #[test]
     fn iscsi_config_redaction_removes_password_fields() {
-        let redacted = redact_iscsi_config(
-            r#"{"targets":{"target":{"password":"secret","name":"client"}}}"#,
-        );
+        let redacted =
+            redact_iscsi_config(r#"{"targets":{"target":{"password":"secret","name":"client"}}}"#);
         assert!(!redacted.contains("secret"));
         assert!(redacted.contains("client"));
     }

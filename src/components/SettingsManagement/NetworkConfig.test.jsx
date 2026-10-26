@@ -26,3 +26,12 @@ it("saves setup network settings without applying a static IP and refreshes read
   expect(settings.updateServer).toHaveBeenCalledWith(expect.objectContaining({ interface: ["eth0"], dns: ["9.9.9.9"] }));
   expect(settings.applyNetworkSettings).not.toHaveBeenCalled();
 });
+
+it("stacks the network sections until wide layouts and keeps footer actions on one line", async () => {
+  const { container } = render(<NetworkConfig />);
+  await screen.findByText("eth0");
+  expect(container.querySelector('[data-testid="network-sections"]')).toHaveClass("grid-cols-1", "xl:grid-cols-2");
+  expect(container.querySelector('[data-testid="network-actions"]')).toHaveClass("flex-nowrap");
+  const detect = screen.getByRole("button", { name: "Auto-Detect" });
+  expect(detect.querySelector("svg")).toHaveAttribute("data-icon", "inline-start");
+});

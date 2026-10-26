@@ -1,6 +1,7 @@
 import {
   HardDrive,
   History,
+  Network,
   RefreshCw,
   Settings,
   ShieldAlert,
@@ -9,6 +10,10 @@ import {
 import { useLayoutEffect, useRef, useState } from "react";
 import { useOnClickOutside } from "../../hooks/useOnClickOutside";
 import { cn } from "@/lib/utils";
+import { isSuperClient } from "@/lib/clientMode";
+import { isOnlineStatus } from "@/lib/clientStatus";
+import { useAuth } from "@/contexts/auth";
+import { Badge } from "@/components/ui/badge";
 
 const MenuItem = ({
   icon: Icon,
@@ -16,6 +21,7 @@ const MenuItem = ({
   onClick,
   variant = "default",
   className = "",
+  disabled = false,
 }) => {
   const variants = {
     default: "hover:bg-accent hover:text-accent-foreground",
@@ -39,6 +45,7 @@ const MenuItem = ({
     <li role="none">
       <button
         type="button"
+        disabled={disabled}
         onClick={onClick}
         onKeyDown={handleKeyDown}
         className={cn(
@@ -67,9 +74,16 @@ export const ContextMenu = ({
   targetClient,
   onClose,
   actions,
+  onExitLegacySuper,
+  superStatus,
+  superMedia = [],
+  superLoading = false,
+  superError = false,
+  targetImage,
 }) => {
   const menuRef = useRef(null);
   const [coords, setCoords] = useState({ x: xPos, y: yPos });
+  const { user } = useAuth();
   useOnClickOutside(menuRef, onClose);
 
   useLayoutEffect(() => {
@@ -84,12 +98,24 @@ export const ContextMenu = ({
 
   if (!isOpen || !targetClient) return null;
 
-  const isOnline = targetClient?.status === "Online";
-  const isSuper = targetClient?.mode === "super";
+  const isOnline = isOnlineStatus(targetClient?.status);
+  const legacyState = targetClient?.legacy_super_state;
+  const isLegacySuper = legacyState === "legacy" || legacyState === "recovery_required" || superStatus?.legacy;
+  const session = superStatus?.session;
+  const sessionState = session?.state?.toLowerCase().replaceAll("_", "");
+  const isManagedSuper = session && session.state !== "completed";
+  const isSuper = !isLegacySuper && (isManagedSuper || (superStatus == null && isSuperClient(targetClient)));
+  const isUnprovisioned = targetClient?.master === "pending";
   const isPersistent =
     targetClient?.snapshot && targetClient?.keep_writeback && !isSuper;
   const isNonPersistent =
     targetClient?.snapshot && !targetClient?.keep_writeback && !isSuper;
+  const validMedia = superMedia.filter((media) => media.validation_state === "valid");
+  const defaultMedia = validMedia.find((media) => media.is_default);
+  const hasReadyAssignment = !!targetImage && targetImage.status === "ready" && !!targetClient?.master && targetClient.master !== "pending";
+  const hasPendingRecovery = targetClient?.recovery_required || superStatus?.storage_recovery;
+  const canStartNormal = hasReadyAssignment && !isOnline && !targetClient?.mutation_state && !hasPendingRecovery && !superLoading && !!defaultMedia;
+  const sessionCanFinish = !isOnline && !targetClient?.mutation_state && !hasPendingRecovery && sessionState === "active";
 
   const handleAction = (cb) => {
     cb(targetClient);
@@ -113,31 +139,79 @@ export const ContextMenu = ({
       </div>
 
       <ul className="flex w-full flex-col p-0" role="menu">
-        {!isOnline && (
+        {isOnline && user?.role === "admin" && isManagedSuper && (
+          <>
+            <SectionHeader label="Super session" />
+            <div className="px-3 py-1.5 text-xs text-muted-foreground">
+              <Badge variant="secondary">Super session: {sessionState === "recoveryrequired" ? "Recovery required" : session?.state?.replaceAll("_", " ")}</Badge>
+              <p className="mt-1">Save and Discard are available after the client is offline.</p>
+              {hasPendingRecovery && <p className="mt-1 text-destructive">Client storage recovery is pending.</p>}
+            </div>
+            <MenuItem icon={History} label={session?.verification_only ? "Save unavailable (verification only)" : "Save Super Changes"} disabled />
+            <MenuItem icon={ShieldAlert} label="Discard Super Changes" variant="destructive" disabled />
+          </>
+        )}
+        {!isOnline && user?.role === "admin" && (
           <>
             <SectionHeader label="Maintenance" />
-            {isSuper ? (
+            {isLegacySuper ? (
+              user?.role === "admin" && (
+                <MenuItem
+                  icon={ShieldAlert}
+                  label="Exit Legacy Super"
+                  variant="warning"
+                  onClick={() => handleAction(onExitLegacySuper)}
+                />
+              )
+            ) : isManagedSuper ? (
               <>
+                <div className="px-3 py-1.5 text-xs text-muted-foreground">
+                  <Badge variant={sessionState === "recoveryrequired" ? "destructive" : "secondary"}>
+                    Super session: {sessionState === "recoveryrequired" ? "Recovery required" : session?.state?.replaceAll("_", " ")}
+                  </Badge>
+                  {session?.verification_only && <p className="mt-1">Verification only · changes are disposable</p>}
+                  {targetClient.use_game_disk && <p className="mt-1">Use game disk stays enabled; its LUN is temporarily unmapped.</p>}
+                  {hasPendingRecovery && <p className="mt-1 text-destructive">Client storage recovery is pending; retry recovery before finishing this session.</p>}
+                </div>
                 <MenuItem
                   icon={History}
-                  label="Save Super Changes"
+                  label={session?.verification_only ? "Save unavailable (verification only)" : "Save Super Changes"}
                   variant="secondary"
-                  onClick={() => handleAction(actions.saveSuper)}
+                  disabled={!sessionCanFinish || session?.verification_only}
+                  onClick={() => sessionCanFinish && !session?.verification_only && actions.saveSuper(targetClient, superStatus)}
                 />
                 <MenuItem
                   icon={ShieldAlert}
-                  label="Disable Super mode"
-                  variant="error"
-                  onClick={() => handleAction(actions.disableSuper)}
+                  label="Discard Super Changes"
+                  variant="destructive"
+                  disabled={!sessionCanFinish}
+                  onClick={() => sessionCanFinish && actions.discardSuper(targetClient, superStatus)}
                 />
               </>
+            ) : isSuper ? (
+              <div className="px-3 py-2 text-sm text-amber-700 dark:text-amber-300">
+                Super session status is unavailable. Refresh client status before taking action.
+              </div>
             ) : (
-              <MenuItem
-                icon={HardDrive}
-                label="Enable Super mode"
-                variant="secondary"
-                onClick={() => handleAction(actions.enableSuper)}
-              />
+              <>
+                <MenuItem
+                  icon={HardDrive}
+                  label={superLoading ? "Checking installer media…" : canStartNormal ? "Start Super session" : "Super session unavailable"}
+                  variant="secondary"
+                  disabled={!canStartNormal}
+                  onClick={() => canStartNormal && actions.startSuper(targetClient, false, superStatus)}
+                />
+                {!superLoading && !superError && hasPendingRecovery && <p className="px-3 pb-2 text-xs text-destructive">Client storage recovery is pending; retry recovery before starting a session.</p>}
+                {!superLoading && superError && <p className="px-3 pb-2 text-xs text-destructive">Unable to load Super-session or installer-media status. Reopen the menu to retry.</p>}
+                {!superLoading && !superError && !hasReadyAssignment && <p className="px-3 pb-2 text-xs text-muted-foreground">An assigned ready image revision is required.</p>}
+                {!superLoading && !superError && hasReadyAssignment && !defaultMedia && (
+                  <p className="px-3 pb-2 text-xs text-muted-foreground">
+                    {validMedia.length > 0
+                      ? "A valid installer ISO exists but none is marked default; set one as default in Installer Media."
+                      : "No valid installer ISO is available."}
+                  </p>
+                )}
+              </>
             )}
           </>
         )}
@@ -150,6 +224,15 @@ export const ContextMenu = ({
               label="Edit Client"
               onClick={() => handleAction(actions.edit)}
             />
+
+            {isUnprovisioned && (
+              <MenuItem
+                icon={Network}
+                label="Request Inventory Boot"
+                variant="info"
+                onClick={() => handleAction(actions.inventoryBoot)}
+              />
+            )}
 
             {isPersistent && (
               <MenuItem

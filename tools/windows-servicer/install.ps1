@@ -1,11 +1,15 @@
 [CmdletBinding()]
 param(
-    [string]$BinaryPath = (Join-Path $PSScriptRoot "diskless-windows-servicer.exe"),
+    [string]$BinaryPath,
     [string]$InstallDirectory = (Join-Path $env:ProgramFiles "Diskless Manager"),
     [switch]$ConfigureOpenSsh
 )
 
 $ErrorActionPreference = "Stop"
+
+if ([string]::IsNullOrWhiteSpace($BinaryPath)) {
+    $BinaryPath = Join-Path $PSScriptRoot "diskless-windows-servicer.exe"
+}
 
 function Test-IsAdministrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -81,6 +85,10 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host ""
+Write-Host "Client driver reporting is NOT enabled by this installer (worker-only install)."
+Write-Host "On a managed client, register it explicitly with:"
+Write-Host "  .\client-report\register-client-report.ps1 -ServerUrl http://<server>:8080 -ClientId <client-id>"
+Write-Host "See client-report/TESTING.md for the opt-in Windows 10/11 test procedure."
 if ($ConfigureOpenSsh) {
     Write-Host "OpenSSH Server is configured and listening through the Windows firewall."
 }

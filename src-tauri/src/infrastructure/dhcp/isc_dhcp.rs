@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::{
     future::Future,
     path::{Path, PathBuf},
@@ -12,9 +12,23 @@ pub struct BootReservation {
     pub ip: String,
     pub target_iqn: String,
     pub server_ip: String,
-    /// One-way iSCSI CHAP credentials embedded in the menu. `None`
+    /// One-way iSCSI CHAP credentials embedded in the boot response. `None`
     /// preserves the legacy open attach.
     pub chap: Option<crate::infrastructure::iscsi::ChapCredentials>,
+    /// Durable Super-session choice, resolved by server-side boot readiness.
+    pub super_boot: Option<SuperBootReservation>,
+    /// True when the client's assigned image is Windows, which is booted
+    /// directly instead of behind the interactive iPXE menu.
+    pub assigned_windows: bool,
+}
+
+#[derive(Debug, Clone)]
+pub enum SuperBootReservation {
+    Installer {
+        media_type: crate::persistence::InstallerMediaType,
+        firmware: crate::domain::PxeMode,
+    },
+    Deny,
 }
 
 pub trait BootReservationPublisher: Send + Sync {
@@ -32,53 +46,64 @@ pub trait BootReservationPublisher: Send + Sync {
 #[derive(Debug, Default)]
 pub struct IscDhcpPublisher;
 
-fn runtime_settings() -> crate::core::config::Settings {
-    let config = crate::config::get_config();
-    serde_json::from_value::<crate::core::config::Settings>(config.settings).unwrap_or_else(
-        |error| {
-            tracing::warn!(
-                error = %error,
-                "failed to decode cached settings while publishing client iPXE; using defaults"
-            );
-            crate::core::config::Settings::default()
-        },
-    )
+pub(crate) fn render_client_ipxe(reservation: &BootReservation) -> String {
+    match reservation.super_boot.as_ref() {
+        Some(SuperBootReservation::Installer {
+            media_type,
+            firmware,
+        }) => crate::infrastructure::pxe::render_super_client_script(
+            &reservation.client_name,
+            &reservation.target_iqn,
+            &reservation.server_ip,
+            *media_type,
+            firmware.clone(),
+            reservation.chap.as_ref(),
+        ),
+        Some(SuperBootReservation::Deny) => crate::infrastructure::pxe::render_super_boot_denied(),
+        None => crate::infrastructure::pxe::render_client_script_for_boot(
+            &reservation.client_name,
+            &reservation.target_iqn,
+            80,
+            true,
+            reservation.chap.as_ref(),
+            reservation.assigned_windows,
+        ),
+    }
 }
 
-/// Generate or replace the MAC-specific iPXE menu for a client.
-///
-/// This is public within the crate so reconciliation/experimental boot flows
-/// can repair menu files for clients that existed before per-client dispatch
-/// was introduced.
-pub(crate) async fn publish_client_ipxe(reservation: &BootReservation) -> Result<PathBuf> {
-    let settings = runtime_settings();
+pub(crate) async fn restore_client_ipxe_menu(
+    settings: &crate::core::config::Settings,
+    mac: &str,
+    script: &str,
+) -> Result<()> {
     let root = PathBuf::from(&settings.http.root_dir);
-    let relative = crate::infrastructure::pxe::client_mac_script_path(&reservation.mac);
-
-    if !crate::infrastructure::pxe::is_managed_script_path(&root, &relative) {
-        anyhow::bail!("refusing unsafe generated iPXE path: {relative}");
-    }
-
-    let path = root.join(&relative);
-    let script = crate::infrastructure::pxe::render_client_script_with_scheme(
-        &reservation.client_name,
-        &reservation.target_iqn,
-        80,
-        true,
-        false,
-        reservation.chap.as_ref(),
+    let relative = crate::infrastructure::pxe::client_mac_script_path(mac);
+    anyhow::ensure!(
+        crate::infrastructure::pxe::is_managed_script_path(&root, &relative),
+        "refusing unsafe generated iPXE path: {relative}"
     );
+    let path = root.join(relative);
+    write_client_ipxe_script(&path, script).await
+}
+
+async fn write_client_ipxe_script(path: &Path, script: &str) -> Result<()> {
     // Image/snapshot updates leave the menu byte-identical; skip the
     // privileged rewrite when the installed file already matches.
-    let installed = crate::infrastructure::command::read_file_with_sudo(&path)
-        .map_err(|error| anyhow::anyhow!("cannot read installed iPXE menu: {error}"))?;
-    if installed.as_deref() == Some(script.as_str()) {
+    let installed = match tokio::fs::read_to_string(path).await {
+        Ok(contents) => Some(contents),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            crate::infrastructure::command::read_file_with_sudo(path)
+                .map_err(|error| anyhow::anyhow!("cannot read installed iPXE menu: {error}"))?
+        }
+        Err(error) => return Err(error.into()),
+    };
+    if installed.as_deref() == Some(script) {
         tracing::debug!(
-            client = %reservation.client_name,
             path = %path.display(),
             "per-client iPXE menu unchanged; skipping rewrite"
         );
-        return Ok(path);
+        return Ok(());
     }
     let parent = path
         .parent()
@@ -90,18 +115,47 @@ pub(crate) async fn publish_client_ipxe(reservation: &BootReservation) -> Result
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("generated iPXE path is not valid UTF-8"))?;
 
-    crate::services::run_sudo_command(["mkdir", "-p", parent]).await?;
-
-    crate::services::write_with_sudo_tee(path_str, &script).await?;
-
-    tracing::info!(
-        client = %reservation.client_name,
-        mac = %reservation.mac,
-        path = %path.display(),
-        "published per-client iPXE menu"
-    );
-
-    Ok(path)
+    let temporary_path = path.with_file_name(format!(
+        ".{}.{}.tmp",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("client.ipxe"),
+        uuid::Uuid::new_v4()
+    ));
+    let local_write = async {
+        tokio::fs::create_dir_all(parent).await?;
+        tokio::fs::write(&temporary_path, script).await?;
+        tokio::fs::rename(&temporary_path, path).await?;
+        Ok::<_, std::io::Error>(())
+    }
+    .await;
+    if local_write.is_err() {
+        let _ = tokio::fs::remove_file(&temporary_path).await;
+        crate::services::run_sudo_command(["mkdir", "-p", parent]).await?;
+        let temporary_path_str = temporary_path
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("temporary iPXE path is not valid UTF-8"))?;
+        if let Err(error) = crate::services::write_with_sudo_tee(temporary_path_str, script).await {
+            return match crate::services::run_sudo_command(["rm", "-f", "--", temporary_path_str]).await {
+                Ok(()) => Err(error).context("failed to stage generated iPXE menu"),
+                Err(cleanup_error) => Err(error).context(format!(
+                    "failed to stage generated iPXE menu and remove its temporary file: {cleanup_error:#}"
+                )),
+            };
+        }
+        if let Err(error) =
+            crate::services::run_sudo_command(["mv", "-f", "--", temporary_path_str, path_str])
+                .await
+        {
+            return match crate::services::run_sudo_command(["rm", "-f", "--", temporary_path_str]).await {
+                Ok(()) => Err(error).context("failed to atomically publish generated iPXE menu"),
+                Err(cleanup_error) => Err(error).context(format!(
+                    "failed to publish generated iPXE menu and remove its temporary file: {cleanup_error:#}"
+                )),
+            };
+        }
+    }
+    Ok(())
 }
 
 async fn remove_generated_ipxe(path: &Path) -> Result<()> {
@@ -112,15 +166,12 @@ async fn remove_generated_ipxe(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Remove a client's MAC-specific iPXE menu so it can no longer boot.
-///
-/// The dispatcher falls through to the enrollment service when the menu
-/// is absent, which denies disabled and unknown machines. Idempotent:
-/// a missing file is not an error. This is the enforcement behind the
-/// client `enabled` switch for already-provisioned machines (whose boots
-/// otherwise never consult the enrollment endpoint).
-pub(crate) async fn remove_client_ipxe_menu(mac: &str) -> Result<()> {
-    let settings = runtime_settings();
+/// Remove a client's custom iPXE menu, usually as part of client deletion.
+/// Boot authorization is enforced by the shared dispatcher.
+pub(crate) async fn remove_client_ipxe_menu(
+    settings: &crate::core::config::Settings,
+    mac: &str,
+) -> Result<()> {
     let root = PathBuf::from(&settings.http.root_dir);
     let relative = crate::infrastructure::pxe::client_mac_script_path(mac);
 
@@ -137,22 +188,35 @@ pub(crate) async fn remove_client_ipxe_menu(mac: &str) -> Result<()> {
     Ok(())
 }
 
-async fn cleanup_boot_artifacts(
-    script_cleanup: impl Future<Output = Result<()>>,
-    dhcp_cleanup: impl Future<Output = Result<()>>,
-) -> Result<()> {
-    // Both must be attempted: a DHCP failure must not leave a bootable menu,
-    // and a file permission error must not keep the reservation live.
-    let script = script_cleanup.await;
-    let dhcp = dhcp_cleanup.await;
-    match (script, dhcp) {
-        (Ok(()), Ok(())) => Ok(()),
-        (Err(error), Ok(())) => Err(error.context("iPXE cleanup failed")),
-        (Ok(()), Err(error)) => Err(error.context("DHCP cleanup failed")),
-        (Err(script), Err(dhcp)) => Err(anyhow::anyhow!(
-            "iPXE cleanup failed: {script:#}; DHCP cleanup failed: {dhcp:#}"
-        )),
+pub(crate) async fn remove_generated_client_ipxe_menu(
+    settings: &crate::core::config::Settings,
+    mac: &str,
+) -> Result<bool> {
+    let root = PathBuf::from(&settings.http.root_dir);
+    let relative = crate::infrastructure::pxe::client_mac_script_path(mac);
+    anyhow::ensure!(
+        crate::infrastructure::pxe::is_managed_script_path(&root, &relative),
+        "refusing unsafe generated iPXE path: {relative}"
+    );
+    let path = root.join(relative);
+    let contents = match tokio::fs::read_to_string(&path).await {
+        Ok(contents) => Some(contents),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            crate::infrastructure::command::read_file_with_sudo(&path)
+                .map_err(|error| anyhow::anyhow!("cannot inspect client iPXE menu: {error}"))?
+        }
+        Err(error) => return Err(error.into()),
+    };
+    if contents
+        .as_deref()
+        .is_some_and(crate::infrastructure::pxe::is_manager_generated_menu)
+    {
+        remove_generated_ipxe(&path).await?;
+        tracing::info!(mac = %mac, path = %path.display(), "removed stale manager-generated iPXE menu");
+        return Ok(true);
     }
+    Ok(false)
 }
 
 impl BootReservationPublisher for IscDhcpPublisher {
@@ -161,11 +225,6 @@ impl BootReservationPublisher for IscDhcpPublisher {
         reservation: &'a BootReservation,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
-            // Publish the MAC-specific menu before making the DHCP reservation
-            // live. A client should never be directed to autoexec.ipxe unless
-            // its corresponding clients/<mac>.ipxe file already exists.
-            let script_path = publish_client_ipxe(reservation).await?;
-
             let entry = super::create_dhcp_entry_for_server(
                 &reservation.client_name,
                 &reservation.mac,
@@ -173,17 +232,9 @@ impl BootReservationPublisher for IscDhcpPublisher {
                 &reservation.target_iqn,
                 &reservation.server_ip,
             );
-            if let Err(error) = super::update_dhcp_config(&reservation.client_name, &entry, true)
+            super::update_dhcp_config(&reservation.client_name, &entry, true)
                 .await
-                .map_err(anyhow::Error::msg)
-            {
-                return match remove_generated_ipxe(&script_path).await {
-                    Ok(()) => Err(error),
-                    Err(cleanup_error) => Err(anyhow::anyhow!(
-                        "failed to publish DHCP reservation: {error:#}; iPXE cleanup also failed: {cleanup_error:#}"
-                    )),
-                };
-            }
+                .map_err(anyhow::Error::msg)?;
 
             if let Err(error) = crate::infrastructure::command::run_command_async([
                 "systemctl",
@@ -212,102 +263,16 @@ impl BootReservationPublisher for IscDhcpPublisher {
         reservation: &'a BootReservation,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
-            let settings = runtime_settings();
-            let root = PathBuf::from(&settings.http.root_dir);
-            let script_cleanup = async {
-                crate::domain::MacAddress::parse(&reservation.mac)?;
-                let relative = crate::infrastructure::pxe::client_mac_script_path(&reservation.mac);
-                if !crate::infrastructure::pxe::is_managed_script_path(&root, &relative) {
-                    anyhow::bail!("refusing unsafe generated iPXE path: {relative}");
-                }
-                remove_generated_ipxe(&root.join(relative)).await
-            };
-            cleanup_boot_artifacts(script_cleanup, async {
-                super::update_dhcp_config(&reservation.client_name, "", false)
-                    .await
-                    .map_err(anyhow::Error::msg)?;
-                crate::infrastructure::command::run_command_async([
-                    "systemctl",
-                    "restart",
-                    crate::platform::detect().dhcp_service(),
-                ])
+            super::update_dhcp_config(&reservation.client_name, "", false)
                 .await
-                .map_err(anyhow::Error::from)
-            })
+                .map_err(anyhow::Error::msg)?;
+            crate::infrastructure::command::run_command_async([
+                "systemctl",
+                "restart",
+                crate::platform::detect().dhcp_service(),
+            ])
             .await
+            .map_err(anyhow::Error::from)
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn rollback_removes_script_even_when_dhcp_cleanup_fails() {
-        let root =
-            std::env::temp_dir().join(format!("diskless-boot-rollback-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir(&root).unwrap();
-        let script = root.join("001122334466.ipxe");
-        let other = root.join("001122334455.ipxe");
-        std::fs::write(&script, "client menu").unwrap();
-        std::fs::write(&other, "other client menu").unwrap();
-        let result = cleanup_boot_artifacts(
-            async {
-                tokio::fs::remove_file(&script)
-                    .await
-                    .map_err(anyhow::Error::from)
-            },
-            async { anyhow::bail!("DHCP restart failed") },
-        )
-        .await;
-        let script_exists = script.exists();
-        let other_content = std::fs::read_to_string(&other).unwrap();
-        std::fs::remove_dir_all(&root).unwrap();
-        assert!(
-            !script_exists,
-            "failed provisioning left a boot menu behind"
-        );
-        assert_eq!(other_content, "other client menu");
-        assert!(format!("{:#}", result.unwrap_err()).contains("DHCP restart failed"));
-    }
-
-    #[tokio::test]
-    async fn rollback_still_removes_reservation_when_script_cleanup_fails() {
-        let reservation =
-            std::env::temp_dir().join(format!("diskless-dhcp-rollback-{}", uuid::Uuid::new_v4()));
-        std::fs::write(&reservation, "host PC001 {}").unwrap();
-        let result =
-            cleanup_boot_artifacts(async { anyhow::bail!("script permission denied") }, async {
-                tokio::fs::remove_file(&reservation)
-                    .await
-                    .map_err(anyhow::Error::from)
-            })
-            .await;
-        assert!(
-            !reservation.exists(),
-            "script cleanup failure skipped DHCP cleanup"
-        );
-        assert!(format!("{:#}", result.unwrap_err()).contains("script permission denied"));
-    }
-
-    #[tokio::test]
-    async fn rollback_succeeds_when_both_artifacts_are_removed() {
-        cleanup_boot_artifacts(async { Ok(()) }, async { Ok(()) })
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn rollback_reports_both_cleanup_failures() {
-        let error =
-            cleanup_boot_artifacts(async { anyhow::bail!("script permission denied") }, async {
-                anyhow::bail!("DHCP validation failed")
-            })
-            .await
-            .unwrap_err();
-        let message = format!("{error:#}");
-        assert!(message.contains("script permission denied"), "{message}");
-        assert!(message.contains("DHCP validation failed"), "{message}");
     }
 }

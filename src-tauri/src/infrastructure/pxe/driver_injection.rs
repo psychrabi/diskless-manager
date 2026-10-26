@@ -1,12 +1,13 @@
 use super::driver_manifest::DriverManifest;
-use super::windows_inf::inspect_inf_file;
+use super::windows_inf::{inspect_inf_file, WindowsInfMetadata};
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::ffi::OsStr;
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use uuid::Uuid;
 
 const MEDIA_DIR: &str = "pxe/network-drivers";
@@ -17,6 +18,10 @@ const ISO_FILE: &str = "network-drivers.iso";
 const STARTNET_FILE: &str = "startnet.cmd";
 const TAG_FILE: &str = "DRIVERS.TAG";
 const VOLUME_LABEL: &str = "DISKLESS_DRIVERS";
+// shortcut: cap imports at 1 GiB, 4096 entries, and 16 MiB of listing output; raise only for a supported vendor package.
+const MAX_DRIVER_ARCHIVE_ENTRIES: usize = 4096;
+const MAX_DRIVER_ARCHIVE_UNCOMPRESSED_BYTES: u64 = 1024 * 1024 * 1024;
+const MAX_DRIVER_ARCHIVE_LISTING_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImportedDriverMetadata {
@@ -116,6 +121,7 @@ impl NetworkDriverInjectionPlugin {
         if !package_dir.is_dir() {
             bail!("network driver package '{}' was not found", canonical_id);
         }
+        validate_network_package(&package_dir)?;
         Ok(package_dir)
     }
 
@@ -150,16 +156,20 @@ impl NetworkDriverInjectionPlugin {
 
         let id = Uuid::new_v4().to_string();
         let package_dir = self.drivers_dir().join(&id);
-        let temp_dir = self.media_dir().join(format!(".import-{}", id));
-
-        fs::create_dir_all(&temp_dir)?;
+        // Private staging prevents concurrent access to untrusted extracted files.
+        let staging = tempfile::Builder::new()
+            .prefix(".import-")
+            .tempdir_in(self.media_dir())?;
+        let temp_dir = staging.path();
 
         let result = (|| -> Result<NetworkDriverPackage> {
+            preflight_zip(source)?;
             validate_zip_paths(source)?;
-            extract_zip(source, &temp_dir)?;
+            extract_zip(source, temp_dir)?;
+            collect_files(temp_dir, &mut |_| {})?;
 
-            let metadata = find_metadata(&temp_dir)?;
-            let package_source = find_driver_package(&temp_dir)?;
+            let metadata = find_metadata(temp_dir)?;
+            let package_source = find_driver_package(temp_dir)?;
             let inf_files = find_inf_files(&package_source)?;
 
             if inf_files.is_empty() {
@@ -177,6 +187,22 @@ impl NetworkDriverInjectionPlugin {
             if network_infs.is_empty() {
                 bail!("archive contains INF files but none identify as network adapter drivers");
             }
+            if network_infs.len() != inspections.len() {
+                let non_network = inf_files
+                    .iter()
+                    .zip(&inspections)
+                    .filter(|(_, inspection)| !inspection.is_network_class)
+                    .map(|(path, _)| path.display().to_string())
+                    .collect::<Vec<_>>();
+                bail!(
+                    "archive contains non-network INF files; import NIC packages separately: {}",
+                    non_network.join(", ")
+                );
+            }
+            // A signed Windows package must reference a catalog file and ship
+            // it alongside the INF; unsigned or damaged packages cannot enter
+            // the catalog. DISM signature verification remains the install gate.
+            require_package_catalog(&package_source, &inf_files, &inspections)?;
 
             fs::create_dir_all(&package_dir)?;
             copy_directory_contents(&package_source, &package_dir)?;
@@ -266,8 +292,6 @@ impl NetworkDriverInjectionPlugin {
 
             Ok(package)
         })();
-
-        let _ = fs::remove_dir_all(&temp_dir);
 
         if result.is_err() {
             let _ = fs::remove_dir_all(&package_dir);
@@ -423,6 +447,99 @@ endlocal
     }
 }
 
+fn validate_network_package(package_dir: &Path) -> Result<()> {
+    checked_package_path(package_dir, package_dir)?;
+    let inf_files = find_inf_files(package_dir)?;
+    if inf_files.is_empty() {
+        bail!("network driver package contains no INF files");
+    }
+    let inspections = inf_files
+        .iter()
+        .map(|inf| inspect_inf_file(inf))
+        .collect::<Result<Vec<_>>>()?;
+    if inspections
+        .iter()
+        .any(|inspection| !inspection.is_network_class)
+    {
+        bail!("network driver package contains a non-network INF file");
+    }
+    require_package_catalog(package_dir, &inf_files, &inspections)
+}
+
+fn preflight_zip(source: &Path) -> Result<()> {
+    let mut child = Command::new("unzip")
+        .args(["-l"])
+        .arg(source)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("network driver import requires unzip")?;
+    let output = child.stdout.take().context("failed to read ZIP listing")?;
+    let mut reader = BufReader::new(output);
+    let listing_result = (|| -> Result<()> {
+        let mut line = Vec::new();
+        let mut listing_bytes = 0usize;
+        let mut entry_count = 0usize;
+        let mut uncompressed_bytes = 0u64;
+        loop {
+            line.clear();
+            let bytes_read = reader.read_until(b'\n', &mut line)?;
+            if bytes_read == 0 {
+                break;
+            }
+            listing_bytes = listing_bytes.saturating_add(bytes_read);
+            if listing_bytes > MAX_DRIVER_ARCHIVE_LISTING_BYTES {
+                bail!("driver archive listing exceeds the safe size limit");
+            }
+            let Some(size) = listed_entry_size(&line) else {
+                continue;
+            };
+            entry_count += 1;
+            uncompressed_bytes = uncompressed_bytes
+                .checked_add(size)
+                .context("driver archive uncompressed size overflow")?;
+            check_zip_limits(entry_count, uncompressed_bytes)?;
+        }
+        Ok(())
+    })();
+    drop(reader);
+    if listing_result.is_err() {
+        let _ = child.kill();
+    }
+    let status = child.wait().context("failed to inspect ZIP archive")?;
+    listing_result?;
+    if !status.success() {
+        bail!("invalid ZIP driver archive");
+    }
+    Ok(())
+}
+
+fn listed_entry_size(line: &[u8]) -> Option<u64> {
+    let mut fields = line
+        .split(|byte| byte.is_ascii_whitespace())
+        .filter(|field| !field.is_empty());
+    let size = std::str::from_utf8(fields.next()?).ok()?.parse().ok()?;
+    let date = fields.next()?;
+    let time = fields.next()?;
+    (date
+        .iter()
+        .filter(|byte| matches!(byte, b'-' | b'/'))
+        .count()
+        >= 2
+        && time.contains(&b':'))
+    .then_some(size)
+}
+
+fn check_zip_limits(entry_count: usize, uncompressed_bytes: u64) -> Result<()> {
+    if entry_count > MAX_DRIVER_ARCHIVE_ENTRIES {
+        bail!("driver archive contains too many files");
+    }
+    if uncompressed_bytes > MAX_DRIVER_ARCHIVE_UNCOMPRESSED_BYTES {
+        bail!("driver archive exceeds the safe uncompressed size limit");
+    }
+    Ok(())
+}
+
 fn find_executable(name: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     for directory in std::env::split_paths(&path) {
@@ -447,8 +564,29 @@ fn validate_zip_paths(source: &Path) -> Result<()> {
 
     for entry in String::from_utf8_lossy(&output.stdout).lines() {
         let normalized = entry.replace('\\', "/");
-        if normalized.starts_with('/') || normalized.contains("../") || normalized == ".." {
+        if normalized.starts_with('/')
+            || normalized.contains(':')
+            || normalized.split('/').any(|part| part == "..")
+        {
             bail!("unsafe path in driver archive: {}", entry);
+        }
+    }
+
+    // Reject links before extraction: unzip can follow a link when a later
+    // archive entry writes beneath it. Name validation alone cannot stop that.
+    let modes = Command::new("unzip")
+        .args(["-Z", "-l"])
+        .arg(source)
+        .output()
+        .context("failed to inspect ZIP entry modes")?;
+    if !modes.status.success() {
+        bail!("invalid ZIP driver archive");
+    }
+    for line in String::from_utf8_lossy(&modes.stdout).lines() {
+        if line.split_whitespace().next().is_some_and(|mode| {
+            mode.len() == 10 && matches!(mode.chars().next(), Some('l' | 'b' | 'c' | 'p' | 's'))
+        }) {
+            bail!("symlink or special file in driver archive");
         }
     }
 
@@ -522,13 +660,25 @@ fn find_inf_files(root: &Path) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
+fn checked_package_path(root: &Path, path: &Path) -> Result<fs::Metadata> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink()
+        || (!metadata.is_dir() && !metadata.is_file())
+        || !path.canonicalize()?.starts_with(root.canonicalize()?)
+    {
+        bail!("symlink or path outside extracted driver package");
+    }
+    Ok(metadata)
+}
+
 fn copy_directory_contents(source: &Path, destination: &Path) -> Result<()> {
+    checked_package_path(source, source)?;
     for entry in fs::read_dir(source)? {
         let entry = entry?;
         let source_path = entry.path();
         let destination_path = destination.join(entry.file_name());
 
-        if source_path.is_dir() {
+        if checked_package_path(source, &source_path)?.is_dir() {
             fs::create_dir_all(&destination_path)?;
             copy_directory_contents(&source_path, &destination_path)?;
         } else {
@@ -540,10 +690,11 @@ fn copy_directory_contents(source: &Path, destination: &Path) -> Result<()> {
 }
 
 fn collect_files(root: &Path, callback: &mut impl FnMut(&Path)) -> Result<()> {
+    checked_package_path(root, root)?;
     for entry in fs::read_dir(root)? {
         let entry = entry?;
         let path = entry.path();
-        if path.is_dir() {
+        if checked_package_path(root, &path)?.is_dir() {
             collect_files(&path, callback)?;
         } else {
             callback(&path);
@@ -568,10 +719,11 @@ fn find_file(root: &Path, filename: &str) -> Result<Option<PathBuf>> {
 }
 
 fn find_directory(root: &Path, dirname: &str) -> Result<Option<PathBuf>> {
+    checked_package_path(root, root)?;
     for entry in fs::read_dir(root)? {
         let entry = entry?;
         let path = entry.path();
-        if path.is_dir() {
+        if checked_package_path(root, &path)?.is_dir() {
             if path
                 .file_name()
                 .and_then(OsStr::to_str)
@@ -586,4 +738,238 @@ fn find_directory(root: &Path, dirname: &str) -> Result<Option<PathBuf>> {
         }
     }
     Ok(None)
+}
+
+/// Require every network-class INF to ship a catalog file alongside the
+/// package. Unsigned or damaged packages (no `CatalogFile` directive, or a
+/// referenced `.cat` missing from the archive) are rejected before they can
+/// enter the catalog. Cryptographic signature verification itself happens at
+/// install time via DISM, which is never given an unsigned-driver override.
+fn require_package_catalog(
+    package_source: &Path,
+    inf_files: &[PathBuf],
+    inspections: &[WindowsInfMetadata],
+) -> Result<()> {
+    for (inf, inspection) in inf_files.iter().zip(inspections.iter()) {
+        if !inspection.is_network_class {
+            continue;
+        }
+        if inspection.catalog_files.is_empty() {
+            bail!(
+                "network driver INF '{}' declares no catalog file; unsigned packages cannot enter the catalog",
+                inf.display()
+            );
+        }
+        let inf_dir = inf.parent().unwrap_or(package_source);
+        let mut found = false;
+        for catalog in &inspection.catalog_files {
+            let name = catalog.rsplit(['/', '\\']).next().unwrap_or(catalog);
+            for candidate in [
+                inf_dir.join(catalog),
+                inf_dir.join(name),
+                package_source.join(catalog),
+                package_source.join(name),
+            ] {
+                if candidate.is_file() {
+                    checked_package_path(package_source, &candidate)?;
+                    found = true;
+                    break;
+                }
+            }
+            if found {
+                break;
+            }
+        }
+        if !found {
+            bail!(
+                "network driver INF '{}' references catalog files ({}) but none are present in the archive",
+                inf.display(),
+                inspection.catalog_files.join(", ")
+            );
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write as _;
+    use std::process::Command;
+
+    fn write_zip(path: &Path, entries: &[(&str, &[u8])]) {
+        let staging = tempfile::tempdir().unwrap();
+        for (name, contents) in entries {
+            let file_path = staging.path().join(name);
+            if let Some(parent) = file_path.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            let mut file = std::fs::File::create(&file_path).unwrap();
+            file.write_all(contents).unwrap();
+        }
+        let names: Vec<&str> = entries.iter().map(|(name, _)| *name).collect();
+        let output = Command::new("zip")
+            .arg("-j")
+            .arg("-q")
+            .arg(path)
+            .args(&names)
+            .current_dir(staging.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "zip failed: {output:?}");
+    }
+
+    const NETWORK_INF: &[u8] = b"[Version]\nSignature=\"$Windows NT$\"\nClass=Net\nClassGuid={4d36e972-e325-11ce-bfc1-08002be10318}\nProvider=%Vendor%\nCatalogFile=nic.cat\n[Manufacturer]\n%Vendor%=Vendor,NTamd64\n[Vendor.NTamd64]\n%Device%=Install,PCI\\VEN_8086&DEV_15F3\n[Install.NT.Services]\nAddService=NetKVM,2,NicInstall\n[Strings]\nVendor=\"Vendor\"\nDevice=\"Test NIC\"\n";
+    const STORAGE_INF: &[u8] = b"[Version]\nSignature=\"$Windows NT$\"\nClass=SCSIAdapter\nClassGuid={4d36e96b-e325-11ce-bfc1-08002be10318}\nProvider=%Vendor%\nCatalogFile=storage.cat\n[Manufacturer]\n%Vendor%=Vendor,NTamd64\n[Vendor.NTamd64]\n%Device%=Install,PCI\\VEN_1234&DEV_5678\n[Install.NT.Services]\nAddService=StorDrv,2,Install\n[Strings]\nVendor=\"Vendor\"\nDevice=\"Test HBA\"\n";
+
+    #[cfg(unix)]
+    #[test]
+    fn import_rejects_symlink_payload_before_copying_external_file() {
+        let root = tempfile::tempdir().unwrap();
+        let staging = tempfile::tempdir().unwrap();
+        let secret = root.path().join("server-secret");
+        fs::write(&secret, b"private server data").unwrap();
+        fs::write(staging.path().join("nic.inf"), NETWORK_INF).unwrap();
+        fs::write(staging.path().join("nic.cat"), b"cat").unwrap();
+        std::os::unix::fs::symlink(&secret, staging.path().join("leak.sys")).unwrap();
+        let archive = root.path().join("symlink.zip");
+        let output = Command::new("zip")
+            .args(["-q", "-y"])
+            .arg(&archive)
+            .args(["nic.inf", "nic.cat", "leak.sys"])
+            .current_dir(staging.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let plugin = NetworkDriverInjectionPlugin::new(root.path().join("media"));
+        let error = plugin.import_zip(&archive).unwrap_err();
+        assert!(error.to_string().contains("symlink"), "{error:#}");
+        assert!(plugin.list().unwrap().is_empty());
+        assert_eq!(fs::read_dir(plugin.drivers_dir()).unwrap().count(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn package_walk_and_copy_reject_links_outside_the_root() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("nic.inf"), NETWORK_INF).unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.path().join("linked")).unwrap();
+        assert!(find_inf_files(root.path()).is_err());
+        let destination = tempfile::tempdir().unwrap();
+        assert!(copy_directory_contents(root.path(), destination.path()).is_err());
+        assert_eq!(fs::read_dir(destination.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn import_rejects_package_without_network_inf() {
+        let root = tempfile::tempdir().unwrap();
+        let archive = root.path().join("storage.zip");
+        write_zip(
+            &archive,
+            &[("storage.inf", STORAGE_INF), ("storage.cat", b"cat")],
+        );
+        let plugin = NetworkDriverInjectionPlugin::new(root.path().join("media"));
+        let error = plugin.import_zip(&archive).unwrap_err();
+        assert!(error.to_string().contains("network adapter"), "{error:#}");
+    }
+
+    #[test]
+    fn import_rejects_network_package_mixed_with_storage_inf() {
+        let root = tempfile::tempdir().unwrap();
+        let archive = root.path().join("mixed.zip");
+        write_zip(
+            &archive,
+            &[
+                ("nic.inf", NETWORK_INF),
+                ("nic.cat", b"cat"),
+                ("storage.inf", STORAGE_INF),
+                ("storage.cat", b"cat"),
+            ],
+        );
+        let plugin = NetworkDriverInjectionPlugin::new(root.path().join("media"));
+
+        let error = plugin.import_zip(&archive).unwrap_err();
+
+        assert!(error.to_string().contains("non-network INF"), "{error:#}");
+        assert!(plugin.list().unwrap().is_empty());
+        assert_eq!(fs::read_dir(plugin.drivers_dir()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn package_directory_rejects_legacy_mixed_network_and_storage_infs() {
+        let root = tempfile::tempdir().unwrap();
+        let plugin = NetworkDriverInjectionPlugin::new(root.path());
+        let id = Uuid::new_v4().to_string();
+        let package_dir = plugin.drivers_dir().join(&id);
+        fs::create_dir_all(&package_dir).unwrap();
+        fs::write(package_dir.join("nic.inf"), NETWORK_INF).unwrap();
+        fs::write(package_dir.join("nic.cat"), b"catalog").unwrap();
+        fs::write(package_dir.join("storage.inf"), STORAGE_INF).unwrap();
+        fs::write(package_dir.join("storage.cat"), b"catalog").unwrap();
+
+        let error = plugin.package_directory(&id).unwrap_err();
+
+        assert!(error.to_string().contains("non-network INF"), "{error:#}");
+    }
+
+    #[test]
+    fn zip_preflight_bounds_entry_count_and_uncompressed_size() {
+        assert_eq!(
+            listed_entry_size(b"        3 10-12-2026 23:55  filename with spaces.inf"),
+            Some(3)
+        );
+        assert_eq!(
+            listed_entry_size(b"---------                     -------"),
+            None
+        );
+        assert_eq!(
+            listed_entry_size(b"        3                     2 files"),
+            None
+        );
+        assert!(check_zip_limits(MAX_DRIVER_ARCHIVE_ENTRIES, 0).is_ok());
+        assert!(check_zip_limits(MAX_DRIVER_ARCHIVE_ENTRIES + 1, 0).is_err());
+        assert!(check_zip_limits(1, MAX_DRIVER_ARCHIVE_UNCOMPRESSED_BYTES).is_ok());
+        assert!(check_zip_limits(1, MAX_DRIVER_ARCHIVE_UNCOMPRESSED_BYTES + 1).is_err());
+    }
+
+    #[test]
+    fn import_rejects_network_inf_without_catalog_file() {
+        let root = tempfile::tempdir().unwrap();
+        let archive = root.path().join("nocat.zip");
+        let inf = String::from_utf8_lossy(NETWORK_INF).replace("CatalogFile=nic.cat\n", "");
+        write_zip(&archive, &[("nic.inf", inf.as_bytes())]);
+        let plugin = NetworkDriverInjectionPlugin::new(root.path().join("media"));
+        let error = plugin.import_zip(&archive).unwrap_err();
+        assert!(error.to_string().contains("catalog"), "{error:#}");
+    }
+
+    #[test]
+    fn import_rejects_missing_catalog_payload() {
+        let root = tempfile::tempdir().unwrap();
+        let archive = root.path().join("missingcat.zip");
+        write_zip(&archive, &[("nic.inf", NETWORK_INF)]);
+        let plugin = NetworkDriverInjectionPlugin::new(root.path().join("media"));
+        let error = plugin.import_zip(&archive).unwrap_err();
+        assert!(error.to_string().contains("catalog"), "{error:#}");
+    }
+
+    #[test]
+    fn import_rejects_malicious_archive_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let archive = root.path().join("evil.zip");
+        let staging = tempfile::tempdir().unwrap();
+        std::fs::write(staging.path().join("nic.inf"), NETWORK_INF).unwrap();
+        std::fs::write(staging.path().join("nic.cat"), b"cat").unwrap();
+        let output = Command::new("python3")
+            .args(["-c", "import sys,zipfile; z=zipfile.ZipFile(sys.argv[1],'w'); z.write(sys.argv[2]+'/nic.inf','nic.inf'); z.write(sys.argv[2]+'/nic.cat','nic.cat'); z.writestr('../escape.inf','evil')"])
+            .arg(&archive)
+            .arg(staging.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "fixture zip failed: {output:?}");
+        let plugin = NetworkDriverInjectionPlugin::new(root.path().join("media"));
+        let error = plugin.import_zip(&archive).unwrap_err();
+        assert!(error.to_string().contains("unsafe path"), "{error:#}");
+    }
 }

@@ -48,7 +48,7 @@ const NetworkInterfaceSelector = ({
               return (
                 <Label
                   key={iface}
-                  className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition-all border ${
+                  className={`flex min-h-11 items-center justify-between p-2 rounded-lg cursor-pointer transition-all border ${
                     isSelected
                       ? "bg-primary/10 border-primary/30 text-primary shadow-sm"
                       : "bg-background border-transparent hover:border-border hover:bg-muted"

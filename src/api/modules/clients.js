@@ -18,10 +18,46 @@ export async function updateClient(id, request) {
   });
 }
 
+export function completeClientInstallation(id) {
+  return apiRequest(`/api/clients/${encodeURIComponent(id)}/installation/complete`, {
+    method: "POST",
+  });
+}
+
+export async function exitLegacySuper(id, snapshot) {
+  return apiRequest(`/api/clients/${encodeURIComponent(id)}/legacy-super/exit`, {
+    method: "POST",
+    body: JSON.stringify({ snapshot }),
+  });
+}
+
+export function getSuperStatus(id) {
+  return apiRequest(`/api/clients/${encodeURIComponent(id)}/super/status`);
+}
+
+export function enterSuper(id, options) {
+  return apiRequest(`/api/clients/${encodeURIComponent(id)}/super/enter`, {
+    method: "POST",
+    body: JSON.stringify(options),
+  });
+}
+
+export function saveSuper(id) {
+  return apiRequest(`/api/clients/${encodeURIComponent(id)}/super/save`, { method: "POST" });
+}
+
+export function discardSuper(id) {
+  return apiRequest(`/api/clients/${encodeURIComponent(id)}/super/discard`, { method: "POST" });
+}
+
 export async function deleteClient(id) {
   return apiRequest(`/api/clients/${id}`, {
     method: "DELETE",
   });
+}
+
+export async function deleteClientWriteback(id) {
+  return apiRequest(`/api/clients/${id}/writeback/delete`, { method: "POST" });
 }
 
 export async function rotateChapSecret(id) {

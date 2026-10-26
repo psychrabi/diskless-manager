@@ -12,6 +12,12 @@ const InfoRow = ({ label, value }) => (
 
 const ServerInfoCard = () => {
   const serverInfo = useAppStore((state) => state.serverInfo);
+  const serverStatus = useAppStore((state) => state.serverStatus);
+
+  const iscsiBackendLabel = {
+    internal_configfs: "Native configfs",
+    targetcli: "targetcli",
+  }[serverStatus?.iscsi_backend];
 
   return (
     <Card className="h-full xl:col-span-2">
@@ -37,6 +43,9 @@ const ServerInfoCard = () => {
             <InfoRow label="Uptime" value={serverInfo.uptime} />
             <InfoRow label="CPU Cores" value={serverInfo.cpu_count} />
             <InfoRow label="Total Memory" value={serverInfo.memory_total} />
+            {iscsiBackendLabel && (
+              <InfoRow label="iSCSI Backend" value={iscsiBackendLabel} />
+            )}
           </div>
         )}
       </CardContent>

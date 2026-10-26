@@ -3,8 +3,8 @@ set -Eeuo pipefail
 
 usage() {
   cat <<'USAGE'
-Create a bootable Linux iSCSI master image from a Fedora KDE/Workstation,
-Kubuntu, or CachyOS live ISO and an empty ZFS volume.
+Create a bootable Linux iSCSI master image from a Fedora KDE/Workstation, Nobara,
+Ubuntu/Kubuntu, Pop!_OS, or CachyOS live ISO and an empty ZFS volume.
 
 Usage:
   sudo bash scripts/create-linux-iscsi-image.sh --iso FILE.iso --volume POOL/VOLUME [--check]
@@ -32,8 +32,13 @@ command -v unshare >/dev/null || { echo 'Install util-linux (unshare).'; exit 1;
 
 # Isolate all temporary mounts from the host mount namespace (notably /run).
 if [[ ${DISKLESS_IMAGE_WORKER:-0} != 1 ]]; then
-  exec unshare --mount --propagation private env DISKLESS_IMAGE_WORKER=1 \
-    bash "$0" --iso "$ISO" --volume "$VOLUME" $([[ $CHECK == 1 ]] && echo --check)
+  # Bash reads scripts incrementally; freeze this build before a long ISO copy.
+  BUILD_SCRIPT=$(mktemp /tmp/diskless-linux-builder.XXXXXX)
+  trap 'rm -f -- "$BUILD_SCRIPT"' EXIT
+  cp -- "$0" "$BUILD_SCRIPT"
+  unshare --mount --propagation private env DISKLESS_IMAGE_WORKER=1 \
+    bash "$BUILD_SCRIPT" --iso "$ISO" --volume "$VOLUME" $([[ $CHECK == 1 ]] && echo --check)
+  exit
 fi
 mount --make-rprivate /
 
@@ -74,6 +79,9 @@ MOUNTS=()
 cleanup() {
   local rc=$? p failed=0
   trap - EXIT
+  if [[ ${DISTRO:-} == cachyos && -x $ROOT_MNT/usr/bin/gpgconf ]]; then
+    chroot "$ROOT_MNT" gpgconf --homedir /etc/pacman.d/gnupg --kill all || true
+  fi
   for ((i=${#MOUNTS[@]}-1; i>=0; i--)); do
     p=${MOUNTS[i]}
     if ! umount -R "$p"; then echo "Could not unmount $p; retaining $TMP" >&2; failed=1; fi
@@ -89,14 +97,19 @@ trap cleanup EXIT
 
 mount -o loop,ro "$ISO" "$ISO_MNT"; MOUNTS+=("$ISO_MNT")
 DISTRO= PAYLOAD=
+POP_PAYLOADS=("$ISO_MNT"/casper_pop-os_*/filesystem.squashfs)
 if [[ -f $ISO_MNT/casper/filesystem.squashfs ]]; then
   DISTRO=ubuntu; PAYLOAD=$ISO_MNT/casper/filesystem.squashfs
+elif [[ -f $ISO_MNT/casper/minimal.squashfs ]]; then
+  DISTRO=ubuntu; PAYLOAD=$ISO_MNT/casper/minimal.squashfs
+elif [[ ${#POP_PAYLOADS[@]} == 1 && -f ${POP_PAYLOADS[0]} ]]; then
+  DISTRO=ubuntu; PAYLOAD=${POP_PAYLOADS[0]}
 elif [[ -f $ISO_MNT/LiveOS/squashfs.img ]]; then
   DISTRO=fedora; PAYLOAD=$ISO_MNT/LiveOS/squashfs.img
 elif [[ -f $ISO_MNT/arch/x86_64/airootfs.sfs ]]; then
   DISTRO=cachyos; PAYLOAD=$ISO_MNT/arch/x86_64/airootfs.sfs
 else
-  echo 'Unsupported ISO layout. Expected Kubuntu casper, Fedora LiveOS, or CachyOS live ISO.' >&2
+  echo 'Unsupported ISO layout. Expected Ubuntu/Kubuntu/Pop!_OS casper, Fedora/Nobara LiveOS, or CachyOS live ISO.' >&2
   exit 1
 fi
 mount -o loop,ro "$PAYLOAD" "$PAYLOAD_MNT"; MOUNTS+=("$PAYLOAD_MNT")
@@ -109,8 +122,8 @@ if [[ -f $SRC/LiveOS/rootfs.img ]]; then
 fi
 [[ -f $SRC/etc/os-release ]] || { echo 'Could not find an installed root filesystem in the ISO payload.' >&2; exit 1; }
 case $DISTRO in
-  ubuntu) grep -qiE 'Ubuntu|Kubuntu' "$SRC/etc/os-release" || { echo 'Unexpected OS in casper payload.' >&2; exit 1; } ;;
-  fedora) grep -qi Fedora "$SRC/etc/os-release" || { echo 'Unexpected OS in LiveOS payload.' >&2; exit 1; } ;;
+  ubuntu) grep -qiE 'Ubuntu|Kubuntu|Pop!_OS|^ID=pop$|^ID="pop"$' "$SRC/etc/os-release" || { echo 'Unexpected OS in casper payload.' >&2; exit 1; } ;;
+  fedora) grep -qiE 'Fedora|Nobara' "$SRC/etc/os-release" || { echo 'Unexpected OS in LiveOS payload.' >&2; exit 1; } ;;
   cachyos) grep -qiE 'CachyOS|Arch Linux' "$SRC/etc/os-release" || { echo 'Unexpected OS in airootfs payload.' >&2; exit 1; } ;;
 esac
 
@@ -177,9 +190,18 @@ case $DISTRO in
     chroot "$ROOT_MNT" env DEBIAN_FRONTEND=noninteractive apt-get install -y dracut-core dracut-network open-iscsi grub-efi-amd64-bin grub-common network-manager openssh-server sudo linux-image-generic
     ;;
   cachyos)
-    chroot "$ROOT_MNT" pacman -Syu --noconfirm dracut dracut-network open-iscsi grub networkmanager openssh sudo linux-cachyos-lts
+    chroot "$ROOT_MNT" pacman-key --init
+    chroot "$ROOT_MNT" pacman-key --populate
+    chroot "$ROOT_MNT" pacman -Syu --noconfirm dracut open-iscsi grub networkmanager openssh sudo linux-cachyos-lts
     ;;
 esac
+
+# The live ISO may enable both managers; networkd can remove the iSCSI route
+# after switch-root while NetworkManager is using the same NIC.
+chroot "$ROOT_MNT" systemctl enable NetworkManager.service
+chroot "$ROOT_MNT" systemctl mask --force systemd-networkd.service systemd-networkd.socket systemd-networkd-wait-online.service
+# Each client receives its target from iBFT; do not clone a saved live-session target.
+rm -rf -- "$ROOT_MNT/etc/iscsi/nodes" "$ROOT_MNT/etc/iscsi/send_targets"
 
 # Create the default login account.
 chroot "$ROOT_MNT" useradd --create-home --shell /bin/bash diskless
@@ -203,8 +225,17 @@ case $DISTRO in
 esac
 [[ -f $KERNEL ]] || { echo "No kernel image matching $KVER in /boot." >&2; exit 1; }
 cp "$KERNEL" "$ROOT_MNT/boot/diskless-vmlinuz"
+# Include physical NICs even when building on a host with a different adapter.
+NET_DRIVERS=$(find "$MODULES/$KVER/kernel/drivers/net/ethernet" -type f -name '*.ko*' -printf '%f\n' | sed 's/\.ko.*//' | tr '\n' ' ')
+ISCSI_INSTALL=()
+# Older Ubuntu dracut omits the helper required by iscsid.service.
+if [[ -f $ROOT_MNT/usr/lib/open-iscsi/startup-checks.sh ]]; then
+  ISCSI_INSTALL=(--install '/usr/lib/open-iscsi/startup-checks.sh /etc/iscsi/iscsid.conf /etc/iscsi/initiatorname.iscsi /usr/sbin/iscsi-iname')
+fi
 chroot "$ROOT_MNT" dracut --force --no-hostonly --no-hostonly-cmdline \
-  --add 'network iscsi' --add-drivers 'iscsi_tcp iscsi_ibft' \
+  "${ISCSI_INSTALL[@]}" \
+  --add 'network-manager network iscsi' --omit 'systemd-networkd' \
+  --add-drivers "iscsi_tcp iscsi_ibft $NET_DRIVERS" \
   "/boot/diskless-initramfs.img" "$KVER"
 
 ROOT_UUID=$(blkid -s UUID -o value "$ROOT")

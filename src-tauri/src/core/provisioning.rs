@@ -4,15 +4,15 @@ use crate::core::provisioning_transaction::ProvisioningTransaction;
 use crate::domain::provisioning::TargetIqn;
 use crate::domain::storage::{ClientStorageSpec, StorageSource};
 use crate::error::AppError;
-use crate::infrastructure::command::{run_command, run_command_async};
+use crate::infrastructure::command::run_command_async;
 use crate::infrastructure::dhcp::{create_dhcp_entry_for_server, update_dhcp_config};
-use crate::infrastructure::zfs::legacy::get_writeback_or_default_dataset;
+use crate::infrastructure::zfs::legacy::get_writeback_or_default_dataset_async;
 use crate::state::AppState;
 use log::{info, warn};
 use sqlx::SqlitePool;
 
-pub fn get_client_by_id(client_id: &str) -> Option<Client> {
-    let config = get_config();
+pub fn get_client_by_id(config: &crate::config::RuntimeConfig, client_id: &str) -> Option<Client> {
+    let config = get_config(config);
 
     for client in &config.clients {
         if client.id.eq_ignore_ascii_case(client_id) {
@@ -23,8 +23,13 @@ pub fn get_client_by_id(client_id: &str) -> Option<Client> {
     None
 }
 
-pub fn check_duplicate_client(name: &str, mac: &str, ip: &str) -> Option<String> {
-    let config = get_config();
+pub fn check_duplicate_client(
+    config: &crate::config::RuntimeConfig,
+    name: &str,
+    mac: &str,
+    ip: &str,
+) -> Option<String> {
+    let config = get_config(config);
 
     for client in &config.clients {
         let client_name = client.name.to_lowercase();
@@ -53,8 +58,8 @@ pub fn check_duplicate_client(name: &str, mac: &str, ip: &str) -> Option<String>
     None
 }
 
-fn configured_target_prefix() -> String {
-    let settings = get_config().settings;
+fn configured_target_prefix(config: &crate::config::RuntimeConfig) -> String {
+    let settings = get_config(config).settings;
 
     settings
         .get("iscsi")
@@ -86,11 +91,18 @@ pub struct ClientStoragePaths {
 
 impl ClientStoragePaths {
     /// Build the default storage paths for a client.
-    pub fn new(client_id: &str, _client_mac: &str) -> Self {
-        let target_iqn = TargetIqn::for_client_name(&configured_target_prefix(), client_id);
+    ///
+    /// Resolves the writeback dataset with an async `zfs list`; callers must
+    /// await this rather than block an async worker.
+    pub async fn new(
+        config: &crate::config::RuntimeConfig,
+        client_id: &str,
+        _client_mac: &str,
+    ) -> Self {
+        let target_iqn = TargetIqn::for_client_name(&configured_target_prefix(config), client_id);
 
         Self {
-            dataset: get_writeback_or_default_dataset(client_id),
+            dataset: get_writeback_or_default_dataset_async(config, client_id).await,
             target_iqn: target_iqn.as_str().to_string(),
             backstore: format!("block_{}", client_id.to_lowercase()),
         }
@@ -104,18 +116,23 @@ impl ClientStoragePaths {
     }
 }
 
-pub fn get_client_paths(client_id: &str, client_mac: &str) -> ClientStoragePaths {
-    get_client_paths_with_master(client_id, client_mac, "")
+pub async fn get_client_paths(
+    config: &crate::config::RuntimeConfig,
+    client_id: &str,
+    client_mac: &str,
+) -> ClientStoragePaths {
+    get_client_paths_with_master(config, client_id, client_mac, "").await
 }
 
-pub fn get_client_paths_with_master(
+pub async fn get_client_paths_with_master(
+    config: &crate::config::RuntimeConfig,
     client_id: &str,
     client_mac: &str,
     _master: &str,
 ) -> ClientStoragePaths {
-    let mut paths = ClientStoragePaths::new(client_id, client_mac);
+    let mut paths = ClientStoragePaths::new(config, client_id, client_mac).await;
 
-    if let Some(client) = get_client_by_id(client_id) {
+    if let Some(client) = get_client_by_id(config, client_id) {
         if let Some(target_iqn) = client.target_iqn.filter(|value| !value.trim().is_empty()) {
             paths.target_iqn = target_iqn;
         }
@@ -124,8 +141,12 @@ pub fn get_client_paths_with_master(
     paths
 }
 
-pub async fn save_client_config(pool: &SqlitePool, client_data: &Client) -> bool {
-    let mut cfg = get_config();
+pub async fn save_client_config(
+    config: &crate::config::RuntimeConfig,
+    pool: &SqlitePool,
+    client_data: &Client,
+) -> bool {
+    let mut cfg = get_config(config);
     let mut found = false;
 
     for client in cfg.clients.iter_mut() {
@@ -140,9 +161,9 @@ pub async fn save_client_config(pool: &SqlitePool, client_data: &Client) -> bool
         cfg.clients.push(client_data.clone());
     }
 
-    match crate::config::write_config(pool, &cfg).await {
+    match crate::config::persist_config_client(pool, client_data).await {
         Ok(_) => {
-            crate::config::set_config(&cfg);
+            crate::config::set_config(config, &cfg);
             true
         }
 
@@ -153,27 +174,36 @@ pub async fn save_client_config(pool: &SqlitePool, client_data: &Client) -> bool
     }
 }
 
-pub async fn delete_client_config(pool: &SqlitePool, client_id: &str) -> bool {
+/// Delete persisted client metadata after its infrastructure has been cleaned up.
+pub async fn delete_client_config(
+    config: &crate::config::RuntimeConfig,
+    pool: &SqlitePool,
+    client_id: &str,
+) -> bool {
     info!("Deleting client config: {}", client_id);
 
-    let mut cfg = get_config();
-    let before = cfg.clients.len();
+    let mut cfg = get_config(config);
 
     cfg.clients
         .retain(|client| !client.id.eq_ignore_ascii_case(client_id));
 
-    if cfg.clients.len() == before {
-        return true;
-    }
-
-    match crate::config::write_config(pool, &cfg).await {
+    let id = match crate::domain::ClientId::from_string(client_id) {
+        Ok(id) => id,
+        Err(error) => {
+            warn!("Invalid client id: {error}");
+            return false;
+        }
+    };
+    match crate::persistence::ClientRepository::new(pool.clone())
+        .delete(&id)
+        .await
+    {
         Ok(_) => {
-            crate::config::set_config(&cfg);
+            crate::config::set_config(config, &cfg);
             true
         }
-
         Err(error) => {
-            warn!("Error writing config file: {}", error);
+            warn!("Error deleting client config: {error}");
             false
         }
     }
@@ -202,6 +232,10 @@ pub async fn add_client_provisioning(
     state: &AppState,
     request: AddClientProvisioningRequest,
 ) -> Result<serde_json::Value, AppError> {
+    if request.master.is_empty() {
+        return add_client_without_master(state, &request).await;
+    }
+
     let AddClientProvisioningRequest {
         name,
         mac,
@@ -213,61 +247,10 @@ pub async fn add_client_provisioning(
     } = request;
 
     // -----------------------------------------------------------------
-    // No master image selected.
-    // -----------------------------------------------------------------
-
-    if master.is_empty() {
-        let now = chrono::Utc::now();
-
-        let client_data = Client {
-            id: name.clone(),
-            name: name.to_uppercase(),
-            mac: mac.clone(),
-            ip: ip.clone(),
-            master: master.clone(),
-            enabled: true,
-            created_at: now,
-            updated_at: now,
-            snapshot: if snapshot.is_empty() {
-                None
-            } else {
-                Some(snapshot.clone())
-            },
-            target_iqn: None,
-            block_device: None,
-            block_store: None,
-            writeback: None,
-            last_modified: Some(now.format("%Y-%m-%d %H:%M:%S").to_string()),
-            status: None,
-            mode: None,
-            pxe_mode: Some("uefi".to_string()),
-            keep_writeback: keep_writeback.or(Some(true)),
-            use_game_disk,
-            chap_user: None,
-            chap_secret: None,
-            chap_enabled: None,
-        };
-
-        if !save_client_config(&state.db_pool, &client_data).await {
-            return Err(AppError::Config(format!(
-                "Failed to save client configuration for {}",
-                name
-            )));
-        }
-
-        return Ok(serde_json::json!({
-            "message": format!(
-                "Client {} added to configuration (no image selected)",
-                name
-            )
-        }));
-    }
-
-    // -----------------------------------------------------------------
     // Validate duplicates.
     // -----------------------------------------------------------------
 
-    if let Some(duplicate) = check_duplicate_client(&name, &mac, &ip) {
+    if let Some(duplicate) = check_duplicate_client(&state.config, &name, &mac, &ip) {
         return Err(AppError::Validation(duplicate));
     }
 
@@ -275,7 +258,7 @@ pub async fn add_client_provisioning(
     // Calculate storage resources.
     // -----------------------------------------------------------------
 
-    let mut paths = get_client_paths_with_master(&name, &mac, &master);
+    let mut paths = get_client_paths_with_master(&state.config, &name, &mac, &master).await;
 
     info!("Client storage paths: {:?}", paths);
 
@@ -297,7 +280,7 @@ pub async fn add_client_provisioning(
     } else {
         used_master_directly = false;
 
-        if let Err(error) = run_command(["zfs", "clone", &snapshot, &paths.dataset]) {
+        if let Err(error) = run_command_async(["zfs", "clone", &snapshot, &paths.dataset]).await {
             let provisioning_error = AppError::Command(format!(
                 "Failed to create ZFS clone {} from {}: {}",
                 paths.dataset, snapshot, error
@@ -316,7 +299,9 @@ pub async fn add_client_provisioning(
     let block_device = format!("/dev/zvol/{}", paths.dataset);
 
     let storage_spec = ClientStorageSpec {
+        installer_iso: None,
         client_id: name.clone(),
+        client_name: name.clone(),
 
         source: if used_master_directly {
             StorageSource::ExistingVolume(master.clone())
@@ -388,6 +373,7 @@ pub async fn add_client_provisioning(
     let now = chrono::Utc::now();
 
     let client_data = Client {
+        installer_media_id: None,
         id: name.clone(),
 
         name: name.to_uppercase(),
@@ -442,7 +428,7 @@ pub async fn add_client_provisioning(
         chap_enabled: None,
     };
 
-    if !save_client_config(&state.db_pool, &client_data).await {
+    if !save_client_config(&state.config, &state.db_pool, &client_data).await {
         let provisioning_error =
             AppError::Config(format!("Failed to save client configuration for {}", name));
 
@@ -479,28 +465,95 @@ pub async fn add_client_provisioning(
     }))
 }
 
+/// Register a client that has no master image yet (the no-image enrollment path).
+async fn add_client_without_master(
+    state: &AppState,
+    request: &AddClientProvisioningRequest,
+) -> Result<serde_json::Value, AppError> {
+    let now = chrono::Utc::now();
+
+    let client_data = Client {
+        installer_media_id: None,
+        id: request.name.clone(),
+        name: request.name.to_uppercase(),
+        mac: request.mac.clone(),
+        ip: request.ip.clone(),
+        master: request.master.clone(),
+        enabled: true,
+        created_at: now,
+        updated_at: now,
+        snapshot: if request.snapshot.is_empty() {
+            None
+        } else {
+            Some(request.snapshot.clone())
+        },
+        target_iqn: None,
+        block_device: None,
+        block_store: None,
+        writeback: None,
+        last_modified: Some(now.format("%Y-%m-%d %H:%M:%S").to_string()),
+        status: None,
+        mode: None,
+        pxe_mode: Some("uefi".to_string()),
+        keep_writeback: request.keep_writeback.or(Some(true)),
+        use_game_disk: request.use_game_disk,
+        chap_user: None,
+        chap_secret: None,
+        chap_enabled: None,
+    };
+
+    if !save_client_config(&state.config, &state.db_pool, &client_data).await {
+        return Err(AppError::Config(format!(
+            "Failed to save client configuration for {}",
+            request.name
+        )));
+    }
+
+    Ok(serde_json::json!({
+        "message": format!(
+            "Client {} added to configuration (no image selected)",
+            request.name
+        )
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn client_storage_paths_build_expected_target_iqn() {
-        let paths = ClientStoragePaths::new("client_1", "00:11:22:33:44:55");
+    #[tokio::test]
+    async fn client_storage_paths_build_expected_target_iqn() {
+        let paths = ClientStoragePaths::new(
+            &crate::config::RuntimeConfig::default(),
+            "client_1",
+            "00:11:22:33:44:55",
+        )
+        .await;
 
         assert_eq!(paths.target_iqn, "iqn.2024-01.com.diskless:client.client_1");
     }
 
-    #[test]
-    fn client_storage_paths_build_expected_backstore() {
-        let paths = ClientStoragePaths::new("CLIENT_1", "00:11:22:33:44:55");
+    #[tokio::test]
+    async fn client_storage_paths_build_expected_backstore() {
+        let paths = ClientStoragePaths::new(
+            &crate::config::RuntimeConfig::default(),
+            "CLIENT_1",
+            "00:11:22:33:44:55",
+        )
+        .await;
 
         assert_eq!(paths.backstore, "block_client_1");
     }
 
-    #[test]
-    fn client_storage_paths_can_replace_dataset() {
-        let paths = ClientStoragePaths::new("client_1", "00:11:22:33:44:55")
-            .with_dataset("tank/writeback/CLIENT_1-disk");
+    #[tokio::test]
+    async fn client_storage_paths_can_replace_dataset() {
+        let paths = ClientStoragePaths::new(
+            &crate::config::RuntimeConfig::default(),
+            "client_1",
+            "00:11:22:33:44:55",
+        )
+        .await
+        .with_dataset("tank/writeback/CLIENT_1-disk");
 
         assert_eq!(paths.dataset, "tank/writeback/CLIENT_1-disk");
 

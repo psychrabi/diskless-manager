@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+const INSTALLER_MEDIA_MULTIPART_OVERHEAD_BYTES: usize = 1024 * 1024;
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Settings {
     #[serde(default)]
@@ -23,6 +25,56 @@ pub struct Settings {
     pub samba: SambaConfig,
     #[serde(default)]
     pub storage: StorageConfig,
+    #[serde(default)]
+    pub installer_media: InstallerMediaConfig,
+    #[serde(default)]
+    pub client_features: ClientFeaturesConfig,
+    #[serde(default)]
+    pub windows_servicing: WindowsServicingConfig,
+}
+
+/// Non-secret connection details for the unattended Windows servicing worker.
+/// Authentication uses the Diskless Manager service account's SSH key.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WindowsServicingConfig {
+    pub worker_host: String,
+    pub worker_username: String,
+    pub helper_executable_path: String,
+    pub iscsi_portal: String,
+    pub report_server_url: String,
+    pub driver_install_strategy: String,
+}
+
+impl Default for WindowsServicingConfig {
+    fn default() -> Self {
+        Self {
+            worker_host: String::new(),
+            worker_username: String::new(),
+            helper_executable_path:
+                r"C:\Program Files\Diskless Manager\diskless-windows-servicer.exe".into(),
+            iscsi_portal: String::new(),
+            report_server_url: String::new(),
+            driver_install_strategy: "offline_dism".into(),
+        }
+    }
+}
+
+impl WindowsServicingConfig {
+    pub fn is_configured(&self) -> bool {
+        !self.worker_host.trim().is_empty()
+            && !self.worker_username.trim().is_empty()
+            && !self.iscsi_portal.trim().is_empty()
+            && !self.report_server_url.trim().is_empty()
+    }
+}
+
+/// Optional client capabilities, disabled until an administrator opts in.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ClientFeaturesConfig {
+    pub enable_chap_authentication: bool,
+    pub enable_experimental_nvme_target: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -235,6 +287,7 @@ impl Default for TftpConfig {
 #[serde(default)]
 pub struct IscsiConfig {
     pub enabled: bool,
+    pub backend: IscsiBackend,
     pub target_prefix: String,
     pub portal_port: u16,
     pub targets_dir: PathBuf,
@@ -244,11 +297,20 @@ impl Default for IscsiConfig {
     fn default() -> Self {
         Self {
             enabled: true,
+            backend: IscsiBackend::Targetcli,
             target_prefix: "iqn.2024-01.com.diskless".to_string(),
             portal_port: 3260,
             targets_dir: PathBuf::from("/var/lib/iscsi-targets"),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum IscsiBackend {
+    #[default]
+    Targetcli,
+    InternalConfigfs,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -298,6 +360,31 @@ pub struct StorageConfig {
     pub snapshots_dir: PathBuf,
 }
 
+/// Upload limits for managed installer ISO media.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct InstallerMediaConfig {
+    /// Maximum ISO payload size (default 8 GiB); request limits may include multipart overhead.
+    pub max_upload_bytes: usize,
+}
+
+impl Default for InstallerMediaConfig {
+    fn default() -> Self {
+        Self {
+            max_upload_bytes: 8 * 1024 * 1024 * 1024,
+        }
+    }
+}
+
+impl InstallerMediaConfig {
+    /// Route body limit includes room for multipart headers and boundaries;
+    /// upload handlers must still enforce `max_upload_bytes` on file chunks.
+    pub fn request_body_limit(&self) -> usize {
+        self.max_upload_bytes
+            .saturating_add(INSTALLER_MEDIA_MULTIPART_OVERHEAD_BYTES)
+    }
+}
+
 impl Default for StorageConfig {
     fn default() -> Self {
         Self {
@@ -309,6 +396,14 @@ impl Default for StorageConfig {
 
 impl Settings {
     pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.installer_media.max_upload_bytes > 0,
+            "installer media upload maximum must be greater than zero"
+        );
+        anyhow::ensure!(
+            self.installer_media.request_body_limit() > self.installer_media.max_upload_bytes,
+            "installer media upload maximum leaves no room for multipart overhead"
+        );
         crate::validation::validate_boot_root(&self.http.root_dir)?;
         crate::validation::validate_boot_root(&self.tftp.root_dir)?;
         if self.http.tls_enabled {
@@ -395,5 +490,65 @@ mod compatibility_tests {
         let mut settings = Settings::default();
         settings.http.root_dir = "/etc".to_string();
         assert!(settings.validate().is_err());
+    }
+
+    #[test]
+    fn installer_media_upload_limit_defaults_and_rejects_zero() {
+        let settings: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(
+            settings.installer_media.max_upload_bytes,
+            8 * 1024 * 1024 * 1024
+        );
+        assert!(
+            settings.installer_media.request_body_limit()
+                > settings.installer_media.max_upload_bytes
+        );
+
+        let invalid: Settings = serde_json::from_value(serde_json::json!({
+            "installer_media": { "max_upload_bytes": 0 }
+        }))
+        .unwrap();
+        assert!(invalid.validate().is_err());
+
+        let oversized: Settings = serde_json::from_value(serde_json::json!({
+            "installer_media": { "max_upload_bytes": usize::MAX }
+        }))
+        .unwrap();
+        assert!(oversized.validate().is_err());
+    }
+
+    #[test]
+    fn windows_servicing_worker_profile_roundtrips_without_passwords() {
+        let settings: Settings = serde_json::from_value(serde_json::json!({
+            "windows_servicing": {
+                "worker_host": "192.0.2.50",
+                "worker_username": "Administrator",
+                "helper_executable_path": "C:\\\\Program Files\\\\Diskless Manager\\\\diskless-windows-servicer.exe",
+                "iscsi_portal": "192.0.2.1",
+                "report_server_url": "http://192.0.2.1:8080"
+            }
+        }))
+        .unwrap();
+
+        assert!(settings.validate().is_ok());
+        let encoded = serde_json::to_value(&settings).unwrap();
+        let profile = &encoded["windows_servicing"];
+        assert_eq!(profile["worker_host"], "192.0.2.50");
+        assert_eq!(profile["worker_username"], "Administrator");
+        assert_eq!(profile["iscsi_portal"], "192.0.2.1");
+        assert!(profile.get("password").is_none());
+        assert_eq!(
+            serde_json::from_value::<Settings>(encoded)
+                .unwrap()
+                .windows_servicing
+                .worker_host,
+            "192.0.2.50"
+        );
+    }
+
+    #[test]
+    fn legacy_settings_have_an_unconfigured_windows_worker_profile() {
+        let settings: Settings = serde_json::from_str("{}").unwrap();
+        assert!(!settings.windows_servicing.is_configured());
     }
 }

@@ -116,7 +116,7 @@ where
         .join(" ");
     // Only print in debug mode to improve performance
     #[cfg(debug_assertions)]
-    println!("Executing command: sudo {}", cmd_str);
+    log::debug!("Executing command: sudo {}", cmd_str);
 
     match exec_sudo_cmd(args_vec.iter()) {
         Ok(_) => Ok(()),
@@ -125,10 +125,10 @@ where
                 CommandError::Failure { stderr, .. } => stderr.clone(),
                 _ => String::new(),
             };
-            eprintln!("Command failed: sudo {}", cmd_str);
-            eprintln!("Error: {}", e);
+            log::error!("Command failed: sudo {}", cmd_str);
+            log::error!("Error: {}", e);
             if !stderr.is_empty() {
-                eprintln!("Stderr: {}", stderr);
+                log::error!("Stderr: {}", stderr);
             }
 
             Err(AppError::Command(format!("{} (stderr: {})", e, stderr)))
@@ -148,7 +148,9 @@ where
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|error| AppError::Command(format!("failed to execute redacted command: {error}")))?;
+        .map_err(|error| {
+            AppError::Command(format!("failed to execute redacted command: {error}"))
+        })?;
     child
         .stdin
         .take()
@@ -202,8 +204,7 @@ where
         .join(" ");
     #[cfg(debug_assertions)]
     log::info!("Executing command: sudo {}", cmd_str);
-    let output =
-        exec_sudo_cmd(args_vec.iter()).map_err(|e| AppError::Command(e.to_string()))?;
+    let output = exec_sudo_cmd(args_vec.iter()).map_err(|e| AppError::Command(e.to_string()))?;
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
@@ -234,7 +235,8 @@ pub fn restorecon_paths(paths: &[&str]) -> Result<(), AppError> {
     run_command(args)
 }
 
-pub fn read_file_with_sudo(path: &std::path::Path) -> Result<Option<String>, AppError> {    use std::ffi::OsStr;
+pub fn read_file_with_sudo(path: &std::path::Path) -> Result<Option<String>, AppError> {
+    use std::ffi::OsStr;
     match std::fs::read_to_string(path) {
         Ok(content) => Ok(Some(content)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -285,6 +287,36 @@ where
     let output = std::process::Command::new(program)
         .args(cmd_iter)
         .output()
+        .map_err(|e| AppError::Command(e.to_string()))?;
+
+    if !output.status.success() {
+        return Err(AppError::Command(format!(
+            "Command failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+/// Async variant of [`run_command_output_no_sudo`] for async callers.
+///
+/// Uses tokio's process driver so request workers are never blocked by the
+/// child process.
+pub async fn run_command_output_no_sudo_async<II>(args: II) -> Result<String, AppError>
+where
+    II: IntoIterator,
+    II::Item: AsRef<std::ffi::OsStr>,
+{
+    let mut cmd_iter = args.into_iter();
+    let program = cmd_iter
+        .next()
+        .ok_or(AppError::Command("No command provided".to_string()))?;
+
+    let output = tokio::process::Command::new(program)
+        .args(cmd_iter)
+        .output()
+        .await
         .map_err(|e| AppError::Command(e.to_string()))?;
 
     if !output.status.success() {

@@ -4,7 +4,7 @@ const ClientLifecycleForm = ({ register, errors, config }) => (
     <Input
       id="offline-reset-delay"
       type="number"
-      label="Reset non-persistent clients after (minutes offline)"
+      label="Delete non-persistent client storage after (minutes offline)"
       register={register("non_persistent_reset_delay_minutes")}
       defaultValue={config?.non_persistent_reset_delay_minutes ?? 5}
       min={1}
@@ -15,7 +15,7 @@ const ClientLifecycleForm = ({ register, errors, config }) => (
           ? "Enter a whole number from 1 to 1440."
           : undefined)
       }
-      helperText="Applies to all non-persistent clients. The timer starts when the disk connection ends; reconnecting cancels the reset."
+      helperText="Applies to all non-persistent clients. The timer starts when the disk connection ends; reconnecting cancels deletion."
     />
   </div>
 );

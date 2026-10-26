@@ -1,5 +1,8 @@
 use crate::{
-    domain::{storage::ClientStorageSpec, Client, CreateClient},
+    domain::{
+        storage::{ClientStorageSpec, StorageSource},
+        BootMode, Client, ClientId, CreateClient,
+    },
     infrastructure::dhcp::{BootReservation, BootReservationPublisher},
     persistence::ClientRepository,
 };
@@ -8,11 +11,69 @@ use std::sync::Arc;
 
 use super::StorageService;
 
+fn boot_reservation(
+    client: &Client,
+    server_ip: &str,
+    storage_spec: &ClientStorageSpec,
+) -> BootReservation {
+    BootReservation {
+        client_name: client.name.clone(),
+        mac: client.mac.to_string(),
+        ip: client.ip.to_string(),
+        target_iqn: client
+            .target_iqn
+            .clone()
+            .unwrap_or_else(|| storage_spec.target_iqn.clone()),
+        server_ip: server_ip.to_owned(),
+        chap: storage_spec.chap.clone(),
+        super_boot: None,
+        assigned_windows: false,
+    }
+}
+
+fn pending_test_client_is_unprovisioned(client: &Client) -> bool {
+    client.master == "pending"
+        && client.snapshot.is_none()
+        && client.block_store.is_none()
+        && client.block_device.is_none()
+        && client.target_iqn.is_none()
+        && client.writeback.is_none()
+        && client.mode == BootMode::Normal
+}
+
+/// Validate a designated test client before the API creates or reads CHAP
+/// credentials. The provisioning method repeats this check at the side-effect
+/// boundary.
+pub fn validate_pending_boot_test_client(
+    client: &Client,
+    candidate_master: &str,
+    candidate_snapshot: &str,
+) -> Result<()> {
+    let already_assigned = client.master == candidate_master
+        && client.snapshot.as_deref() == Some(candidate_snapshot)
+        && client.block_store.is_some()
+        && client.block_device.is_some()
+        && client.target_iqn.is_some()
+        && client.writeback.is_some();
+    if already_assigned || pending_test_client_is_unprovisioned(client) {
+        Ok(())
+    } else {
+        bail!("only an unprovisioned pending client can be designated for a Windows boot test");
+    }
+}
+
+fn private_candidate_source(spec: &ClientStorageSpec, client: &Client, snapshot: &str) -> bool {
+    matches!(&spec.source, StorageSource::Snapshot(source) if source == snapshot)
+        && spec.client_id == client.id.as_str()
+        && spec.client_name == client.name
+}
+
 /// Authoritative client creation transaction.
 ///
 /// Infrastructure is created before persistence and is removed if the
 /// database write fails. Existing/shared ZFS volumes remain protected by the
 /// ownership semantics carried in `ClientStorage`.
+#[derive(Clone)]
 pub struct ProvisioningService {
     storage: Arc<StorageService>,
     clients: ClientRepository,
@@ -33,6 +94,131 @@ impl ProvisioningService {
     }
 
     pub async fn create_client(
+        &self,
+        request: CreateClient,
+        storage_spec: ClientStorageSpec,
+        server_ip: &str,
+    ) -> Result<Client> {
+        let service = self.clone();
+        let server_ip = server_ip.to_owned();
+        let runtime = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || {
+            runtime.block_on(service.create_client_blocking(request, storage_spec, &server_ip))
+        })
+        .await
+        .context("client provisioning worker failed")?
+    }
+
+    /// Assign only an empty enrollment placeholder to a disposable Windows
+    /// boot-test clone. Repeating the same assignment republishes its boot
+    /// reservation without creating another writable clone.
+    pub async fn assign_pending_boot_test_client(
+        &self,
+        client_id: &str,
+        candidate_master: &str,
+        candidate_snapshot: &str,
+        storage_spec: ClientStorageSpec,
+        server_ip: &str,
+    ) -> Result<Client> {
+        let service = self.clone();
+        let client_id = client_id.to_owned();
+        let candidate_master = candidate_master.to_owned();
+        let candidate_snapshot = candidate_snapshot.to_owned();
+        let server_ip = server_ip.to_owned();
+        let runtime = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || {
+            runtime.block_on(service.assign_pending_boot_test_client_blocking(
+                &client_id,
+                &candidate_master,
+                &candidate_snapshot,
+                storage_spec,
+                &server_ip,
+            ))
+        })
+        .await
+        .context("boot-test client provisioning worker failed")?
+    }
+
+    async fn assign_pending_boot_test_client_blocking(
+        &self,
+        client_id: &str,
+        candidate_master: &str,
+        candidate_snapshot: &str,
+        storage_spec: ClientStorageSpec,
+        server_ip: &str,
+    ) -> Result<Client> {
+        let id = ClientId::from_string(client_id.to_owned())?;
+        let mut client = self
+            .clients
+            .find_by_id(&id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("test client not found: {client_id}"))?;
+        if !private_candidate_source(&storage_spec, &client, candidate_snapshot) {
+            bail!("boot-test storage does not match the designated client and candidate snapshot");
+        }
+
+        validate_pending_boot_test_client(&client, candidate_master, candidate_snapshot)?;
+        let assigned = client.master == candidate_master
+            && client.snapshot.as_deref() == Some(candidate_snapshot)
+            && client.block_store.is_some()
+            && client.block_device.is_some()
+            && client.target_iqn.is_some()
+            && client.writeback.is_some();
+        if assigned {
+            let reservation = boot_reservation(&client, server_ip, &storage_spec);
+            self.boot.publish(&reservation).await?;
+            return Ok(client);
+        }
+        let storage = self
+            .storage
+            .create_client_storage(&storage_spec)
+            .with_context(|| {
+                format!(
+                    "failed to provision boot-test storage for '{}'",
+                    client.name
+                )
+            })?;
+        client.master = candidate_master.to_owned();
+        client.snapshot = Some(candidate_snapshot.to_owned());
+        client.block_store = Some(storage.backstore().to_owned());
+        client.block_device = Some(storage.block_device().display().to_string());
+        client.target_iqn = Some(storage.target_iqn().to_owned());
+        client.writeback = Some(storage.dataset().to_owned());
+        if let Some(chap) = &storage_spec.chap {
+            client.chap_user = Some(chap.username.clone());
+            client.chap_secret = Some(chap.password.clone());
+            client.chap_enabled = true;
+        }
+        client.mark_ready();
+
+        let reservation = boot_reservation(&client, server_ip, &storage_spec);
+        if let Err(error) = self.boot.publish(&reservation).await {
+            let rollback = self.storage.destroy_client_storage(&storage);
+            return match rollback {
+                Ok(()) => Err(error).context("failed to publish boot-test client reservation"),
+                Err(rollback_error) => Err(anyhow::anyhow!(
+                    "failed to publish boot-test client reservation: {error}; storage rollback also failed: {rollback_error}"
+                )),
+            };
+        }
+        if let Err(error) = self.clients.update(&client).await {
+            let boot_rollback = self.boot.remove(&reservation).await.err();
+            let storage_rollback = self.storage.destroy_client_storage(&storage).err();
+            let mut message = format!("failed to persist boot-test client assignment: {error}");
+            if let Some(error) = boot_rollback {
+                message.push_str(&format!(
+                    "; boot configuration rollback also failed: {error:#}"
+                ));
+            }
+            if let Some(error) = storage_rollback {
+                message.push_str(&format!("; storage rollback also failed: {error}"));
+            }
+            bail!(message);
+        }
+        Ok(client)
+    }
+
+    async fn create_client_blocking(
         &self,
         request: CreateClient,
         mut storage_spec: ClientStorageSpec,
@@ -69,6 +255,12 @@ impl ProvisioningService {
         ) {
             client.writeback = Some(storage.dataset().to_string());
         }
+        if let Some(chap) = &storage_spec.chap {
+            client.chap_user = Some(chap.username.clone());
+            client.chap_secret = Some(chap.password.clone());
+            client.chap_enabled = true;
+        }
+
         client.mark_ready();
 
         let reservation = BootReservation {
@@ -80,6 +272,8 @@ impl ProvisioningService {
             // The provisioned menu must carry the same credentials the
             // target enforces, or the first boot cannot log in.
             chap: storage_spec.chap.clone(),
+            assigned_windows: false,
+            super_boot: None,
         };
         if let Err(error) = self.boot.publish(&reservation).await {
             let rollback = self.storage.destroy_client_storage(&storage);
@@ -106,29 +300,6 @@ impl ProvisioningService {
             bail!(message);
         }
 
-        // Persist CHAP credentials resolved at the API layer. The target
-        // and menu already enforce/carry them; the database must agree.
-        if let Some(chap) = &storage_spec.chap {
-            if let Err(error) = self
-                .clients
-                .set_chap_credentials(&client.id, &chap.username, &chap.password)
-                .await
-            {
-                tracing::error!(client_id = %client.id, %error, "failed to persist CHAP credentials; continuing without them");
-            }
-            client.chap_user = Some(chap.username.clone());
-            client.chap_secret = Some(chap.password.clone());
-            client.chap_enabled = true;
-        }
-
-        if let Err(error) = self
-            .clients
-            .set_game_selection(&client.id, &client.game_disks)
-            .await
-        {
-            tracing::error!(client_id = %client.id, %error, "failed to persist game selection; continuing without it");
-        }
-
         Ok(client)
     }
 }
@@ -141,7 +312,9 @@ mod tests {
         infrastructure::{
             dhcp::{BootReservation, BootReservationPublisher},
             image::{ImageBackend, ImageBackendInfo},
-            iscsi::{ChapCredentials, IscsiLunState, IscsiProvisioner, IscsiTargetSpec, IscsiTargetState},
+            iscsi::{
+                ChapCredentials, IscsiLunState, IscsiProvisioner, IscsiTargetSpec, IscsiTargetState,
+            },
         },
     };
     use std::path::Path;
@@ -202,7 +375,7 @@ mod tests {
             unreachable!()
         }
         fn remove_target_with_backstores(&self, _: &str, _: &[String]) -> Result<()> {
-            unreachable!()
+            bail!("target has active sessions")
         }
         fn target_exists(&self, _: &str) -> Result<bool> {
             unreachable!()
@@ -344,6 +517,8 @@ mod tests {
     fn request_and_spec() -> (CreateClient, ClientStorageSpec) {
         (
             CreateClient {
+                installer_media_id: None,
+                enabled: None,
                 name: "PC-01".into(),
                 mac: "00:11:22:33:44:66".into(),
                 ip: "192.168.1.101".into(),
@@ -359,7 +534,9 @@ mod tests {
                 chap_enabled: false,
             },
             ClientStorageSpec {
+                installer_iso: None,
                 client_id: "ignored".into(),
+                client_name: "PC01".into(),
                 source: StorageSource::ExistingVolume("tank/win11".into()),
                 dataset: "tank/win11".into(),
                 backstore: "block_pc01".into(),
@@ -370,6 +547,30 @@ mod tests {
                 chap: None,
             },
         )
+    }
+
+    #[test]
+    fn boot_test_assignment_requires_empty_pending_client_and_private_candidate_snapshot() {
+        let (mut request, mut spec) = request_and_spec();
+        request.master = "pending".into();
+        let mut client = Client::create(request).unwrap();
+        let snapshot = "tank/candidate@serviced-test";
+        spec.client_id = client.id.to_string();
+        spec.client_name = client.name.clone();
+        spec.source = StorageSource::Snapshot(snapshot.into());
+
+        assert!(pending_test_client_is_unprovisioned(&client));
+        assert!(private_candidate_source(&spec, &client, snapshot));
+        assert!(matches!(spec.source, StorageSource::Snapshot(_)));
+
+        client.master = "tank/live-image".into();
+        client.block_device = Some("/dev/zvol/tank/live-client".into());
+        assert!(!pending_test_client_is_unprovisioned(&client));
+        assert!(!private_candidate_source(
+            &spec,
+            &client,
+            "tank/other@serviced-test"
+        ));
     }
 
     #[tokio::test]
@@ -397,6 +598,8 @@ mod tests {
             Arc::new(UnexpectedBootPublisher),
         );
         let request = CreateClient {
+            installer_media_id: None,
+            enabled: None,
             name: "PC-01".into(),
             mac: "00:11:22:33:44:66".into(),
             ip: "192.168.1.101".into(),
@@ -412,7 +615,9 @@ mod tests {
             chap_enabled: false,
         };
         let spec = ClientStorageSpec {
+            installer_iso: None,
             client_id: "ignored".into(),
+            client_name: "PC01".into(),
             source: StorageSource::ExistingVolume("tank/win11".into()),
             dataset: "tank/win11".into(),
             backstore: "block_pc01".into(),
@@ -512,5 +717,146 @@ mod tests {
         assert!(boot_published.load(Ordering::SeqCst));
         assert!(boot_removed.load(Ordering::SeqCst));
         assert!(iscsi_removed.load(Ordering::SeqCst));
+    }
+    #[tokio::test]
+    async fn audit_credentials_are_inserted_atomically_and_redacted() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        sqlx::query("CREATE TRIGGER no_credential_update BEFORE UPDATE OF chap_user ON clients BEGIN SELECT RAISE(FAIL, 'credentials must be inserted'); END")
+            .execute(&pool).await.unwrap();
+        let service = ProvisioningService::new(
+            Arc::new(StorageService::new(
+                Arc::new(ExistingVolumeBackend),
+                Arc::new(RecordingIscsi(Arc::new(AtomicBool::new(false)))),
+            )),
+            ClientRepository::new(pool.clone()),
+            Arc::new(RecordingBootPublisher {
+                published: Arc::new(AtomicBool::new(false)),
+                removed: Arc::new(AtomicBool::new(false)),
+            }),
+        );
+        let (mut request, mut spec) = request_and_spec();
+        request.chap_enabled = true;
+        spec.chap = Some(ChapCredentials {
+            username: "test-user".into(),
+            password: "test-secret".into(),
+        });
+        let client = service
+            .create_client(request, spec, "192.168.1.250")
+            .await
+            .unwrap();
+        let credentials = service.clients.chap_credentials(&client.id).await.unwrap();
+        assert_eq!(
+            credentials,
+            (client.chap_user.clone(), client.chap_secret.clone())
+        );
+        let response = serde_json::to_value(&client).unwrap();
+        assert!(response.get("chap_secret").is_none());
+        assert!(response.get("chap_user").is_none());
+    }
+
+    #[tokio::test]
+    async fn audit_game_selection_failure_rolls_back_client_and_infrastructure() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        sqlx::query("CREATE TRIGGER reject_game BEFORE INSERT ON client_game_disks BEGIN SELECT RAISE(FAIL, 'selection failed'); END").execute(&pool).await.unwrap();
+        let removed = Arc::new(AtomicBool::new(false));
+        let boot_removed = Arc::new(AtomicBool::new(false));
+        let service = ProvisioningService::new(
+            Arc::new(StorageService::new(
+                Arc::new(ExistingVolumeBackend),
+                Arc::new(RecordingIscsi(removed.clone())),
+            )),
+            ClientRepository::new(pool.clone()),
+            Arc::new(RecordingBootPublisher {
+                published: Arc::new(AtomicBool::new(false)),
+                removed: boot_removed.clone(),
+            }),
+        );
+        let (mut request, spec) = request_and_spec();
+        request.game_disks = vec!["tank/games/test".into()];
+        assert!(service
+            .create_client(request, spec, "192.168.1.250")
+            .await
+            .is_err());
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM clients")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0
+        );
+        assert!(removed.load(Ordering::SeqCst));
+        assert!(boot_removed.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn audit_delete_retains_client_when_storage_mapping_fails() {
+        let (mut state, _, _, _) = crate::api::security_tests::setup().await;
+        let (mut request, _) = request_and_spec();
+        request.master = "invalid".into();
+        request.target_iqn = Some("iqn.test:pc01".into());
+        let client = Client::create(request).unwrap();
+        let repository = ClientRepository::new(state.db_pool.clone());
+        repository.insert(&client).await.unwrap();
+        let mut application = crate::application::ApplicationServices::new(state.db_pool.clone());
+        application.storage = Arc::new(StorageService::new(
+            Arc::new(UnexpectedImageBackend),
+            Arc::new(UnexpectedIscsi),
+        ));
+        state.application = Arc::new(application);
+        let result = crate::api::handlers::client_delete::delete_client(
+            axum::extract::State(state.clone()),
+            axum::extract::Path(client.id.to_string()),
+        )
+        .await;
+        assert_eq!(result, Err(axum::http::StatusCode::INTERNAL_SERVER_ERROR));
+        assert!(state
+            .application
+            .clients
+            .get_by_string(client.id.as_str())
+            .await
+            .unwrap()
+            .is_some());
+    }
+    #[tokio::test]
+    async fn audit_delete_retains_client_when_target_removal_fails() {
+        let (mut state, _, _, _) = crate::api::security_tests::setup().await;
+        let (mut request, _) = request_and_spec();
+        request.master = format!(
+            "{}/image-disk/test",
+            crate::config::get_zpool_name(&crate::config::RuntimeConfig::default())
+        );
+        request.target_iqn = Some("iqn.test:pc01".into());
+        let client = Client::create(request).unwrap();
+        let repository = ClientRepository::new(state.db_pool.clone());
+        repository.insert(&client).await.unwrap();
+        let mut application = crate::application::ApplicationServices::new(state.db_pool.clone());
+        application.storage = Arc::new(StorageService::new(
+            Arc::new(UnexpectedImageBackend),
+            Arc::new(UnexpectedIscsi),
+        ));
+        state.application = Arc::new(application);
+        let result = crate::api::handlers::client_delete::delete_client(
+            axum::extract::State(state.clone()),
+            axum::extract::Path(client.id.to_string()),
+        )
+        .await;
+        assert_eq!(result, Err(axum::http::StatusCode::INTERNAL_SERVER_ERROR));
+        assert!(state
+            .application
+            .clients
+            .get_by_string(client.id.as_str())
+            .await
+            .unwrap()
+            .is_some());
     }
 }

@@ -23,6 +23,7 @@ const ChainNode = ({
   index,
   isLast,
   masterName,
+  newerSnapshots,
   handleDeleteSnapshot,
   handleRollbackSnapshot,
 }) => (
@@ -38,7 +39,7 @@ const ChainNode = ({
       {!isLast && <span className="w-px flex-1 bg-border" />}
     </div>
     <div className="flex-1 min-w-0 pb-3">
-      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/60 bg-background px-3 py-2 hover:bg-muted/40">
+      <div data-testid="snapshot-actions" className="flex flex-col items-stretch gap-2 rounded-lg border border-border/60 bg-background px-3 py-2 hover:bg-muted/40 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <span className=" text-xs break-all">
@@ -50,13 +51,15 @@ const ChainNode = ({
               </Badge>
             )}
           </div>
-          <div className="text-muted-foreground text-xs mt-0.5 whitespace-nowrap">
+          <div className="text-muted-foreground mt-0.5 break-words text-xs sm:whitespace-nowrap">
             #{index + 1} &middot; {snap.created} &middot; {snap.used}
           </div>
         </div>
-        <div className="flex space-x-1 flex-shrink-0">
+        <div className="flex shrink-0 justify-end gap-1 sm:space-x-1">
           <Button
-            onClick={() => handleRollbackSnapshot(snap.name, masterName)}
+            onClick={() =>
+              handleRollbackSnapshot(snap.name, masterName, newerSnapshots)
+            }
             variant="info"
             size="icon"
             className="min-h-[36px] min-w-[36px]"
@@ -140,6 +143,7 @@ export const SnapshotsList = ({ master }) => {
                 index={index}
                 isLast={index === snapshots.length - 1}
                 masterName={master.name}
+                newerSnapshots={snapshots.slice(index + 1)}
                 handleDeleteSnapshot={handleDeleteSnapshot}
                 handleRollbackSnapshot={handleRollbackSnapshot}
               />

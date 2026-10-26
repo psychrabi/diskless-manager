@@ -148,6 +148,30 @@ const ScheduledOperationsList = ({ isOpen, onClose }) => {
               </p>
             </div>
           ) : (
+            <>
+            <div className="space-y-3 md:hidden">
+              {operations.map((operation) => (
+                <article key={operation.id} data-testid="scheduled-operation-mobile-card" className="rounded-lg border bg-card p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <h3 className="truncate font-semibold">{getClientName(operation.client_id)}</h3>
+                      <p className="mt-1 text-sm text-muted-foreground">{formatTimestamp(operation.scheduled_time)}</p>
+                    </div>
+                    <Badge variant="outline">{operation.result || "Pending"}</Badge>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Badge variant={getOperationBadgeVariant(operation.operation_type)}>{operation.operation_type}</Badge>
+                    <Badge variant={getModeBadgeVariant(operation.operation_mode)}>{operation.operation_mode}</Badge>
+                  </div>
+                  <div className="mt-3 flex justify-end border-t pt-3">
+                    <Button variant="outline" size="sm" onClick={() => handleCancelOperation(operation.id)} disabled={cancellingId === operation.id}>
+                      <Trash2 data-icon="inline-start" />{cancellingId === operation.id ? "Cancelling..." : "Cancel"}
+                    </Button>
+                  </div>
+                </article>
+              ))}
+            </div>
+            <div className="hidden overflow-x-auto md:block">
             <Table className="overflow-hidden rounded-lg border border-border">
               <TableHeader>
                 <TableRow className="bg-muted/50">
@@ -198,6 +222,8 @@ const ScheduledOperationsList = ({ isOpen, onClose }) => {
                 ))}
               </TableBody>
             </Table>
+            </div>
+            </>
           )}
         </div>
       </div>

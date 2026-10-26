@@ -33,30 +33,30 @@ export const useMasterManager = () => {
     }
   }, [confirm, fetchMasters, success, error]);
 
-  const handleRollbackSnapshot = useCallback(async (snapshot, image) => {
+  const handleRollbackSnapshot = useCallback(async (snapshot, image, newerSnapshots = []) => {
     if (!snapshot || !image) return;
-    confirm({
-      title: "Rollback Snapshot",
-      description: `Are you sure you want to rollback snapshot "${snapshot}" for image "${image}"? This action cannot be undone and might affect clones.`,
-      confirmText: "Rollback Snapshot",
-      cancelText: "Cancel",
-      confirmVariant: "primary",
-      size: "2xl",
-    })
-      .then((ok) => {
-        if (!ok) return;
-        rollbackImageSnapshot(image, snapshot)
-          .then(async (response) => {
-            await fetchMasters();
-            if (response.message) success(response.message);
-          })
-          .catch((err) => {
-            error(err?.error || String(err));
-          });
-      })
-      .catch((err) => {
-        console.error("Confirmation dialog error:", err);
+    const newerNames = newerSnapshots.map((entry) => entry.name);
+    const newerSummary = newerNames.length
+      ? `This permanently deletes ${newerNames.length} newer recovery point${
+          newerNames.length === 1 ? "" : "s"
+        }: ${newerNames.join(", ")}.`
+      : "No newer recovery points will be deleted.";
+    try {
+      const ok = await confirm({
+        title: "Rollback Snapshot",
+        description: `Restore image "${image}" to snapshot "${snapshot}"? ${newerSummary} Clients assigned to newer recovery points must be reassigned first. This cannot be undone.`,
+        confirmText: "Rollback Snapshot",
+        cancelText: "Cancel",
+        confirmVariant: newerNames.length ? "destructive" : "primary",
+        size: "2xl",
       });
+      if (!ok) return;
+      const response = await rollbackImageSnapshot(image, snapshot, newerNames);
+      await fetchMasters();
+      if (response.message) success(response.message);
+    } catch (err) {
+      error(err?.error || err?.message || String(err));
+    }
   }, [confirm, fetchMasters, success, error]);
 
   const setDefaultMaster = useCallback(async (masterName) => {
@@ -89,7 +89,7 @@ export const useMasterManager = () => {
           success("Image Management", "Image deleted successfully");
           await fetchMasters();
         } catch (err) {
-          error(err?.error || "Unknown error");
+          error(err?.message || err?.error || String(err));
         }
       })
       .catch((err) => {

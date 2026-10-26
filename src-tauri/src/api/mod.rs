@@ -7,7 +7,9 @@ pub mod server;
 pub mod util;
 
 #[cfg(test)]
-mod security_tests;
+pub(crate) mod installation_tests;
+#[cfg(test)]
+pub(crate) mod security_tests;
 
 #[cfg(test)]
 mod backup_setup_tests;

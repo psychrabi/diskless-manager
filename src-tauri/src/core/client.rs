@@ -5,7 +5,7 @@ use sqlx::sqlite::SqlitePool;
 use uuid::Uuid;
 
 /// Core Client type with DateTime fields for business logic
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Client {
     pub id: String,
     pub name: String,
@@ -26,6 +26,7 @@ pub struct Client {
     pub pxe_mode: Option<String>,
     pub keep_writeback: Option<bool>,
     pub use_game_disk: Option<bool>,
+    pub installer_media_id: Option<String>,
     #[serde(skip_serializing)]
     pub chap_user: Option<String>,
     #[serde(skip_serializing)]
@@ -39,6 +40,7 @@ pub struct CreateClientRequest {
     pub mac: String,
     pub ip: String,
     pub master: String,
+    pub enabled: Option<bool>,
     pub snapshot: Option<String>,
     pub keep_writeback: Option<bool>,
     pub use_game_disk: Option<bool>,
@@ -49,15 +51,18 @@ pub struct CreateClientRequest {
     pub block_store: Option<String>,
     pub block_device: Option<String>,
     pub target_iqn: Option<String>,
+    pub installer_media_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UpdateClientRequest {
     pub name: Option<String>,
     pub mac: Option<String>,
     pub ip: Option<String>,
     pub master: Option<String>,
     pub snapshot: Option<String>,
+    /// Set when a full client form selects or clears installation media.
+    pub installer_media_id: Option<String>,
     pub keep_writeback: Option<bool>,
     pub use_game_disk: Option<bool>,
     /// Explicit per-client game master selection. `None` keeps the stored
@@ -97,7 +102,7 @@ impl Client {
             mac,
             ip: req.ip,
             master: req.master,
-            enabled: true,
+            enabled: req.enabled.unwrap_or(true),
             created_at: Utc::now(),
             updated_at: Utc::now(),
             snapshot: req.snapshot,
@@ -111,6 +116,7 @@ impl Client {
             pxe_mode: Some("uefi".to_string()),
             keep_writeback: req.keep_writeback,
             use_game_disk: req.use_game_disk,
+            installer_media_id: req.installer_media_id,
             chap_user: None,
             chap_secret: None,
             chap_enabled: None,
@@ -144,7 +150,22 @@ impl Client {
 
     /// Check if client has a snapshot assigned
     pub fn has_snapshot(&self) -> bool {
-        self.snapshot.is_some() && !self.snapshot.as_ref().is_some_and(|s| s.is_empty())
+        self.snapshot
+            .as_deref()
+            .is_some_and(|s| !s.trim().is_empty())
+    }
+
+    /// Whether this client's storage points at an image directly, with no
+    /// clone of a snapshot.
+    pub fn is_direct_image_assignment(&self) -> bool {
+        let master = self.master.trim();
+        !master.is_empty() && !master.eq_ignore_ascii_case("pending") && !self.has_snapshot()
+    }
+
+    /// Whether this client is the super client. The assignment decides, not
+    /// only the stored mode flag.
+    pub fn is_super_client(&self) -> bool {
+        self.is_super_mode() || self.is_direct_image_assignment()
     }
 }
 
@@ -198,6 +219,7 @@ struct ClientRow {
     chap_user: Option<String>,
     chap_secret: Option<String>,
     chap_enabled: Option<bool>,
+    installer_media_id: Option<String>,
 }
 
 impl ClientManager {
@@ -214,8 +236,8 @@ impl ClientManager {
                 id, name, mac, ip, master, snapshot, block_store, target_iqn,
                 writeback, block_device, status, mode, pxe_mode, keep_writeback,
                 use_game_disk, chap_user, chap_secret, chap_enabled,
-                created_at, last_modified, enabled, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                installer_media_id, created_at, last_modified, enabled, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name, mac = excluded.mac, ip = excluded.ip,
                 master = excluded.master, snapshot = excluded.snapshot,
@@ -225,6 +247,7 @@ impl ClientManager {
                 keep_writeback = excluded.keep_writeback, use_game_disk = excluded.use_game_disk,
                 chap_user = excluded.chap_user, chap_secret = excluded.chap_secret,
                 chap_enabled = excluded.chap_enabled,
+                installer_media_id = excluded.installer_media_id,
                 created_at = excluded.created_at, last_modified = excluded.last_modified,
                 enabled = excluded.enabled, updated_at = excluded.updated_at
             "#,
@@ -247,6 +270,7 @@ impl ClientManager {
         .bind(&client.chap_user)
         .bind(&client.chap_secret)
         .bind(client.chap_enabled.unwrap_or(false))
+        .bind(&client.installer_media_id)
         .bind(client.created_at.to_rfc3339())
         .bind(&client.last_modified)
         .bind(client.enabled)
@@ -260,10 +284,33 @@ impl ClientManager {
     pub async fn list(&self) -> anyhow::Result<Vec<Client>> {
         let rows = sqlx::query_as::<_, ClientRow>(
             r#"
-            SELECT id, name, mac, ip, master, enabled, created_at, updated_at,
-                   snapshot, block_store, target_iqn, writeback, last_modified,
-                   block_device, status, mode, keep_writeback, use_game_disk,
-                   chap_user, chap_secret, chap_enabled
+            SELECT
+                CAST(id AS TEXT) AS id,
+                CAST(name AS TEXT) AS name,
+                CAST(mac AS TEXT) AS mac,
+                CAST(ip AS TEXT) AS ip,
+                CAST(master AS TEXT) AS master,
+                CASE WHEN enabled <> 0 THEN 1 ELSE 0 END AS enabled,
+                CAST(created_at AS TEXT) AS created_at,
+                CAST(updated_at AS TEXT) AS updated_at,
+                CAST(snapshot AS TEXT) AS snapshot,
+                CAST(block_store AS TEXT) AS block_store,
+                CAST(target_iqn AS TEXT) AS target_iqn,
+                CAST(writeback AS TEXT) AS writeback,
+                CAST(last_modified AS TEXT) AS last_modified,
+                CAST(block_device AS TEXT) AS block_device,
+                CAST(status AS TEXT) AS status,
+                CAST(mode AS TEXT) AS mode,
+                CAST(pxe_mode AS TEXT) AS pxe_mode,
+                CASE WHEN keep_writeback IS NULL THEN NULL
+                     WHEN keep_writeback <> 0 THEN 1 ELSE 0 END AS keep_writeback,
+                CASE WHEN use_game_disk IS NULL THEN NULL
+                     WHEN use_game_disk <> 0 THEN 1 ELSE 0 END AS use_game_disk,
+                CASE WHEN typeof(chap_user) = 'text' THEN chap_user END AS chap_user,
+                CASE WHEN typeof(chap_secret) = 'text' THEN chap_secret END AS chap_secret,
+                CASE WHEN chap_enabled IS NULL THEN NULL
+                     WHEN chap_enabled <> 0 THEN 1 ELSE 0 END AS chap_enabled,
+                CAST(installer_media_id AS TEXT) AS installer_media_id
             FROM clients
             ORDER BY name
             "#,
@@ -306,6 +353,7 @@ impl ClientManager {
                 chap_user: row.chap_user,
                 chap_secret: row.chap_secret,
                 chap_enabled: row.chap_enabled,
+                installer_media_id: row.installer_media_id,
             })
             .collect();
 
@@ -315,10 +363,33 @@ impl ClientManager {
     pub async fn get(&self, id: &str) -> anyhow::Result<Client> {
         let row = sqlx::query_as::<_, ClientRow>(
             r#"
-            SELECT id, name, mac, ip, master, enabled, created_at, updated_at,
-                   snapshot, block_store, target_iqn, writeback, last_modified,
-                   block_device, status, mode, keep_writeback, use_game_disk,
-                   chap_user, chap_secret, chap_enabled
+            SELECT
+                CAST(id AS TEXT) AS id,
+                CAST(name AS TEXT) AS name,
+                CAST(mac AS TEXT) AS mac,
+                CAST(ip AS TEXT) AS ip,
+                CAST(master AS TEXT) AS master,
+                CASE WHEN enabled <> 0 THEN 1 ELSE 0 END AS enabled,
+                CAST(created_at AS TEXT) AS created_at,
+                CAST(updated_at AS TEXT) AS updated_at,
+                CAST(snapshot AS TEXT) AS snapshot,
+                CAST(block_store AS TEXT) AS block_store,
+                CAST(target_iqn AS TEXT) AS target_iqn,
+                CAST(writeback AS TEXT) AS writeback,
+                CAST(last_modified AS TEXT) AS last_modified,
+                CAST(block_device AS TEXT) AS block_device,
+                CAST(status AS TEXT) AS status,
+                CAST(mode AS TEXT) AS mode,
+                CAST(pxe_mode AS TEXT) AS pxe_mode,
+                CASE WHEN keep_writeback IS NULL THEN NULL
+                     WHEN keep_writeback <> 0 THEN 1 ELSE 0 END AS keep_writeback,
+                CASE WHEN use_game_disk IS NULL THEN NULL
+                     WHEN use_game_disk <> 0 THEN 1 ELSE 0 END AS use_game_disk,
+                CASE WHEN typeof(chap_user) = 'text' THEN chap_user END AS chap_user,
+                CASE WHEN typeof(chap_secret) = 'text' THEN chap_secret END AS chap_secret,
+                CASE WHEN chap_enabled IS NULL THEN NULL
+                     WHEN chap_enabled <> 0 THEN 1 ELSE 0 END AS chap_enabled,
+                CAST(installer_media_id AS TEXT) AS installer_media_id
             FROM clients
             WHERE id = ? OR name = ? OR mac = ?
             "#,
@@ -364,6 +435,7 @@ impl ClientManager {
             chap_user: row.chap_user,
             chap_secret: row.chap_secret,
             chap_enabled: row.chap_enabled,
+            installer_media_id: row.installer_media_id,
         })
     }
 
@@ -378,6 +450,7 @@ impl ClientManager {
 
     pub async fn update(&self, id: &str, req: UpdateClientRequest) -> anyhow::Result<Client> {
         let mut client = self.get(id).await?;
+        let full_form_update = req.master.is_some();
 
         if let Some(name) = req.name {
             client.name = name;
@@ -390,6 +463,9 @@ impl ClientManager {
         }
         if let Some(master) = req.master {
             client.master = master;
+        }
+        if full_form_update {
+            client.installer_media_id = req.installer_media_id;
         }
         client.snapshot = req.snapshot;
         // Storage pointers are only overwritten when the request carries
@@ -529,14 +605,40 @@ impl ClientManager {
     }
 }
 
+impl std::fmt::Debug for Client {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Client")
+            .field("id", &self.id)
+            .field("name", &self.name)
+            .field("chap_enabled", &self.chap_enabled)
+            .finish_non_exhaustive()
+    }
+}
+
 #[cfg(test)]
 mod response_tests {
-    use super::Client;
+    use super::{Client, ClientManager};
     use chrono::Utc;
+
+    #[test]
+    fn super_detection_normalizes_snapshot_and_pending() {
+        let mut client = Client::new(
+            serde_json::from_value(serde_json::json!({
+                "name": "PC001", "mac": "00:11:22:33:44:55", "ip": "192.0.2.1",
+                "master": "tank/windows", "snapshot": "  "
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(client.is_super_client());
+        client.master = "  PENDING  ".into();
+        assert!(!client.is_super_client());
+    }
 
     #[test]
     fn serialized_clients_do_not_include_chap_credentials() {
         let client = Client {
+            installer_media_id: None,
             id: "id".to_string(),
             name: "PC001".to_string(),
             mac: "00:11:22:33:44:55".to_string(),
@@ -561,8 +663,34 @@ mod response_tests {
             chap_enabled: Some(true),
         };
 
+        assert!(!format!("{client:?}").contains("secret"));
         let encoded = serde_json::to_value(client).unwrap();
         assert!(encoded.get("chap_user").is_none());
         assert!(encoded.get("chap_secret").is_none());
+    }
+
+    #[tokio::test]
+    async fn lookup_handles_non_text_legacy_chap_values() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory database should open");
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await
+            .expect("database should migrate");
+        sqlx::query("INSERT INTO clients (id, name, mac, ip, master, created_at, updated_at, chap_secret) VALUES ('legacy-id', 'PC001', '00:11:22:33:44:55', '192.168.1.10', 'pool/master', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', X'FF')")
+            .execute(&pool)
+            .await
+            .expect("legacy row should be inserted");
+
+        let client = ClientManager::new(pool)
+            .get("legacy-id")
+            .await
+            .expect("non-text CHAP values should not hide existing clients");
+
+        assert_eq!(client.id, "legacy-id");
+        assert_eq!(client.chap_secret, None);
     }
 }

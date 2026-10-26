@@ -18,18 +18,18 @@ impl ConfigfsProvisioner {
     pub const fn new() -> Self {
         Self
     }
-    pub(crate) fn probe() -> bool {
-        matches!(Self::request(Operation::Probe), Ok(Reply::Unit))
-    }
-    /// Persist LIO state for boot. Native when available, otherwise the
-    /// legacy `targetcli saveconfig` (old installations only).
+    /// Persist LIO state for boot using the explicitly selected native backend.
     pub(crate) fn save_config() -> Result<()> {
-        if Self::probe() {
-            return Self::unit(Operation::Save);
-        }
-        crate::infrastructure::command::run_command(["targetcli", "saveconfig"])
-            .map_err(anyhow::Error::from)
-            .context("targetcli saveconfig failed")
+        Self::unit(Operation::Save)
+    }
+    /// Check the installed privileged command and initialized LIO before any
+    /// native mutation is selected for this server process.
+    pub(crate) fn probe() -> Result<()> {
+        ensure!(
+            matches!(Self::request(Operation::Probe)?, Reply::Unit),
+            "unexpected native iSCSI probe response"
+        );
+        Ok(())
     }
     fn request(operation: Operation) -> Result<Reply> {
         let input = serde_json::to_vec(&Request {
@@ -81,6 +81,12 @@ impl ConfigfsProvisioner {
 }
 
 impl IscsiProvisioner for ConfigfsProvisioner {
+    fn ensure_initiator_acl(&self, spec: &IscsiTargetSpec) -> Result<()> {
+        if spec.initiator_iqn.is_some() {
+            Self::unit(Operation::EnsureAcl(spec.clone()))?;
+        }
+        Ok(())
+    }
     fn create_target(&self, spec: &IscsiTargetSpec) -> Result<()> {
         self.create_target_transaction(spec).map(|_| ())
     }
@@ -136,9 +142,17 @@ impl IscsiProvisioner for ConfigfsProvisioner {
             _ => bail!("unexpected native iSCSI response"),
         }
     }
+    fn verify_named_file_lun_mappings(&self, spec: &IscsiTargetSpec) -> Result<()> {
+        match Self::request(Operation::VerifyFileMappings(spec.clone()))? {
+            Reply::Unit => Ok(()),
+            _ => bail!("unexpected native iSCSI response"),
+        }
+    }
     fn reconcile(&self, spec: &IscsiTargetSpec) -> Result<()> {
         if !self.inspect_target(spec)?.is_ready() {
             self.create_target(spec)?;
+        } else {
+            self.ensure_initiator_acl(spec)?;
         }
         Ok(())
     }

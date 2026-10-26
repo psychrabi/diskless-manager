@@ -35,7 +35,7 @@ pub async fn add_client_impl(
     let mut master = req.master.trim().to_string();
 
     if master.is_empty() {
-        let config = get_config();
+        let config = get_config(&state.config);
 
         if let Some(default) = config
             .settings
@@ -55,7 +55,7 @@ pub async fn add_client_impl(
         .map(|value| value.trim().to_string())
         .unwrap_or_default();
 
-    if let Some(duplicate) = check_duplicate_client(&name, &mac, &ip) {
+    if let Some(duplicate) = check_duplicate_client(&state.config, &name, &mac, &ip) {
         return Err(AppError::Validation(duplicate));
     }
 
@@ -85,10 +85,16 @@ pub async fn add_client_impl(
     let dataset = if snapshot.is_empty() {
         master.clone()
     } else {
-        crate::infrastructure::zfs::legacy::get_writeback_or_default_dataset(&name)
+        crate::infrastructure::zfs::legacy::get_writeback_or_default_dataset_async(
+            &state.config,
+            &name,
+        )
+        .await
     };
     let storage_spec = ClientStorageSpec {
+        installer_iso: None,
         client_id: name.clone(),
+        client_name: name.clone(),
         source,
         dataset,
         backstore: format!("block_{}", name.to_lowercase()),
@@ -108,6 +114,8 @@ pub async fn add_client_impl(
         .provisioning
         .create_client(
             crate::domain::CreateClient {
+                installer_media_id: None,
+                enabled: None,
                 name: name.clone(),
                 mac,
                 ip,

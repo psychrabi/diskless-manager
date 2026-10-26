@@ -90,9 +90,12 @@ export const useAppStore = create()(
 
       return {
         clients: [],
+        clientsError: null,
         masters: [],
+        mastersError: null,
         images: [],
         services: [],
+        servicesError: null,
         dependencies: [],
         services_status: {},
         zpoolStats: null,
@@ -125,19 +128,31 @@ export const useAppStore = create()(
         licenseInfo: null, // Added
         _pollIntervalId: null, // Added
 
-        fetchClients: async () =>
-          runRequest(
-            () => listClients(),
-            (clientsData) => set({ clients: clientsData || [] }),
-            "Failed to fetch clients:"
-          ),
+        fetchClients: async () => {
+          try {
+            const clientsData = await listClients();
+            set({ clients: clientsData || [], clientsError: null });
+            return clientsData;
+          } catch (err) {
+            console.error("Failed to fetch clients:", err);
+            set({
+              clientsError: err?.message || "Unable to load clients.",
+            });
+            return null;
+          }
+        },
 
-        fetchMasters: async () =>
-          runRequest(
-            () => listMasters(),
-            (mastersRes) => set({ masters: mastersRes || [] }),
-            "Failed to fetch masters:"
-          ),
+        fetchMasters: async () => {
+          try {
+            const mastersRes = await listMasters();
+            set({ masters: mastersRes || [], mastersError: null });
+            return mastersRes;
+          } catch (err) {
+            console.error("Failed to fetch masters:", err);
+            set({ mastersError: err?.message || "Unable to load images." });
+            return null;
+          }
+        },
 
         fetchImages: async () =>
           runRequest(
@@ -206,12 +221,22 @@ export const useAppStore = create()(
           }
         },
 
-        fetchServices: async () =>
-          runRequest(
-            () => listServices(),
-            (servicesRes) => set({ services: normalizeServices(servicesRes) }),
-            "Failed to fetch services:"
-          ),
+        fetchServices: async () => {
+          try {
+            const servicesRes = await listServices();
+            set({
+              services: normalizeServices(servicesRes),
+              servicesError: null,
+            });
+            return servicesRes;
+          } catch (err) {
+            console.error("Failed to fetch services:", err);
+            set({
+              servicesError: err?.message || "Unable to load services.",
+            });
+            return null;
+          }
+        },
 
         startService: async (name, authToken) =>
           runServiceAction({

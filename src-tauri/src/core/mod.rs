@@ -1,3 +1,4 @@
+pub mod alarm;
 pub mod client;
 pub mod config;
 pub mod dhcp_reconciliation;

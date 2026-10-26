@@ -1,8 +1,9 @@
+use super::ClientMutationLocks;
 use crate::application::ApplicationServices;
 use crate::core::config::Settings;
 use crate::metrics::MetricsCollector;
 use crate::ssh_executor::SshExecutor;
-use log::info;
+use log::{info, warn};
 use sqlx::sqlite::SqlitePool;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -10,8 +11,9 @@ use tokio::sync::RwLock;
 
 #[derive(Clone)]
 pub struct AppState {
-    /// Serializes client configuration writes and automatic storage resets.
-    pub client_mutations: Arc<tokio::sync::Mutex<()>>,
+    pub config: crate::config::RuntimeConfig,
+    /// Serializes mutations per client and provides a barrier for fleet-wide operations.
+    pub client_mutations: ClientMutationLocks,
     pub settings: Arc<RwLock<Settings>>,
     pub db_pool: SqlitePool,
     pub config_path: PathBuf,
@@ -23,6 +25,53 @@ pub struct AppState {
 }
 
 impl AppState {
+    pub fn hardware_identity_service(
+        &self,
+    ) -> crate::application::hardware_identity_service::HardwareIdentityService {
+        crate::application::hardware_identity_service::HardwareIdentityService::new(
+            crate::application::hardware_identity_service::HardwareIdentityDeps {
+                repository: crate::persistence::repositories::hardware_identity::HardwareIdentityRepository::new(self.db_pool.clone()),
+                clients: self.application.client_repository.clone(),
+                backend: self.application.image_backend.clone(),
+                storage: self.application.storage.clone(),
+                iscsi: self.application.iscsi.clone(),
+                mutation_locks: self.client_mutations.clone(),
+            }
+        )
+    }
+    /// Builds the installer-media service from the current configured boot root and upload cap.
+    pub async fn installer_media_service(
+        &self,
+    ) -> crate::application::installer_media_service::InstallerMediaService {
+        let settings = self.settings.read().await;
+        crate::application::installer_media_service::InstallerMediaService::new(
+            &settings.http.root_dir,
+            settings.installer_media.max_upload_bytes as u64,
+            self.application.installer_media.clone(),
+            self.application.super_sessions.clone(),
+        )
+    }
+
+    pub async fn super_client_service(
+        &self,
+    ) -> crate::application::super_client_service::SuperClientService {
+        let settings = self.settings.read().await.clone();
+        crate::application::super_client_service::SuperClientService::new(
+            crate::application::super_client_service::SuperClientServiceDeps {
+                clients: self.application.client_repository.clone(),
+                media: self.application.installer_media.clone(),
+                sessions: self.application.super_sessions.clone(),
+                images: self.application.images.clone(),
+                storage: self.application.storage.clone(),
+                iscsi: self.application.iscsi.clone(),
+                config: self.config.clone(),
+                settings,
+                media_service: self.installer_media_service().await,
+                mutation_locks: self.client_mutations.clone(),
+            },
+        )
+    }
+
     pub async fn new() -> anyhow::Result<Self> {
         // Determine config directory - use same as existing diskless-manager
         let config_dir = dirs::config_dir()
@@ -55,11 +104,10 @@ impl AppState {
 
         // Run migrations
         Self::init_database(&pool).await?;
-        let application = Arc::new(ApplicationServices::new(pool.clone()));
-
-        // Load config from database and populate the cache
+        let runtime_config = crate::config::RuntimeConfig::default();
+        // Load the instance-owned configuration snapshot.
         if let Ok(config) = crate::config::read_config_db(&pool).await {
-            crate::config::set_config(&config);
+            crate::config::set_config(&runtime_config, &config);
             // Sync settings from DB to the current settings struct if available
             if let Ok(db_settings) = serde_json::from_value::<Settings>(config.settings) {
                 if db_settings.validate().is_ok() {
@@ -71,14 +119,40 @@ impl AppState {
             }
         }
 
+        let mut config = crate::config::get_config(&runtime_config);
+        let typed_settings = serde_json::to_value(&settings)?;
+        if let (Some(existing), Some(typed)) =
+            (config.settings.as_object_mut(), typed_settings.as_object())
+        {
+            existing.extend(typed.clone());
+        } else {
+            config.settings = typed_settings;
+        }
+        crate::config::set_config(&runtime_config, &config);
+
+        let application = Arc::new(ApplicationServices::with_iscsi_backend(
+            pool.clone(),
+            settings.iscsi.backend,
+            runtime_config.clone(),
+        ));
+        crate::application::installer_media_service::InstallerMediaService::new(
+            &settings.http.root_dir,
+            settings.installer_media.max_upload_bytes as u64,
+            application.installer_media.clone(),
+            application.super_sessions.clone(),
+        )
+        .reconcile_storage()
+        .await?;
+
         info!("Database initialized at {}", db_path.display());
 
         // Load all client IPs from database
         let client_ips = Self::load_client_ips(&pool).await?;
         info!("Loaded {} client IPs from database", client_ips.len());
 
-        Ok(Self {
-            client_mutations: Arc::new(tokio::sync::Mutex::new(())),
+        let state = Self {
+            config: runtime_config,
+            client_mutations: ClientMutationLocks::default(),
             settings: Arc::new(RwLock::new(settings)),
             db_pool: pool,
             config_path,
@@ -86,7 +160,25 @@ impl AppState {
             metrics_collector: Arc::new(MetricsCollector::default()),
             ssh_executor: Arc::new(SshExecutor::new()),
             application,
-        })
+        };
+        state
+            .super_client_service()
+            .await
+            .recover_incomplete()
+            .await?;
+        crate::persistence::repositories::installation::InstallationRepository::new(
+            state.db_pool.clone(),
+        )
+        .recover_interrupted()
+        .await?;
+        state.hardware_identity_service().recover_pending().await?;
+        let interrupted =
+            crate::application::windows_servicing::recover_interrupted_revisions(&state.db_pool)
+                .await?;
+        if interrupted > 0 {
+            warn!("Abandoned {interrupted} interrupted Windows driver revision(s)");
+        }
+        Ok(state)
     }
 
     /// Load all client IPs from the database
@@ -106,11 +198,45 @@ impl AppState {
     }
 
     async fn init_database(pool: &SqlitePool) -> anyhow::Result<()> {
+        Self::ensure_legacy_columns(pool).await?;
+
         static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
         MIGRATOR.run(pool).await?;
 
-        // Databases created before versioned migrations may already contain a
-        // narrow clients table. Expand it in place without rewriting rows.
+        Self::ensure_clients_columns(pool).await?;
+        Self::migrate_legacy_images(pool).await?;
+        Self::create_support_tables(pool).await?;
+        Self::create_indexes(pool).await?;
+
+        Ok(())
+    }
+
+    /// Add columns that must exist before the versioned migration runner executes.
+    async fn ensure_legacy_columns(pool: &SqlitePool) -> anyhow::Result<()> {
+        // Legacy unversioned images need these columns before the table-rebuild migration.
+        let images_exist: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'images'",
+        )
+        .fetch_one(pool)
+        .await?;
+        if images_exist != 0 {
+            Self::ensure_column(pool, "images", "kind", "TEXT NOT NULL DEFAULT 'master'").await?;
+            Self::ensure_column(pool, "images", "source_snapshot", "TEXT").await?;
+        }
+        // Migration 0011 rebuilds boot-test rows and reads clients.snapshot.
+        // Older unversioned databases can have clients before that column was
+        // introduced, so add it before the migration runner reaches 0011.
+        let clients_exist: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'clients'",
+        )
+        .fetch_one(pool)
+        .await?;
+        if clients_exist != 0 {
+            Self::ensure_column(pool, "clients", "snapshot", "TEXT").await?;
+        }
+        Ok(())
+    }
+    async fn ensure_clients_columns(pool: &SqlitePool) -> anyhow::Result<()> {
         for (column, definition) in [
             ("snapshot", "TEXT"),
             ("block_store", "TEXT"),
@@ -126,41 +252,48 @@ impl AppState {
             ("chap_user", "TEXT"),
             ("chap_secret", "TEXT"),
             ("chap_enabled", "INTEGER NOT NULL DEFAULT 0"),
+            (
+                "installer_media_id",
+                "TEXT REFERENCES installer_media(id) ON DELETE RESTRICT",
+            ),
         ] {
             Self::ensure_column(pool, "clients", column, definition).await?;
         }
-
+        Ok(())
+    }
+    /// Backfill the ImageKind columns and reclassify legacy image records.
+    async fn migrate_legacy_images(pool: &SqlitePool) -> anyhow::Result<()> {
         sqlx::query(
             r#"
-            CREATE TABLE IF NOT EXISTS images (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL UNIQUE,
-                kind TEXT NOT NULL DEFAULT 'master',
-                os_type TEXT NOT NULL,
-                size_gb INTEGER NOT NULL,
-                path TEXT NOT NULL,
-                format TEXT NOT NULL DEFAULT 'raw',
-                status TEXT NOT NULL DEFAULT 'ready',
-                description TEXT,
-                parent_id TEXT,
-                source_snapshot TEXT,
-                tags TEXT,
-                checksum TEXT,
-                is_default INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-            "#,
+        CREATE TABLE IF NOT EXISTS images (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            kind TEXT NOT NULL DEFAULT 'master',
+            os_type TEXT NOT NULL,
+            size_gb INTEGER NOT NULL,
+            path TEXT NOT NULL,
+            format TEXT NOT NULL DEFAULT 'raw',
+            status TEXT NOT NULL DEFAULT 'ready',
+            description TEXT,
+            parent_id TEXT,
+            source_snapshot TEXT,
+            tags TEXT,
+            checksum TEXT,
+            is_default INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
         )
         .execute(pool)
         .await?;
 
         let has_kind: i64 = sqlx::query_scalar(
             r#"
-            SELECT COUNT(*)
-            FROM pragma_table_info('images')
-            WHERE name = 'kind'
-            "#,
+        SELECT COUNT(*)
+        FROM pragma_table_info('images')
+        WHERE name = 'kind'
+        "#,
         )
         .fetch_one(pool)
         .await?;
@@ -168,9 +301,9 @@ impl AppState {
         if has_kind == 0 {
             sqlx::query(
                 r#"
-                ALTER TABLE images
-                ADD COLUMN kind TEXT NOT NULL DEFAULT 'master'
-                "#,
+            ALTER TABLE images
+            ADD COLUMN kind TEXT NOT NULL DEFAULT 'master'
+            "#,
             )
             .execute(pool)
             .await?;
@@ -178,10 +311,10 @@ impl AppState {
 
         let has_source_snapshot: i64 = sqlx::query_scalar(
             r#"
-            SELECT COUNT(*)
-            FROM pragma_table_info('images')
-            WHERE name = 'source_snapshot'
-            "#,
+        SELECT COUNT(*)
+        FROM pragma_table_info('images')
+        WHERE name = 'source_snapshot'
+        "#,
         )
         .fetch_one(pool)
         .await?;
@@ -189,9 +322,9 @@ impl AppState {
         if has_source_snapshot == 0 {
             sqlx::query(
                 r#"
-                ALTER TABLE images
-                ADD COLUMN source_snapshot TEXT
-                "#,
+            ALTER TABLE images
+            ADD COLUMN source_snapshot TEXT
+            "#,
             )
             .execute(pool)
             .await?;
@@ -206,44 +339,46 @@ impl AppState {
 
         sqlx::query(
             r#"
-            UPDATE images
-            SET kind = 'snapshot'
-            WHERE
-                parent_id IS NOT NULL
-                AND description LIKE 'Snapshot of %'
-                AND (kind IS NULL OR kind = 'master')
-            "#,
+        UPDATE images
+        SET kind = 'snapshot'
+        WHERE
+            parent_id IS NOT NULL
+            AND description LIKE 'Snapshot of %'
+            AND (kind IS NULL OR kind = 'master')
+        "#,
         )
         .execute(pool)
         .await?;
 
         sqlx::query(
             r#"
-            UPDATE images
-            SET
-                kind = 'clone',
-                source_snapshot = CASE
-                    WHEN instr(description, '@') > 0
-                    THEN substr(description, instr(description, '@') + 1)
-                    ELSE source_snapshot
-                END
-            WHERE
-                parent_id IS NOT NULL
-                AND description LIKE 'Clone of %@%'
-                AND (kind IS NULL OR kind = 'master')
-            "#,
+        UPDATE images
+        SET
+            kind = 'clone',
+            source_snapshot = CASE
+                WHEN instr(description, '@') > 0
+                THEN substr(description, instr(description, '@') + 1)
+                ELSE source_snapshot
+            END
+        WHERE
+            parent_id IS NOT NULL
+            AND description LIKE 'Clone of %@%'
+            AND (kind IS NULL OR kind = 'master')
+        "#,
         )
         .execute(pool)
         .await?;
-
+        Ok(())
+    }
+    async fn create_support_tables(pool: &SqlitePool) -> anyhow::Result<()> {
         // App configuration table (for masters, services, settings JSON blobs)
         sqlx::query(
             r#"
-            CREATE TABLE IF NOT EXISTS app_config (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )
-            "#,
+        CREATE TABLE IF NOT EXISTS app_config (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+        "#,
         )
         .execute(pool)
         .await?;
@@ -251,23 +386,23 @@ impl AppState {
         // Images table
         sqlx::query(
             r#"
-            CREATE TABLE IF NOT EXISTS images (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL UNIQUE,
-                os_type TEXT NOT NULL,
-                size_gb INTEGER NOT NULL,
-                path TEXT NOT NULL,
-                format TEXT NOT NULL DEFAULT 'raw',
-                status TEXT NOT NULL DEFAULT 'ready',
-                description TEXT,
-                parent_id TEXT,
-                tags TEXT,
-                checksum TEXT,
-                is_default INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-            "#,
+        CREATE TABLE IF NOT EXISTS images (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            os_type TEXT NOT NULL,
+            size_gb INTEGER NOT NULL,
+            path TEXT NOT NULL,
+            format TEXT NOT NULL DEFAULT 'raw',
+            status TEXT NOT NULL DEFAULT 'ready',
+            description TEXT,
+            parent_id TEXT,
+            tags TEXT,
+            checksum TEXT,
+            is_default INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
         )
         .execute(pool)
         .await?;
@@ -275,21 +410,21 @@ impl AppState {
         // Image versions table
         sqlx::query(
             r#"
-            CREATE TABLE IF NOT EXISTS image_versions (
-                id TEXT PRIMARY KEY,
-                base_name TEXT NOT NULL,
-                version TEXT NOT NULL,
-                image_id TEXT NOT NULL,
-                parent_version_id TEXT,
-                changelog TEXT,
-                is_latest INTEGER NOT NULL DEFAULT 0,
-                is_stable INTEGER NOT NULL DEFAULT 0,
-                created_by TEXT,
-                tags TEXT,
-                created_at TEXT NOT NULL,
-                UNIQUE(base_name, version)
-            )
-            "#,
+        CREATE TABLE IF NOT EXISTS image_versions (
+            id TEXT PRIMARY KEY,
+            base_name TEXT NOT NULL,
+            version TEXT NOT NULL,
+            image_id TEXT NOT NULL,
+            parent_version_id TEXT,
+            changelog TEXT,
+            is_latest INTEGER NOT NULL DEFAULT 0,
+            is_stable INTEGER NOT NULL DEFAULT 0,
+            created_by TEXT,
+            tags TEXT,
+            created_at TEXT NOT NULL,
+            UNIQUE(base_name, version)
+        )
+        "#,
         )
         .execute(pool)
         .await?;
@@ -297,17 +432,17 @@ impl AppState {
         // Boot logs table
         sqlx::query(
             r#"
-            CREATE TABLE IF NOT EXISTS boot_logs (
-                id TEXT PRIMARY KEY,
-                client_id TEXT NOT NULL,
-                image_id TEXT,
-                boot_time TEXT NOT NULL,
-                success INTEGER NOT NULL,
-                duration_ms INTEGER,
-                message TEXT,
-                FOREIGN KEY (client_id) REFERENCES clients(id)
-            )
-            "#,
+        CREATE TABLE IF NOT EXISTS boot_logs (
+            id TEXT PRIMARY KEY,
+            client_id TEXT NOT NULL,
+            image_id TEXT,
+            boot_time TEXT NOT NULL,
+            success INTEGER NOT NULL,
+            duration_ms INTEGER,
+            message TEXT,
+            FOREIGN KEY (client_id) REFERENCES clients(id)
+        )
+        "#,
         )
         .execute(pool)
         .await?;
@@ -315,23 +450,23 @@ impl AppState {
         // Control operations audit log
         sqlx::query(
             r#"
-            CREATE TABLE IF NOT EXISTS control_operations (
-                id TEXT PRIMARY KEY,
-                client_id TEXT NOT NULL,
-                client_name TEXT NOT NULL,
-                client_ip TEXT NOT NULL,
-                os_type TEXT NOT NULL,
-                operation_type TEXT NOT NULL,
-                operation_mode TEXT NOT NULL,
-                delay_minutes INTEGER,
-                administrator TEXT,
-                result TEXT NOT NULL,
-                result_message TEXT,
-                duration_ms INTEGER,
-                timestamp TEXT NOT NULL,
-                FOREIGN KEY (client_id) REFERENCES clients(id)
-            )
-            "#,
+        CREATE TABLE IF NOT EXISTS control_operations (
+            id TEXT PRIMARY KEY,
+            client_id TEXT NOT NULL,
+            client_name TEXT NOT NULL,
+            client_ip TEXT NOT NULL,
+            os_type TEXT NOT NULL,
+            operation_type TEXT NOT NULL,
+            operation_mode TEXT NOT NULL,
+            delay_minutes INTEGER,
+            administrator TEXT,
+            result TEXT NOT NULL,
+            result_message TEXT,
+            duration_ms INTEGER,
+            timestamp TEXT NOT NULL,
+            FOREIGN KEY (client_id) REFERENCES clients(id)
+        )
+        "#,
         )
         .execute(pool)
         .await?;
@@ -339,18 +474,18 @@ impl AppState {
         // Error log
         sqlx::query(
             r#"
-            CREATE TABLE IF NOT EXISTS error_logs (
-                id TEXT PRIMARY KEY,
-                client_id TEXT,
-                operation_type TEXT NOT NULL,
-                error_type TEXT NOT NULL,
-                error_message TEXT NOT NULL,
-                error_code TEXT,
-                stack_trace TEXT,
-                timestamp TEXT NOT NULL,
-                FOREIGN KEY (client_id) REFERENCES clients(id)
-            )
-            "#,
+        CREATE TABLE IF NOT EXISTS error_logs (
+            id TEXT PRIMARY KEY,
+            client_id TEXT,
+            operation_type TEXT NOT NULL,
+            error_type TEXT NOT NULL,
+            error_message TEXT NOT NULL,
+            error_code TEXT,
+            stack_trace TEXT,
+            timestamp TEXT NOT NULL,
+            FOREIGN KEY (client_id) REFERENCES clients(id)
+        )
+        "#,
         )
         .execute(pool)
         .await?;
@@ -358,18 +493,18 @@ impl AppState {
         // Scheduled operations
         sqlx::query(
             r#"
-            CREATE TABLE IF NOT EXISTS scheduled_operations (
-                id TEXT PRIMARY KEY,
-                client_id TEXT NOT NULL,
-                operation_type TEXT NOT NULL,
-                operation_mode TEXT NOT NULL,
-                scheduled_time TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                cancelled_at TEXT,
-                result TEXT,
-                FOREIGN KEY (client_id) REFERENCES clients(id)
-            )
-            "#,
+        CREATE TABLE IF NOT EXISTS scheduled_operations (
+            id TEXT PRIMARY KEY,
+            client_id TEXT NOT NULL,
+            operation_type TEXT NOT NULL,
+            operation_mode TEXT NOT NULL,
+            scheduled_time TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            cancelled_at TEXT,
+            result TEXT,
+            FOREIGN KEY (client_id) REFERENCES clients(id)
+        )
+        "#,
         )
         .execute(pool)
         .await?;
@@ -377,13 +512,13 @@ impl AppState {
         // OS type cache
         sqlx::query(
             r#"
-            CREATE TABLE IF NOT EXISTS os_type_cache (
-                client_id TEXT PRIMARY KEY,
-                os_type TEXT NOT NULL,
-                detected_at TEXT NOT NULL,
-                FOREIGN KEY (client_id) REFERENCES clients(id)
-            )
-            "#,
+        CREATE TABLE IF NOT EXISTS os_type_cache (
+            client_id TEXT PRIMARY KEY,
+            os_type TEXT NOT NULL,
+            detected_at TEXT NOT NULL,
+            FOREIGN KEY (client_id) REFERENCES clients(id)
+        )
+        "#,
         )
         .execute(pool)
         .await?;
@@ -391,21 +526,22 @@ impl AppState {
         // Users table
         sqlx::query(
             r#"
-            CREATE TABLE IF NOT EXISTS users (
-                id TEXT PRIMARY KEY,
-                username TEXT NOT NULL UNIQUE,
-                password_hash TEXT NOT NULL,
-                role TEXT NOT NULL DEFAULT 'user',
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                last_login TEXT
-            )
-            "#,
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'user',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            last_login TEXT
+        )
+        "#,
         )
         .execute(pool)
         .await?;
-
-        // Create indexes
+        Ok(())
+    }
+    async fn create_indexes(pool: &SqlitePool) -> anyhow::Result<()> {
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_clients_mac ON clients(mac)")
             .execute(pool)
             .await?;
@@ -435,13 +571,12 @@ impl AppState {
             .await?;
 
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_scheduled_ops_client ON scheduled_operations(client_id)")
-            .execute(pool)
-            .await?;
+        .execute(pool)
+        .await?;
 
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
             .execute(pool)
             .await?;
-
         Ok(())
     }
 
@@ -505,6 +640,60 @@ mod migration_tests {
             .expect("schema should be readable");
             assert_eq!(exists, 1, "missing table: {table}");
         }
+    }
+
+    #[tokio::test]
+    async fn snapshot_names_are_unique_per_parent_after_migration() {
+        let pool = memory_pool().await;
+        sqlx::raw_sql(include_str!("../../migrations/0001_base_schema.sql"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        let insert = "INSERT INTO images (id, name, kind, os_type, size_gb, path, parent_id, tags, created_at, updated_at) VALUES (?, ?, ?, 'linux', 50, '/dev/zvol/test', ?, 'preserve-me', 'now', 'now')";
+        for (id, name, kind, parent) in [
+            ("fedora", "fedora44", "master", None),
+            ("kubuntu", "kubuntu", "master", None),
+            ("fedora-base", "base", "snapshot", Some("fedora")),
+        ] {
+            sqlx::query(insert)
+                .bind(id)
+                .bind(name)
+                .bind(kind)
+                .bind(parent)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        AppState::init_database(&pool).await.unwrap();
+        sqlx::query(insert)
+            .bind("kubuntu-base")
+            .bind("base")
+            .bind("snapshot")
+            .bind("kubuntu")
+            .execute(&pool)
+            .await
+            .expect("different images may both have a base snapshot");
+        for (id, name, kind, parent) in [
+            ("duplicate-snapshot", "base", "snapshot", Some("kubuntu")),
+            ("duplicate-master", "kubuntu", "master", None),
+        ] {
+            assert!(sqlx::query(insert)
+                .bind(id)
+                .bind(name)
+                .bind(kind)
+                .bind(parent)
+                .execute(&pool)
+                .await
+                .is_err());
+        }
+        let tags: String = sqlx::query_scalar("SELECT tags FROM images WHERE id = 'fedora-base'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(tags, "preserve-me");
+        AppState::init_database(&pool)
+            .await
+            .expect("migration is restartable");
     }
 
     #[tokio::test]
@@ -572,6 +761,7 @@ mod migration_tests {
             "chap_user",
             "chap_secret",
             "chap_enabled",
+            "installer_media_id",
         ] {
             let exists: i64 = sqlx::query_scalar(
                 "SELECT COUNT(*) FROM pragma_table_info('clients') WHERE name = ?",

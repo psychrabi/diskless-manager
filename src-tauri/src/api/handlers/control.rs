@@ -10,7 +10,9 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 use tracing::{debug, error, info};
 
-use crate::audit_logger::{AuditLogFilter, AuditLogger, ControlOperation, OperationResult};
+use crate::audit_logger::{
+    AuditEventFilter, AuditLogFilter, AuditLogger, ControlOperation, OperationResult,
+};
 use crate::state::AppState;
 use chrono::Utc;
 use sqlx::sqlite::SqlitePool;
@@ -192,6 +194,19 @@ pub struct CancelOperationRequest {
 pub struct AuditLogQuery {
     pub client_id: Option<String>,
     pub operation_type: Option<String>,
+    pub start_date: Option<String>,
+    pub end_date: Option<String>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+/// Query parameters for administrative audit events
+#[derive(Debug, Deserialize)]
+pub struct AuditEventQuery {
+    pub actor: Option<String>,
+    pub module: Option<String>,
+    pub action: Option<String>,
+    pub status: Option<String>,
     pub start_date: Option<String>,
     pub end_date: Option<String>,
     pub limit: Option<i64>,
@@ -436,6 +451,13 @@ pub struct RemoteDesktopResponse {
 #[derive(Debug, Serialize)]
 pub struct AuditLogsResponse {
     pub logs: Vec<crate::audit_logger::AuditLogEntry>,
+    pub total: usize,
+}
+
+/// Response for administrative audit events
+#[derive(Debug, Serialize)]
+pub struct AuditEventsResponse {
+    pub events: Vec<crate::audit_logger::AuditEvent>,
     pub total: usize,
 }
 
@@ -1226,6 +1248,40 @@ pub async fn get_audit_logs(
     let total = logs.len();
 
     Ok(Json(AuditLogsResponse { logs, total }))
+}
+
+/// Get administrative audit events with optional filters.
+pub async fn get_audit_events(
+    State(state): State<AppState>,
+    Query(query): Query<AuditEventQuery>,
+) -> Result<Json<AuditEventsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let filter = AuditEventFilter {
+        actor: query.actor,
+        module: query.module,
+        action: query.action,
+        status: query.status,
+        start_date: query.start_date,
+        end_date: query.end_date,
+        limit: query.limit,
+        offset: query.offset,
+    };
+
+    let audit_logger = AuditLogger::new(Arc::new(state.db_pool.clone()));
+    let events = audit_logger.query_events(&filter).await.map_err(|e| {
+        error!("Failed to query audit events: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                error: "Failed to query audit events".to_string(),
+                details: Some(e.to_string()),
+            }),
+        )
+    })?;
+
+    let total = events.len();
+
+    Ok(Json(AuditEventsResponse { events, total }))
 }
 
 /// Get scheduled operations with optional filters

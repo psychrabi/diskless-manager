@@ -2,17 +2,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::core::config::Settings;
-use crate::infrastructure::{
-    dhcp::{BootReservation, publish_client_ipxe},
-    pxe::render_client_dispatcher_autoexec_with_scheme,
-};
+use crate::infrastructure::pxe::render_client_dispatcher_autoexec;
 use crate::services::{
-    ServiceStatus, get_service_pid, is_systemd_service_running, run_sudo_command,
-    write_with_sudo_tee,
+    get_service_pid, is_systemd_service_running, run_sudo_command, write_with_sudo_tee,
+    ServiceStatus,
 };
 use log::info;
 
 pub struct HttpService {
+    pub(crate) db_pool: sqlx::SqlitePool,
     pub(crate) settings: Arc<Settings>,
 }
 
@@ -60,7 +58,7 @@ impl HttpService {
         write_with_sudo_tee(config_str, &apache_config).await?;
 
         self.publish_autoexec().await?;
-        self.publish_cached_client_menus().await?;
+        self.remove_stale_generated_client_menus().await?;
         info!("Apache configuration written to {}", config_path.display());
 
         // Fedora's httpd automatically loads every *.conf file dropped into
@@ -75,11 +73,8 @@ impl HttpService {
     }
 
     async fn publish_autoexec(&self) -> anyhow::Result<()> {
-        let autoexec = render_client_dispatcher_autoexec_with_scheme(
-            80,
-            crate::infrastructure::pxe::ENROLL_PORT,
-            false,
-        );
+        let autoexec =
+            render_client_dispatcher_autoexec(80, crate::infrastructure::pxe::ENROLL_PORT);
         let root_dir = PathBuf::from(&self.settings.http.root_dir);
         let path = root_dir.join("autoexec.ipxe");
         let path = path
@@ -91,75 +86,25 @@ impl HttpService {
         Ok(())
     }
 
-    /// Rebuild MAC-specific boot menus for clients loaded from the database
-    /// into the runtime configuration cache during AppState startup.
-    ///
-    /// This repairs existing installations automatically when the HTTP service
-    /// is generated, started, or reloaded. New clients are also generated
-    /// transactionally by `IscDhcpPublisher` during provisioning.
-    async fn publish_cached_client_menus(&self) -> anyhow::Result<()> {
-        let config = crate::config::get_config();
-        let server_ip = if self.settings.dhcp.next_server_ip.trim().is_empty() {
-            self.settings.server.ip_address.trim()
-        } else {
-            self.settings.dhcp.next_server_ip.trim()
-        };
-
-        let mut published = 0usize;
+    /// Remove obsolete manager scripts while preserving administrator menus.
+    async fn remove_stale_generated_client_menus(&self) -> anyhow::Result<()> {
+        let config = crate::config::read_config_db(&self.db_pool).await?;
+        let mut removed = 0usize;
         for client in config.clients {
-            if !client.enabled {
-                continue;
+            if crate::infrastructure::dhcp::remove_generated_client_ipxe_menu(
+                &self.settings,
+                &client.mac,
+            )
+            .await?
+            {
+                removed += 1;
             }
-
-            let Some(target_iqn) = client
-                .target_iqn
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            else {
-                tracing::warn!(
-                    client = %client.name,
-                    "skipping per-client iPXE menu because no target IQN is persisted"
-                );
-                continue;
-            };
-
-            let chap = match (
-                client.chap_enabled,
-                client.chap_user.as_deref(),
-                client.chap_secret.as_deref(),
-            ) {
-                (Some(true), Some(username), Some(password))
-                    if !username.trim().is_empty() && !password.is_empty() =>
-                {
-                    Some(crate::infrastructure::iscsi::ChapCredentials {
-                        username: username.to_string(),
-                        password: password.to_string(),
-                    })
-                }
-                _ => None,
-            };
-
-            let reservation = BootReservation {
-                client_name: client.name.clone(),
-                mac: client.mac.clone(),
-                ip: client.ip.clone(),
-                target_iqn: target_iqn.to_string(),
-                server_ip: server_ip.to_string(),
-                chap,
-            };
-
-            publish_client_ipxe(&reservation).await.map_err(|error| {
-                anyhow::anyhow!(
-                    "failed to regenerate iPXE menu for client '{}': {}",
-                    client.name,
-                    error
-                )
-            })?;
-            published += 1;
         }
 
-        info!("Regenerated {} per-client iPXE menu file(s)", published);
+        info!(
+            "Removed {} stale manager-generated iPXE menu file(s)",
+            removed
+        );
         Ok(())
     }
 
@@ -196,15 +141,13 @@ impl HttpService {
     }
 
     pub async fn get_config(&self) -> anyhow::Result<String> {
-        let config_path = PathBuf::from(crate::platform::detect().http_config_path());
+        let distro = crate::platform::detect();
+        let config_path = PathBuf::from(distro.http_config_path());
         if config_path.exists() {
             return Ok(std::fs::read_to_string(config_path)?);
         }
 
-        Ok(render_apache_config(
-            &self.settings,
-            crate::platform::detect().http_log_dir(),
-        ))
+        Ok(render_apache_config(&self.settings, distro.http_log_dir()))
     }
 
     pub async fn status(&self) -> anyhow::Result<ServiceStatus> {

@@ -16,7 +16,13 @@ import Sidebar from "@/components/layouts/Sidebar";
 import Header from "@/components/layouts/Header";
 
 const AdminLayout = () => {
-  const { error, fetchData, loading } = useAppStore();
+  const {
+    error,
+    fetchData,
+    loading,
+    startClientStatusPolling,
+    stopClientStatusPolling,
+  } = useAppStore();
   const navigation = useNavigation();
   const isNavigating = Boolean(navigation.location);
   const location = useLocation();
@@ -26,13 +32,18 @@ const AdminLayout = () => {
     fetchData();
   }, [fetchData]);
 
+  useEffect(() => {
+    startClientStatusPolling();
+    return stopClientStatusPolling;
+  }, [startClientStatusPolling, stopClientStatusPolling]);
+
   // Restore path on mount if we are at root and have a saved path
   const pathRestored = useRef(false);
   useEffect(() => {
     if (pathRestored.current) return;
+    pathRestored.current = true;
     const lastPath = localStorage.getItem("last_path");
     if (lastPath && lastPath !== "/" && location.pathname === "/") {
-      pathRestored.current = true;
       navigate(lastPath, { replace: true });
     }
   }, [location.pathname, navigate]);
@@ -65,7 +76,7 @@ const AdminLayout = () => {
       <SidebarInset className="min-w-0 overflow-hidden md:border">
         <Header />
         <div id="main-content" tabIndex={-1} className="min-h-0 flex-1 overflow-y-auto outline-none">
-          <div className="relative mx-auto w-full p-4 md:p-6 lg:p-8">
+          <div className="relative mx-auto w-full p-3 sm:p-4 md:p-6 lg:p-8">
             {loading && (
               <div className="absolute inset-0 z-40 flex items-center justify-center rounded-lg bg-background/50 backdrop-blur-sm" role="status" aria-live="polite">
                 <Loading className="size-10 text-primary" />

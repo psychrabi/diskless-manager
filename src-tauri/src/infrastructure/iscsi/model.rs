@@ -1,3 +1,4 @@
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -10,12 +11,24 @@ pub struct IscsiLunSpec {
     /// targetcli/LIO block backstore name.
     pub backstore: String,
 
-    /// Linux block device exposed through the LIO backstore.
+    /// Device or regular-file path exposed through the LIO backstore.
     pub block_device: PathBuf,
+
+    /// Storage object type. Missing values deserialize as legacy block LUNs.
+    #[serde(default)]
+    pub backing: IscsiLunBacking,
 
     /// Whether this LUN should be exposed read-only.
     #[serde(default)]
     pub readonly: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum IscsiLunBacking {
+    #[default]
+    BlockDevice,
+    File,
 }
 
 impl IscsiLunSpec {
@@ -24,6 +37,7 @@ impl IscsiLunSpec {
             lun,
             backstore: backstore.into(),
             block_device: block_device.into(),
+            backing: IscsiLunBacking::BlockDevice,
             readonly: false,
         }
     }
@@ -37,8 +51,42 @@ impl IscsiLunSpec {
             lun,
             backstore: backstore.into(),
             block_device: block_device.into(),
+            backing: IscsiLunBacking::BlockDevice,
             readonly: true,
         }
+    }
+
+    pub fn readonly_file(lun: u32, backstore: impl Into<String>, path: impl Into<PathBuf>) -> Self {
+        Self {
+            lun,
+            backstore: backstore.into(),
+            block_device: path.into(),
+            backing: IscsiLunBacking::File,
+            readonly: true,
+        }
+    }
+
+    /// Validate LUN and backing intent before either backend mutates state.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(self.lun <= 65535, "invalid LUN number");
+        anyhow::ensure!(
+            !self.backstore.trim().is_empty(),
+            "iSCSI backstore cannot be empty"
+        );
+        let path = self.block_device.to_str().context("invalid backing path")?;
+        anyhow::ensure!(
+            self.block_device.is_absolute()
+                && !path.split('/').any(|part| matches!(part, "." | "..")),
+            "iSCSI backing path must be absolute and cannot traverse parents"
+        );
+        match self.backing {
+            IscsiLunBacking::BlockDevice => anyhow::ensure!(
+                self.block_device.is_absolute(),
+                "block LUN must use an absolute device path"
+            ),
+            IscsiLunBacking::File => anyhow::ensure!(self.readonly, "file LUN must be read-only"),
+        }
+        Ok(())
     }
 }
 
@@ -57,6 +105,10 @@ impl IscsiLunSpec {
 pub struct IscsiTargetSpec {
     /// iSCSI Qualified Name.
     pub target_iqn: String,
+
+    /// Named ACL for a managed client's iPXE initiator. Service targets omit it.
+    #[serde(default)]
+    pub initiator_iqn: Option<String>,
 
     /// LUNs exposed by this target.
     pub luns: Vec<IscsiLunSpec>,
@@ -83,6 +135,7 @@ impl IscsiTargetSpec {
     ) -> Self {
         Self {
             target_iqn: target_iqn.into(),
+            initiator_iqn: None,
             luns: vec![IscsiLunSpec::new(lun, backstore, block_device)],
             chap: None,
             portal_address: "0.0.0.0".to_string(),
@@ -101,6 +154,7 @@ impl IscsiTargetSpec {
 
         Ok(Self {
             target_iqn: target_iqn.into(),
+            initiator_iqn: None,
             luns,
             chap: None,
             portal_address: "0.0.0.0".to_string(),
@@ -119,12 +173,21 @@ impl IscsiTargetSpec {
 /// Stored per client in the database (server-generated, never accepted
 /// from API input) and embedded in the client's boot menu so unattended
 /// boot keeps working. Rotation issues a new secret for the same username.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ChapCredentials {
     /// CHAP username, e.g. `chap-pc001`. Stable for the client lifetime.
     pub username: String,
     /// CHAP secret, 12 alphanumeric characters.
     pub password: String,
+}
+
+impl std::fmt::Debug for ChapCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChapCredentials")
+            .field("username", &self.username)
+            .field("password", &"[REDACTED]")
+            .finish()
+    }
 }
 
 impl ChapCredentials {
@@ -174,8 +237,7 @@ impl ChapCredentials {
 fn generate_chap_secret() -> anyhow::Result<String> {
     use std::io::Read;
 
-    const ALPHABET: &[u8] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     let mut bytes = [0u8; 12];
     std::fs::File::open("/dev/urandom")
         .and_then(|mut file| file.read_exact(&mut bytes))
@@ -327,6 +389,27 @@ impl IscsiProvisionResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_luns_are_readonly_and_validate_as_managed_iso_paths() {
+        let lun = IscsiLunSpec::readonly_file(1, "installer_iso", "/srv/isos/installer.iso");
+        assert_eq!(lun.backing, IscsiLunBacking::File);
+        assert!(lun.validate().is_ok());
+        assert!(
+            IscsiLunSpec::readonly_file(1, "installer_iso", "/srv/isos/../other.iso")
+                .validate()
+                .is_err()
+        );
+        let mut writable = lun;
+        writable.readonly = false;
+        assert!(writable.validate().is_err());
+        assert!(IscsiLunSpec::new(0, "block", "/dev/zvol/pool/client")
+            .validate()
+            .is_ok());
+        assert!(IscsiLunSpec::new(65536, "block", "/dev/zvol/pool/client")
+            .validate()
+            .is_err());
+    }
 
     #[test]
     fn provision_result_starts_empty() {
@@ -514,14 +597,22 @@ mod chap_tests {
     }
 
     #[test]
+    fn chap_debug_redacts_password() {
+        let credentials = ChapCredentials {
+            username: "test-user".into(),
+            password: "test-secret".into(),
+        };
+        let debug = format!("{credentials:?}");
+        assert!(!debug.contains("test-secret"));
+        assert!(debug.contains("test-user"));
+    }
+
+    #[test]
     fn generated_secret_has_required_shape() {
         let creds = ChapCredentials::generate("PC001").expect("generation must succeed");
         assert_eq!(creds.username, "chap-pc001");
         assert_eq!(creds.password.len(), 12);
-        assert!(creds
-            .password
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric()));
+        assert!(creds.password.chars().all(|c| c.is_ascii_alphanumeric()));
     }
 
     #[test]

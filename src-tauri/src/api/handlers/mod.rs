@@ -1,9 +1,11 @@
+pub mod alarms;
 pub mod auth;
 pub mod backup;
 pub mod client_chap;
 pub mod client_delete;
 #[path = "client_update_entry.rs"]
 pub mod client_game_update;
+pub mod client_storage;
 #[path = "client_enabled_update.rs"]
 pub mod client_update;
 #[path = "client_update.rs"]
@@ -15,7 +17,9 @@ pub mod control;
 pub mod dashboard;
 pub mod dhcp_reconciliation;
 pub mod disks;
+pub mod hardware_identity;
 pub mod images;
+pub mod installation;
 pub mod license;
 pub mod logs;
 pub mod network_drivers;
@@ -25,6 +29,7 @@ pub mod reconciliation;
 pub mod services;
 pub mod setup;
 pub mod ssh;
+pub mod super_client;
 pub mod system;
 pub mod system_reconciliation;
 pub mod users;

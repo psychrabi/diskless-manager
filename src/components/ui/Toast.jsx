@@ -13,7 +13,11 @@ export default function Toast({ toast }) {
   const { Icon, ring } = typeMeta[toast.type] || typeMeta.info;
 
   return (
-    <div className="flex w-full max-w-full items-start gap-3 rounded-lg bg-popover px-4 py-3 text-popover-foreground shadow-lg ring-1 ring-foreground/10 backdrop-blur-md">
+    <div
+      role={toast.type === "error" ? "alert" : "status"}
+      aria-atomic="true"
+      className="flex w-full max-w-full items-start gap-3 rounded-lg bg-popover px-4 py-3 text-popover-foreground shadow-lg ring-1 ring-foreground/10 backdrop-blur-md"
+    >
       <Icon className={ring} />
       <div className="flex-1 min-w-0">
         <h4 className="text-sm font-bold leading-tight">{toast.title}</h4>

@@ -9,7 +9,7 @@ use axum::{
 use futures::{sink::SinkExt, stream::StreamExt};
 use once_cell::sync::Lazy;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -17,7 +17,6 @@ use tokio::time::interval;
 
 use crate::{
     metrics::{StorageTrafficMetrics, Throughput},
-    persistence::ClientRepository,
     state::AppState,
     types::Claims,
 };
@@ -141,36 +140,69 @@ async fn handle_metrics_socket(socket: WebSocket, state: AppState, claims: Claim
     }
 }
 
+fn iscsi_peers(output: &str) -> HashSet<String> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let endpoint = line.split_whitespace().nth(3)?;
+            let (ip, port) = endpoint.rsplit_once(':')?;
+            port.parse::<u16>().ok()?;
+            let ip = ip.trim_matches(['[', ']']);
+            ip.parse::<std::net::IpAddr>().ok().map(|ip| ip.to_string())
+        })
+        .collect()
+}
+
 pub(crate) async fn fetch_metrics(state: &AppState) -> Result<MetricsUpdate, String> {
-    let client_ips = state.client_ips.read().await.clone();
     let settings = state.settings.read().await.clone();
     let iscsi_port = settings.iscsi.portal_port;
-    let registered_clients = ClientRepository::new(state.db_pool.clone())
-        .find_all()
-        .await
-        .map_err(|error| format!("failed to load clients for metrics: {error}"))?;
+    let registered_clients = sqlx::query_as::<_, (String, String, Option<String>)>(
+        r#"
+        SELECT CAST(name AS TEXT), CAST(ip AS TEXT),
+            CASE WHEN typeof(target_iqn) = 'text' THEN target_iqn END
+        FROM clients
+        WHERE CAST(enabled AS INTEGER) = 1
+        "#,
+    )
+    .fetch_all(&state.db_pool)
+    .await
+    .map_err(|error| format!("failed to load clients for metrics: {error}"))?;
     let mut target_by_ip = HashMap::new();
     let mut lio_sources = Vec::new();
-    for client in registered_clients {
-        let normalized_name = client.name.trim().to_lowercase();
-        let target_iqn = client.target_iqn.unwrap_or_else(|| {
+    let mut client_ips = Vec::with_capacity(registered_clients.len());
+    for (name, ip, target_iqn) in registered_clients {
+        let normalized_name = name.trim().to_lowercase();
+        let target_iqn = target_iqn.unwrap_or_else(|| {
             format!(
                 "{}:client.{}",
                 settings.iscsi.target_prefix, normalized_name
             )
         });
-        let ip = client.ip.to_string();
+        client_ips.push(ip.clone());
         lio_sources.push((ip.clone(), format!("block_{normalized_name}")));
         target_by_ip.insert(ip, target_iqn);
     }
     let collector = Arc::clone(&state.metrics_collector);
-    let (snapshot, lio_rates) = tokio::task::spawn_blocking(move || {
+    let (snapshot, lio_rates, peers) = tokio::task::spawn_blocking(move || {
+        let output = std::process::Command::new("ss")
+            .args([
+                "-Htn",
+                "state",
+                "established",
+                &format!("( sport = :{iscsi_port} )"),
+            ])
+            .output()
+            .map_err(|error| format!("failed to inspect iSCSI connections: {error}"))?;
+        if !output.status.success() {
+            return Err("failed to inspect iSCSI connections".to_string());
+        }
+        let peers = iscsi_peers(&String::from_utf8_lossy(&output.stdout));
         let snapshot = collector.collect(&client_ips, iscsi_port);
         let lio_rates = collector.collect_lio(&lio_sources);
-        (snapshot, lio_rates)
+        Ok((snapshot, lio_rates, peers))
     })
     .await
-    .map_err(|error| format!("metrics collection task failed: {error}"))?;
+    .map_err(|error| format!("metrics collection task failed: {error}"))??;
 
     let mut clients = Vec::new();
     let mut session_starts = CLIENT_SESSION_START_TIMES.lock().await;
@@ -183,17 +215,17 @@ pub(crate) async fn fetch_metrics(state: &AppState) -> Result<MetricsUpdate, Str
             sample.iscsi = Some(lio.clone());
             sample.network.get_or_insert(lio);
         }
-        let connected = target_by_ip
-            .get(&ip)
-            .map(|target_iqn| {
-                crate::infrastructure::iscsi::target_has_active_sessions(target_iqn).unwrap_or_else(
-                    |error| {
-                        tracing::warn!(%target_iqn, %error, "failed to inspect iSCSI session");
-                        false
-                    },
-                )
-            })
-            .unwrap_or(false);
+        let connected = peers.contains(&ip)
+            && target_by_ip
+                .get(&ip)
+                .map(|target_iqn| {
+                    crate::infrastructure::iscsi::target_has_active_sessions(target_iqn)
+                        .unwrap_or_else(|error| {
+                            tracing::warn!(%target_iqn, %error, "failed to inspect iSCSI session");
+                            false
+                        })
+                })
+                .unwrap_or(false);
         let status = if connected { "Online" } else { "Offline" }.to_string();
         let uptime_seconds = session_uptime(&mut session_starts, &ip, connected, now);
 
@@ -221,6 +253,33 @@ pub(crate) async fn fetch_metrics(state: &AppState) -> Result<MetricsUpdate, Str
 mod tests {
     use super::session_uptime;
     use std::collections::HashMap;
+
+    #[test]
+    fn iscsi_peers_do_not_mark_another_client_online() {
+        let peers = super::iscsi_peers(
+            "0 0 192.168.1.250:3260 192.168.123.10:28157\n0 0 [::1]:3260 [::1]:4567\nmalformed\n",
+        );
+        assert!(peers.contains("192.168.123.10"));
+        assert!(peers.contains("::1"));
+        assert!(!peers.contains("192.168.1.101"));
+        assert_eq!(peers.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn metrics_stream_survives_unrelated_legacy_client_field_types() {
+        let (state, _, _, _) = crate::api::security_tests::setup().await;
+        sqlx::query("INSERT INTO clients (id, name, mac, ip, master, created_at, updated_at, chap_secret) VALUES ('client', 'PC001', '00:11:22:33:44:55', '192.168.1.101', 'diskless/windows', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', ?)")
+            .bind(vec![65_u8, 66])
+            .execute(&state.db_pool)
+            .await
+            .expect("legacy client fixture should be inserted");
+        let metrics = super::fetch_metrics(&state)
+            .await
+            .expect("metrics should not decode unrelated client fields");
+
+        assert_eq!(metrics.clients.len(), 1);
+        assert_eq!(metrics.clients[0].ip, "192.168.1.101");
+    }
 
     #[tokio::test]
     async fn stalled_metrics_reader_cannot_keep_a_revoked_socket_alive() {

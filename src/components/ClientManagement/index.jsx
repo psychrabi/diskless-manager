@@ -9,23 +9,32 @@ import { PageHeader } from "@/components/ui";
 import { LoadingSkeleton } from "@/components/ui/LoadingSkeleton";
 import { ContextMenu } from "../ui/ContextMenu";
 import { PlusCircle, Users, Wifi, WifiOff, History, Clock } from "lucide-react";
-import { memo, useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "../../store/useAppStore";
+import { isOnlineStatus } from "@/lib/clientStatus";
 import ClientFormModal from "./ClientFormModal";
+import { getNextClientIdentity } from "./clientDefaults";
 import ClientTable from "./ClientTable";
 import ClientHero from "./ClientHero";
 import RemoteDesktopModal from "./RemoteDesktopModal";
 import PowerActionModal from "./PowerActionModal";
 import AuditLogViewer from "./AuditLogViewer";
 import ScheduledOperationsList from "./ScheduledOperationsList";
+import LegacySuperExitDialog from "./LegacySuperExitDialog";
+import { getSuperStatus } from "@/api/modules/clients";
+import { listInstallerMedia } from "@/api/modules/installerMedia";
+import { getPendingClientRecoveries } from "@/api/modules/reconciliation";
+import { useAuth } from "@/contexts/auth";
 
 const MemoizedClientTable = memo(ClientTable);
 const MemoizedContextMenu = memo(ContextMenu);
 
 const ClientManagement = () => {
+  const { user } = useAuth();
   const {
     clients,
+    clientsError,
     fetchClients,
     fetchImages,
     masters,
@@ -33,6 +42,7 @@ const ClientManagement = () => {
   } = useAppStore(
     useShallow((state) => ({
       clients: state.clients,
+      clientsError: state.clientsError,
       fetchClients: state.fetchClients,
       fetchImages: state.fetchImages,
       masters: state.masters,
@@ -45,6 +55,7 @@ const ClientManagement = () => {
   const [powerAction, setPowerAction] = useState(null);
   const [isAuditLogViewerOpen, setIsAuditLogViewerOpen] = useState(false);
   const [isScheduledOperationsOpen, setIsScheduledOperationsOpen] = useState(false);
+  const [legacySuperClient, setLegacySuperClient] = useState(null);
   const [client, setClient] = useState({
     name: "",
     mac: "",
@@ -59,6 +70,29 @@ const ClientManagement = () => {
     y: 0,
     client: null,
   });
+  const contextMenuRequestId = useRef(0);
+  const [superData, setSuperData] = useState(null);
+
+  useEffect(() => {
+    const target = contextMenu.client;
+    if (!contextMenu.isOpen || !target || user?.role !== "admin") return;
+    let current = true;
+    Promise.all([getSuperStatus(target.id), listInstallerMedia(), getPendingClientRecoveries()])
+      .then(([status, media, recoveryResponse]) => {
+        if (!current) return;
+        const storageRecovery = (recoveryResponse.recoveries || []).some(
+          (recovery) => recovery.client_id === target.id && recovery.kind !== "boot_failure",
+        );
+        setSuperData({ requestId: contextMenu.requestId, status: { ...status, storage_recovery: storageRecovery }, media: media || [] });
+      })
+      .catch(() => {
+        if (!current) return;
+        setSuperData({ requestId: contextMenu.requestId, status: null, media: [], error: true });
+      });
+    return () => { current = false; };
+  }, [contextMenu.client, contextMenu.isOpen, contextMenu.requestId, user?.role]);
+
+  const currentSuperData = superData?.requestId === contextMenu.requestId ? superData : null;
 
   const handleClientContextMenu = useCallback((event, client) => {
     event.preventDefault();
@@ -67,6 +101,7 @@ const ClientManagement = () => {
       x: event.clientX,
       y: event.clientY,
       client: client,
+      requestId: ++contextMenuRequestId.current,
     });
   }, []);
 
@@ -89,33 +124,7 @@ const ClientManagement = () => {
   );
 
   const handleClientFormModalOpen = useCallback(() => {
-    let newName = "PC001";
-    let newIp = "192.168.1.101"; // Default start IP
-
-    if (clients.length > 0) {
-      // Sort clients by name to find the "last" one logically
-      const sortedClients = [...clients].sort((a, b) =>
-        a.name.localeCompare(b.name)
-      );
-      const lastClient = sortedClients[sortedClients.length - 1];
-
-      // Extract number from last client name and increment
-      const nameMatch = lastClient.name.match(/(\d+)$/);
-      if (nameMatch) {
-        const lastNumber = parseInt(nameMatch[1], 10);
-        const nextNumber = lastNumber + 1;
-        const prefix = lastClient.name.replace(/\d+$/, "");
-        newName = `${prefix}${nextNumber.toString().padStart(3, "0")}`;
-      }
-
-      // Extract IP and increment
-      const ipMatch = lastClient.ip.match(/^(\d+\.\d+\.\d+\.)(\d+)$/);
-      if (ipMatch) {
-        const ipBase = ipMatch[1];
-        const lastOctet = parseInt(ipMatch[2], 10);
-        newIp = `${ipBase}${lastOctet + 1}`;
-      }
-    }
+    const { name: newName, ip: newIp } = getNextClientIdentity(clients);
 
     setClient({
       name: newName,
@@ -129,7 +138,7 @@ const ClientManagement = () => {
   }, [clients, masters]);
 
   // Calculate statistics
-  const onlineClients = useMemo(() => clients.filter((c) => c.status === "Online").length, [clients]);
+  const onlineClients = useMemo(() => clients.filter((c) => isOnlineStatus(c.status)).length, [clients]);
   const offlineClients = clients.length - onlineClients;
 
   if (loading && clients.length === 0) {
@@ -159,7 +168,7 @@ const ClientManagement = () => {
         title="Client Management"
         description="Manage diskless boot clients and monitor their connection status"
         actions={
-          <div className="flex gap-2">
+          <div className="flex w-full flex-wrap gap-2 sm:w-auto [&>button]:flex-1 sm:[&>button]:flex-none">
             <Button
               variant="outline"
               size="sm"
@@ -187,6 +196,17 @@ const ClientManagement = () => {
           </div>
         }
       />
+      {clientsError && (
+        <div
+          role="alert"
+          className="flex items-center justify-between gap-4 rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm"
+        >
+          <span>Failed to load clients: {clientsError}</span>
+          <Button variant="outline" onClick={() => fetchClients()}>
+            Retry
+          </Button>
+        </div>
+      )}
       {clients.length > 0 && (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
           {/* Total Clients */}
@@ -234,7 +254,7 @@ const ClientManagement = () => {
 
       {/* Client Table or Empty State */}
       {clients.length === 0 ? (
-        <ClientHero handleClientFormModalOpen={handleClientFormModalOpen} />
+        clientsError ? null : <ClientHero handleClientFormModalOpen={handleClientFormModalOpen} />
       ) : (
         <MemoizedClientTable
           handleClientContextMenu={handleClientContextMenu}
@@ -247,7 +267,22 @@ const ClientManagement = () => {
         targetClient={contextMenu.client}
         onClose={closeContextMenu}
         actions={contextActions}
+        onExitLegacySuper={setLegacySuperClient}
+        superStatus={currentSuperData?.status}
+        superMedia={currentSuperData?.media || []}
+        superLoading={!currentSuperData}
+        superError={currentSuperData?.error}
+        targetImage={masters.find((image) => image.name === contextMenu.client?.master || image.id === contextMenu.client?.master)}
       />
+      {legacySuperClient && (
+        <LegacySuperExitDialog
+          client={clients.find((item) => item.id === legacySuperClient.id) || legacySuperClient}
+          masters={masters}
+          isOpen
+          onClose={() => setLegacySuperClient(null)}
+          refresh={refreshData}
+        />
+      )}
       <ClientFormModal
         client={client}
         setClient={setClient}

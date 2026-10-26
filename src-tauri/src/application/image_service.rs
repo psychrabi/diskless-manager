@@ -1,12 +1,16 @@
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
-use std::path::PathBuf;
+use std::collections::HashSet;
+use std::future::Future;
+use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::{
     core::image::{
-        CreateImageRequest, Image, ImageFormat, ImageInfo, ImageKind, ImportImageRequest, OsType,
+        BootProbe, CreateImageRequest, DriverRevisionStatus, HealthCheckStatus, Image, ImageFormat,
+        ImageHealth, ImageHealthCheck, ImageInfo, ImageKind, ImportImageRequest, OsType,
         UpdateImageRequest,
     },
     infrastructure::image::{ImageBackend, ZfsImageBackend},
@@ -14,10 +18,37 @@ use crate::{
     validation::validate_zfs_name,
 };
 
+/// Image orchestration: run synchronous storage work on blocking workers,
+/// using the existing runtime for database awaits.
 #[derive(Clone)]
 pub struct ImageService {
     repository: ImageRepository,
     backend: Arc<dyn ImageBackend>,
+}
+
+/// A unit of storage orchestration that may block and still awaits the
+/// database internally; it therefore has to run on a blocking-pool thread.
+type BlockingJob<T> = Pin<Box<dyn Future<Output = Result<T>> + Send>>;
+
+fn health_check(
+    id: &str,
+    label: &str,
+    status: HealthCheckStatus,
+    detail: impl Into<String>,
+) -> ImageHealthCheck {
+    ImageHealthCheck {
+        id: id.to_string(),
+        label: label.to_string(),
+        status,
+        detail: detail.into(),
+    }
+}
+
+fn is_linux_filesystem(filesystem: &str) -> bool {
+    matches!(
+        filesystem.to_ascii_lowercase().as_str(),
+        "ext2" | "ext3" | "ext4" | "xfs" | "btrfs" | "f2fs"
+    )
 }
 
 impl ImageService {
@@ -35,8 +66,56 @@ impl ImageService {
         }
     }
 
+    /// Run a storage job on the blocking pool while database awaits inside it
+    /// keep working.
+    ///
+    /// `Handle::block_on` is safe on a blocking-pool thread because it is not
+    /// an async execution context; the request worker stays free meanwhile.
+    /// Only call from async context, and never run blocking-pool work from
+    /// inside a job: the pool is finite and nesting can starve it.
+    async fn run_blocking<T, F>(&self, job: F) -> Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(ImageService) -> BlockingJob<T> + Send + 'static,
+    {
+        let service = self.clone();
+        let runtime = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || runtime.block_on(job(service)))
+            .await
+            .context("image worker failed")?
+    }
+
     pub async fn list(&self) -> Result<Vec<Image>> {
-        self.repository.list().await
+        let mut images = self.repository.list().await?;
+        if images.is_empty() {
+            return Ok(images);
+        }
+        let names: Vec<String> = images
+            .iter()
+            .map(|image| {
+                if image.kind == ImageKind::Snapshot {
+                    let parent = images
+                        .iter()
+                        .find(|parent| Some(&parent.id) == image.parent_id.as_ref())
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("snapshot '{}' has no parent image", image.name)
+                        })?;
+                    Ok(format!("{}@{}", parent.name, image.name))
+                } else {
+                    Ok(image.name.clone())
+                }
+            })
+            .collect::<Result<_>>()?;
+        let backend = self.backend.clone();
+        let present = tokio::task::spawn_blocking(move || backend.check_presence(&names))
+            .await
+            .context("image worker failed")??;
+        for (image, exists) in images.iter_mut().zip(present) {
+            if !exists {
+                image.status = "missing".to_owned();
+            }
+        }
+        Ok(images)
     }
 
     pub async fn get(&self, id_or_name: &str) -> Result<Image> {
@@ -46,7 +125,18 @@ impl ImageService {
             .ok_or_else(|| anyhow::anyhow!("Image not found: {}", id_or_name))
     }
 
+    pub async fn get_optional(&self, id_or_name: &str) -> Result<Option<Image>> {
+        self.repository.get(id_or_name).await
+    }
+
     pub async fn create(&self, request: CreateImageRequest) -> Result<Image> {
+        self.run_blocking(move |service| {
+            Box::pin(async move { service.create_blocking(request).await })
+        })
+        .await
+    }
+
+    async fn create_blocking(&self, request: CreateImageRequest) -> Result<Image> {
         validate_create_request(&request)?;
 
         let os_type = request.os_type.parse::<OsType>()?;
@@ -119,6 +209,15 @@ impl ImageService {
     }
 
     pub async fn rename(&self, id: &str, new_name: &str) -> Result<Image> {
+        let id = id.to_owned();
+        let new_name = new_name.to_owned();
+        self.run_blocking(move |service| {
+            Box::pin(async move { service.rename_blocking(&id, &new_name).await })
+        })
+        .await
+    }
+
+    async fn rename_blocking(&self, id: &str, new_name: &str) -> Result<Image> {
         validate_zfs_name(new_name)?;
 
         let mut image = self.get(id).await?;
@@ -153,10 +252,20 @@ impl ImageService {
     }
 
     pub async fn update(&self, id: &str, request: UpdateImageRequest) -> Result<Image> {
+        let id = id.to_owned();
+        self.run_blocking(move |service| {
+            Box::pin(async move { service.update_blocking(&id, request).await })
+        })
+        .await
+    }
+
+    async fn update_blocking(&self, id: &str, request: UpdateImageRequest) -> Result<Image> {
         let mut image = self.get(id).await?;
 
         if let Some(name) = request.name {
-            image = self.rename(&image.id, &name).await?;
+            // Already on a blocking-pool thread: call the inner job directly
+            // instead of nesting another spawn_blocking.
+            image = self.rename_blocking(&image.id, &name).await?;
         }
 
         if let Some(os_type) = request.os_type {
@@ -183,6 +292,25 @@ impl ImageService {
     }
 
     pub async fn clone_image(
+        &self,
+        source_id: &str,
+        snapshot_name: &str,
+        new_name: &str,
+    ) -> Result<Image> {
+        let source_id = source_id.to_owned();
+        let snapshot_name = snapshot_name.to_owned();
+        let new_name = new_name.to_owned();
+        self.run_blocking(move |service| {
+            Box::pin(async move {
+                service
+                    .clone_image_blocking(&source_id, &snapshot_name, &new_name)
+                    .await
+            })
+        })
+        .await
+    }
+
+    async fn clone_image_blocking(
         &self,
         source_id: &str,
         snapshot_name: &str,
@@ -306,10 +434,70 @@ impl ImageService {
         Ok(image)
     }
 
+    /// Publish a completed servicing clone without ZFS promotion, preserving source snapshots.
+    pub async fn publish_serviced_clone(&self, id: &str) -> Result<Image> {
+        let mut image = self.get(id).await?;
+        if image.kind != ImageKind::Clone
+            || image.status != "preparing"
+            || self.snapshots(id).await?.is_empty()
+        {
+            bail!("only a completed servicing clone with a snapshot can be published");
+        }
+        image.kind = ImageKind::Master;
+        image.parent_id = None;
+        image.source_snapshot = None;
+        image.status = "ready".into();
+        image.updated_at = Utc::now();
+        self.repository.update(&image).await?;
+        Ok(image)
+    }
+
+    /// Remove the source dependency from a serviced clone before deleting its temporary origin.
+    /// Repeated calls are safe after a successful promotion.
+    pub async fn promote_clone(&self, name: &str) -> Result<()> {
+        let backend = self.backend.clone();
+        let name = name.to_owned();
+        tokio::task::spawn_blocking(move || {
+            if backend.clone_origin(&name)?.is_some() {
+                backend.promote_clone(&name)?;
+            }
+            Ok(())
+        })
+        .await
+        .context("image worker failed")?
+    }
+
     pub async fn rollback_snapshot(
         &self,
         master_id_or_name: &str,
         snapshot_name: &str,
+        prune_newer_snapshots: bool,
+        expected_newer_snapshots: &[String],
+    ) -> Result<usize> {
+        let master_id_or_name = master_id_or_name.to_owned();
+        let snapshot_name = snapshot_name.to_owned();
+        let expected_newer_snapshots = expected_newer_snapshots.to_vec();
+        self.run_blocking(move |service| {
+            Box::pin(async move {
+                service
+                    .rollback_snapshot_blocking(
+                        &master_id_or_name,
+                        &snapshot_name,
+                        prune_newer_snapshots,
+                        &expected_newer_snapshots,
+                    )
+                    .await
+            })
+        })
+        .await
+    }
+
+    async fn rollback_snapshot_blocking(
+        &self,
+        master_id_or_name: &str,
+        snapshot_name: &str,
+        prune_newer_snapshots: bool,
+        expected_newer_snapshots: &[String],
     ) -> Result<usize> {
         let master = self.get(master_id_or_name).await?;
 
@@ -330,22 +518,97 @@ impl ImageService {
                 )
             })?;
 
-        let newer_ids: Vec<String> = snapshots
+        let newer_snapshots: Vec<&Image> = snapshots
             .iter()
             .filter(|snapshot| snapshot.created_at > target.created_at)
+            .collect();
+        let newer_ids: Vec<String> = newer_snapshots
+            .iter()
             .map(|snapshot| snapshot.id.clone())
             .collect();
+        let newer_names: Vec<String> = newer_snapshots
+            .iter()
+            .map(|snapshot| snapshot.name.clone())
+            .collect();
 
-        self.backend.rollback_snapshot(&master.name, &target.name)?;
-
-        for id in &newer_ids {
-            self.repository.delete(id).await?;
+        if !newer_ids.is_empty() && !prune_newer_snapshots {
+            bail!("rollback would delete newer snapshots; explicit prune approval is required");
         }
+        if prune_newer_snapshots {
+            let mut expected = expected_newer_snapshots.to_vec();
+            let mut actual = newer_names.clone();
+            expected.sort();
+            actual.sort();
+            if expected != actual {
+                bail!("newer snapshots changed since confirmation; refresh and retry");
+            }
+        }
+        if self
+            .repository
+            .has_non_snapshot_children(&master.id)
+            .await?
+        {
+            bail!("cannot rollback an image with dependent clones");
+        }
+        if self.repository.has_pending_installation(&master.id).await? {
+            bail!("cannot rollback an image with a pending installer session");
+        }
+        let assigned_clients = self
+            .repository
+            .clients_assigned_to_snapshots(&master.name, &newer_names)
+            .await?;
+        if !assigned_clients.is_empty() {
+            bail!(
+                "cannot rollback while clients are assigned to newer snapshots: {}",
+                assigned_clients.join(", ")
+            );
+        }
+        for target_iqn in self
+            .repository
+            .assigned_client_targets(&master.name)
+            .await?
+        {
+            if crate::infrastructure::iscsi::target_has_active_sessions(&target_iqn)? {
+                bail!("cannot rollback while a client has an active iSCSI session");
+            }
+        }
+
+        // `zfs rollback -r` also destroys snapshots that have no metadata row.
+        // Refuse instead of silently deleting operator- or replication-created
+        // snapshots; `import-scan` can register them first.
+        let tracked_names: HashSet<&str> = snapshots
+            .iter()
+            .map(|snapshot| snapshot.name.as_str())
+            .collect();
+        let storage = self.backend.info(&master.name)?;
+        let untracked: Vec<&str> = storage
+            .snapshots
+            .iter()
+            .map(String::as_str)
+            .filter(|name| !tracked_names.contains(name))
+            .collect();
+        if !untracked.is_empty() {
+            bail!(
+                "cannot rollback while untracked ZFS snapshots exist: {}; import or remove them first",
+                untracked.join(", ")
+            );
+        }
+
+        let transaction = self.repository.begin_delete_snapshots(&newer_ids).await?;
+        self.backend.rollback_snapshot(&master.name, &target.name)?;
+        transaction.commit().await?;
 
         Ok(newer_ids.len())
     }
 
     pub async fn import(&self, request: ImportImageRequest) -> Result<Image> {
+        self.run_blocking(move |service| {
+            Box::pin(async move { service.import_blocking(request).await })
+        })
+        .await
+    }
+
+    async fn import_blocking(&self, request: ImportImageRequest) -> Result<Image> {
         use crate::infrastructure::image::{ImageConversionBackend, QemuImgBackend};
 
         validate_zfs_name(&request.name)?;
@@ -376,35 +639,14 @@ impl ImageService {
             bail!("source image has zero virtual size");
         }
 
-        /*
-         * qemu-img always converts into a
-         * temporary raw file before it enters
-         * the ZFS ZVOL.
-         */
-        let temp_path =
-            std::env::temp_dir().join(format!("diskless-import-{}.raw", Uuid::new_v4()));
-
-        let conversion_result = if source_info.format == ImageFormat::Raw {
-            std::fs::copy(source, &temp_path)
-                .map(|_| ())
-                .map_err(anyhow::Error::from)
-        } else {
-            converter.convert_to_raw(source, &temp_path)
-        };
-
-        if let Err(error) = conversion_result {
-            let _ = std::fs::remove_file(&temp_path);
-
-            return Err(error).context("failed to convert source image to raw");
-        }
-
-        let import_result = self
-            .backend
-            .import_raw(&temp_path, &destination, size_bytes);
-
-        let _ = std::fs::remove_file(&temp_path);
-
-        import_result?;
+        import_source(
+            self.backend.as_ref(),
+            source,
+            source_info.format,
+            &destination,
+            size_bytes,
+        )
+        .context("failed to import source image")?;
 
         self.backend.set_os_type(&destination, &request.os_type)?;
 
@@ -450,6 +692,14 @@ impl ImageService {
     }
 
     pub async fn resize(&self, id: &str, new_size_gb: u64) -> Result<Image> {
+        let id = id.to_owned();
+        self.run_blocking(move |service| {
+            Box::pin(async move { service.resize_blocking(&id, new_size_gb).await })
+        })
+        .await
+    }
+
+    async fn resize_blocking(&self, id: &str, new_size_gb: u64) -> Result<Image> {
         if new_size_gb == 0 {
             bail!("image size must be greater than zero");
         }
@@ -480,12 +730,37 @@ impl ImageService {
     }
 
     pub async fn verify(&self, id: &str) -> Result<bool> {
+        let id = id.to_owned();
+        self.run_blocking(move |service| {
+            Box::pin(async move { service.verify_blocking(&id).await })
+        })
+        .await
+    }
+
+    async fn verify_blocking(&self, id: &str) -> Result<bool> {
         let image = self.get(id).await?;
 
-        self.backend.verify(&image.name)
+        if !self.backend.verify(&image.name)? {
+            return Ok(false);
+        }
+
+        let expected_size = image
+            .size_gb
+            .checked_mul(1024 * 1024 * 1024)
+            .context("image size exceeds supported capacity")?;
+        let actual_size = self.backend.info(&image.name)?.virtual_size;
+        Ok(actual_size > 0 && actual_size == expected_size)
     }
 
     pub async fn get_info(&self, id: &str) -> Result<ImageInfo> {
+        let id = id.to_owned();
+        self.run_blocking(move |service| {
+            Box::pin(async move { service.get_info_blocking(&id).await })
+        })
+        .await
+    }
+
+    async fn get_info_blocking(&self, id: &str) -> Result<ImageInfo> {
         let image = self.get(id).await?;
 
         let info = self.backend.info(&image.name)?;
@@ -493,7 +768,313 @@ impl ImageService {
         Ok(info.into())
     }
 
+    /// Inspect storage and boot metadata without mounting the image.
+    pub async fn health(&self, id: &str) -> Result<ImageHealth> {
+        let id = id.to_owned();
+        self.run_blocking(move |service| {
+            Box::pin(async move { service.health_blocking(&id).await })
+        })
+        .await
+    }
+
+    async fn health_blocking(&self, id: &str) -> Result<ImageHealth> {
+        let image = self.get(id).await?;
+        if image.kind == ImageKind::Snapshot {
+            bail!("health inspection requires a master image or clone");
+        }
+
+        let mut checks = Vec::new();
+        let mut boot = BootProbe::default();
+
+        let storage = match self.backend.verify(&image.name) {
+            Ok(true) => match self.backend.info(&image.name) {
+                Ok(info) => {
+                    checks.push(health_check(
+                        "storage",
+                        "Storage volume",
+                        HealthCheckStatus::Pass,
+                        format!("{} is present", image.name),
+                    ));
+                    Some(info)
+                }
+                Err(error) => {
+                    checks.push(health_check(
+                        "storage",
+                        "Storage volume",
+                        HealthCheckStatus::Fail,
+                        format!("{error:#}"),
+                    ));
+                    None
+                }
+            },
+            Ok(false) => {
+                checks.push(health_check(
+                    "storage",
+                    "Storage volume",
+                    HealthCheckStatus::Fail,
+                    format!("{} is missing from storage", image.name),
+                ));
+                None
+            }
+            Err(error) => {
+                checks.push(health_check(
+                    "storage",
+                    "Storage volume",
+                    HealthCheckStatus::Fail,
+                    format!("{error:#}"),
+                ));
+                None
+            }
+        };
+
+        if let Some(info) = &storage {
+            match image
+                .size_gb
+                .checked_mul(1024 * 1024 * 1024)
+                .filter(|expected| info.virtual_size > 0 && info.virtual_size == *expected)
+            {
+                Some(_) => checks.push(health_check(
+                    "size",
+                    "Volume size",
+                    HealthCheckStatus::Pass,
+                    format!("{} GB allocated", image.size_gb),
+                )),
+                None => checks.push(health_check(
+                    "size",
+                    "Volume size",
+                    HealthCheckStatus::Fail,
+                    format!(
+                        "metadata says {} GB, storage reports {} bytes",
+                        image.size_gb, info.virtual_size
+                    ),
+                )),
+            }
+
+            match self.backend.probe_boot(&image.name) {
+                Ok(probe) => boot = probe,
+                Err(error) => checks.push(health_check(
+                    "boot-probe",
+                    "Boot metadata",
+                    HealthCheckStatus::Warn,
+                    format!("could not read partition metadata: {error:#}"),
+                )),
+            }
+        }
+
+        if storage.is_some() {
+            checks.push(if boot.partition_table.is_some() {
+                health_check(
+                    "partition-table",
+                    "Partition table",
+                    HealthCheckStatus::Pass,
+                    boot.partition_table
+                        .clone()
+                        .unwrap_or_else(|| "detected".to_string()),
+                )
+            } else {
+                health_check(
+                    "partition-table",
+                    "Partition table",
+                    HealthCheckStatus::Warn,
+                    "no partition table detected",
+                )
+            });
+
+            checks.push(if boot.partitions.is_empty() {
+                health_check(
+                    "partitions",
+                    "Partitions",
+                    HealthCheckStatus::Warn,
+                    "no partitions detected",
+                )
+            } else {
+                health_check(
+                    "partitions",
+                    "Partitions",
+                    HealthCheckStatus::Pass,
+                    format!("{} partition(s) detected", boot.partitions.len()),
+                )
+            });
+
+            let has_efi = boot.partitions.iter().any(|partition| {
+                partition
+                    .part_type
+                    .as_deref()
+                    .is_some_and(|kind| kind.to_ascii_lowercase().contains("efi"))
+            });
+            let has_boot_flag = boot.partitions.iter().any(|partition| {
+                partition.part_flags.as_deref().is_some_and(|flags| {
+                    let flags = flags.to_ascii_lowercase();
+                    flags.contains("0x80") || flags.contains("boot")
+                })
+            });
+
+            match image.os_type {
+                OsType::Windows => {
+                    let has_ntfs = boot
+                        .filesystem
+                        .as_deref()
+                        .is_some_and(|filesystem| filesystem.eq_ignore_ascii_case("ntfs"))
+                        || boot.partitions.iter().any(|partition| {
+                            partition.filesystem.as_deref().is_some_and(|filesystem| {
+                                filesystem.eq_ignore_ascii_case("ntfs")
+                                    || filesystem.eq_ignore_ascii_case("bitlocker")
+                            })
+                        });
+                    checks.push(if has_ntfs {
+                        health_check(
+                            "windows-filesystem",
+                            "Windows filesystem",
+                            HealthCheckStatus::Pass,
+                            "NTFS or BitLocker volume found",
+                        )
+                    } else {
+                        health_check(
+                            "windows-filesystem",
+                            "Windows filesystem",
+                            HealthCheckStatus::Fail,
+                            "no NTFS or BitLocker volume found",
+                        )
+                    });
+                    checks.push(if has_efi {
+                        health_check(
+                            "efi-partition",
+                            "EFI System Partition",
+                            HealthCheckStatus::Pass,
+                            "EFI partition found",
+                        )
+                    } else {
+                        health_check(
+                            "efi-partition",
+                            "EFI System Partition",
+                            HealthCheckStatus::Warn,
+                            "no EFI partition found; verify BIOS boot before assigning clients",
+                        )
+                    });
+                }
+                OsType::Linux => {
+                    let has_linux_filesystem =
+                        boot.filesystem.as_deref().is_some_and(is_linux_filesystem)
+                            || boot.partitions.iter().any(|partition| {
+                                partition
+                                    .filesystem
+                                    .as_deref()
+                                    .is_some_and(is_linux_filesystem)
+                            });
+                    checks.push(if has_linux_filesystem {
+                        health_check(
+                            "linux-filesystem",
+                            "Linux filesystem",
+                            HealthCheckStatus::Pass,
+                            "ext, XFS, Btrfs, or F2FS volume found",
+                        )
+                    } else {
+                        health_check(
+                            "linux-filesystem",
+                            "Linux filesystem",
+                            HealthCheckStatus::Warn,
+                            "no common Linux filesystem found",
+                        )
+                    });
+                    checks.push(if has_efi {
+                        health_check(
+                            "efi-partition",
+                            "EFI System Partition",
+                            HealthCheckStatus::Pass,
+                            "EFI partition found",
+                        )
+                    } else if has_boot_flag {
+                        health_check(
+                            "efi-partition",
+                            "Boot partition",
+                            HealthCheckStatus::Pass,
+                            "BIOS boot flag found",
+                        )
+                    } else {
+                        health_check(
+                            "efi-partition",
+                            "Boot partition",
+                            HealthCheckStatus::Warn,
+                            "no EFI or BIOS boot marker found",
+                        )
+                    });
+                }
+            }
+        }
+
+        if image.os_type == OsType::Windows {
+            match self.repository.list_driver_revisions(&image.id).await {
+                Ok(revisions) => {
+                    let ready = revisions
+                        .iter()
+                        .filter(|revision| revision.status == DriverRevisionStatus::Ready)
+                        .count();
+                    let pending = revisions
+                        .iter()
+                        .filter(|revision| {
+                            matches!(
+                                revision.status,
+                                DriverRevisionStatus::Preparing
+                                    | DriverRevisionStatus::AwaitingTest
+                            )
+                        })
+                        .count();
+                    let failed = revisions
+                        .iter()
+                        .filter(|revision| revision.status == DriverRevisionStatus::Failed)
+                        .count();
+                    let (status, detail) = if ready > 0 {
+                        (
+                            HealthCheckStatus::Pass,
+                            format!("{ready} tested driver revision(s) available"),
+                        )
+                    } else if pending > 0 {
+                        (
+                            HealthCheckStatus::Warn,
+                            format!("{pending} driver candidate(s) awaiting a boot test"),
+                        )
+                    } else if failed > 0 {
+                        (
+                            HealthCheckStatus::Warn,
+                            "no tested driver revision; latest candidate failed, base image drivers will be used"
+                                .to_string(),
+                        )
+                    } else {
+                        (
+                            HealthCheckStatus::Pass,
+                            "no driver revision recorded; base image drivers will be used"
+                                .to_string(),
+                        )
+                    };
+                    checks.push(health_check(
+                        "driver-readiness",
+                        "Driver readiness",
+                        status,
+                        detail,
+                    ));
+                }
+                Err(error) => checks.push(health_check(
+                    "driver-readiness",
+                    "Driver readiness",
+                    HealthCheckStatus::Warn,
+                    format!("driver revision lookup failed: {error:#}"),
+                )),
+            }
+        }
+
+        Ok(ImageHealth::from_checks(image.id, checks, boot))
+    }
+
     pub async fn create_snapshot(&self, id: &str, snapshot_name: &str) -> Result<Image> {
+        let id = id.to_owned();
+        let snapshot_name = snapshot_name.to_owned();
+        self.run_blocking(move |service| {
+            Box::pin(async move { service.create_snapshot_blocking(&id, &snapshot_name).await })
+        })
+        .await
+    }
+
+    async fn create_snapshot_blocking(&self, id: &str, snapshot_name: &str) -> Result<Image> {
         validate_zfs_name(snapshot_name)?;
 
         let source = self.get(id).await?;
@@ -577,64 +1158,67 @@ impl ImageService {
     }
 
     pub async fn delete(&self, id: &str) -> Result<()> {
+        let id = id.to_owned();
+        self.run_blocking(move |service| {
+            Box::pin(async move { service.delete_blocking(&id).await })
+        })
+        .await
+    }
+
+    async fn delete_blocking(&self, id: &str) -> Result<()> {
         let image = self.get(id).await?;
 
-        if image.is_default {
+        if image.is_default && self.backend.exists(&image.name)? {
             bail!("cannot delete the default image");
         }
 
-        match image.kind {
+        let storage_name = match image.kind {
             ImageKind::Snapshot => {
-                /*
-                 * A snapshot is represented in the database as:
-                 *
-                 *     name = "v1"
-                 *     parent_id = source image ID
-                 *
-                 * The actual ZFS object is:
-                 *
-                 *     source.name@image.name
-                 */
                 let parent_id = image.parent_id.as_deref().ok_or_else(|| {
                     anyhow::anyhow!("snapshot '{}' has no parent image", image.name)
                 })?;
-
                 let parent = self.get(parent_id).await?;
-
-                self.backend.destroy_snapshot(&parent.name, &image.name)?;
+                format!("{}@{}", parent.name, image.name)
             }
-
             ImageKind::Master | ImageKind::Clone => {
-                /*
-                 * Both masters and clones are ZFS volumes.
-                 *
-                 * Therefore both must use:
-                 *
-                 *     zfs destroy <dataset>
-                 *
-                 * NOT destroy_snapshot().
-                 */
-
                 let children = self.repository.list().await?;
-
-                let has_children = children
+                if children
                     .iter()
-                    .any(|candidate| candidate.parent_id.as_deref() == Some(&image.id));
-
-                if has_children {
+                    .any(|candidate| candidate.parent_id.as_deref() == Some(&image.id))
+                {
                     bail!(
                         "cannot delete image '{}' while dependent snapshots or clones exist",
                         image.name
                     );
                 }
-
-                if self.backend.exists(&image.name)? {
-                    self.backend.destroy(&image.name)?;
-                }
+                image.name.clone()
             }
-        }
+        };
 
-        self.repository.delete(&image.id).await?;
+        // An image whose storage already vanished can never be used again, so
+        // its revision references must not keep the record alive, and there is
+        // nothing left to destroy (ZFS fails on a snapshot that is already gone).
+        let storage_missing = !self.backend.exists(&storage_name)?;
+        let (transaction, _) = self
+            .repository
+            .begin_delete(&image.id, storage_missing)
+            .await?;
+        if !storage_missing {
+            match image.kind {
+                ImageKind::Snapshot => {
+                    let (parent, snapshot) = storage_name
+                        .rsplit_once('@')
+                        .context("snapshot storage name has no parent")?;
+                    self.backend.destroy_snapshot(parent, snapshot)
+                }
+                ImageKind::Master | ImageKind::Clone => self.backend.destroy(&storage_name),
+            }
+            .with_context(|| format!("failed to delete image '{}'", storage_name))?;
+        }
+        transaction
+            .commit()
+            .await
+            .context("failed to remove image metadata after storage deletion")?;
 
         Ok(())
     }
@@ -645,8 +1229,6 @@ impl ImageService {
         if image.kind == ImageKind::Snapshot {
             bail!("a snapshot cannot be the default image");
         }
-
-        self.repository.clear_default().await?;
 
         self.repository.set_default(&image.id).await?;
 
@@ -673,9 +1255,14 @@ impl ImageService {
     /// duplicate snapshot name) is skipped with a warning rather than aborting
     /// the whole scan.
     pub async fn import_existing_images(&self) -> Result<ImportScanResult> {
-        use crate::infrastructure::zfs::{
-            ZfsCommand, ZfsDatasetOperations, ZfsSnapshotOperations,
-        };
+        self.run_blocking(|service| {
+            Box::pin(async move { service.import_existing_images_blocking().await })
+        })
+        .await
+    }
+
+    async fn import_existing_images_blocking(&self) -> Result<ImportScanResult> {
+        use crate::infrastructure::zfs::{ZfsCommand, ZfsDatasetOperations, ZfsSnapshotOperations};
 
         let parent = self.backend.image_parent()?;
 
@@ -885,4 +1472,799 @@ fn parent_dataset(zfs_name: &str) -> Result<String> {
         .rsplit_once('/')
         .map(|(parent, _)| parent.to_string())
         .ok_or_else(|| anyhow::anyhow!("invalid ZFS image name '{}'", zfs_name))
+}
+
+fn import_source(
+    backend: &dyn ImageBackend,
+    source: &Path,
+    format: ImageFormat,
+    destination: &str,
+    size_bytes: u64,
+) -> Result<()> {
+    if format == ImageFormat::Raw {
+        backend.import_raw(source, destination, size_bytes)
+    } else {
+        backend.import_converted(source, destination, size_bytes)
+    }
+}
+
+#[cfg(test)]
+mod storage_presence_tests {
+    use super::*;
+    use crate::infrastructure::image::ImageBackendInfo;
+    use std::collections::HashSet;
+    use std::path::Path;
+
+    struct FakeStorage {
+        present: HashSet<String>,
+        virtual_size: u64,
+        fail: bool,
+        fail_rollback: bool,
+        snapshots: Vec<String>,
+        boot_probe: BootProbe,
+        promoted: Arc<std::sync::atomic::AtomicBool>,
+        imports: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+    impl ImageBackend for FakeStorage {
+        fn clone_origin(&self, _: &str) -> Result<Option<String>> {
+            Ok((!self.promoted.load(std::sync::atomic::Ordering::SeqCst))
+                .then(|| "pool/origin@snapshot".to_owned()))
+        }
+        fn promote_clone(&self, _: &str) -> Result<()> {
+            self.promoted
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+        fn exists(&self, name: &str) -> Result<bool> {
+            if self.fail {
+                bail!("storage query failed");
+            }
+            Ok(self.present.contains(name))
+        }
+        fn destroy(&self, _: &str) -> Result<()> {
+            bail!("unexpected destroy")
+        }
+        fn destroy_snapshot(&self, _: &str, _: &str) -> Result<()> {
+            bail!("unexpected snapshot destroy")
+        }
+        fn create_volume(&self, _: &str, _: u64) -> Result<()> {
+            unreachable!()
+        }
+        fn rename(&self, _: &str, _: &str) -> Result<()> {
+            unreachable!()
+        }
+        fn clone_image(&self, _: &str, _: &str) -> Result<()> {
+            unreachable!()
+        }
+        fn create_snapshot(&self, _: &str, _: &str) -> Result<()> {
+            unreachable!()
+        }
+        fn rollback_snapshot(&self, _: &str, _: &str) -> Result<()> {
+            if self.fail_rollback {
+                bail!("rollback failed");
+            }
+            Ok(())
+        }
+        fn resize(&self, _: &str, _: u64) -> Result<()> {
+            unreachable!()
+        }
+        fn import_raw(&self, source: &Path, destination: &str, size_bytes: u64) -> Result<()> {
+            self.imports.lock().unwrap().push(format!(
+                "raw:{}:{destination}:{size_bytes}",
+                source.display()
+            ));
+            Ok(())
+        }
+        fn import_converted(
+            &self,
+            source: &Path,
+            destination: &str,
+            size_bytes: u64,
+        ) -> Result<()> {
+            self.imports.lock().unwrap().push(format!(
+                "converted:{}:{destination}:{size_bytes}",
+                source.display()
+            ));
+            Ok(())
+        }
+        fn verify(&self, name: &str) -> Result<bool> {
+            Ok(self.present.contains(name))
+        }
+        fn info(&self, _: &str) -> Result<ImageBackendInfo> {
+            Ok(ImageBackendInfo {
+                virtual_size: self.virtual_size,
+                actual_size: 0,
+                format: ImageFormat::Raw,
+                backing_file: None,
+                snapshots: self.snapshots.clone(),
+            })
+        }
+        fn probe_boot(&self, _: &str) -> Result<BootProbe> {
+            Ok(self.boot_probe.clone())
+        }
+        fn set_os_type(&self, _: &str, _: &str) -> Result<()> {
+            unreachable!()
+        }
+        fn image_parent(&self) -> Result<String> {
+            unreachable!()
+        }
+    }
+    async fn service(present: &[&str], fail: bool) -> ImageService {
+        service_with_virtual_size(present, fail, 50 * 1024 * 1024 * 1024).await
+    }
+
+    async fn service_with_virtual_size(
+        present: &[&str],
+        fail: bool,
+        virtual_size: u64,
+    ) -> ImageService {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        ImageService::with_backend(
+            ImageRepository::new(pool),
+            Arc::new(FakeStorage {
+                present: present.iter().map(|name| name.to_string()).collect(),
+                virtual_size,
+                fail,
+                fail_rollback: false,
+                boot_probe: BootProbe::default(),
+                snapshots: Vec::new(),
+                promoted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                imports: Arc::new(std::sync::Mutex::new(Vec::new())),
+            }),
+        )
+    }
+    fn image(id: &str, name: &str, parent: Option<&str>) -> Image {
+        Image {
+            id: id.into(),
+            name: name.into(),
+            kind: if parent.is_some() {
+                ImageKind::Snapshot
+            } else {
+                ImageKind::Master
+            },
+            os_type: OsType::Linux,
+            size_gb: 50,
+            path: PathBuf::from("/dev/zvol/pool/image"),
+            format: ImageFormat::Raw,
+            status: "ready".into(),
+            description: None,
+            parent_id: parent.map(str::to_owned),
+            source_snapshot: None,
+            checksum: None,
+            is_default: false,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_rejects_a_zvol_whose_capacity_differs_from_image_metadata() {
+        let service =
+            service_with_virtual_size(&["pool/image"], false, 49 * 1024 * 1024 * 1024).await;
+        service
+            .repository
+            .insert(&image("master", "pool/image", None))
+            .await
+            .unwrap();
+
+        assert!(!service.verify("master").await.unwrap());
+
+        let matching =
+            service_with_virtual_size(&["pool/image"], false, 50 * 1024 * 1024 * 1024).await;
+        matching
+            .repository
+            .insert(&image("master", "pool/image", None))
+            .await
+            .unwrap();
+        assert!(matching.verify("master").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn verify_returns_false_when_the_zvol_is_missing() {
+        let service = service(&[], false).await;
+        service
+            .repository
+            .insert(&image("master", "pool/image", None))
+            .await
+            .unwrap();
+
+        assert!(!service.verify("master").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn health_fails_when_storage_is_missing() {
+        let service = service(&[], false).await;
+        service
+            .repository
+            .insert(&image("master", "pool/image", None))
+            .await
+            .unwrap();
+
+        let health = service.health("master").await.unwrap();
+
+        assert_eq!(health.status, HealthCheckStatus::Fail);
+        assert!(health
+            .checks
+            .iter()
+            .any(|check| check.id == "storage" && check.status == HealthCheckStatus::Fail));
+    }
+
+    #[tokio::test]
+    async fn health_accepts_a_windows_image_with_ntfs_and_an_efi_partition() {
+        let virtual_size = 50 * 1024 * 1024 * 1024;
+        let mut service = service_with_virtual_size(&["pool/image"], false, virtual_size).await;
+        service.backend = Arc::new(FakeStorage {
+            present: HashSet::from(["pool/image".to_owned()]),
+            virtual_size,
+            fail: false,
+            fail_rollback: false,
+            boot_probe: BootProbe {
+                partition_table: Some("gpt".into()),
+                filesystem: None,
+                partitions: vec![
+                    crate::core::image::BootPartition {
+                        name: "zd0p1".into(),
+                        size: 100 * 1024 * 1024,
+                        filesystem: Some("vfat".into()),
+                        part_type: Some("EFI System".into()),
+                        part_flags: Some("boot".into()),
+                    },
+                    crate::core::image::BootPartition {
+                        name: "zd0p2".into(),
+                        size: virtual_size - 100 * 1024 * 1024,
+                        filesystem: Some("ntfs".into()),
+                        part_type: Some("Microsoft basic data".into()),
+                        part_flags: None,
+                    },
+                ],
+            },
+            snapshots: Vec::new(),
+            promoted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            imports: Arc::new(std::sync::Mutex::new(Vec::new())),
+        });
+        let mut master = image("master", "pool/image", None);
+        master.os_type = OsType::Windows;
+        service.repository.insert(&master).await.unwrap();
+
+        let health = service.health("master").await.unwrap();
+
+        assert_eq!(health.status, HealthCheckStatus::Pass);
+        assert_eq!(health.boot.partitions.len(), 2);
+        assert!(health.checks.iter().any(|check| {
+            check.id == "windows-filesystem" && check.status == HealthCheckStatus::Pass
+        }));
+        assert!(health.checks.iter().any(|check| {
+            check.id == "efi-partition" && check.status == HealthCheckStatus::Pass
+        }));
+    }
+
+    #[test]
+    fn imports_raw_files_directly_and_converts_other_formats_at_the_destination() {
+        let imports = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let backend = FakeStorage {
+            present: HashSet::new(),
+            virtual_size: 0,
+            fail: false,
+            fail_rollback: false,
+            boot_probe: BootProbe::default(),
+            snapshots: Vec::new(),
+            promoted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            imports: Arc::clone(&imports),
+        };
+
+        import_source(
+            &backend,
+            Path::new("/images/source.raw"),
+            ImageFormat::Raw,
+            "pool/image-disk/test",
+            1024,
+        )
+        .unwrap();
+        import_source(
+            &backend,
+            Path::new("/images/source.qcow2"),
+            ImageFormat::Qcow2,
+            "pool/image-disk/test-2",
+            2048,
+        )
+        .unwrap();
+
+        assert_eq!(
+            *imports.lock().unwrap(),
+            [
+                "raw:/images/source.raw:pool/image-disk/test:1024",
+                "converted:/images/source.qcow2:pool/image-disk/test-2:2048"
+            ]
+        );
+    }
+    #[tokio::test]
+    async fn listing_checks_volumes_and_snapshot_names_without_removing_records() {
+        let service = service(&["pool/image", "pool/image@present"], false).await;
+        for record in [
+            image("master", "pool/image", None),
+            image("present", "present", Some("master")),
+            image("gone", "gone", Some("master")),
+            image("missing", "pool/missing", None),
+        ] {
+            service.repository.insert(&record).await.unwrap();
+        }
+        let images = service.list().await.unwrap();
+        assert_eq!(
+            images.iter().find(|i| i.id == "gone").unwrap().status,
+            "missing"
+        );
+        assert_eq!(
+            images.iter().find(|i| i.id == "missing").unwrap().status,
+            "missing"
+        );
+        assert_eq!(
+            images.iter().find(|i| i.id == "present").unwrap().status,
+            "ready"
+        );
+        assert_eq!(service.repository.list().await.unwrap().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn rollback_requires_approval_before_pruning_newer_snapshots() {
+        let service = service(&[], false).await;
+        let now = Utc::now();
+        let mut master = image("master", "pool/image", None);
+        master.created_at = now;
+        let mut old = image("old", "old", Some("master"));
+        old.created_at = now - chrono::Duration::minutes(1);
+        let mut newer = image("newer", "newer", Some("master"));
+        newer.created_at = now + chrono::Duration::minutes(1);
+        for record in [&master, &old, &newer] {
+            service.repository.insert(record).await.unwrap();
+        }
+
+        let result = service.rollback_snapshot("master", "old", false, &[]).await;
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("explicit prune approval"));
+        let images = service.repository.list().await.unwrap();
+        assert!(images.iter().any(|record| record.id == "newer"));
+    }
+
+    #[tokio::test]
+    async fn rollback_rejects_a_stale_prune_approval() {
+        let service = service(&[], false).await;
+        let now = Utc::now();
+        let master = image("master", "pool/image", None);
+        let mut old = image("old", "old", Some("master"));
+        old.created_at = now - chrono::Duration::minutes(1);
+        let mut newer = image("newer", "newer", Some("master"));
+        newer.created_at = now + chrono::Duration::minutes(1);
+        for record in [&master, &old, &newer] {
+            service.repository.insert(record).await.unwrap();
+        }
+
+        let error = service
+            .rollback_snapshot("master", "old", true, &[])
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("changed since confirmation"));
+        assert!(service.repository.get("newer").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn rollback_prunes_newer_snapshot_metadata_only_after_storage_succeeds() {
+        let service = service(&[], false).await;
+        let now = Utc::now();
+        let master = image("master", "pool/image", None);
+        let mut old = image("old", "old", Some("master"));
+        old.created_at = now - chrono::Duration::minutes(1);
+        let mut newer = image("newer", "newer", Some("master"));
+        newer.created_at = now + chrono::Duration::minutes(1);
+        for record in [&master, &old, &newer] {
+            service.repository.insert(record).await.unwrap();
+        }
+
+        assert_eq!(
+            service
+                .rollback_snapshot("master", "old", true, &["newer".to_string()])
+                .await
+                .unwrap(),
+            1
+        );
+        let images = service.repository.list().await.unwrap();
+        assert!(!images.iter().any(|record| record.id == "newer"));
+        assert!(images.iter().any(|record| record.id == "old"));
+    }
+
+    #[tokio::test]
+    async fn rollback_failure_keeps_newer_snapshot_metadata() {
+        let mut service = service(&[], false).await;
+        service.backend = Arc::new(FakeStorage {
+            present: HashSet::new(),
+            virtual_size: 0,
+            fail: false,
+            fail_rollback: true,
+            boot_probe: BootProbe::default(),
+            snapshots: Vec::new(),
+            promoted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            imports: Arc::new(std::sync::Mutex::new(Vec::new())),
+        });
+        let master = image("master", "pool/image", None);
+        let mut old = image("old", "old", Some("master"));
+        old.created_at = Utc::now() - chrono::Duration::minutes(1);
+        let mut newer = image("newer", "newer", Some("master"));
+        newer.created_at = Utc::now() + chrono::Duration::minutes(1);
+        for record in [&master, &old, &newer] {
+            service.repository.insert(record).await.unwrap();
+        }
+
+        assert!(service
+            .rollback_snapshot("master", "old", true, &["newer".to_string()])
+            .await
+            .is_err());
+        assert!(service
+            .repository
+            .list()
+            .await
+            .unwrap()
+            .iter()
+            .any(|record| record.id == "newer"));
+    }
+
+    #[tokio::test]
+    async fn rollback_refuses_images_with_dependent_clones() {
+        let service = service(&[], false).await;
+        let master = image("master", "pool/image", None);
+        let mut snapshot = image("snapshot", "stable", Some("master"));
+        snapshot.created_at = Utc::now() - chrono::Duration::minutes(1);
+        let mut clone = image("clone", "pool/clone", Some("master"));
+        clone.kind = ImageKind::Clone;
+        for record in [&master, &snapshot, &clone] {
+            service.repository.insert(record).await.unwrap();
+        }
+
+        let error = service
+            .rollback_snapshot("master", "stable", true, &[])
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("dependent clones"));
+        assert!(service.repository.get("snapshot").await.unwrap().is_some());
+    }
+    #[tokio::test]
+    async fn rollback_refuses_clients_assigned_to_a_newer_snapshot() {
+        let service = service(&[], false).await;
+        let now = Utc::now();
+        let master = image("master", "pool/image", None);
+        let mut old = image("old", "old", Some("master"));
+        old.created_at = now - chrono::Duration::minutes(1);
+        let mut newer = image("newer", "newer", Some("master"));
+        newer.created_at = now + chrono::Duration::minutes(1);
+        for record in [&master, &old, &newer] {
+            service.repository.insert(record).await.unwrap();
+        }
+        sqlx::query("INSERT INTO clients (id, name, mac, ip, master, snapshot, created_at, updated_at) VALUES ('client', 'PC-01', '02:00:00:00:00:01', '192.0.2.10', 'pool/image', 'pool/image@newer', '2026-10-12', '2026-10-12')")
+            .execute(service.repository.test_pool())
+            .await
+            .unwrap();
+
+        let error = service
+            .rollback_snapshot("master", "old", true, &["newer".to_string()])
+            .await
+            .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("clients are assigned to newer snapshots"));
+        assert!(service.repository.get("newer").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn rollback_refuses_untracked_zfs_snapshots() {
+        let mut service = service(&[], false).await;
+        service.backend = Arc::new(FakeStorage {
+            present: HashSet::new(),
+            virtual_size: 0,
+            fail: false,
+            fail_rollback: false,
+            boot_probe: BootProbe::default(),
+            snapshots: vec!["manual-backup".into()],
+            promoted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            imports: Arc::new(std::sync::Mutex::new(Vec::new())),
+        });
+        let now = Utc::now();
+        let master = image("master", "pool/image", None);
+        let mut old = image("old", "old", Some("master"));
+        old.created_at = now - chrono::Duration::minutes(1);
+        for record in [&master, &old] {
+            service.repository.insert(record).await.unwrap();
+        }
+
+        let error = service
+            .rollback_snapshot("master", "old", true, &[])
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("untracked ZFS snapshots"));
+        assert!(error.to_string().contains("manual-backup"));
+    }
+
+    #[tokio::test]
+    async fn missing_snapshot_then_missing_default_can_be_removed() {
+        let service = service(&[], false).await;
+        let mut master = image("master", "pool/image", None);
+        master.is_default = true;
+        service.repository.insert(&master).await.unwrap();
+        service
+            .repository
+            .insert(&image("snap", "gone", Some("master")))
+            .await
+            .unwrap();
+        service.delete("snap").await.unwrap();
+        service.delete("master").await.unwrap();
+        assert!(service.repository.list().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn promoting_serviced_clone_severs_its_origin_and_is_retry_safe() {
+        let service = service(&["pool/clone"], false).await;
+        service.promote_clone("pool/clone").await.unwrap();
+        service.promote_clone("pool/clone").await.unwrap();
+        assert_eq!(service.backend.clone_origin("pool/clone").unwrap(), None);
+    }
+    #[tokio::test]
+    async fn failed_query_never_allows_metadata_deletion() {
+        let service = service(&[], true).await;
+        service
+            .repository
+            .insert(&image("master", "pool/image", None))
+            .await
+            .unwrap();
+        assert!(service.delete("master").await.is_err());
+        assert!(service.repository.get("master").await.unwrap().is_some());
+        assert!(service.list().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn awaiting_windows_revision_can_replace_the_default() {
+        let service = service(&[], false).await;
+        let mut current = image("current", "pool/current", None);
+        current.is_default = true;
+        service.repository.insert(&current).await.unwrap();
+        let candidate = image("candidate", "pool/candidate", None);
+        service.repository.insert(&candidate).await.unwrap();
+        service
+            .repository
+            .insert_driver_revision(&crate::core::image::ImageDriverRevision {
+                id: "revision".into(),
+                source_image_id: "current".into(),
+                source_snapshot: "pool/current@snap".into(),
+                revision_image_id: Some("candidate".into()),
+                driver_package_ids: vec![],
+                driver_set_hash: "hash".into(),
+                status: crate::core::image::DriverRevisionStatus::AwaitingTest,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            })
+            .await
+            .unwrap();
+
+        assert!(service.set_default("candidate").await.unwrap().is_default);
+        assert!(
+            !service
+                .repository
+                .get("current")
+                .await
+                .unwrap()
+                .unwrap()
+                .is_default
+        );
+        assert!(
+            service
+                .repository
+                .get("candidate")
+                .await
+                .unwrap()
+                .unwrap()
+                .is_default
+        );
+
+        assert!(!service.repository.set_default("missing").await.unwrap());
+        assert!(
+            service
+                .repository
+                .get("candidate")
+                .await
+                .unwrap()
+                .unwrap()
+                .is_default
+        );
+    }
+
+    #[tokio::test]
+    async fn revision_can_be_default_without_a_matching_test_for_every_recorded_nic() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let service = ImageService::with_backend(
+            ImageRepository::new(pool.clone()),
+            Arc::new(FakeStorage {
+                present: HashSet::new(),
+                virtual_size: 0,
+                fail: false,
+                fail_rollback: false,
+                boot_probe: BootProbe::default(),
+                snapshots: Vec::new(),
+                promoted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                imports: Arc::new(std::sync::Mutex::new(Vec::new())),
+            }),
+        );
+        let mut current = image("current", "pool/current", None);
+        current.is_default = true;
+        service.repository.insert(&current).await.unwrap();
+        service
+            .repository
+            .insert(&image("candidate", "pool/candidate", None))
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO clients(id, name, mac, ip, master, created_at, updated_at) VALUES ('test-client', 'test-client', '02:00:00:00:00:01', '192.0.2.10', 'pool/candidate', '2026-10-12T00:00:00Z', '2026-10-12T00:00:00Z')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        service
+            .repository
+            .insert_driver_revision(&crate::core::image::ImageDriverRevision {
+                id: "revision".into(),
+                source_image_id: "current".into(),
+                source_snapshot: "pool/current@snap".into(),
+                revision_image_id: Some("candidate".into()),
+                driver_package_ids: vec!["nic-b".into()],
+                driver_set_hash: "hash".into(),
+                status: crate::core::image::DriverRevisionStatus::Ready,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            })
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO windows_nic_inventory (mac, boot_nic_ids, observed_at) VALUES ('02:00:00:00:00:01', '[\"PCI\\\\VEN_10EC&DEV_8168\"]', '2026-10-12T00:00:00Z')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO windows_revision_boot_tests (id, revision_id, test_client_id, expected_nic_id, candidate_image_id, candidate_snapshot, status, reported_revision, reported_nic_id, result_at, created_at) VALUES ('test', 'revision', 'test-client', 'PCI\\VEN_8086&DEV_15F3', 'candidate', '', 'passed', 'revision', 'PCI\\VEN_8086&DEV_15F3', '2026-10-12T00:00:00Z', '2026-10-12T00:00:00Z')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert!(service.set_default("candidate").await.unwrap().is_default);
+        assert!(
+            !service
+                .repository
+                .get("current")
+                .await
+                .unwrap()
+                .unwrap()
+                .is_default
+        );
+    }
+
+    #[tokio::test]
+    async fn deleting_boot_test_candidate_preserves_history() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let mut service = service(&[], false).await;
+        service.repository = ImageRepository::new(pool.clone());
+        for id in ["source", "candidate"] {
+            service
+                .repository
+                .insert(&image(id, &format!("pool/{id}"), None))
+                .await
+                .unwrap();
+        }
+        sqlx::query("INSERT INTO windows_image_driver_revisions (id, source_image_id, source_snapshot, driver_set_hash, status, created_at, updated_at) VALUES ('revision', 'source', 'pool/source@snap', 'hash', 'ready', '2026-10-12', '2026-10-12')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO windows_revision_boot_tests (id, revision_id, test_client_id, expected_nic_id, candidate_image_id, candidate_snapshot, status, created_at) VALUES ('test', 'revision', 'client', 'nic', 'candidate', 'pool/candidate@snap', 'passed', '2026-10-12')")
+            .execute(&pool).await.unwrap();
+
+        service.backend = Arc::new(FakeStorage {
+            present: HashSet::from(["pool/candidate".to_owned()]),
+            virtual_size: 50 * 1024 * 1024 * 1024,
+            fail: false,
+            fail_rollback: false,
+            boot_probe: BootProbe::default(),
+            snapshots: Vec::new(),
+            promoted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            imports: Arc::new(std::sync::Mutex::new(Vec::new())),
+        });
+        assert!(service
+            .delete("candidate")
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("failed to delete image"));
+        assert!(service.get_optional("candidate").await.unwrap().is_some());
+        let candidate: Option<String> = sqlx::query_scalar(
+            "SELECT candidate_image_id FROM windows_revision_boot_tests WHERE id = 'test'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(candidate.as_deref(), Some("candidate"));
+        service.backend = Arc::new(FakeStorage {
+            present: HashSet::new(),
+            virtual_size: 0,
+            fail: false,
+            fail_rollback: false,
+            boot_probe: BootProbe::default(),
+            snapshots: Vec::new(),
+            promoted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            imports: Arc::new(std::sync::Mutex::new(Vec::new())),
+        });
+
+        service.delete("candidate").await.unwrap();
+        assert!(service.get_optional("candidate").await.unwrap().is_none());
+        let history: (Option<String>, String, String) = sqlx::query_as("SELECT candidate_image_id, candidate_snapshot, status FROM windows_revision_boot_tests WHERE id = 'test'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(
+            history,
+            (None, "pool/candidate@snap".into(), "passed".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn referenced_source_is_rejected_before_destroying_storage() {
+        let service = service(&["pool/source"], false).await;
+        service
+            .repository
+            .insert(&image("source", "pool/source", None))
+            .await
+            .unwrap();
+        service
+            .repository
+            .insert_driver_revision(&crate::core::image::ImageDriverRevision {
+                id: "revision".into(),
+                source_image_id: "source".into(),
+                source_snapshot: "pool/source@snap".into(),
+                revision_image_id: None,
+                driver_package_ids: vec![],
+                driver_set_hash: "hash".into(),
+                status: crate::core::image::DriverRevisionStatus::Ready,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            })
+            .await
+            .unwrap();
+        let error = service.delete("source").await.unwrap_err();
+        assert!(
+            format!("{error:#}").contains("required by driver revisions or super sessions"),
+            "{error:#}"
+        );
+        assert!(service.get_optional("source").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn existing_default_and_dependent_records_remain_protected() {
+        let service = service(&["pool/image"], false).await;
+        let mut master = image("master", "pool/image", None);
+        master.is_default = true;
+        service.repository.insert(&master).await.unwrap();
+        assert!(service
+            .delete("master")
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("default"));
+        master.is_default = false;
+        service.repository.update(&master).await.unwrap();
+        service
+            .repository
+            .insert(&image("snap", "gone", Some("master")))
+            .await
+            .unwrap();
+        assert!(service
+            .delete("master")
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("dependent"));
+        assert_eq!(service.repository.list().await.unwrap().len(), 2);
+    }
 }

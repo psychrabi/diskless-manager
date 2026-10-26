@@ -11,7 +11,9 @@ use std::{net::IpAddr, net::SocketAddr, sync::Arc};
 use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
 
+use crate::audit_logger::{AuditLogger, NewAuditEvent};
 use crate::state::AppState;
+use crate::types::Claims;
 
 /// Simple in-memory auth attempt limiter (10 attempts per 60 seconds per IP).
 #[derive(Clone, Default)]
@@ -62,6 +64,126 @@ fn client_ip(request: &Request<axum::body::Body>) -> Option<IpAddr> {
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .map(|connect_info| connect_info.0.ip())
+}
+
+/// Group an API route under the first path segment after `/api`.
+fn audit_module(path: &str) -> String {
+    path.trim_start_matches('/')
+        .split('/')
+        .nth(1)
+        .filter(|segment| !segment.is_empty())
+        .unwrap_or("system")
+        .to_string()
+}
+
+/// Human-readable operation name for an audited mutation.
+///
+/// The route path is stored separately, so this only needs to distinguish
+/// familiar operations from generic CRUD verbs.
+fn audit_action(method: &Method, path: &str) -> String {
+    const NAMED_ACTIONS: &[&str] = &[
+        "acknowledge",
+        "activate",
+        "cancel",
+        "clone",
+        "complete",
+        "default",
+        "discard",
+        "enter",
+        "install",
+        "password",
+        "reboot",
+        "restart",
+        "retry",
+        "rollback",
+        "rotate",
+        "save",
+        "shutdown",
+        "upload",
+        "verify",
+    ];
+    // Hyphenated endpoint names are actions, not resource ids. Resource ids
+    // may also contain hyphens, so never infer "action" from punctuation.
+    const HYPHEN_ACTIONS: &[&str] = &[
+        "close-recovery",
+        "execute-command",
+        "import-scan",
+        "inventory-boot",
+        "prepare-assignment",
+        "prepare-image",
+        "remote-desktop",
+        "set-default",
+        "system-info",
+        "test-connection",
+    ];
+
+    let terminal = path
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or_default();
+
+    if let Some(action) = NAMED_ACTIONS.iter().find(|action| **action == terminal) {
+        return match *action {
+            "password" => "change-password".to_string(),
+            "default" => "set-default".to_string(),
+            _ => action.to_string(),
+        };
+    }
+    if HYPHEN_ACTIONS.contains(&terminal) {
+        return terminal.to_string();
+    }
+
+    match *method {
+        Method::POST => "create",
+        Method::PUT | Method::PATCH => "update",
+        Method::DELETE => "delete",
+        _ => "read",
+    }
+    .to_string()
+}
+
+/// Record an authenticated mutation after the handler runs.
+///
+/// Only method/path/status metadata is stored; request bodies may contain
+/// passwords or CHAP material and are never read.
+async fn record_audit_event(
+    state: &AppState,
+    method: &Method,
+    path: &str,
+    ip: Option<String>,
+    claims: &Claims,
+    status: StatusCode,
+) {
+    if !matches!(
+        *method,
+        Method::POST | Method::PUT | Method::PATCH | Method::DELETE
+    ) {
+        return;
+    }
+
+    let event = NewAuditEvent {
+        actor: claims.username.clone(),
+        actor_role: Some(claims.role.clone()),
+        ip,
+        module: audit_module(path),
+        action: audit_action(method, path),
+        method: method.to_string(),
+        path: path.to_string(),
+        status: if status.is_success() {
+            "success".to_string()
+        } else {
+            "failed".to_string()
+        },
+        status_code: i64::from(status.as_u16()),
+        details: (!status.is_success())
+            .then(|| status.canonical_reason().unwrap_or("failed").to_string()),
+    };
+
+    let logger = AuditLogger::new(Arc::new(state.db_pool.clone()));
+    if let Err(error) = logger.log_event(&event).await {
+        tracing::error!(%error, "failed to record administrative audit event");
+    }
 }
 
 /// Rate-limit login endpoints by IP.
@@ -150,6 +272,15 @@ fn is_public_endpoint(method: &Method, path: &str) -> bool {
 }
 
 fn user_request_is_allowed(method: &Method, path: &str) -> bool {
+    if (path.starts_with("/api/installer-media/") && method != Method::GET)
+        || (path.starts_with("/api/clients/")
+            && (path.contains("/super/enter")
+                || path.contains("/super/save")
+                || path.contains("/super/discard")
+                || path.ends_with("/legacy-super/exit")))
+    {
+        return false;
+    }
     if matches!(method, &Method::GET | &Method::OPTIONS) {
         return true;
     }
@@ -157,6 +288,8 @@ fn user_request_is_allowed(method: &Method, path: &str) -> bool {
     // Users may operate the system and manage resources, but cannot remove
     // data or change the server's settings.
     !matches!(method, &Method::DELETE)
+        && path != "/api/services/install"
+        && !(path.starts_with("/api/clients/") && path.ends_with("/chap/rotate"))
         && !(path == "/api/system/settings" && matches!(method, &Method::PUT | &Method::PATCH))
 }
 
@@ -197,16 +330,24 @@ pub async fn require_auth(
         return Err(StatusCode::FORBIDDEN);
     }
 
-    let mut request = request;
-    request.extensions_mut().insert(claims);
+    let method = request.method().clone();
+    let path = request.uri().path().to_string();
+    let ip = client_ip(&request).map(|ip| ip.to_string());
 
-    Ok(next.run(request).await)
+    let mut request = request;
+    request.extensions_mut().insert(claims.clone());
+
+    let response = next.run(request).await;
+    record_audit_event(&state, &method, &path, ip, &claims, response.status()).await;
+
+    Ok(response)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        client_ip, cors_origins, is_public_endpoint, user_request_is_allowed, websocket_token,
+        audit_action, audit_module, client_ip, cors_origins, is_public_endpoint,
+        user_request_is_allowed, websocket_token,
     };
     use axum::{
         body::Body,
@@ -255,6 +396,46 @@ mod tests {
             &Method::PATCH,
             "/api/system/settings"
         ));
+    }
+
+    #[test]
+    fn legacy_super_exit_is_admin_only() {
+        assert!(!user_request_is_allowed(
+            &Method::POST,
+            "/api/clients/client-1/legacy-super/exit"
+        ));
+    }
+
+    #[test]
+    fn audit_events_use_stable_modules_and_operation_names() {
+        assert_eq!(audit_module("/api/clients/client-1/super/enter"), "clients");
+        assert_eq!(audit_module("/api/images/pool/image"), "images");
+        assert_eq!(audit_module("/health"), "system");
+
+        assert_eq!(
+            audit_action(
+                &Method::POST,
+                "/api/images/pool/image/snapshots/s1/rollback"
+            ),
+            "rollback"
+        );
+        assert_eq!(
+            audit_action(&Method::PUT, "/api/auth/admin/password"),
+            "change-password"
+        );
+        assert_eq!(
+            audit_action(&Method::POST, "/api/clients/client-1/inventory-boot"),
+            "inventory-boot"
+        );
+        assert_eq!(
+            audit_action(&Method::POST, "/api/images/pool/image/snapshots/default"),
+            "set-default"
+        );
+        assert_eq!(
+            audit_action(&Method::DELETE, "/api/clients/client-1"),
+            "delete"
+        );
+        assert_eq!(audit_action(&Method::POST, "/api/clients"), "create");
     }
 
     #[test]

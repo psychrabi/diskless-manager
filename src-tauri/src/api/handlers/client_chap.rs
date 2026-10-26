@@ -12,32 +12,70 @@ pub async fn rotate_client_chap(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
-    let _client_guard = state.client_mutations.lock().await;
-
-    let (client, credentials) = state
-        .application
-        .clients
-        .rotate_chap(&id)
+    if !state
+        .settings
+        .read()
+        .await
+        .client_features
+        .enable_chap_authentication
+    {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                status: StatusCode::FORBIDDEN.as_u16(),
+                error: "CHAP authentication is disabled in System Settings".to_string(),
+            }),
+        ));
+    }
+    let _client_guard = state.client_mutations.lock_client(&id).await;
+    if crate::application::client_storage_reservations::has_storage_reservation(&state.db_pool, &id)
         .await
         .map_err(|error| {
-            let not_found = error.to_string().contains("client not found");
-            let status = if not_found {
-                StatusCode::NOT_FOUND
-            } else {
-                StatusCode::INTERNAL_SERVER_ERROR
-            };
+            tracing::error!(client_id = %id, %error, "failed to check client storage reservation");
             (
-                status,
+                StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
-                    status: status.as_u16(),
-                    error: if not_found {
-                        format!("Client not found: {id}")
-                    } else {
-                        format!("Failed to rotate CHAP credentials: {error}")
-                    },
+                    status: 500,
+                    error: "Failed to check client storage reservation".into(),
                 }),
             )
-        })?;
+        })?
+    {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(ErrorResponse {
+                status: 409,
+                error: "Client storage is reserved by an installer session or hardware profile"
+                    .into(),
+            }),
+        ));
+    }
+
+    let (client, credentials) =
+        state
+            .application
+            .clients
+            .rotate_chap(&id)
+            .await
+            .map_err(|error| {
+                let not_found = error.to_string().contains("client not found");
+                let status = if not_found {
+                    StatusCode::NOT_FOUND
+                } else {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                };
+                (
+                    status,
+                    Json(ErrorResponse {
+                        status: status.as_u16(),
+                        error: if not_found {
+                            format!("Client not found: {id}")
+                        } else {
+                            format!("Failed to rotate CHAP credentials: {error}")
+                        },
+                    }),
+                )
+            })?;
 
     if let Some(target_iqn) = client
         .target_iqn
@@ -58,26 +96,6 @@ pub async fn rotate_client_chap(
                     }),
                 )
             })?;
-
-        let settings = state.settings.read().await;
-        let next_server = settings.dhcp.next_server_ip.trim();
-        let server_ip = if next_server.is_empty() {
-            settings.server.ip_address.trim()
-        } else {
-            next_server
-        };
-        let reservation = crate::infrastructure::dhcp::BootReservation {
-            client_name: client.name.clone(),
-            mac: client.mac.to_string(),
-            ip: client.ip.to_string(),
-            target_iqn: target_iqn.to_string(),
-            server_ip: server_ip.to_string(),
-            chap: Some(credentials.clone()),
-        };
-
-        if let Err(error) = crate::infrastructure::dhcp::publish_client_ipxe(&reservation).await {
-            tracing::warn!(client_id = %id, %error, "failed to republish boot menu after CHAP rotation");
-        }
     }
 
     tracing::info!(
