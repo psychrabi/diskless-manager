@@ -1,14 +1,21 @@
 use axum::{
     body::Body,
+    extract::{connect_info::ConnectInfo, State},
     http::{Request, StatusCode},
-    Router,
+    Json, Router,
 };
 use serde_json::json;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower::ServiceExt;
 
-use crate::{auth::authenticate_user, state::AppState};
+use crate::{
+    audit_logger::{AuditEventFilter, AuditLogger},
+    auth::authenticate_user,
+    state::AppState,
+    types::LoginRequest,
+};
 
 pub(crate) async fn setup() -> (AppState, Router, String, String) {
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
@@ -118,6 +125,93 @@ async fn users_cannot_write_service_configs_or_destroy_snapshots() {
         request(&app, "GET", "/api/clients", &user, json!(null)).await,
         StatusCode::OK
     );
+}
+
+#[tokio::test]
+async fn authenticated_mutations_are_audited_but_reads_are_not() {
+    let (state, app, admin, _) = setup().await;
+    let path = "/api/images/missing/snapshots/missing/rollback";
+    assert_eq!(
+        request(&app, "POST", path, &admin, json!({})).await,
+        StatusCode::NOT_FOUND
+    );
+
+    let logger = AuditLogger::new(Arc::new(state.db_pool.clone()));
+    let events = logger
+        .query_events(&AuditEventFilter::default())
+        .await
+        .unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].actor, "admin");
+    assert_eq!(events[0].module, "images");
+    assert_eq!(events[0].action, "rollback");
+    assert_eq!(events[0].method, "POST");
+    assert_eq!(events[0].path, path);
+    assert_eq!(events[0].status, "failed");
+    assert_eq!(events[0].status_code, 404);
+
+    assert_eq!(
+        request(&app, "GET", "/api/clients", &admin, json!(null)).await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        logger
+            .query_events(&AuditEventFilter::default())
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn login_success_and_failure_are_audited_without_credentials() {
+    let (state, _, _, _) = setup().await;
+    let peer = ConnectInfo(SocketAddr::from(([192, 0, 2, 10], 5000)));
+
+    let success = super::handlers::auth::login(
+        State(state.clone()),
+        peer,
+        Json(LoginRequest {
+            username: "admin".into(),
+            password: "StrongPass1".into(),
+        }),
+    )
+    .await
+    .unwrap();
+    assert!(!success.0.token.is_empty());
+
+    let failure = super::handlers::auth::login(
+        State(state.clone()),
+        ConnectInfo(SocketAddr::from(([192, 0, 2, 10], 5001))),
+        Json(LoginRequest {
+            username: "admin".into(),
+            password: "WrongPass1".into(),
+        }),
+    )
+    .await;
+    assert!(failure.is_err());
+
+    let events = AuditLogger::new(Arc::new(state.db_pool.clone()))
+        .query_events(&AuditEventFilter {
+            module: Some("auth".into()),
+            ..AuditEventFilter::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(events.len(), 2);
+    assert!(events.iter().all(|event| event.action == "login"));
+    assert!(events.iter().all(|event| event.actor == "admin"));
+    assert_eq!(events[0].ip.as_deref(), Some("192.0.2.10"));
+    assert_eq!(events[0].status, "failed");
+    assert_eq!(events[1].status, "success");
+    assert!(events.iter().all(|event| {
+        !event
+            .details
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Pass")
+    }));
 }
 
 #[tokio::test]

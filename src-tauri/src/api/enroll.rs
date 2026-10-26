@@ -43,6 +43,7 @@ pub fn enroll_router(state: AppState) -> Router {
         .route("/enroll/{mac}", get(enroll_client))
         .route("/inventory/{mac}", axum::routing::post(submit_inventory))
         .route("/boot/net-config/{mac}", get(client_network_config))
+        .route("/boot/failed/{mac}", get(report_client_boot_failure))
         .route(
             "/api/installer/{id}/{token}/report",
             axum::routing::post(crate::api::handlers::installation::report),
@@ -52,6 +53,39 @@ pub fn enroll_router(state: AppState) -> Router {
             get(crate::api::handlers::installation::payload),
         )
         .with_state(state)
+}
+
+/// Record a boot failure only when the registered client is reporting from its
+/// reserved address. The MAC and peer IP together bind this unauthenticated
+/// endpoint to the client already known to the PXE server.
+async fn report_client_boot_failure(
+    State(state): State<AppState>,
+    ConnectInfo(remote): ConnectInfo<SocketAddr>,
+    Path(mac): Path<String>,
+) -> StatusCode {
+    let Ok(mac) = MacAddress::parse(&mac) else {
+        return StatusCode::NOT_FOUND;
+    };
+    let repository = ClientRepository::new(state.db_pool.clone());
+    let Ok(Some(client)) = repository.find_by_mac(&mac).await else {
+        return StatusCode::NOT_FOUND;
+    };
+    if !client.enabled || !peer_matches_client_ip(&client.ip.to_string(), remote.ip()) {
+        return StatusCode::NOT_FOUND;
+    }
+    match crate::application::client_boot::record_boot_failure(
+        &state,
+        client.id.as_str(),
+        "iPXE reported boot failure",
+    )
+    .await
+    {
+        Ok(()) => StatusCode::OK,
+        Err(error) => {
+            error!(client_id = %client.id, %error, "failed to record iPXE boot failure");
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    }
 }
 
 pub struct EnrollServer {
@@ -793,6 +827,45 @@ mod tests {
             .await
             .unwrap_or_default();
         (status, String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    #[tokio::test]
+    async fn boot_failure_report_is_recorded_only_for_the_client_reserved_ip() {
+        let state = test_state().await;
+        sqlx::query("INSERT INTO clients (id, name, mac, ip, master, enabled, created_at, updated_at) VALUES ('report-client', 'report-client', '02:00:00:00:00:0d', '192.0.2.13', 'pool/master', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+            .execute(&state.db_pool)
+            .await
+            .unwrap();
+
+        for (peer_ip, expected) in [
+            ("192.0.2.99", StatusCode::NOT_FOUND),
+            ("192.0.2.13", StatusCode::OK),
+        ] {
+            let peer: ConnectInfo<SocketAddr> = ConnectInfo(
+                format!("{peer_ip}:68")
+                    .parse()
+                    .expect("test peer must parse"),
+            );
+            let response = enroll_router(state.clone())
+                .oneshot(
+                    Request::builder()
+                        .uri("/boot/failed/02:00:00:00:00:0d")
+                        .extension(peer)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+        }
+
+        let diagnostic: (i64, String) = sqlx::query_as(
+            "SELECT failures, last_error FROM client_boot_failures WHERE client_id = 'report-client'",
+        )
+        .fetch_one(&state.db_pool)
+        .await
+        .unwrap();
+        assert_eq!(diagnostic, (1, "iPXE reported boot failure".into()));
     }
 
     #[tokio::test]

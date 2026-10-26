@@ -208,6 +208,77 @@ impl ImageRepository {
         Ok(deleted)
     }
 
+    pub async fn has_non_snapshot_children(&self, image_id: &str) -> Result<bool> {
+        let exists: i64 = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM images WHERE parent_id = ? AND kind != 'snapshot')",
+        )
+        .bind(image_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(exists != 0)
+    }
+
+    pub async fn assigned_client_targets(&self, image_name: &str) -> Result<Vec<String>> {
+        Ok(sqlx::query_scalar(
+            "SELECT target_iqn FROM clients WHERE master = ? AND target_iqn IS NOT NULL AND target_iqn != ''",
+        )
+        .bind(image_name)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    /// Client names whose saved boot assignment names one of `snapshot_names`.
+    pub async fn clients_assigned_to_snapshots(
+        &self,
+        master_name: &str,
+        snapshot_names: &[String],
+    ) -> Result<Vec<String>> {
+        if snapshot_names.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut query =
+            sqlx::QueryBuilder::<sqlx::Sqlite>::new("SELECT name FROM clients WHERE snapshot IN (");
+        let mut separated = query.separated(", ");
+        for name in snapshot_names {
+            separated.push_bind(format!("{}@{}", master_name, name));
+        }
+        query.push(") ORDER BY name");
+        Ok(query.build_query_scalar().fetch_all(&self.pool).await?)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_pool(&self) -> &sqlx::SqlitePool {
+        &self.pool
+    }
+
+    pub async fn has_pending_installation(&self, image_id: &str) -> Result<bool> {
+        let exists: i64 = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM installation_sessions WHERE image_id = ? AND state != 'completed')",
+        )
+        .bind(image_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(exists != 0)
+    }
+
+    pub async fn begin_delete_snapshots(
+        &self,
+        ids: &[String],
+    ) -> Result<sqlx::Transaction<'static, sqlx::Sqlite>> {
+        let mut transaction = self.pool.begin().await?;
+        for id in ids {
+            sqlx::query("UPDATE windows_revision_boot_tests SET candidate_image_id = NULL WHERE candidate_image_id = ?")
+                .bind(id)
+                .execute(&mut *transaction)
+                .await?;
+            sqlx::query("DELETE FROM images WHERE id = ?")
+                .bind(id)
+                .execute(&mut *transaction)
+                .await?;
+        }
+        Ok(transaction)
+    }
+
     /// Stage metadata removal before destroying storage. Keep the transaction open
     /// until storage succeeds so constraints cannot fail after destructive work.
     /// Dropping it on failure restores the image and its boot-test references.

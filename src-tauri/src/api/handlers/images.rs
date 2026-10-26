@@ -461,6 +461,25 @@ pub async fn verify_image(
     })))
 }
 
+pub async fn get_image_health(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<crate::core::image::ImageHealth>, StatusCode> {
+    let service = image_service(&state);
+
+    service.health(&id).await.map(Json).map_err(|error| {
+        let message = format!("{error:#}");
+        log::error!("Failed to inspect health of image '{}': {}", id, message);
+        if message.contains("Image not found") {
+            StatusCode::NOT_FOUND
+        } else if message.contains("health inspection requires") {
+            StatusCode::BAD_REQUEST
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    })
+}
+
 pub async fn delete_snapshot(
     State(state): State<AppState>,
     Path((master_name, snapshot_name)): Path<(String, String)>,
@@ -538,101 +557,59 @@ pub async fn rollback_snapshot(
     State(state): State<AppState>,
     axum::Extension(claims): axum::Extension<crate::types::Claims>,
     Path((master_name, snapshot_name)): Path<(String, String)>,
+    body: axum::body::Bytes,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     if claims.role != "admin" {
         return Err(StatusCode::FORBIDDEN);
     }
-    /*
-     * Rollback is intentionally left as a legacy operation
-     * for this stage.
-     *
-     * Stage 3D should move this into ImageService/ImageBackend
-     * so the HTTP handler contains no direct ZFS or SQL logic.
-     */
-
-    log::info!(
-        "Received rollback request: master='{}', snapshot='{}'",
-        master_name,
-        snapshot_name
-    );
-
+    let request = if body.is_empty() {
+        RollbackSnapshotRequest::default()
+    } else {
+        serde_json::from_slice::<RollbackSnapshotRequest>(&body)
+            .map_err(|_| StatusCode::BAD_REQUEST)?
+    };
+    let _client_mutations = state.client_mutations.lock().await;
     let service = image_service(&state);
-
-    let images = service.list().await.map_err(|error| {
-        log::error!("Failed to list images: {}", error);
-
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    let master = images
-        .iter()
-        .find(|image| image.id == master_name || image.name == master_name)
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    let target_snapshot = images
-        .iter()
-        .find(|image| image.name == snapshot_name && image.parent_id.as_deref() == Some(&master.id))
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    if image_reserved(&state, &master.id)
+    let removed = service
+        .rollback_snapshot(
+            &master_name,
+            &snapshot_name,
+            request.prune_newer_snapshots,
+            &request.expected_newer_snapshots,
+        )
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    {
-        return Err(StatusCode::CONFLICT);
-    }
-
-    let newer_snapshots: Vec<String> = images
-        .iter()
-        .filter(|image| {
-            image.parent_id.as_deref() == Some(&master.id)
-                && image.created_at > target_snapshot.created_at
-        })
-        .map(|image| image.id.clone())
-        .collect();
-
-    let snapshot_full_path = format!("{}@{}", master.name, snapshot_name);
-
-    crate::infrastructure::command::run_command(&["zfs", "rollback", "-r", &snapshot_full_path])
         .map_err(|error| {
             log::error!(
-                "Failed to rollback snapshot '{}': {}",
-                snapshot_full_path,
+                "Failed to rollback snapshot '{}@{}': {:#}",
+                master_name,
+                snapshot_name,
                 error
             );
-
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-
-    if !newer_snapshots.is_empty() {
-        let placeholders = newer_snapshots
-            .iter()
-            .map(|_| "?")
-            .collect::<Vec<_>>()
-            .join(",");
-
-        let query = format!("DELETE FROM images WHERE id IN ({})", placeholders);
-
-        let mut query_builder = sqlx::query(&query);
-
-        for id in &newer_snapshots {
-            query_builder = query_builder.bind(id);
-        }
-
-        query_builder
-            .execute(&state.db_pool)
-            .await
-            .map_err(|error| {
-                log::error!("Failed to delete newer snapshots from database: {}", error);
-
+            if error.to_string().contains("cannot rollback")
+                || error.to_string().contains("explicit prune approval")
+                || error.to_string().contains("changed since confirmation")
+            {
+                StatusCode::CONFLICT
+            } else if error.to_string().contains("not found") {
+                StatusCode::NOT_FOUND
+            } else {
                 StatusCode::INTERNAL_SERVER_ERROR
-            })?;
-    }
+            }
+        })?;
 
     Ok(Json(serde_json::json!({
         "message": format!(
             "Successfully rolled back to snapshot '{}' and removed {} newer snapshots",
             snapshot_name,
-            newer_snapshots.len()
+            removed
         )
     })))
+}
+
+#[derive(Default, Deserialize)]
+pub struct RollbackSnapshotRequest {
+    #[serde(default)]
+    pub prune_newer_snapshots: bool,
+    #[serde(default)]
+    pub expected_newer_snapshots: Vec<String>,
 }

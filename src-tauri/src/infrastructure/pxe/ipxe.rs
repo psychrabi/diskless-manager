@@ -100,8 +100,9 @@ pub fn render_super_client_script(
         crate::persistence::InstallerMediaType::OtherIso => "Other installer",
     };
     format!(
-        "#!ipxe\ndhcp\n# Super installer boot for {slug} ({}, {label})\nset initiator-iqn {initiator_iqn}\nset target-iqn {target_iqn}\nset keep-san 1\n{chap_settings}sanhook --drive 0x81 iscsi:{server_ip}:::0:{target_iqn} || goto failed\nsanboot --no-describe iscsi:{server_ip}:::2:{target_iqn} || goto failed\n:failed\necho Super installer boot failed.\nshell\n",
+        "#!ipxe\ndhcp\n# Super installer boot for {slug} ({}, {label})\nset initiator-iqn {initiator_iqn}\nset target-iqn {target_iqn}\nset keep-san 1\n{chap_settings}sanhook --drive 0x81 iscsi:{server_ip}:::0:{target_iqn} || goto failed\nsanboot --no-describe iscsi:{server_ip}:::2:{target_iqn} || goto failed\n:failed\nimgfetch http://${{next-server}}:{enroll_port}/boot/failed/${{client-mac}} || echo Could not report boot failure\necho Super installer boot failed.\nshell\n",
         firmware.as_str(),
+        enroll_port = ENROLL_PORT,
     )
 }
 
@@ -328,9 +329,11 @@ echo The client cannot be provisioned until a storage target exists.
 shell
 
 :failed
+imgfetch http://${{next-server}}:{enroll_port}/boot/failed/${{client-mac}} || echo Could not report boot failure
 echo WinPE provisioning boot failed.
 shell
 "##,
+            enroll_port = ENROLL_PORT,
         );
     }
 
@@ -381,6 +384,7 @@ shell
 goto start
 
 :failed
+imgfetch http://${{next-server}}:{enroll_port}/boot/failed/${{client-mac}} || echo Could not report boot failure
 echo Booting failed, dropping to shell
 shell
 
@@ -452,6 +456,7 @@ kernel ${{boot-url}}/anduinos/vmlinuz ip=dhcp iscsi_initiator=${{initiator-iqn}}
 initrd ${{boot-url}}/anduinos/initrd.img
 boot || goto failed
 "##,
+        enroll_port = ENROLL_PORT,
         nvme_flag = NVMEOF_CAPABILITY_FLAG,
         nvme_firmware = NVMEOF_FIRMWARE,
     )
@@ -545,6 +550,7 @@ mod tests {
             let installer = "sanboot --no-describe iscsi:192.0.2.10:::2:iqn.example:client.pc001";
             assert!(script.contains("set username chap-pc001"));
             assert!(script.contains("set password Secret123"));
+            assert!(script.contains("/boot/failed/${client-mac}"));
             assert!(script.find(working).unwrap() < script.find(installer).unwrap());
             assert!(script.contains("set keep-san 1"));
             assert!(script.contains(match media {
@@ -696,6 +702,7 @@ mod tests {
         assert!(!script.contains("choose --timeout"), "{script}");
         assert!(script.contains(":boot_windows\n"), "{script}");
         assert!(script.contains("sanboot ${root-path}"), "{script}");
+        assert!(script.contains("imgfetch http://${next-server}:4237/boot/failed/${client-mac}"));
     }
 
     #[test]

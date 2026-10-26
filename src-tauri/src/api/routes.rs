@@ -12,6 +12,7 @@ use std::time::Duration;
 
 // API routes configuration
 use crate::api::handlers::{
+    alarms::{acknowledge_alarm, list_alarms},
     auth::{
         bootstrap_first_admin, check_admin_exists, login, update_admin_password,
         validate_auth_token,
@@ -27,17 +28,17 @@ use crate::api::handlers::{
     clients_v2::{get_client, get_client_boot_history, list_clients},
     config::get_config,
     control::{
-        cancel_operation, get_audit_logs, get_scheduled_operations, reboot_client,
-        remote_desktop_client, shutdown_client,
+        cancel_operation, get_audit_events, get_audit_logs, get_scheduled_operations,
+        reboot_client, remote_desktop_client, shutdown_client,
     },
     dashboard::{get_client_io_metrics, get_client_overview, get_default_image},
     dhcp_reconciliation::{inspect_dhcp_reconciliation, repair_dhcp_reconciliation},
     disks::{create_pool, list_disks, pool_exists, rename_disk},
     images::{
         clone_image, create_image, create_snapshot, delete_image, delete_snapshot,
-        get_driver_readiness, get_image, get_image_info, get_snapshots, import_existing_images,
-        import_image, list_images, list_masters, rename_image, resize_image, rollback_snapshot,
-        set_default_image, update_image, verify_image,
+        get_driver_readiness, get_image, get_image_health, get_image_info, get_snapshots,
+        import_existing_images, import_image, list_images, list_masters, rename_image,
+        resize_image, rollback_snapshot, set_default_image, update_image, verify_image,
     },
     license::{activate_license_handler, get_license_info_handler},
     logs::{clear_logs, get_logs},
@@ -358,6 +359,7 @@ fn client_routes() -> Router<AppState> {
             post(cancel_operation),
         )
         .route("/api/audit-logs", get(get_audit_logs))
+        .route("/api/audit-events", get(get_audit_events))
         .route("/api/scheduled-operations", get(get_scheduled_operations))
 }
 
@@ -386,6 +388,7 @@ fn image_routes() -> Router<AppState> {
             post(rollback_snapshot),
         )
         .route("/api/images/{id}/info", get(get_image_info))
+        .route("/api/images/{id}/health", get(get_image_health))
         .route(
             "/api/images/{id}/driver-readiness",
             get(get_driver_readiness),
@@ -468,6 +471,8 @@ fn system_routes() -> Router<AppState> {
         )
         .route("/api/system/ram-usage", get(get_ram_usage))
         .route("/api/system/zfs-arcstat", get(get_zfs_arcstat))
+        .route("/api/alarms", get(list_alarms))
+        .route("/api/alarms/{id}/acknowledge", post(acknowledge_alarm))
         .route(
             "/api/system/reconciliation",
             get(inspect_system_reconciliation_handler),

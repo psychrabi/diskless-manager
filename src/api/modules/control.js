@@ -51,6 +51,23 @@ export async function getAuditLogs(filters = {}) {
   return apiRequest(`/api/audit-logs?${params.toString()}`);
 }
 
+export async function getAuditEvents(filters = {}) {
+  const params = new URLSearchParams();
+  for (const key of [
+    "actor",
+    "module",
+    "status",
+    "start_date",
+    "end_date",
+    "limit",
+    "offset",
+  ]) {
+    if (filters[key]) params.append(key, filters[key]);
+  }
+
+  return apiRequest(`/api/audit-events?${params.toString()}`);
+}
+
 export async function getScheduledOperations(filters = {}) {
   const params = new URLSearchParams();
   if (filters.client_id) params.append("client_id", filters.client_id);

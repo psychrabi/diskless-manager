@@ -16,6 +16,7 @@ import { DriverCatalog } from "./DriverCatalog";
 const ImageManagement = () => {
   // Use a more specific selector to ensure re-renders
   const masters = useAppStore((state) => state.masters);
+  const mastersError = useAppStore((state) => state.mastersError);
   const datasets = useAppStore((state) => state.datasets);
   const zpools = useAppStore((state) => state.zpools);
   const fetchMasters = useAppStore((state) => state.fetchMasters);
@@ -115,7 +116,13 @@ const ImageManagement = () => {
           </div>
         }/>
       <div className="space-y-6 min-h-[50vh]">
-        {masters.length === 0 ? (
+        {mastersError && (
+          <div role="alert" className="flex items-center justify-between gap-4 rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm">
+            <span>{mastersError}</span>
+            <Button variant="outline" onClick={() => fetchMasters()}>Retry</Button>
+          </div>
+        )}
+        {masters.length === 0 && !mastersError ? (
           <ShadcnCard className="shadow-sm border border-border/50">
             <CardContent className="flex flex-col gap-4 items-center text-center p-12">
               <div className="w-20 h-20 bg-muted rounded-full flex items-center justify-center text-4xl mb-4">
@@ -142,9 +149,8 @@ const ImageManagement = () => {
               )}
             </CardContent>
           </ShadcnCard>
-        ) : (
-          <ImagesList masters={masters} />
-        )}
+        ) : null}
+        {masters.length > 0 && <ImagesList masters={masters} />}
       </div>
       {openImageCreateModal && (
         <CreateImageModal

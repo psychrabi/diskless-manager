@@ -328,3 +328,78 @@ pub struct ImageInfo {
     pub backing_file: Option<String>,
     pub snapshots: Vec<String>,
 }
+
+/// Read-only block-device metadata used by image health inspection.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BootProbe {
+    pub partition_table: Option<String>,
+    pub filesystem: Option<String>,
+    pub partitions: Vec<BootPartition>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BootPartition {
+    pub name: String,
+    pub size: u64,
+    pub filesystem: Option<String>,
+    pub part_type: Option<String>,
+    pub part_flags: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum HealthCheckStatus {
+    Pass,
+    Warn,
+    Fail,
+}
+
+impl std::fmt::Display for HealthCheckStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Pass => write!(f, "pass"),
+            Self::Warn => write!(f, "warn"),
+            Self::Fail => write!(f, "fail"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageHealthCheck {
+    pub id: String,
+    pub label: String,
+    pub status: HealthCheckStatus,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageHealth {
+    pub image_id: String,
+    pub status: HealthCheckStatus,
+    pub checks: Vec<ImageHealthCheck>,
+    pub boot: BootProbe,
+}
+
+impl ImageHealth {
+    pub fn from_checks(image_id: String, checks: Vec<ImageHealthCheck>, boot: BootProbe) -> Self {
+        let status = if checks
+            .iter()
+            .any(|check| check.status == HealthCheckStatus::Fail)
+        {
+            HealthCheckStatus::Fail
+        } else if checks
+            .iter()
+            .any(|check| check.status == HealthCheckStatus::Warn)
+        {
+            HealthCheckStatus::Warn
+        } else {
+            HealthCheckStatus::Pass
+        };
+        Self {
+            image_id,
+            status,
+            checks,
+            boot,
+        }
+    }
+}

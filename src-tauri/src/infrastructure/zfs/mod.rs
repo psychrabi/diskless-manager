@@ -8,6 +8,7 @@
 mod clone;
 mod command;
 mod dataset;
+mod pool;
 mod snapshot;
 mod volume;
 
@@ -18,6 +19,7 @@ pub mod provider;
 pub use clone::ZfsCloneOperations;
 pub use command::ZfsCommand;
 pub use dataset::ZfsDatasetOperations;
+pub use pool::{list_pool_health, ZpoolHealth};
 pub use snapshot::ZfsSnapshotOperations;
 pub use volume::ZfsVolumeOperations;
 

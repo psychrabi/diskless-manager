@@ -46,11 +46,15 @@ export async function deleteSnapshot(masterName, snapshotName) {
   );
 }
 
-export async function rollbackImageSnapshot(masterName, snapshotName) {
+export async function rollbackImageSnapshot(masterName, snapshotName, newerSnapshotNames = []) {
   return apiRequest(
     `/api/images/${encodeURIComponent(masterName)}/snapshots/${encodeURIComponent(snapshotName)}/rollback`,
     {
       method: "POST",
+      body: JSON.stringify({
+        prune_newer_snapshots: newerSnapshotNames.length > 0,
+        expected_newer_snapshots: newerSnapshotNames,
+      }),
     },
   );
 }
@@ -66,4 +70,8 @@ export async function setDefaultImage(masterName) {
 
 export async function getDriverReadiness(imageId) {
   return apiRequest(`/api/images/${encodeURIComponent(imageId)}/driver-readiness`);
+}
+
+export async function getImageHealth(imageId) {
+  return apiRequest(`/api/images/${encodeURIComponent(imageId)}/health`);
 }

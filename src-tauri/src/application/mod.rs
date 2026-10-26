@@ -1,3 +1,4 @@
+pub mod alarm_service;
 pub mod boot_history_service;
 pub mod client_boot;
 pub mod client_lifecycle;

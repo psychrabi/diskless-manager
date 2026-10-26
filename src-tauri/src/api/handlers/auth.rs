@@ -1,19 +1,65 @@
-use axum::{extract::State, http::StatusCode, Extension, Json};
+use axum::{
+    extract::{ConnectInfo, State},
+    http::StatusCode,
+    Extension, Json,
+};
 use log::info;
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
+use std::sync::Arc;
 
 use crate::{
+    audit_logger::{AuditLogger, NewAuditEvent},
     auth::{authenticate_user, bootstrap_admin, validate_token, BootstrapAdminError},
     state::AppState,
     types::{Claims, LoginRequest, LoginResponse},
 };
 
+async fn record_login_event(
+    state: &AppState,
+    username: &str,
+    role: Option<&str>,
+    ip: Option<String>,
+    status_code: StatusCode,
+) {
+    let event = NewAuditEvent {
+        actor: username.to_string(),
+        actor_role: role.map(str::to_string),
+        ip,
+        module: "auth".to_string(),
+        action: "login".to_string(),
+        method: "POST".to_string(),
+        path: "/api/auth/login".to_string(),
+        status: if status_code.is_success() {
+            "success".to_string()
+        } else {
+            "failed".to_string()
+        },
+        status_code: i64::from(status_code.as_u16()),
+        details: (!status_code.is_success()).then(|| {
+            status_code
+                .canonical_reason()
+                .unwrap_or("failed")
+                .to_string()
+        }),
+    };
+
+    if let Err(error) = AuditLogger::new(Arc::new(state.db_pool.clone()))
+        .log_event(&event)
+        .await
+    {
+        tracing::error!(%error, "failed to record login audit event");
+    }
+}
+
 pub async fn login(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(request): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, StatusCode> {
     let username = request.username.clone();
     let password = request.password.clone();
+    let ip = Some(peer.ip().to_string());
 
     info!("login attempt: user={}", username);
 
@@ -22,9 +68,20 @@ pub async fn login(
     match auth_result {
         Ok(response) => {
             info!("login success: user={}", username);
+            record_login_event(
+                &state,
+                &username,
+                Some(&response.user.role),
+                ip,
+                StatusCode::OK,
+            )
+            .await;
             Ok(Json(response))
         }
-        Err(_) => Err(StatusCode::UNAUTHORIZED),
+        Err(_) => {
+            record_login_event(&state, &username, None, ip, StatusCode::UNAUTHORIZED).await;
+            Err(StatusCode::UNAUTHORIZED)
+        }
     }
 }
 

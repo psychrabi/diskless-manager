@@ -1,8 +1,9 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 import ImageManagement from "./index";
 const state = vi.hoisted(() => ({
   masters: [], datasets: [], zpools: ["diskless"],
+  mastersError: null,
   fetchMasters: vi.fn(), fetchImages: vi.fn(), fetchDatasets: vi.fn(),
 }));
 vi.mock("../../store/useAppStore", () => ({ useAppStore: (selector) => selector(state) }));
@@ -29,4 +30,17 @@ it("keeps the image page actions inside a responsive action group", () => {
   expect(screen.getByRole("button", { name: "Import Existing" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Create Image" })).toBeInTheDocument();
   state.masters = originalMasters;
+});
+
+it("shows an image load error and retry action instead of the empty state", () => {
+  state.masters = [];
+  state.mastersError = "Image catalog unavailable";
+  state.fetchMasters.mockClear();
+  render(<ImageManagement />);
+
+  expect(screen.getByRole("alert")).toHaveTextContent("Image catalog unavailable");
+  expect(screen.queryByText("No Images Available")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  expect(state.fetchMasters).toHaveBeenCalledOnce();
+  state.mastersError = null;
 });

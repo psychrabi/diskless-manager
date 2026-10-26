@@ -1,4 +1,5 @@
 import { getAuditLogs } from "@/api/modules/control";
+import { Button } from "@/components/ui/button";
 import { useToastStore } from "@/store/useToastStore";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAppStore } from "../../store/useAppStore";
@@ -10,6 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import AuditLogFilters from "./AuditLogFilters";
 import AuditLogTable from "./AuditLogTable";
+import SystemAuditLogView from "./SystemAuditLogView";
 
 const DEFAULT_FILTERS = {
   client_id: "",
@@ -28,6 +30,7 @@ const AuditLogViewer = ({ isOpen, onClose }) => {
   const [loading, setLoading] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
+  const [view, setView] = useState("operations");
 
   const fetchLogs = useCallback(async () => {
     try {
@@ -44,12 +47,12 @@ const AuditLogViewer = ({ isOpen, onClose }) => {
   }, [error, filters]);
 
   useEffect(() => {
-    if (!isOpen) return undefined;
+    if (!isOpen || view !== "operations") return undefined;
     // Defer so setState inside fetchLogs is not synchronous within
     // the effect body (react-hooks/set-state-in-effect).
     const timer = setTimeout(fetchLogs, 0);
     return () => clearTimeout(timer);
-  }, [isOpen, fetchLogs]);
+  }, [isOpen, view, fetchLogs]);
 
   const handleFilterChange = useCallback((field, value) => {
     setFilters((prev) => ({
@@ -93,22 +96,55 @@ const AuditLogViewer = ({ isOpen, onClose }) => {
         </DialogHeader>
 
         <div className="flex flex-col gap-4">
-          <AuditLogFilters
-            filters={filters}
-            clients={clients}
-            onFilterChange={handleFilterChange}
-            onClearFilters={handleClearFilters}
-          />
+          <div
+            role="tablist"
+            aria-label="Audit log type"
+            className="flex w-full gap-1 rounded-lg border border-border bg-muted/30 p-1 sm:w-fit"
+          >
+            <Button
+              role="tab"
+              aria-selected={view === "operations"}
+              variant={view === "operations" ? "secondary" : "ghost"}
+              size="sm"
+              className="flex-1 sm:flex-none"
+              onClick={() => setView("operations")}
+            >
+              Client Control
+            </Button>
+            <Button
+              role="tab"
+              aria-selected={view === "events"}
+              variant={view === "events" ? "secondary" : "ghost"}
+              size="sm"
+              className="flex-1 sm:flex-none"
+              onClick={() => setView("events")}
+            >
+              Administrative Activity
+            </Button>
+          </div>
 
-          <AuditLogTable
-            loading={loading}
-            logs={logs}
-            currentPage={currentPage}
-            totalPages={totalPages}
-            paginatedLogs={paginatedLogs}
-            onPreviousPage={handlePreviousPage}
-            onNextPage={handleNextPage}
-          />
+          {view === "operations" ? (
+            <>
+              <AuditLogFilters
+                filters={filters}
+                clients={clients}
+                onFilterChange={handleFilterChange}
+                onClearFilters={handleClearFilters}
+              />
+
+              <AuditLogTable
+                loading={loading}
+                logs={logs}
+                currentPage={currentPage}
+                totalPages={totalPages}
+                paginatedLogs={paginatedLogs}
+                onPreviousPage={handlePreviousPage}
+                onNextPage={handleNextPage}
+              />
+            </>
+          ) : (
+            <SystemAuditLogView />
+          )}
         </div>
       </DialogContent>
     </Dialog>

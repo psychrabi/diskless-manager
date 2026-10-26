@@ -1,3 +1,4 @@
+pub mod alarms;
 pub mod auth;
 pub mod backup;
 pub mod client_chap;

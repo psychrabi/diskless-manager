@@ -23,6 +23,7 @@ const ChainNode = ({
   index,
   isLast,
   masterName,
+  newerSnapshots,
   handleDeleteSnapshot,
   handleRollbackSnapshot,
 }) => (
@@ -56,7 +57,9 @@ const ChainNode = ({
         </div>
         <div className="flex shrink-0 justify-end gap-1 sm:space-x-1">
           <Button
-            onClick={() => handleRollbackSnapshot(snap.name, masterName)}
+            onClick={() =>
+              handleRollbackSnapshot(snap.name, masterName, newerSnapshots)
+            }
             variant="info"
             size="icon"
             className="min-h-[36px] min-w-[36px]"
@@ -140,6 +143,7 @@ export const SnapshotsList = ({ master }) => {
                 index={index}
                 isLast={index === snapshots.length - 1}
                 masterName={master.name}
+                newerSnapshots={snapshots.slice(index + 1)}
                 handleDeleteSnapshot={handleDeleteSnapshot}
                 handleRollbackSnapshot={handleRollbackSnapshot}
               />

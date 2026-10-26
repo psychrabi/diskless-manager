@@ -16,7 +16,13 @@ import Sidebar from "@/components/layouts/Sidebar";
 import Header from "@/components/layouts/Header";
 
 const AdminLayout = () => {
-  const { error, fetchData, loading } = useAppStore();
+  const {
+    error,
+    fetchData,
+    loading,
+    startClientStatusPolling,
+    stopClientStatusPolling,
+  } = useAppStore();
   const navigation = useNavigation();
   const isNavigating = Boolean(navigation.location);
   const location = useLocation();
@@ -25,6 +31,11 @@ const AdminLayout = () => {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  useEffect(() => {
+    startClientStatusPolling();
+    return stopClientStatusPolling;
+  }, [startClientStatusPolling, stopClientStatusPolling]);
 
   // Restore path on mount if we are at root and have a saved path
   const pathRestored = useRef(false);

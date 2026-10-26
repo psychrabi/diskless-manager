@@ -19,12 +19,14 @@ import {
   Edit,
   History,
   PlusCircle,
+  ShieldCheck,
   Star,
   StarIcon,
   Trash2,
 } from "lucide-react";
 import { useCallback, useState } from "react";
 import CreateSnapshotModal from "./CreateSnapshotModal";
+import ImageHealthDialog from "./ImageHealthDialog";
 import RenameImageModal from "./RenameImageModal";
 import { SnapshotsList } from "./SnapshotsList";
 
@@ -34,6 +36,7 @@ export const ImagesList = ({ masters }) => {
   const [selectedImage, setSelectedImage] = useState("");
   const [openRenameModal, setOpenRenameModal] = useState(false);
   const [recoveryImageName, setRecoveryImageName] = useState(null);
+  const [healthImage, setHealthImage] = useState(null);
 
   const handleCreateSnapshot = useCallback((image) => {
     setSelectedImage(image);
@@ -98,6 +101,15 @@ export const ImagesList = ({ masters }) => {
                     title={`Recovery points for ${master.name}`}
                   >
                     Recovery points ({master.snapshots?.length ?? 0})
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    icon={ShieldCheck}
+                    onClick={() => setHealthImage(master)}
+                    title={`Check health of ${master.name}`}
+                  >
+                    Health
                   </Button>
                   <Button
                     variant="primary"
@@ -165,6 +177,11 @@ export const ImagesList = ({ masters }) => {
           selectedImage={selectedImage}
         />
       )}
+      <ImageHealthDialog
+        open={Boolean(healthImage)}
+        onOpenChange={(nextOpen) => !nextOpen && setHealthImage(null)}
+        image={healthImage}
+      />
     </>
   );
 };

@@ -37,3 +37,42 @@ it("shows an error when snapshot deletion fails", async () => {
   await act(async () => {});
   expect(mocks.error).toHaveBeenCalledWith("delete denied");
 });
+
+it("lists the exact newer snapshots before approving pruning", async () => {
+  mocks.rollbackImageSnapshot.mockResolvedValue({ message: "restored" });
+  const { result } = renderHook(() => useMasterManager());
+  const newer = [{ name: "snap-b" }, { name: "snap-c" }];
+
+  await act(() =>
+    result.current.handleRollbackSnapshot("stable", "pool/windows", newer)
+  );
+
+  expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({
+    description: expect.stringContaining("snap-b, snap-c"),
+    confirmVariant: "destructive",
+  }));
+  expect(mocks.rollbackImageSnapshot).toHaveBeenCalledWith("pool/windows", "stable", ["snap-b", "snap-c"]);
+  expect(mocks.fetchMasters).toHaveBeenCalledOnce();
+});
+
+it("does not request pruning when the selected snapshot is already latest", async () => {
+  mocks.rollbackImageSnapshot.mockResolvedValue({ message: "restored" });
+  const { result } = renderHook(() => useMasterManager());
+
+  await act(() => result.current.handleRollbackSnapshot("stable", "pool/windows", []));
+
+  expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({
+    description: expect.stringContaining("No newer recovery points will be deleted"),
+    confirmVariant: "primary",
+  }));
+  expect(mocks.rollbackImageSnapshot).toHaveBeenCalledWith("pool/windows", "stable", []);
+});
+
+it("does not rollback when snapshot confirmation is canceled", async () => {
+  mocks.confirm.mockResolvedValue(false);
+  const { result } = renderHook(() => useMasterManager());
+
+  await act(() => result.current.handleRollbackSnapshot("stable", "pool/windows"));
+
+  expect(mocks.rollbackImageSnapshot).not.toHaveBeenCalled();
+});

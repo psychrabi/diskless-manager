@@ -14,6 +14,7 @@ import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "../../store/useAppStore";
 import { isOnlineStatus } from "@/lib/clientStatus";
 import ClientFormModal from "./ClientFormModal";
+import { getNextClientIdentity } from "./clientDefaults";
 import ClientTable from "./ClientTable";
 import ClientHero from "./ClientHero";
 import RemoteDesktopModal from "./RemoteDesktopModal";
@@ -33,6 +34,7 @@ const ClientManagement = () => {
   const { user } = useAuth();
   const {
     clients,
+    clientsError,
     fetchClients,
     fetchImages,
     masters,
@@ -40,6 +42,7 @@ const ClientManagement = () => {
   } = useAppStore(
     useShallow((state) => ({
       clients: state.clients,
+      clientsError: state.clientsError,
       fetchClients: state.fetchClients,
       fetchImages: state.fetchImages,
       masters: state.masters,
@@ -121,33 +124,7 @@ const ClientManagement = () => {
   );
 
   const handleClientFormModalOpen = useCallback(() => {
-    let newName = "PC001";
-    let newIp = "192.168.1.101"; // Default start IP
-
-    if (clients.length > 0) {
-      // Sort clients by name to find the "last" one logically
-      const sortedClients = [...clients].sort((a, b) =>
-        a.name.localeCompare(b.name)
-      );
-      const lastClient = sortedClients[sortedClients.length - 1];
-
-      // Extract number from last client name and increment
-      const nameMatch = lastClient.name.match(/(\d+)$/);
-      if (nameMatch) {
-        const lastNumber = parseInt(nameMatch[1], 10);
-        const nextNumber = lastNumber + 1;
-        const prefix = lastClient.name.replace(/\d+$/, "");
-        newName = `${prefix}${nextNumber.toString().padStart(3, "0")}`;
-      }
-
-      // Extract IP and increment
-      const ipMatch = lastClient.ip.match(/^(\d+\.\d+\.\d+\.)(\d+)$/);
-      if (ipMatch) {
-        const ipBase = ipMatch[1];
-        const lastOctet = parseInt(ipMatch[2], 10);
-        newIp = `${ipBase}${lastOctet + 1}`;
-      }
-    }
+    const { name: newName, ip: newIp } = getNextClientIdentity(clients);
 
     setClient({
       name: newName,
@@ -219,6 +196,17 @@ const ClientManagement = () => {
           </div>
         }
       />
+      {clientsError && (
+        <div
+          role="alert"
+          className="flex items-center justify-between gap-4 rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm"
+        >
+          <span>Failed to load clients: {clientsError}</span>
+          <Button variant="outline" onClick={() => fetchClients()}>
+            Retry
+          </Button>
+        </div>
+      )}
       {clients.length > 0 && (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
           {/* Total Clients */}
@@ -266,7 +254,7 @@ const ClientManagement = () => {
 
       {/* Client Table or Empty State */}
       {clients.length === 0 ? (
-        <ClientHero handleClientFormModalOpen={handleClientFormModalOpen} />
+        clientsError ? null : <ClientHero handleClientFormModalOpen={handleClientFormModalOpen} />
       ) : (
         <MemoizedClientTable
           handleClientContextMenu={handleClientContextMenu}

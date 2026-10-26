@@ -3,6 +3,7 @@ import { PageHeader } from "@/components/ui";
 import { useAppStore } from "@/store/useAppStore";
 import { useShallow } from "zustand/react/shallow";
 import ArcCacheCard from "./ArcCacheCard";
+import AlarmInbox from "./AlarmInbox";
 import MetricsCard from "./MetricsCard";
 import ServerInfoCard from "./ServerInfoCard";
 import ServicesStatus from "./ServicesStatus";
@@ -44,6 +45,7 @@ export default function Dashboard() {
         description="Monitor clients, storage, and the services behind your boot environment."
       />
       <MetricsCard />
+      <AlarmInbox />
 
       <div className="grid grid-cols-1 items-stretch gap-4 md:grid-cols-2 xl:grid-cols-6">
         <StorageCard />
