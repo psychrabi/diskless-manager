@@ -1,0 +1,12 @@
+import { apiRequest } from "@/api/client";
+const clientPath = (id) => `/api/clients/${encodeURIComponent(id)}`;
+const post = (url, body = {}) => apiRequest(url, { method: "POST", body: JSON.stringify(body) });
+export const listInstallations = (id) => apiRequest(`${clientPath(id)}/installation-sessions`);
+export const startInstallation = (id, request) => post(`${clientPath(id)}/installation-sessions`, request);
+export const cancelInstallation = (id) => post(`/api/installation-sessions/${encodeURIComponent(id)}/cancel`);
+export const closeInstallationRecovery = (id) => post(`/api/installation-sessions/${encodeURIComponent(id)}/close-recovery`);
+export const getHardwareIdentity = (id) => apiRequest(`${clientPath(id)}/identity`);
+export const captureHardwareIdentity = (id) => post(`${clientPath(id)}/identity/capture`);
+export const applyHardwareIdentity = (id) => post(`${clientPath(id)}/identity/apply`);
+export const removeHardwareIdentity = (id) => apiRequest(`${clientPath(id)}/identity`, { method: "DELETE" });
+export const requestHardwareInventory = (id) => post(`${clientPath(id)}/inventory-boot`);

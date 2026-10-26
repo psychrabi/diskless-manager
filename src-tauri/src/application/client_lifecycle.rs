@@ -99,10 +99,12 @@ fn retry_delay(failures: i64) -> i64 {
     30 * (1_i64 << failures.clamp(0, 5))
 }
 
-fn storage_spec(client: &Client) -> Result<ClientStorageSpec> {
-    let snapshot = client
-        .snapshot
+async fn storage_spec(pool: &sqlx::SqlitePool, client: &Client) -> Result<ClientStorageSpec> {
+    let cached_source =
+        super::hardware_identity_service::cached_source_for_client(pool, client).await?;
+    let snapshot = cached_source
         .as_deref()
+        .or(client.snapshot.as_deref())
         .filter(|s| s.contains('@'))
         .context("client has no snapshot")?;
     let dataset = client
@@ -141,6 +143,14 @@ fn storage_spec(client: &Client) -> Result<ClientStorageSpec> {
 
 /// Caller must hold `state.client_mutations`; pending operations are rejected here.
 pub async fn delete_writeback_locked(state: &AppState, client: &Client) -> Result<()> {
+    if super::client_storage_reservations::has_storage_reservation(
+        &state.db_pool,
+        client.id.as_str(),
+    )
+    .await?
+    {
+        return Err(PendingRecoverySafetyError::StorageReserved.into());
+    }
     let pending: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM client_offline_resets WHERE client_id = ? AND operation IS NOT NULL",
     )
@@ -150,7 +160,7 @@ pub async fn delete_writeback_locked(state: &AppState, client: &Client) -> Resul
     if pending != 0 {
         return Err(PendingRecoverySafetyError::PendingOperation.into());
     }
-    let mut spec = storage_spec(client)?;
+    let mut spec = storage_spec(&state.db_pool, client).await?;
     let persisted_device = client
         .block_device
         .as_deref()
@@ -240,8 +250,12 @@ async fn validate_unshared_storage(
     Ok(())
 }
 
-fn validate_deletion_owner(client: &Client, operation: &OfflineDeletion) -> Result<()> {
-    let expected = storage_spec(client)?;
+async fn validate_deletion_owner(
+    pool: &sqlx::SqlitePool,
+    client: &Client,
+    operation: &OfflineDeletion,
+) -> Result<()> {
+    let expected = storage_spec(pool, client).await?;
     anyhow::ensure!(
         operation.spec.client_id == client.id.as_str()
             && operation.spec.client_name == expected.client_name
@@ -407,6 +421,14 @@ async fn process_locked(state: AppState, client_id: String) -> Result<()> {
 }
 
 async fn process(state: &AppState, client: &Client) -> Result<()> {
+    let has_identity_cache: i64 =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM client_identity_caches WHERE client_id=?)")
+            .bind(client.id.as_str())
+            .fetch_one(&state.db_pool)
+            .await?;
+    if has_identity_cache != 0 {
+        return Ok(());
+    }
     let settings = state.settings.read().await.clone();
     let now = chrono::Utc::now().timestamp();
     let eligible =
@@ -437,7 +459,7 @@ async fn process(state: &AppState, client: &Client) -> Result<()> {
     if let Some(journal) = saved.operation.as_deref() {
         match deserialize_pending_journal(serde_json::from_str(journal)?)? {
             PendingJournal::Deletion(mut operation) => {
-                validate_deletion_owner(client, &operation)?;
+                validate_deletion_owner(&state.db_pool, client, &operation).await?;
                 if now < saved.retry_after {
                     return Ok(());
                 }
@@ -554,6 +576,8 @@ pub enum PendingRecoverySafetyError {
     NvmeExported,
     #[error("client has a pending storage operation")]
     PendingOperation,
+    #[error("client storage is reserved by an installer session or hardware profile")]
+    StorageReserved,
     #[error("client storage is shared with another client")]
     SharedStorage,
 }
@@ -678,7 +702,7 @@ pub async fn retry_pending_recovery(state: &AppState, id: &str) -> Result<bool> 
         .context("client no longer exists")?;
     match deserialize_pending_journal(parsed)? {
         PendingJournal::Deletion(mut operation) => {
-            validate_deletion_owner(&client, &operation)?;
+            validate_deletion_owner(&state.db_pool, &client, &operation).await?;
             validate_unshared_storage(state, &client, &operation.spec).await?;
             if let Err(error) = persist_deletion(state, id, &mut operation, true).await {
                 record_manual_recovery_failure(&state.db_pool, id, failures, &error).await?;

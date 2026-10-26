@@ -61,7 +61,7 @@ impl WindowsIscsiConnection {
 struct Response {
     ok: bool,
     #[serde(default)]
-    result: Option<WindowsImagePreparationResult>,
+    result: Option<serde_json::Value>,
     #[serde(default)]
     error: Option<String>,
     #[serde(default)]
@@ -72,6 +72,30 @@ pub fn prepare(
     connection: &WindowsIscsiConnection,
     request: &WindowsImagePreparationRequest,
 ) -> Result<WindowsImagePreparationResult> {
+    let mut offline_request = request.clone();
+    offline_request.iscsi = None;
+    serde_json::from_value(run(
+        connection,
+        serde_json::json!({"preparation": offline_request}),
+        false,
+    )?)
+    .context("invalid preparation result")
+}
+
+pub fn check_volume(
+    connection: &WindowsIscsiConnection,
+) -> Result<super::windows_volume_safety::WindowsVolumeSafetyResult> {
+    let mut result: super::windows_volume_safety::WindowsVolumeSafetyResult =
+        serde_json::from_value(run(connection, serde_json::json!({}), true)?)?;
+    result.disk_released = true;
+    Ok(result)
+}
+
+fn run(
+    connection: &WindowsIscsiConnection,
+    mut payload: serde_json::Value,
+    safety: bool,
+) -> Result<serde_json::Value> {
     connection.validate()?;
     if !cfg!(windows) {
         bail!("iSCSI volume servicing must run on the Windows worker");
@@ -79,12 +103,10 @@ pub fn prepare(
     let temporary = tempfile::tempdir()?;
     let script = temporary.path().join("service-iscsi.ps1");
     std::fs::write(&script, include_str!("windows_iscsi_servicing.ps1"))?;
-    let mut offline_request = request.clone();
-    offline_request.iscsi = None;
-    let payload = serde_json::to_vec(&serde_json::json!({
-        "connection": connection, "preparation": offline_request,
-        "executable": std::env::current_exe()?,
-    }))?;
+    payload["connection"] = serde_json::to_value(connection)?;
+    payload["executable"] = serde_json::to_value(std::env::current_exe()?)?;
+    payload["safety"] = serde_json::json!(safety);
+    let payload = serde_json::to_vec(&payload)?;
     let mut process = Command::new("powershell.exe")
         .args([
             "-NoProfile",

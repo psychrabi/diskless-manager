@@ -43,6 +43,14 @@ pub fn enroll_router(state: AppState) -> Router {
         .route("/enroll/{mac}", get(enroll_client))
         .route("/inventory/{mac}", axum::routing::post(submit_inventory))
         .route("/boot/net-config/{mac}", get(client_network_config))
+        .route(
+            "/api/installer/{id}/{token}/report",
+            axum::routing::post(crate::api::handlers::installation::report),
+        )
+        .route(
+            "/api/installer/{id}/{token}/{*asset}",
+            get(crate::api::handlers::installation::payload),
+        )
         .with_state(state)
 }
 
@@ -487,6 +495,22 @@ async fn submit_inventory(
         boot_nics = validated.boot_nic_ids.len(),
         "stored preboot NIC inventory"
     );
+    if validated.firmware != crate::infrastructure::pxe::FirmwareInterface::Unknown
+        && !validated.architecture.is_empty()
+    {
+        if let Err(error) = state
+            .hardware_identity_service()
+            .observe(
+                &client_id,
+                &validated.boot_nic_ids,
+                &validated.architecture,
+                &validated.firmware.to_string(),
+            )
+            .await
+        {
+            tracing::warn!(client_id, %error, "hardware profile observation failed");
+        }
+    }
     (
         StatusCode::OK,
         Json(serde_json::json!({"ok": true, "mac": parsed.as_str()})),

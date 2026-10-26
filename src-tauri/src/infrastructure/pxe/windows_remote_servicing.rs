@@ -45,6 +45,8 @@ pub struct RemoteWindowsServicingCapabilities {
     #[serde(default)]
     pub iscsi_volume_servicing: bool,
     #[serde(default)]
+    pub volume_safety: bool,
+    #[serde(default)]
     pub nexboot_boot_time: bool,
     #[serde(default)]
     pub nic_collection: bool,
@@ -133,6 +135,60 @@ impl RemoteWindowsServicer {
                 .context("remote Windows servicing helper returned invalid capability JSON")?;
         validate_protocol(capabilities.protocol_version)?;
         Ok(capabilities)
+    }
+
+    pub async fn check_volume(
+        &self,
+        worker: RemoteWindowsCapabilitiesRequest,
+        connection: super::windows_iscsi_servicing::WindowsIscsiConnection,
+    ) -> Result<super::windows_volume_safety::WindowsVolumeSafetyResult> {
+        connection.validate()?;
+        let capabilities = self.capabilities(worker.clone()).await?;
+        if !capabilities.available
+            || !capabilities.elevated
+            || !capabilities.iscsi_volume_servicing
+            || !capabilities.volume_safety
+        {
+            bail!("update the elevated Windows servicing worker: native volume_safety capability is required before saving Windows");
+        }
+        let executable =
+            validate_helper_path(worker.executable_path.as_deref().unwrap_or(DEFAULT_HELPER))?;
+        let payload = serde_json::to_vec(&connection)?;
+        let output = self
+            .executor(worker.username, worker.password)
+            .execute_command_with_input(
+                &worker.host,
+                &powershell_helper_command(&executable, "check-volume"),
+                &payload,
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!("Windows volume safety check failed: {error}"))?;
+        #[derive(Deserialize)]
+        struct Response {
+            protocol_version: u32,
+            ok: bool,
+            result: Option<super::windows_volume_safety::WindowsVolumeSafetyResult>,
+            error: Option<String>,
+        }
+        let response: Response = serde_json::from_str(output.stdout.trim()).context(
+            "invalid Windows volume safety response; retain candidate and inspect worker lease",
+        )?;
+        validate_protocol(response.protocol_version)?;
+        if output.exit_code != 0 || !response.ok {
+            bail!(
+                "{}",
+                response
+                    .error
+                    .unwrap_or_else(|| "Windows volume check failed; retain candidate".into())
+            );
+        }
+        let result = response
+            .result
+            .context("Windows volume safety response omitted result")?;
+        if !result.disk_released {
+            bail!("Windows worker did not confirm candidate disk release");
+        }
+        Ok(result)
     }
 
     pub async fn prepare(
@@ -365,6 +421,17 @@ fn powershell_statement(statement: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn old_worker_does_not_implicitly_advertise_volume_safety() {
+        let capabilities: RemoteWindowsServicingCapabilities =
+            serde_json::from_value(serde_json::json!({
+                "protocol_version": 3, "platform": "windows", "available": true,
+                "elevated": true, "iscsi_volume_servicing": true,
+            }))
+            .unwrap();
+        assert!(!capabilities.volume_safety);
+    }
 
     #[test]
     fn staging_directory_uses_supported_powershell_parameters_and_quoted_paths() {

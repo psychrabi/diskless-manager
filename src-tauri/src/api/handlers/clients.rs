@@ -755,6 +755,31 @@ pub async fn update_client(
         )
     })?;
 
+    let reserved = crate::application::client_storage_reservations::has_storage_reservation(
+        &state.db_pool,
+        &id,
+    )
+    .await
+    .map_err(|error| {
+        tracing::error!(client_id = %id, %error, "failed to check client storage reservation");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                status: 500,
+                error: "Failed to check client storage reservation".into(),
+            }),
+        )
+    })?;
+    if reserved && !matches!(request.action.as_deref(), Some("shutdown")) {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(ErrorResponse {
+                status: 409,
+                error: "Client storage is reserved by an installer session or hardware profile; close recovery or remove the profile before changing it".into(),
+            }),
+        ));
+    }
+
     if request.chap_enabled == Some(true)
         && !state
             .settings
@@ -2099,6 +2124,28 @@ pub async fn rotate_client_chap(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     let _client_guard = state.client_mutations.lock_client(&id).await;
+    if crate::application::client_storage_reservations::has_storage_reservation(&state.db_pool, &id)
+        .await
+        .map_err(|error| {
+            tracing::error!(client_id = %id, %error, "failed to check client storage reservation");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    status: 500,
+                    error: "Failed to check client storage reservation".into(),
+                }),
+            )
+        })?
+    {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(ErrorResponse {
+                status: 409,
+                error: "Client storage is reserved by an installer session or hardware profile"
+                    .into(),
+            }),
+        ));
+    }
     let err = |error: String| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,

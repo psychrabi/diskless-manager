@@ -7,7 +7,7 @@ const ProtectedRoute = ({ children }) => {
   const { user, token, loading } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const adminOnlyPaths = ["/users", "/license", "/installer-media"];
+  const adminOnlyPaths = ["/users", "/license", "/installer-media", "/client-provisioning"];
   const isAdminOnlyPath = adminOnlyPaths.includes(location.pathname.replace(/\/+$/, "") || "/");
 
   useEffect(() => {

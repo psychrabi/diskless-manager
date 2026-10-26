@@ -327,7 +327,11 @@ pub(crate) async fn storage_spec_for_client(
         None
     };
 
-    let source = match client.snapshot.as_deref().map(str::trim) {
+    let identity_source =
+        crate::application::hardware_identity_service::cached_source_for_client(pool, client)
+            .await?;
+    let source_revision = identity_source.as_deref().or(client.snapshot.as_deref());
+    let source = match source_revision.map(str::trim) {
         Some(snapshot) if !snapshot.is_empty() => {
             let dataset = client.writeback.clone().ok_or_else(|| {
                 anyhow::anyhow!(

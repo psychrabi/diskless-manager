@@ -25,6 +25,16 @@ fn image_delete_error(status: StatusCode, message: impl Into<String>) -> ImageDe
     )
 }
 
+async fn image_reserved(state: &AppState, image_id: &str) -> anyhow::Result<bool> {
+    let reserved: i64 = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM installation_sessions WHERE image_id=? AND state!='completed')",
+    )
+    .bind(image_id)
+    .fetch_one(&state.db_pool)
+    .await?;
+    Ok(reserved != 0)
+}
+
 fn image_service(state: &AppState) -> ImageService {
     ImageService::with_backend(
         ImageRepository::new(state.db_pool.clone()),
@@ -204,6 +214,12 @@ pub async fn update_image(
     Path(id): Path<String>,
     Json(request): Json<crate::core::image::UpdateImageRequest>,
 ) -> Result<Json<Image>, StatusCode> {
+    if image_reserved(&state, &id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    {
+        return Err(StatusCode::CONFLICT);
+    }
     log::info!(
         "Received update request for image id '{}', request: {:?}",
         id,
@@ -233,6 +249,12 @@ pub async fn rename_image(
     Path(id): Path<String>,
     Json(request): Json<RenameImageRequest>,
 ) -> Result<Json<Image>, StatusCode> {
+    if image_reserved(&state, &id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    {
+        return Err(StatusCode::CONFLICT);
+    }
     let service = image_service(&state);
 
     service
@@ -250,6 +272,15 @@ pub async fn delete_image(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<(), ImageDeleteError> {
+    if image_reserved(&state, &id)
+        .await
+        .map_err(|error| image_delete_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
+    {
+        return Err(image_delete_error(
+            StatusCode::CONFLICT,
+            "Image storage is reserved by an unfinished client installation session",
+        ));
+    }
     let service = image_service(&state);
 
     match service.delete(&id).await {
@@ -394,6 +425,12 @@ pub async fn resize_image(
     Path(id): Path<String>,
     Json(request): Json<ResizeImageRequest>,
 ) -> Result<Json<Image>, StatusCode> {
+    if image_reserved(&state, &id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    {
+        return Err(StatusCode::CONFLICT);
+    }
     let service = image_service(&state);
 
     service
@@ -536,6 +573,13 @@ pub async fn rollback_snapshot(
         .iter()
         .find(|image| image.name == snapshot_name && image.parent_id.as_deref() == Some(&master.id))
         .ok_or(StatusCode::NOT_FOUND)?;
+
+    if image_reserved(&state, &master.id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    {
+        return Err(StatusCode::CONFLICT);
+    }
 
     let newer_snapshots: Vec<String> = images
         .iter()

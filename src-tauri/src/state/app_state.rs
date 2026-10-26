@@ -25,6 +25,20 @@ pub struct AppState {
 }
 
 impl AppState {
+    pub fn hardware_identity_service(
+        &self,
+    ) -> crate::application::hardware_identity_service::HardwareIdentityService {
+        crate::application::hardware_identity_service::HardwareIdentityService::new(
+            crate::application::hardware_identity_service::HardwareIdentityDeps {
+                repository: crate::persistence::repositories::hardware_identity::HardwareIdentityRepository::new(self.db_pool.clone()),
+                clients: self.application.client_repository.clone(),
+                backend: self.application.image_backend.clone(),
+                storage: self.application.storage.clone(),
+                iscsi: self.application.iscsi.clone(),
+                mutation_locks: self.client_mutations.clone(),
+            }
+        )
+    }
     /// Builds the installer-media service from the current configured boot root and upload cap.
     pub async fn installer_media_service(
         &self,
@@ -152,6 +166,12 @@ impl AppState {
             .await
             .recover_incomplete()
             .await?;
+        crate::persistence::repositories::installation::InstallationRepository::new(
+            state.db_pool.clone(),
+        )
+        .recover_interrupted()
+        .await?;
+        state.hardware_identity_service().recover_pending().await?;
         let interrupted =
             crate::application::windows_servicing::recover_interrupted_revisions(&state.db_pool)
                 .await?;

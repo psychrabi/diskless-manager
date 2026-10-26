@@ -38,21 +38,19 @@ it("hides the inventory boot for provisioned clients", () => {
 
 // A client assigned an image directly, with no snapshot clone, is the super
 // client even when a legacy or imported row never stored the mode flag.
-it("offers verified and disposable start paths based on installer media", () => {
+it("offers the normal Super session when installer media is available", () => {
   const client = { id: "c1", name: "PC001", ip: "192.0.2.1", mac: "02:00:00:00:00:01", status: "Offline", master: "tank/image/windows", snapshot: "tank/image/windows@clean", pxe_mode: "uefi" };
   show(client, {
     targetImage: { os_type: "windows", status: "ready" },
-    superMedia: [{ media_type: "winpe", validation_state: "valid", is_default: true, uefi_verified: false }],
+    superMedia: [{ media_type: "winpe", validation_state: "valid", is_default: true }],
   });
-  expect(screen.getByRole("button", { name: "Super session unavailable" })).toBeDisabled();
-  const verification = screen.getByRole("button", { name: "Start verification-only session" });
-  expect(verification).toBeEnabled();
-  fireEvent.click(verification);
-  expect(actions.startSuper).toHaveBeenCalledWith(client, true, undefined);
-  expect(screen.getByText(/not boot-verified/i)).toBeInTheDocument();
+  const start = screen.getByRole("button", { name: "Start Super session" });
+  expect(start).toBeEnabled();
+  fireEvent.click(start);
+  expect(actions.startSuper).toHaveBeenCalledWith(client, false, undefined);
 });
 
-it("enables normal Super only when the default ISO is verified for the client firmware", () => {
+it("enables normal Super without a recorded ISO boot result", () => {
   show({ id: "c1", name: "PC001", ip: "192.0.2.1", mac: "02:00:00:00:00:01", status: "Offline", master: "tank/image/windows", snapshot: "tank/image/windows@clean", pxe_mode: "uefi" }, {
     targetImage: { os_type: "windows", status: "ready" },
     superMedia: [{ media_type: "winpe", validation_state: "valid", is_default: true, uefi_verified: true }],
@@ -143,7 +141,6 @@ it("explains that a matching ISO exists but is not the default", () => {
     superMedia: [{ media_type: "linux_iso", validation_state: "valid", is_default: false }],
   });
   expect(screen.getByRole("button", { name: "Super session unavailable" })).toBeDisabled();
-  expect(screen.getByRole("button", { name: "Verification session unavailable" })).toBeDisabled();
   expect(screen.getByText(/none is marked default/i)).toBeInTheDocument();
 });
 

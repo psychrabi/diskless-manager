@@ -7,6 +7,8 @@ pub mod server;
 pub mod util;
 
 #[cfg(test)]
+pub(crate) mod installation_tests;
+#[cfg(test)]
 pub(crate) mod security_tests;
 
 #[cfg(test)]

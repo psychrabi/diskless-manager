@@ -167,7 +167,7 @@ export default function InstallerMedia() {
       </Card>
 
       <Card>
-        <CardHeader><CardTitle>Installer ISO catalog</CardTitle><CardDescription>Structural validation, checksum, size, and default selection.</CardDescription></CardHeader>
+        <CardHeader><CardTitle>Installer ISO catalog</CardTitle><CardDescription>Validated installer images available for client assignment.</CardDescription></CardHeader>
         <CardContent className="space-y-4">
           {loading ? <p role="status">Loading installer media…</p> : media.length === 0 ? <p>No installer ISOs have been uploaded.</p> : media.map((item) => (
             <article key={item.id} className="rounded-lg border p-4">

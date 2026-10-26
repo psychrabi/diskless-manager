@@ -11,6 +11,7 @@ export const navSections = [
     label: "Infrastructure",
     items: [
       { id: "clients", to: "/clients", label: "Clients", icon: Laptop2 },
+      { id: "client-provisioning", to: "/client-provisioning", label: "Install & Adapt", icon: Disc3, adminOnly: true },
       { id: "pending-recovery", to: "/pending-recovery", label: "Pending Recovery", icon: RotateCw },
       { id: "disks", to: "/disks", label: "Disks", icon: HardDrive },
       { id: "images", to: "/images", label: "Images", icon: FilesIcon },

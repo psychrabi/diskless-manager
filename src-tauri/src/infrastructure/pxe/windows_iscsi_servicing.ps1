@@ -61,13 +61,18 @@ try {
         if (Test-Path (Join-Path $path 'Windows\System32\config\SYSTEM')) { $windowsRoots += $path }
     }
     if ($windowsRoots.Count -ne 1) { throw 'Clone must contain exactly one accessible Windows installation' }
-    $request.preparation.image_path = $windowsRoots[0]
-    $request.preparation.iscsi = $null
-    $payload = $request.preparation | ConvertTo-Json -Depth 30 -Compress
-    $response = $payload | & $request.executable prepare-volume
+    if ($request.safety) {
+        $payload = @{image_path=$windowsRoots[0]} | ConvertTo-Json -Compress
+        $response = $payload | & $request.executable check-volume-local
+    } else {
+        $request.preparation.image_path = $windowsRoots[0]
+        $request.preparation.iscsi = $null
+        $payload = $request.preparation | ConvertTo-Json -Depth 30 -Compress
+        $response = $payload | & $request.executable prepare-volume
+    }
     if ($LASTEXITCODE -ne 0) {
         $message = ($response | ConvertFrom-Json).error
-        throw ('Offline volume preparation failed: ' + $message)
+        throw ('Offline volume operation failed: ' + $message)
     }
     $result = ($response | ConvertFrom-Json).result
 } catch {
@@ -101,7 +106,7 @@ try {
             if (@(Get-IscsiSession | Where-Object TargetNodeAddress -eq $target).Count) { throw 'Servicing session remains connected' }
         } catch { $releaseErrors += $_.Exception.Message }
     }
-    if (!$releaseErrors.Count -and (Test-Path $directory)) { Remove-Item $directory -Recurse -Force }
+    if (!$failure -and !$releaseErrors.Count -and (Test-Path $directory)) { Remove-Item $directory -Recurse -Force }
 }
 if ($releaseErrors.Count) { $failure = ($failure + '; release failed: ' + ($releaseErrors -join '; ') + '; lease: ' + $journal) }
 @{ok=(!$failure);result=$result;error=$failure;released=(!$releaseErrors.Count)} | ConvertTo-Json -Depth 100 -Compress

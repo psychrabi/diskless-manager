@@ -2,6 +2,7 @@ pub mod driver_injection;
 pub mod driver_manifest;
 pub mod driver_selection;
 pub mod driver_validation;
+pub mod installation;
 mod ipxe;
 pub mod nic_inventory;
 pub mod nvmeof;
@@ -46,3 +47,5 @@ pub use windows_remote_servicing::{
     RemoteWindowsCapabilitiesRequest, RemoteWindowsCatalogPreparationResult, RemoteWindowsServicer,
     RemoteWindowsServicingCapabilities, RemoteWindowsServicingRequest, StagedDriverPackage,
 };
+
+pub mod windows_volume_safety;

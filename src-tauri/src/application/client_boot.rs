@@ -353,8 +353,21 @@ pub async fn ensure_client_boot_ready(
         .await
         .map(|image| image.os_type == crate::core::image::OsType::Windows)
         .unwrap_or(false);
+    // A durable installation session owns the boot payload: scoped credentials, the
+    // recipe's boot commands and its disk-identity gate. A session that fails
+    // validation denies boot instead of silently falling back to the generic
+    // installer menu, which is bound to neither the client's disk size nor session.
     let script =
-        render_client_menu(&clients, &client, &settings, super_boot, assigned_windows).await?;
+        match crate::application::installation_service::InstallationService::new(state.clone())
+            .boot_for_client(id.as_str())
+            .await?
+        {
+            Some(script) => script,
+            None => {
+                render_client_menu(&clients, &client, &settings, super_boot, assigned_windows)
+                    .await?
+            }
+        };
     let fingerprint =
         crate::application::client_lifecycle::lifecycle_fingerprint(state, &client).await?;
     sqlx::query("INSERT INTO client_offline_resets(client_id, fingerprint, offline_since, completed, failures, retry_after, last_error) VALUES (?, ?, NULL, 0, 0, 0, NULL) ON CONFLICT(client_id) DO UPDATE SET fingerprint = excluded.fingerprint, offline_since = NULL, completed = 0, failures = 0, retry_after = 0, last_error = NULL")

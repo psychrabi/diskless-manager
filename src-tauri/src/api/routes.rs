@@ -220,6 +220,20 @@ pub fn create_app(state: AppState) -> Router {
         ));
 
     let api_router = Router::new()
+        .merge(crate::api::handlers::hardware_identity::router())
+        .route(
+            "/api/clients/{id}/installation-sessions",
+            get(crate::api::handlers::installation::list)
+                .post(crate::api::handlers::installation::create),
+        )
+        .route(
+            "/api/installation-sessions/{id}/cancel",
+            post(crate::api::handlers::installation::cancel),
+        )
+        .route(
+            "/api/installation-sessions/{id}/close-recovery",
+            post(crate::api::handlers::installation::close_recovery),
+        )
         .merge(client_routes())
         .merge(image_routes())
         .merge(installer_media_routes(media_body_limit))

@@ -24,6 +24,7 @@ use crate::infrastructure::{
 /// Infrastructure implementations are constructed here and injected
 /// into application services.
 pub struct ApplicationServices {
+    pub image_backend: Arc<dyn ImageBackend>,
     pub iscsi_backend: IscsiBackend,
     pub iscsi: Arc<dyn IscsiProvisioner>,
     pub clients: ClientService,
@@ -58,6 +59,21 @@ impl ApplicationServices {
         let iscsi_backend = safe_iscsi.backend();
         let iscsi: Arc<dyn IscsiProvisioner> = safe_iscsi;
 
+        Self::with_backends(pool, config, image_backend, iscsi, iscsi_backend)
+    }
+
+    /// Compose the service graph over already-built storage backends.
+    ///
+    /// Tests and non-ZFS hosts inject fake image/iSCSI backends here instead of
+    /// touching a live pool or target, keeping the shared storage, provisioning
+    /// and image services identical to production wiring.
+    pub fn with_backends(
+        pool: SqlitePool,
+        config: crate::config::RuntimeConfig,
+        image_backend: Arc<dyn ImageBackend>,
+        iscsi: Arc<dyn IscsiProvisioner>,
+        iscsi_backend: IscsiBackend,
+    ) -> Self {
         let storage = Arc::new(StorageService::with_config(
             image_backend.clone(),
             Arc::clone(&iscsi),
@@ -66,7 +82,8 @@ impl ApplicationServices {
         let boot_history = BootHistoryService::new(BootLogRepository::new(pool.clone()));
         let installer_media = InstallerMediaRepository::new(pool.clone());
         let super_sessions = SuperSessionRepository::new(pool.clone());
-        let images = ImageService::with_backend(ImageRepository::new(pool.clone()), image_backend);
+        let images =
+            ImageService::with_backend(ImageRepository::new(pool.clone()), image_backend.clone());
         let clients = ClientRepository::new(pool);
         let client_service = ClientService::new(clients.clone());
         let provisioning =
@@ -74,6 +91,7 @@ impl ApplicationServices {
         let nvmeof_boot = NvmeOfBootService::new(clients.clone(), super_sessions.clone());
 
         Self {
+            image_backend,
             iscsi_backend,
             iscsi,
             clients: client_service,

@@ -12,6 +12,16 @@ pub async fn delete_client(
 ) -> Result<(), StatusCode> {
     let _client_guard = state.client_mutations.lock_client(&id).await;
 
+    if crate::application::client_storage_reservations::has_storage_reservation(&state.db_pool, &id)
+        .await
+        .map_err(|error| {
+            tracing::error!(client_id = %id, %error, "failed to check client storage reservation");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+    {
+        return Err(StatusCode::CONFLICT);
+    }
+
     let recovering: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM client_offline_resets WHERE client_id = ? AND operation IS NOT NULL",
     )

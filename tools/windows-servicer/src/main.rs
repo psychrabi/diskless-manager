@@ -25,6 +25,8 @@ mod windows_inf;
 mod windows_iscsi_servicing;
 #[path = "../../../src-tauri/src/infrastructure/pxe/windows_nexboot_adaptation.rs"]
 mod windows_nexboot_adaptation;
+#[path = "../../../src-tauri/src/infrastructure/pxe/windows_volume_safety.rs"]
+mod windows_volume_safety;
 
 pub use windows_boot_arming::{WindowsBootArmConfig, WindowsBootArmResult, WindowsBootArmer};
 pub use windows_driver_injection::WindowsDriverInjector;
@@ -49,6 +51,7 @@ struct WindowsServicerCapabilities {
     available: bool,
     elevated: bool,
     iscsi_volume_servicing: bool,
+    volume_safety: bool,
     nexboot_boot_time: bool,
     nic_collection: bool,
     local_nic_installation: bool,
@@ -72,6 +75,7 @@ fn main() {
             available: windows_servicing_available(),
             elevated: is_elevated(),
             iscsi_volume_servicing: cfg!(windows),
+            volume_safety: cfg!(windows),
             nexboot_boot_time: cfg!(windows),
             nic_collection: cfg!(windows),
             local_nic_installation: cfg!(windows),
@@ -97,6 +101,40 @@ fn main() {
                 1
             }
         },
+        Some(command @ ("check-volume" | "check-volume-local")) => {
+            let result =
+                (|| -> anyhow::Result<windows_volume_safety::WindowsVolumeSafetyResult> {
+                    anyhow::ensure!(
+                        cfg!(windows) && is_elevated(),
+                        "volume safety requires an elevated Windows worker"
+                    );
+                    let payload = read_request()?;
+                    if command == "check-volume" {
+                        let connection: windows_iscsi_servicing::WindowsIscsiConnection =
+                            serde_json::from_slice(&payload)?;
+                        windows_iscsi_servicing::check_volume(&connection)
+                    } else {
+                        #[derive(serde::Deserialize)]
+                        struct Local {
+                            image_path: std::path::PathBuf,
+                        }
+                        let request: Local = serde_json::from_slice(&payload)?;
+                        windows_volume_safety::check_offline_volume(&request.image_path)
+                    }
+                })();
+            let response = match result {
+                Ok(result) => {
+                    serde_json::json!({"protocol_version": PROTOCOL_VERSION, "ok": true, "result": result})
+                }
+                Err(error) => {
+                    serde_json::json!({"protocol_version": PROTOCOL_VERSION, "ok": false, "error": format!("{error:#}")})
+                }
+            };
+            let code = if response["ok"] == true { 0 } else { 1 };
+            write_json(&response)
+                .map(|_| code)
+                .unwrap_or_else(report_output_error)
+        }
         Some(command @ ("gpt-capture" | "gpt-restore")) => {
             let response = match run_gpt(command) {
                 Ok(identity) => serde_json::json!({"ok": true, "result": identity}),

@@ -112,11 +112,9 @@ export const ContextMenu = ({
     targetClient?.snapshot && !targetClient?.keep_writeback && !isSuper;
   const validMedia = superMedia.filter((media) => media.validation_state === "valid");
   const defaultMedia = validMedia.find((media) => media.is_default);
-  const firmwareVerified = targetClient?.pxe_mode === "bios" ? defaultMedia?.bios_verified : defaultMedia?.uefi_verified;
   const hasReadyAssignment = !!targetImage && targetImage.status === "ready" && !!targetClient?.master && targetClient.master !== "pending";
   const hasPendingRecovery = targetClient?.recovery_required || superStatus?.storage_recovery;
-  const canStartNormal = hasReadyAssignment && !isOnline && !targetClient?.mutation_state && !hasPendingRecovery && !superLoading && !!defaultMedia && firmwareVerified;
-  const canStartVerification = hasReadyAssignment && !isOnline && !targetClient?.mutation_state && !hasPendingRecovery && !superLoading && !!defaultMedia;
+  const canStartNormal = hasReadyAssignment && !isOnline && !targetClient?.mutation_state && !hasPendingRecovery && !superLoading && !!defaultMedia;
   const sessionCanFinish = !isOnline && !targetClient?.mutation_state && !hasPendingRecovery && sessionState === "active";
 
   const handleAction = (cb) => {
@@ -203,13 +201,6 @@ export const ContextMenu = ({
                   disabled={!canStartNormal}
                   onClick={() => canStartNormal && actions.startSuper(targetClient, false, superStatus)}
                 />
-                <MenuItem
-                  icon={ShieldAlert}
-                  label={canStartVerification ? "Start verification-only session" : "Verification session unavailable"}
-                  variant="warning"
-                  disabled={!canStartVerification}
-                  onClick={() => canStartVerification && actions.startSuper(targetClient, true, superStatus)}
-                />
                 {!superLoading && !superError && hasPendingRecovery && <p className="px-3 pb-2 text-xs text-destructive">Client storage recovery is pending; retry recovery before starting a session.</p>}
                 {!superLoading && superError && <p className="px-3 pb-2 text-xs text-destructive">Unable to load Super-session or installer-media status. Reopen the menu to retry.</p>}
                 {!superLoading && !superError && !hasReadyAssignment && <p className="px-3 pb-2 text-xs text-muted-foreground">An assigned ready image revision is required.</p>}
@@ -220,7 +211,6 @@ export const ContextMenu = ({
                       : "No valid installer ISO is available."}
                   </p>
                 )}
-                {!superLoading && defaultMedia && !firmwareVerified && <p className="px-3 pb-2 text-xs text-muted-foreground">Default ISO is not boot-verified for {targetClient?.pxe_mode || "this firmware mode"}; use verification-only first.</p>}
               </>
             )}
           </>

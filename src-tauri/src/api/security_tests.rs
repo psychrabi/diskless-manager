@@ -355,6 +355,10 @@ async fn installer_media_and_super_mutations_are_authenticated_and_admin_only() 
         "/api/clients/client-1/super/enter",
         "/api/clients/client-1/super/save",
         "/api/clients/client-1/super/discard",
+        "/api/installation-sessions/session-1/cancel",
+        "/api/installation-sessions/session-1/close-recovery",
+        "/api/clients/client-1/identity/capture",
+        "/api/clients/client-1/identity/apply",
     ] {
         assert_eq!(
             request(&app, "POST", path, &user, json!({})).await,
@@ -366,11 +370,34 @@ async fn installer_media_and_super_mutations_are_authenticated_and_admin_only() 
         request(&app, "GET", "/api/installer-media", &user, json!(null)).await,
         StatusCode::FORBIDDEN
     );
+    // A well-formed preparation request must still be refused before any storage work.
     assert_eq!(
         request(
             &app,
-            "GET",
-            "/api/clients/client-1/super/status",
+            "POST",
+            "/api/clients/client-1/installation-sessions",
+            &user,
+            json!({"recipe":"interactive","confirm_erase":true})
+        )
+        .await,
+        StatusCode::FORBIDDEN
+    );
+    for path in [
+        "/api/clients/client-1/super/status",
+        "/api/clients/client-1/installation-sessions",
+        "/api/clients/client-1/identity",
+    ] {
+        assert_eq!(
+            request(&app, "GET", path, &user, json!(null)).await,
+            StatusCode::FORBIDDEN,
+            "{path}"
+        );
+    }
+    assert_eq!(
+        request(
+            &app,
+            "DELETE",
+            "/api/clients/client-1/identity",
             &user,
             json!(null)
         )

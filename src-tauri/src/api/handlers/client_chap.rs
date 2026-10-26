@@ -28,6 +28,28 @@ pub async fn rotate_client_chap(
         ));
     }
     let _client_guard = state.client_mutations.lock_client(&id).await;
+    if crate::application::client_storage_reservations::has_storage_reservation(&state.db_pool, &id)
+        .await
+        .map_err(|error| {
+            tracing::error!(client_id = %id, %error, "failed to check client storage reservation");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    status: 500,
+                    error: "Failed to check client storage reservation".into(),
+                }),
+            )
+        })?
+    {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(ErrorResponse {
+                status: 409,
+                error: "Client storage is reserved by an installer session or hardware profile"
+                    .into(),
+            }),
+        ));
+    }
 
     let (client, credentials) =
         state

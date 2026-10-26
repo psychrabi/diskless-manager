@@ -3,7 +3,9 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 const { api, toast } = vi.hoisted(() => ({
-  api: { list: vi.fn(), upload: vi.fn(), setDefault: vi.fn(), remove: vi.fn(), settings: vi.fn() },
+  api: {
+    list: vi.fn(), upload: vi.fn(), setDefault: vi.fn(), remove: vi.fn(), settings: vi.fn(),
+  },
   toast: { success: vi.fn(), error: vi.fn() },
 }));
 vi.mock("@/api/modules/installerMedia", () => ({
@@ -62,6 +64,15 @@ describe("Installer Media page", () => {
       .getAllByRole("option")
       .map((option) => option.textContent);
     expect(options).toEqual(["Windows PE", "Windows ISO", "Linux ISO", "Other ISO"]);
+  });
+
+  it("keeps the installer catalog free of client test and boot-result controls", async () => {
+    render(<InstallerMedia />);
+    const article = await screen.findByRole("article");
+    expect(within(article).getByText("Default: No")).toBeInTheDocument();
+    expect(within(article).queryByLabelText("Test client")).not.toBeInTheDocument();
+    expect(within(article).queryByLabelText("Boot result")).not.toBeInTheDocument();
+    expect(within(article).queryByRole("button", { name: "Record observed boot result" })).not.toBeInTheDocument();
   });
 
   it("uploads the chosen media type and displays the upload result", async () => {
@@ -163,12 +174,4 @@ describe("Installer Media page", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("shows the ISO catalog without client boot-verification controls", async () => {
-    render(<InstallerMedia />);
-    const article = await screen.findByRole("article");
-    expect(within(article).getByText("Default: No")).toBeInTheDocument();
-    expect(within(article).queryByLabelText("Test client")).not.toBeInTheDocument();
-    expect(within(article).queryByLabelText("Boot result")).not.toBeInTheDocument();
-    expect(within(article).queryByText(/Observed LUNs/)).not.toBeInTheDocument();
-  });
 });
