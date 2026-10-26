@@ -1,6 +1,6 @@
 import { act, renderHook } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
-import { useClientActions } from "/home/rabistha/Documents/Projects/diskless-manager/src/hooks/useClientActions.js";
+import { useClientActions } from "./useClientActions.js";
 
 const mocks = vi.hoisted(() => ({
   confirm: vi.fn(), success: vi.fn(), error: vi.fn(), info: vi.fn(),
