@@ -62,3 +62,5 @@ docs/superpowers/plans/*
 !docs/superpowers/plans/2026-10-25-nexboot-integration.md
 
 **/target/
+tools/windows-servicer/target/
+
