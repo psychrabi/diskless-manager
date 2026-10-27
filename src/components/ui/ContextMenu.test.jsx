@@ -5,7 +5,7 @@ import { AuthContext } from "@/contexts/auth";
 
 const actions = { edit: vi.fn(), inventoryBoot: vi.fn(), delete: vi.fn(), startSuper: vi.fn(), saveSuper: vi.fn(), discardSuper: vi.fn() };
 
-function show(client, { role = "admin", onExitLegacySuper = vi.fn(), onClose = vi.fn(), superStatus, superMedia = [], superLoading = false, targetImage } = {}) {
+function show(client, { role = "admin", onExitLegacySuper = vi.fn(), onClose = vi.fn(), superStatus, superLoading = false, targetImage } = {}) {
   render(
     <AuthContext.Provider value={{ user: { role } }}>
       <ContextMenu
@@ -17,7 +17,6 @@ function show(client, { role = "admin", onExitLegacySuper = vi.fn(), onClose = v
         actions={actions}
         onExitLegacySuper={onExitLegacySuper}
         superStatus={superStatus}
-        superMedia={superMedia}
         superLoading={superLoading}
         targetImage={targetImage}
       />
@@ -38,11 +37,10 @@ it("hides the inventory boot for provisioned clients", () => {
 
 // A client assigned an image directly, with no snapshot clone, is the super
 // client even when a legacy or imported row never stored the mode flag.
-it("offers the normal Super session when installer media is available", () => {
+it("offers the normal Super session without installer media", () => {
   const client = { id: "c1", name: "PC001", ip: "192.0.2.1", mac: "02:00:00:00:00:01", status: "Offline", master: "tank/image/windows", snapshot: "tank/image/windows@clean", pxe_mode: "uefi" };
   show(client, {
     targetImage: { os_type: "windows", status: "ready" },
-    superMedia: [{ media_type: "winpe", validation_state: "valid", is_default: true }],
   });
   const start = screen.getByRole("button", { name: "Start Super session" });
   expect(start).toBeEnabled();
@@ -53,7 +51,6 @@ it("offers the normal Super session when installer media is available", () => {
 it("enables normal Super without a recorded ISO boot result", () => {
   show({ id: "c1", name: "PC001", ip: "192.0.2.1", mac: "02:00:00:00:00:01", status: "Offline", master: "tank/image/windows", snapshot: "tank/image/windows@clean", pxe_mode: "uefi" }, {
     targetImage: { os_type: "windows", status: "ready" },
-    superMedia: [{ media_type: "winpe", validation_state: "valid", is_default: true, uefi_verified: true }],
   });
   const start = screen.getByRole("button", { name: "Start Super session" });
   expect(start).toBeEnabled();
@@ -61,10 +58,9 @@ it("enables normal Super without a recorded ISO boot result", () => {
   expect(actions.startSuper).toHaveBeenCalledWith(expect.objectContaining({ id: "c1" }), false, undefined);
 });
 
-it("starts Super with the global default ISO regardless of the image OS", () => {
+it("starts Super from the working clone regardless of image OS", () => {
   show({ id: "c1", name: "PC001", ip: "192.0.2.1", mac: "02:00:00:00:00:01", status: "Offline", master: "tank/image/windows", snapshot: "tank/image/windows@clean", pxe_mode: "uefi" }, {
     targetImage: { os_type: "windows", status: "ready" },
-    superMedia: [{ media_type: "linux_iso", validation_state: "valid", is_default: true, uefi_verified: true }],
   });
   const start = screen.getByRole("button", { name: "Start Super session" });
   expect(start).toBeEnabled();
@@ -76,7 +72,6 @@ it("allows a ready direct image assignment without a snapshot to start Super", (
   show({ id: "c1", name: "PC001", ip: "192.0.2.1", mac: "02:00:00:00:00:01", status: "Offline", master: "tank/image/windows", pxe_mode: "uefi" }, {
     superStatus: { mode: "normal", legacy: false, session: null },
     targetImage: { os_type: "windows", status: "ready" },
-    superMedia: [{ media_type: "winpe", validation_state: "valid", is_default: true, uefi_verified: true }],
   });
   expect(screen.getByRole("button", { name: "Start Super session" })).toBeEnabled();
 });
@@ -102,7 +97,6 @@ it("disables finishing actions while a Super session needs recovery", () => {
 it("treats the API's lowercase online status as online for Super controls", () => {
   show({ id: "c1", name: "PC001", ip: "192.0.2.1", mac: "02:00:00:00:00:01", status: "online", master: "tank/image/windows", snapshot: "tank/image/windows@clean", pxe_mode: "uefi" }, {
     targetImage: { os_type: "windows", status: "ready" },
-    superMedia: [{ media_type: "winpe", validation_state: "valid", is_default: true, uefi_verified: true }],
   });
   expect(screen.queryByRole("button", { name: "Start Super session" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Start verification-only session" })).not.toBeInTheDocument();
@@ -128,20 +122,18 @@ it("blocks controls for storage recovery but ignores boot-failure recovery rows"
   show(client, {
     superStatus: { mode: "normal", legacy: false, session: null, storage_recovery: true },
     targetImage: { os_type: "windows", status: "ready" },
-    superMedia: [{ media_type: "winpe", validation_state: "valid", is_default: true, uefi_verified: true }],
   });
   expect(screen.getByRole("button", { name: "Super session unavailable" })).toBeDisabled();
   expect(screen.getByText(/storage recovery is pending/i)).toBeInTheDocument();
 });
 
-it("explains that a matching ISO exists but is not the default", () => {
+it("starts Super when a valid ISO exists but is not the default", () => {
   show({ id: "c1", name: "PC001", ip: "192.0.2.1", mac: "02:00:00:00:00:01", status: "Offline", master: "tank/image/linux", snapshot: "tank/image/linux@clean", pxe_mode: "uefi" }, {
     superStatus: { mode: "normal", legacy: false, session: null },
     targetImage: { os_type: "linux", status: "ready" },
-    superMedia: [{ media_type: "linux_iso", validation_state: "valid", is_default: false }],
   });
-  expect(screen.getByRole("button", { name: "Super session unavailable" })).toBeDisabled();
-  expect(screen.getByText(/none is marked default/i)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Start Super session" })).toBeEnabled();
+  expect(screen.queryByText(/none is marked default/i)).not.toBeInTheDocument();
 });
 
 it("shows legacy exit only to admins and invokes its handler", () => {

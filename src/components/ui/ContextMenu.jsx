@@ -76,7 +76,6 @@ export const ContextMenu = ({
   actions,
   onExitLegacySuper,
   superStatus,
-  superMedia = [],
   superLoading = false,
   superError = false,
   targetImage,
@@ -110,11 +109,9 @@ export const ContextMenu = ({
     targetClient?.snapshot && targetClient?.keep_writeback && !isSuper;
   const isNonPersistent =
     targetClient?.snapshot && !targetClient?.keep_writeback && !isSuper;
-  const validMedia = superMedia.filter((media) => media.validation_state === "valid");
-  const defaultMedia = validMedia.find((media) => media.is_default);
   const hasReadyAssignment = !!targetImage && targetImage.status === "ready" && !!targetClient?.master && targetClient.master !== "pending";
   const hasPendingRecovery = targetClient?.recovery_required || superStatus?.storage_recovery;
-  const canStartNormal = hasReadyAssignment && !isOnline && !targetClient?.mutation_state && !hasPendingRecovery && !superLoading && !!defaultMedia;
+  const canStartNormal = hasReadyAssignment && !isOnline && !targetClient?.mutation_state && !hasPendingRecovery && !superLoading;
   const sessionCanFinish = !isOnline && !targetClient?.mutation_state && !hasPendingRecovery && sessionState === "active";
 
   const handleAction = (cb) => {
@@ -196,21 +193,14 @@ export const ContextMenu = ({
               <>
                 <MenuItem
                   icon={HardDrive}
-                  label={superLoading ? "Checking installer media…" : canStartNormal ? "Start Super session" : "Super session unavailable"}
+                  label={superLoading ? "Checking Super-session…" : canStartNormal ? "Start Super session" : "Super session unavailable"}
                   variant="secondary"
                   disabled={!canStartNormal}
                   onClick={() => canStartNormal && actions.startSuper(targetClient, false, superStatus)}
                 />
                 {!superLoading && !superError && hasPendingRecovery && <p className="px-3 pb-2 text-xs text-destructive">Client storage recovery is pending; retry recovery before starting a session.</p>}
-                {!superLoading && superError && <p className="px-3 pb-2 text-xs text-destructive">Unable to load Super-session or installer-media status. Reopen the menu to retry.</p>}
+                {!superLoading && superError && <p className="px-3 pb-2 text-xs text-destructive">Unable to load Super-session status. Reopen the menu to retry.</p>}
                 {!superLoading && !superError && !hasReadyAssignment && <p className="px-3 pb-2 text-xs text-muted-foreground">An assigned ready image revision is required.</p>}
-                {!superLoading && !superError && hasReadyAssignment && !defaultMedia && (
-                  <p className="px-3 pb-2 text-xs text-muted-foreground">
-                    {validMedia.length > 0
-                      ? "A valid installer ISO exists but none is marked default; set one as default in Installer Media."
-                      : "No valid installer ISO is available."}
-                  </p>
-                )}
               </>
             )}
           </>

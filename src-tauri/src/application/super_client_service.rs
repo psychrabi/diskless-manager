@@ -52,9 +52,9 @@ impl VolumeSafetyGuard for RemoteVolumeSafetyGuard {
     }
 }
 
-/// Coordinates clone-backed installer sessions. A session owns only its working image,
-/// target backstores, and installer attachment; the client's prior assignment and storage
-/// remain recoverable until Save succeeds.
+/// Coordinates clone-backed Super sessions. Normal sessions edit an isolated
+/// working clone and never depend on installer media; verification-only sessions
+/// additionally attach a read-only installer ISO for media boot testing.
 #[derive(Clone)]
 pub struct SuperClientService {
     clients: ClientRepository,
@@ -485,11 +485,14 @@ impl SuperClientService {
             SuperSessionState::Preparing => {
                 let prepared = async {
                     self.validate_prior_storage_safe(&client, &session).await?;
-                    let media_id = session
-                        .installer_media_id
-                        .as_deref()
-                        .context("session installer media is missing")?;
-                    let media = self.media_service.verify_integrity(media_id).await?;
+                    let media_id = session.installer_media_id.as_deref();
+                    anyhow::ensure!(
+                        !session.verification_only || media_id.is_some(),
+                        "verification session installer media is missing"
+                    );
+                    if let Some(media_id) = media_id {
+                        self.media_service.verify_integrity(media_id).await?;
+                    }
                     let snapshot = session
                         .working_origin_snapshot
                         .as_deref()
@@ -500,7 +503,7 @@ impl SuperClientService {
                         &session.prior_image_id,
                         snapshot,
                         &session.working_clone,
-                        &media.id,
+                        media_id,
                     )
                     .await
                 }
@@ -567,16 +570,11 @@ impl SuperClientService {
     }
 
     async fn verify_active_session(&self, client: &Client, session: &SuperSession) -> Result<()> {
-        let media = self
-            .media_service
-            .verify_integrity(
-                session
-                    .installer_media_id
-                    .as_deref()
-                    .context("active session is missing media")?,
-            )
-            .await?;
-        self.verify_active_session_target(client, session, &media)
+        let media = match session.installer_media_id.as_deref() {
+            Some(media_id) => Some(self.media_service.verify_integrity(media_id).await?),
+            None => None,
+        };
+        self.verify_active_session_target(client, session, media.as_ref())
             .await
     }
 
@@ -601,7 +599,7 @@ impl SuperClientService {
                 && session.prior_snapshot.as_deref() == client.snapshot.as_deref(),
             "verification session does not match the current client assignment"
         );
-        self.verify_active_session_target(client, session, media)
+        self.verify_active_session_target(client, session, Some(media))
             .await
     }
 
@@ -609,7 +607,7 @@ impl SuperClientService {
         &self,
         client: &Client,
         session: &SuperSession,
-        media: &InstallerMedia,
+        media: Option<&InstallerMedia>,
     ) -> Result<()> {
         let mut spec = self.normal_spec(client).await?;
         spec.dataset = session.working_clone.clone();
@@ -617,8 +615,8 @@ impl SuperClientService {
         spec.backstore = StorageService::super_session_working_backstore(&session.working_clone);
         spec.use_game_disk = false;
         spec.game_disks.clear();
-        let desired =
-            StorageService::build_super_session_iscsi_spec(&spec, media.managed_path.clone())?;
+        let installer_iso = media.map(|media| media.managed_path.clone());
+        let desired = StorageService::build_super_session_iscsi_spec(&spec, installer_iso)?;
         self.storage.verify_super_session_target(&desired)?;
         Ok(())
     }
@@ -719,12 +717,19 @@ impl SuperClientService {
             image.status == "ready" && matches!(image.kind, ImageKind::Master | ImageKind::Clone),
             "assigned image is not a ready image revision"
         );
-        let media = self
-            .media
-            .get_default()
-            .await?
-            .context("no default installer media is configured")?;
-        let media = self.media_service.verify_integrity(&media.id).await?;
+        // Normal Super sessions boot the isolated working clone. Installer media
+        // is only meaningful for an explicit verification session that tests an
+        // ISO boot path, so it must never gate starting a normal session.
+        let media = if verification_only {
+            let media = self
+                .media
+                .get_default()
+                .await?
+                .context("no default installer media is configured")?;
+            Some(self.media_service.verify_integrity(&media.id).await?)
+        } else {
+            None
+        };
         crate::application::client_boot::backup_custom_client_menu(
             &self.clients,
             &client,
@@ -761,7 +766,7 @@ impl SuperClientService {
             prior_snapshot: client.snapshot.clone(),
             working_origin_snapshot: Some(origin_snapshot),
             working_clone: working_dataset.clone(),
-            installer_media_id: Some(media.id.clone()),
+            installer_media_id: media.as_ref().map(|media| media.id.clone()),
             verification_only,
             state: SuperSessionState::Preparing,
             resume_state: None,
@@ -779,7 +784,7 @@ impl SuperClientService {
                 &image.id,
                 &source_snapshot_name,
                 &working_dataset,
-                &media.id,
+                media.as_ref().map(|media| media.id.as_str()),
             )
             .await;
         match result {
@@ -844,7 +849,7 @@ impl SuperClientService {
         image_id: &str,
         snapshot_name: &str,
         working_clone: &str,
-        media_id: &str,
+        media_id: Option<&str>,
     ) -> Result<()> {
         let source = self.images.get(image_id).await?;
         let (working_path, working_name) = session_working_clone_path(&source.name, working_clone)?;
@@ -880,8 +885,16 @@ impl SuperClientService {
         spec.use_game_disk = false;
         spec.game_disks.clear();
         spec.chap = chap(client);
-        let media = self.media_service.verify_integrity(media_id).await?;
-        let target = StorageService::build_super_session_iscsi_spec(&spec, &media.managed_path)?;
+        let installer_iso = match media_id {
+            Some(media_id) => Some(
+                self.media_service
+                    .verify_integrity(media_id)
+                    .await?
+                    .managed_path,
+            ),
+            None => None,
+        };
+        let target = StorageService::build_super_session_iscsi_spec(&spec, installer_iso.clone())?;
         anyhow::ensure!(
             !self.clients.has_other_storage_owner(client).await?,
             "client storage is shared with another client"
@@ -896,7 +909,7 @@ impl SuperClientService {
                 .with_context(|| format!("assigned client target is unsafe: {normal_error:#}"))?;
         }
         self.storage
-            .create_super_session_target(&spec, &media.managed_path)
+            .create_super_session_target(&spec, installer_iso)
             .context("failed to publish verified Super-session storage")?;
         self.storage
             .verify_super_session_target(&target)
@@ -908,8 +921,11 @@ impl SuperClientService {
             .target_iqn
             .as_deref()
             .context("client target is missing")?;
-        let backstores =
-            StorageService::super_session_backstores(&session.client_id, &session.working_clone);
+        let backstores = StorageService::super_session_backstores(
+            &session.client_id,
+            &session.working_clone,
+            session.installer_media_id.is_some(),
+        );
         self.storage
             .remove_super_session_target(target, &backstores)?;
         let normal = self.normal_spec(client).await?;
@@ -1078,7 +1094,11 @@ impl SuperClientService {
         if !save {
             client = self.prior_assignment(&client, session).await?;
         }
-        let owned = StorageService::super_session_backstores(client_id, &session.working_clone);
+        let owned = StorageService::super_session_backstores(
+            client_id,
+            &session.working_clone,
+            session.installer_media_id.is_some(),
+        );
         self.storage.remove_super_session_target(&target, &owned)?;
 
         if save {
@@ -2227,7 +2247,8 @@ mod tests {
         spec.game_disks.clear();
         let media = service.media.get("media-1").await.unwrap().unwrap();
         let mut partial =
-            StorageService::build_super_session_iscsi_spec(&spec, media.managed_path).unwrap();
+            StorageService::build_super_session_iscsi_spec(&spec, Some(media.managed_path))
+                .unwrap();
         partial.luns.pop();
         *iscsi.target.lock().unwrap() = Some(partial);
         sessions.insert(&session).await.unwrap();
@@ -2333,8 +2354,9 @@ mod tests {
         );
         assert_eq!(tokio::fs::read_to_string(&menu).await.unwrap(), normal_menu);
         assert_eq!(updated.mode, BootMode::Super);
-        assert_eq!(target.luns.len(), 2);
-        assert_eq!(target.luns[1].lun, 2);
+        assert!(session.installer_media_id.is_none());
+        assert_eq!(target.luns.len(), 1);
+        assert_eq!(target.luns[0].lun, 0);
         assert_eq!(
             target.luns[0].block_device,
             PathBuf::from(format!("/dev/zvol/{}", session.working_clone))
@@ -2382,6 +2404,117 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn normal_entry_does_not_require_installer_media() {
+        let (service, _, _, _, iscsi, client, _media_root) = fixture().await;
+        sqlx::query("UPDATE installer_media SET is_default = 0")
+            .execute(service.sessions.pool())
+            .await
+            .unwrap();
+
+        let session = service
+            .enter(client.id.as_str(), false, false)
+            .await
+            .unwrap();
+
+        assert!(session.installer_media_id.is_none());
+        let target = iscsi.target.lock().unwrap().clone().unwrap();
+        assert_eq!(target.luns.len(), 1);
+        assert_eq!(target.luns[0].lun, 0);
+    }
+
+    #[tokio::test]
+    async fn clone_only_active_session_is_left_in_place_on_recovery() {
+        let (service, clients, sessions, _, iscsi, mut client, _media_root) = fixture().await;
+        client.mode = BootMode::Super;
+        client.status = ClientStatus::Online;
+        clients.update(&client).await.unwrap();
+        let mut session = active_session(&client, SuperSessionState::Active);
+        session.installer_media_id = None;
+        let mut spec = service.normal_spec(&client).await.unwrap();
+        spec.dataset = session.working_clone.clone();
+        spec.source = StorageSource::ExistingVolume(session.working_clone.clone());
+        spec.backstore = StorageService::super_session_working_backstore(&session.working_clone);
+        spec.use_game_disk = false;
+        spec.game_disks.clear();
+        *iscsi.target.lock().unwrap() =
+            Some(StorageService::build_super_session_iscsi_spec(&spec, None).unwrap());
+        iscsi.active_session.store(true, Ordering::SeqCst);
+        sessions.insert(&session).await.unwrap();
+
+        service.recover_incomplete().await.unwrap();
+
+        assert_eq!(iscsi.seen_lun_counts.lock().unwrap().len(), 0);
+        assert_eq!(
+            sessions
+                .get_for_client(client.id.as_str())
+                .await
+                .unwrap()
+                .unwrap()
+                .state,
+            SuperSessionState::Active
+        );
+        assert_eq!(iscsi.target.lock().unwrap().as_ref().unwrap().luns.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn active_recovery_rejects_installer_lun_on_clone_only_session() {
+        let (service, _, sessions, _, iscsi, client, _media_root) = fixture().await;
+        let mut session = active_session(&client, SuperSessionState::Active);
+        session.installer_media_id = None;
+        let mut spec = service.normal_spec(&client).await.unwrap();
+        spec.dataset = session.working_clone.clone();
+        spec.source = StorageSource::ExistingVolume(session.working_clone.clone());
+        spec.backstore = StorageService::super_session_working_backstore(&session.working_clone);
+        spec.use_game_disk = false;
+        spec.game_disks.clear();
+        let media = service.media.get("media-1").await.unwrap().unwrap();
+        *iscsi.target.lock().unwrap() = Some(
+            StorageService::build_super_session_iscsi_spec(&spec, Some(media.managed_path))
+                .unwrap(),
+        );
+        sessions.insert(&session).await.unwrap();
+
+        let error = service.recover_incomplete().await.unwrap_err();
+        assert!(
+            format!("{error:#}").contains("exactly the expected LUNs"),
+            "{error:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn clone_only_discard_restores_assignment_without_installer_cleanup() {
+        let (service, clients, sessions, backend, iscsi, client, _media_root) = fixture().await;
+        backend
+            .datasets
+            .lock()
+            .unwrap()
+            .insert("pool/super-working-session1".into());
+        let mut session = active_session(&client, SuperSessionState::Active);
+        session.installer_media_id = None;
+        sessions.insert(&session).await.unwrap();
+
+        service.discard(client.id.as_str()).await.unwrap();
+
+        let restored = clients.find_by_id(&client.id).await.unwrap().unwrap();
+        assert_eq!(restored.master, client.master);
+        assert_eq!(restored.snapshot, client.snapshot);
+        assert!(sessions.list_incomplete().await.unwrap().is_empty());
+        let target = iscsi.target.lock().unwrap().clone().unwrap();
+        assert_eq!(target.luns.len(), 1);
+        let normal = service.normal_spec(&restored).await.unwrap();
+        assert_eq!(target.luns[0].backstore, normal.backstore);
+        assert_eq!(
+            sessions
+                .get_for_client(client.id.as_str())
+                .await
+                .unwrap()
+                .unwrap()
+                .installer_media_id,
+            None
+        );
+    }
+
+    #[tokio::test]
     async fn entry_rejects_media_integrity_mismatch_before_persisting_session() {
         let (service, _, sessions, _, iscsi, client, media_root) = fixture().await;
         tokio::fs::write(
@@ -2409,7 +2542,8 @@ mod tests {
         spec.game_disks.clear();
         let media = service.media.get("media-1").await.unwrap().unwrap();
         *iscsi.target.lock().unwrap() = Some(
-            StorageService::build_super_session_iscsi_spec(&spec, media.managed_path).unwrap(),
+            StorageService::build_super_session_iscsi_spec(&spec, Some(media.managed_path))
+                .unwrap(),
         );
         iscsi.active_session.store(true, Ordering::SeqCst);
         sessions
@@ -2441,7 +2575,8 @@ mod tests {
         spec.game_disks.clear();
         let media = service.media.get("media-1").await.unwrap().unwrap();
         let mut target =
-            StorageService::build_super_session_iscsi_spec(&spec, media.managed_path).unwrap();
+            StorageService::build_super_session_iscsi_spec(&spec, Some(media.managed_path))
+                .unwrap();
         let mut extra = target.luns[1].clone();
         extra.lun = 2;
         extra.backstore = "stale_game_lun".into();
@@ -2476,7 +2611,7 @@ mod tests {
         spec.use_game_disk = false;
         spec.game_disks.clear();
         let mut target =
-            StorageService::build_super_session_iscsi_spec(&spec, media.managed_path.clone())
+            StorageService::build_super_session_iscsi_spec(&spec, Some(media.managed_path.clone()))
                 .unwrap();
         target.initiator_iqn = None;
         *iscsi.target.lock().unwrap() = Some(target);
@@ -2500,10 +2635,7 @@ mod tests {
             .await
             .unwrap_err();
         let error = format!("{error:#}");
-        assert!(
-            error.contains("exactly the working disk and installer LUNs"),
-            "{error}"
-        );
+        assert!(error.contains("exactly the expected LUNs"), "{error}");
         assert_eq!(
             clients.find_by_id(&client.id).await.unwrap().unwrap().mode,
             BootMode::Normal

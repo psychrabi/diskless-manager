@@ -28,6 +28,8 @@ pub enum SuperBootReservation {
         media_type: crate::persistence::InstallerMediaType,
         firmware: crate::domain::PxeMode,
     },
+    /// Boot the isolated Super working clone at LUN 0 without installer media.
+    WorkingClone,
     Deny,
 }
 
@@ -60,14 +62,16 @@ pub(crate) fn render_client_ipxe(reservation: &BootReservation) -> String {
             reservation.chap.as_ref(),
         ),
         Some(SuperBootReservation::Deny) => crate::infrastructure::pxe::render_super_boot_denied(),
-        None => crate::infrastructure::pxe::render_client_script_for_boot(
-            &reservation.client_name,
-            &reservation.target_iqn,
-            80,
-            true,
-            reservation.chap.as_ref(),
-            reservation.assigned_windows,
-        ),
+        Some(SuperBootReservation::WorkingClone) | None => {
+            crate::infrastructure::pxe::render_client_script_for_boot(
+                &reservation.client_name,
+                &reservation.target_iqn,
+                80,
+                true,
+                reservation.chap.as_ref(),
+                reservation.assigned_windows,
+            )
+        }
     }
 }
 

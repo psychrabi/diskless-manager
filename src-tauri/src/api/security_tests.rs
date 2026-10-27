@@ -128,6 +128,22 @@ async fn users_cannot_write_service_configs_or_destroy_snapshots() {
 }
 
 #[tokio::test]
+async fn users_cannot_apply_restore_points() {
+    let (_, app, admin, user) = setup().await;
+    let path = "/api/images/missing/snapshots/missing/apply";
+    let body = json!({ "new_name": "restored-image" });
+
+    assert_eq!(
+        request(&app, "POST", path, &user, body.clone()).await,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        request(&app, "POST", path, &admin, body).await,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
 async fn authenticated_mutations_are_audited_but_reads_are_not() {
     let (state, app, admin, _) = setup().await;
     let path = "/api/images/missing/snapshots/missing/rollback";

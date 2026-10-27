@@ -430,23 +430,22 @@ impl StorageService {
             .collect()
     }
 
-    /// Build the temporary Super target: writable working image at LUN 0 and
-    /// a read-only installer ISO at LUN 2, with game disks omitted.
+    /// Build the temporary Super target: writable working image at LUN 0 and,
+    /// for verification-only sessions, a read-only installer ISO at LUN 2.
+    /// Game disks are omitted while the session owns the client target.
     pub fn build_super_session_iscsi_spec(
         spec: &ClientStorageSpec,
-        installer_iso: impl Into<PathBuf>,
+        installer_iso: Option<PathBuf>,
     ) -> Result<IscsiTargetSpec> {
-        let mut target = IscsiTargetSpec::with_luns(
-            &spec.target_iqn,
-            vec![
-                IscsiLunSpec::new(0, &spec.backstore, spec.block_device()),
-                IscsiLunSpec::readonly_file(
-                    2,
-                    format!("installer_{}", sanitize_client_id(&spec.client_id)),
-                    installer_iso,
-                ),
-            ],
-        )?;
+        let mut luns = vec![IscsiLunSpec::new(0, &spec.backstore, spec.block_device())];
+        if let Some(installer_iso) = installer_iso {
+            luns.push(IscsiLunSpec::readonly_file(
+                2,
+                format!("installer_{}", sanitize_client_id(&spec.client_id)),
+                installer_iso,
+            ));
+        }
+        let mut target = IscsiTargetSpec::with_luns(&spec.target_iqn, luns)?;
         target.initiator_iqn = Some(spec.initiator_iqn());
         target.chap = spec.chap.clone();
         Ok(target)
@@ -457,11 +456,16 @@ impl StorageService {
         format!("super_{working_name}")
     }
 
-    pub fn super_session_backstores(client_id: &str, working_clone: &str) -> Vec<String> {
-        vec![
-            Self::super_session_working_backstore(working_clone),
-            format!("installer_{}", sanitize_client_id(client_id)),
-        ]
+    pub fn super_session_backstores(
+        client_id: &str,
+        working_clone: &str,
+        include_installer: bool,
+    ) -> Vec<String> {
+        let mut backstores = vec![Self::super_session_working_backstore(working_clone)];
+        if include_installer {
+            backstores.push(format!("installer_{}", sanitize_client_id(client_id)));
+        }
+        backstores
     }
 
     pub fn verify_super_session_target(&self, desired: &IscsiTargetSpec) -> Result<()> {
@@ -474,7 +478,7 @@ impl StorageService {
                         .iter()
                         .any(|lun| lun.lun == expected.lun && lun.backstore == expected.backstore)
                 }),
-            "Super-session target must expose exactly the working disk and installer LUNs"
+            "Super-session target must expose exactly the expected LUNs"
         );
         anyhow::ensure!(
             self.iscsi.inspect_target(desired)?.is_ready(),
@@ -488,7 +492,7 @@ impl StorageService {
     pub fn create_super_session_target(
         &self,
         spec: &ClientStorageSpec,
-        installer_iso: impl Into<PathBuf>,
+        installer_iso: Option<PathBuf>,
     ) -> Result<()> {
         self.image_backend
             .validate_unmounted(&spec.dataset)
@@ -1801,6 +1805,26 @@ mod game_storage_tests {
     }
 
     #[test]
+    fn super_session_target_boots_only_the_working_disk_without_media() {
+        let spec = crate::domain::storage::ClientStorageSpec {
+            installer_iso: None,
+            client_id: "pc001".into(),
+            client_name: "pc001".into(),
+            source: StorageSource::ExistingClientVolume("pool/pc001".into()),
+            dataset: "pool/pc001".into(),
+            backstore: "block_pc001".into(),
+            target_iqn: "iqn.test:pc001".into(),
+            lun: 0,
+            use_game_disk: true,
+            game_disks: vec!["pool/game".into()],
+            chap: None,
+        };
+        let target = StorageService::build_super_session_iscsi_spec(&spec, None).unwrap();
+        assert_eq!(target.luns.len(), 1);
+        assert_eq!(target.luns[0].lun, 0);
+    }
+
+    #[test]
     fn super_session_target_uses_lun_zero_and_readonly_iso_lun_two_without_games() {
         let spec = crate::domain::storage::ClientStorageSpec {
             installer_iso: None,
@@ -1815,8 +1839,11 @@ mod game_storage_tests {
             game_disks: vec!["pool/game".into()],
             chap: None,
         };
-        let target =
-            StorageService::build_super_session_iscsi_spec(&spec, "/srv/iso/install.iso").unwrap();
+        let target = StorageService::build_super_session_iscsi_spec(
+            &spec,
+            Some("/srv/iso/install.iso".into()),
+        )
+        .unwrap();
         assert_eq!(target.luns.len(), 2);
         assert_eq!(target.luns[0].lun, 0);
         assert_eq!(target.luns[1].lun, 2);
@@ -1830,8 +1857,12 @@ mod game_storage_tests {
     #[test]
     fn super_session_cleanup_names_only_session_owned_luns() {
         assert_eq!(
-            StorageService::super_session_backstores("PC 001", "pool/super-session-123"),
+            StorageService::super_session_backstores("PC 001", "pool/super-session-123", true),
             vec!["super_super-session-123", "installer_pc_001"]
+        );
+        assert_eq!(
+            StorageService::super_session_backstores("PC 001", "pool/super-session-123", false),
+            vec!["super_super-session-123"]
         );
     }
 }

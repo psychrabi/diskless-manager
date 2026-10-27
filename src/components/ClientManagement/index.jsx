@@ -23,7 +23,6 @@ import AuditLogViewer from "./AuditLogViewer";
 import ScheduledOperationsList from "./ScheduledOperationsList";
 import LegacySuperExitDialog from "./LegacySuperExitDialog";
 import { getSuperStatus } from "@/api/modules/clients";
-import { listInstallerMedia } from "@/api/modules/installerMedia";
 import { getPendingClientRecoveries } from "@/api/modules/reconciliation";
 import { useAuth } from "@/contexts/auth";
 
@@ -77,17 +76,17 @@ const ClientManagement = () => {
     const target = contextMenu.client;
     if (!contextMenu.isOpen || !target || user?.role !== "admin") return;
     let current = true;
-    Promise.all([getSuperStatus(target.id), listInstallerMedia(), getPendingClientRecoveries()])
-      .then(([status, media, recoveryResponse]) => {
+    Promise.all([getSuperStatus(target.id), getPendingClientRecoveries()])
+      .then(([status, recoveryResponse]) => {
         if (!current) return;
         const storageRecovery = (recoveryResponse.recoveries || []).some(
           (recovery) => recovery.client_id === target.id && recovery.kind !== "boot_failure",
         );
-        setSuperData({ requestId: contextMenu.requestId, status: { ...status, storage_recovery: storageRecovery }, media: media || [] });
+        setSuperData({ requestId: contextMenu.requestId, status: { ...status, storage_recovery: storageRecovery } });
       })
       .catch(() => {
         if (!current) return;
-        setSuperData({ requestId: contextMenu.requestId, status: null, media: [], error: true });
+        setSuperData({ requestId: contextMenu.requestId, status: null, error: true });
       });
     return () => { current = false; };
   }, [contextMenu.client, contextMenu.isOpen, contextMenu.requestId, user?.role]);
@@ -269,7 +268,6 @@ const ClientManagement = () => {
         actions={contextActions}
         onExitLegacySuper={setLegacySuperClient}
         superStatus={currentSuperData?.status}
-        superMedia={currentSuperData?.media || []}
         superLoading={!currentSuperData}
         superError={currentSuperData?.error}
         targetImage={masters.find((image) => image.name === contextMenu.client?.master || image.id === contextMenu.client?.master)}

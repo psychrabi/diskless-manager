@@ -4,6 +4,11 @@ The **Install & Adapt** page (Infrastructure → Install & Adapt, administrators
 only) installs an operating system onto a client's assigned disk and preserves
 or restores a working Windows hardware identity.
 
+Normal **Super sessions** are a separate workflow: they boot an isolated
+writable clone of the assigned image at LUN 0 and do not require installer
+media. Installer media is used by the installation sessions on this page and by
+explicit verification-only sessions that test ISO boot behavior.
+
 Everything on this page requires the client to be **powered off**. The server
 refuses to prepare an installation for a client that is online or still holds an
 iSCSI session.

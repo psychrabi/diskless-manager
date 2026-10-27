@@ -16,6 +16,7 @@ Existing uncommitted work is preserved. No commit/push/deployment is included be
 
 ## Supported workflows
 
+- **Super session (normal)**: boots an isolated writable working clone at LUN 0. The clone is made from the client's assigned snapshot when present, otherwise from a generated origin snapshot of the master; the shared master is never exported. Installer media is not required.
 - **Interactive ISO boot** (`interactive`): any firmware, any cataloged Windows/Linux/other ISO. The server attaches the ISO to the client target as read-only LUN 2 and boots the media's own menu; no client test session or observed boot result is required, and no unattended answer file is used.
 - **Windows unattended** (`windows`): UEFI amd64 only, cataloged Windows ISO containing `sources/install.wim` (install.esd is rejected), and a deployed dedicated WinPE installer (`boot/winpe/` with `wimboot`, `BCD`, `boot.sdi`, `boot-installer.wim`, `installer-v1.json` attesting amd64/PowerShell/StorageWMI). WinPE boots over the network, re-verifies target IQN, iSCSI bus type, exact disk size and UEFI, then partitions the job target and streams `install.wim` over HTTP.
 - **Ubuntu unattended** (`ubuntu`): Ubuntu Server 24.04 amd64 live-server ISO. Requires `casper/vmlinuz`, `casper/initrd` and a `.disk/info` matching that release. Direct-installs onto the iSCSI by-path device with GPT/ESP and reports progress; the media ISO is served over the scoped session URL.

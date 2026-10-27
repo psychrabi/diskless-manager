@@ -84,6 +84,7 @@ fn audit_action(method: &Method, path: &str) -> String {
     const NAMED_ACTIONS: &[&str] = &[
         "acknowledge",
         "activate",
+        "apply",
         "cancel",
         "clone",
         "complete",
@@ -418,6 +419,10 @@ mod tests {
                 "/api/images/pool/image/snapshots/s1/rollback"
             ),
             "rollback"
+        );
+        assert_eq!(
+            audit_action(&Method::POST, "/api/images/pool/image/snapshots/s1/apply"),
+            "apply"
         );
         assert_eq!(
             audit_action(&Method::PUT, "/api/auth/admin/password"),

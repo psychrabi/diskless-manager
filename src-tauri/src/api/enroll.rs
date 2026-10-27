@@ -727,6 +727,23 @@ mod tests {
                 exists,
             ))
         }
+        fn verify_named_file_lun_mappings(&self, spec: &IscsiTargetSpec) -> anyhow::Result<()> {
+            if spec
+                .luns
+                .iter()
+                .any(|lun| lun.backing == crate::infrastructure::iscsi::IscsiLunBacking::File)
+            {
+                anyhow::ensure!(
+                    spec.initiator_iqn.is_some(),
+                    "named file LUN mapping is missing"
+                );
+                anyhow::ensure!(
+                    self.acl.lock().unwrap().as_deref() == spec.initiator_iqn.as_deref(),
+                    "named file LUN mapping is missing"
+                );
+            }
+            Ok(())
+        }
         fn reconcile(&self, spec: &IscsiTargetSpec) -> anyhow::Result<()> {
             self.create_target(spec)
         }
@@ -926,6 +943,54 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(reset, (None, 0, 0, None));
+    }
+
+    #[tokio::test]
+    async fn active_super_session_without_installer_media_boots_the_working_clone() {
+        let mut state = test_state().await;
+        let image = std::sync::Arc::new(FakeImage::default());
+        let iscsi = std::sync::Arc::new(FakeIscsi::default());
+        let storage = StorageService::new(image, iscsi.clone());
+        std::sync::Arc::get_mut(&mut state.application)
+            .expect("test application has one owner")
+            .storage = std::sync::Arc::new(storage);
+        let root = tempfile::tempdir().unwrap();
+        state.settings.write().await.http.root_dir = root.path().display().to_string();
+        sqlx::query("INSERT INTO images (id, name, kind, os_type, size_gb, path, format, status, created_at, updated_at) VALUES ('super-master', 'pool/master', 'master', 'linux', 50, '/dev/zvol/pool/master', 'raw', 'ready', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+            .execute(&state.db_pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO clients (id, name, mac, ip, master, block_device, block_store, target_iqn, mode, enabled, created_at, updated_at) VALUES ('super-boot', 'super-boot', '02:00:00:00:00:0e', '192.0.2.14', 'pool/master', '/dev/zvol/pool/master', 'block_super_boot', 'iqn.test:super-boot', 'super', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+            .execute(&state.db_pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO super_sessions (id, client_id, prior_image_id, working_origin_snapshot, working_clone, installer_media_id, verification_only, state, created_at, updated_at) VALUES ('super-session', 'super-boot', 'super-master', 'pool/master@v1', 'pool/super-working-session1', NULL, 0, 'active', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+            .execute(&state.db_pool)
+            .await
+            .unwrap();
+        *iscsi.luns.lock().unwrap() = vec![IscsiLunState {
+            lun: 0,
+            backstore: "super_super-working-session1".into(),
+            exists: true,
+            backstore_exists: true,
+            block_device_matches: true,
+        }];
+
+        let script = crate::application::client_boot::ensure_client_boot_ready(
+            &state,
+            "super-boot",
+            "02:00:00:00:00:0e",
+        )
+        .await
+        .unwrap();
+
+        assert!(script.contains("iqn.test:super-boot"), "{script}");
+        assert!(
+            !script.to_ascii_lowercase().contains("installer"),
+            "{script}"
+        );
+        assert_eq!(*iscsi.creates.lock().unwrap(), 0);
+        assert_eq!(iscsi.luns.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]
