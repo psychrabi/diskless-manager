@@ -1,8 +1,21 @@
-import { deleteSnapshot, rollbackImageSnapshot, setDefaultImage, deleteImage } from "@/api/modules/images";
+import { applySnapshot, deleteSnapshot, rollbackImageSnapshot, setDefaultImage, deleteImage } from "@/api/modules/images";
 import { useConfirm } from "@/contexts/confirmDialog";
 import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
 import { useCallback } from "react";
+
+const restoreImageName = (imageName, snapshotName) => {
+  const leaf = String(imageName || "image").split("/").pop();
+  const stamp = new Date()
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace("T", "-")
+    .slice(0, 15);
+  return `${leaf}-${snapshotName}-restore-${stamp}`.replace(
+    /[^a-zA-Z0-9_-]/g,
+    "-"
+  );
+};
 
 export const useMasterManager = () => {
   const { success, error } = useToastStore();
@@ -59,6 +72,38 @@ export const useMasterManager = () => {
     }
   }, [confirm, fetchMasters, success, error]);
 
+  const handleApplySnapshot = useCallback(async (snapshot, image) => {
+    if (!snapshot || !image) return;
+    try {
+      const answer = await confirm({
+        title: "Apply Restore Point",
+        description: `Create a new master image from "${snapshot}" of "${image}"? The current image, newer restore points, and all client assignments are left unchanged. Assign clients to the new image afterwards.`,
+        confirmText: "Create Image",
+        cancelText: "Cancel",
+        confirmVariant: "primary",
+        size: "2xl",
+        showInput: true,
+        inputLabel: "New image name",
+        defaultValue: restoreImageName(image, snapshot),
+      });
+      if (typeof answer !== "string") return;
+      const newName = answer.trim();
+      if (!newName) {
+        error("Image Management", "Enter a name for the new image");
+        return;
+      }
+
+      const created = await applySnapshot(image, snapshot, newName);
+      await fetchMasters();
+      success(
+        "Image Management",
+        `Created ${created?.name || newName} from restore point "${snapshot}"`
+      );
+    } catch (err) {
+      error(err?.error || err?.message || String(err));
+    }
+  }, [confirm, fetchMasters, success, error]);
+
   const setDefaultMaster = useCallback(async (masterName) => {
     setDefaultImage(masterName)
       .then(async (response) => {
@@ -100,6 +145,7 @@ export const useMasterManager = () => {
   return {
     handleDeleteSnapshot,
     handleRollbackSnapshot,
+    handleApplySnapshot,
     setDefaultMaster,
     handleDeleteImage,
   };

@@ -4,10 +4,12 @@ import { useMasterManager } from "./useMasterManager";
 
 const mocks = vi.hoisted(() => ({
   confirm: vi.fn(), success: vi.fn(), error: vi.fn(), fetchMasters: vi.fn(),
-  deleteSnapshot: vi.fn(), rollbackImageSnapshot: vi.fn(), setDefaultImage: vi.fn(), deleteImage: vi.fn(),
+  deleteSnapshot: vi.fn(), rollbackImageSnapshot: vi.fn(), applySnapshot: vi.fn(),
+  setDefaultImage: vi.fn(), deleteImage: vi.fn(),
 }));
 vi.mock("@/api/modules/images", () => ({
   deleteSnapshot: mocks.deleteSnapshot, rollbackImageSnapshot: mocks.rollbackImageSnapshot,
+  applySnapshot: mocks.applySnapshot,
   setDefaultImage: mocks.setDefaultImage, deleteImage: mocks.deleteImage,
 }));
 vi.mock("@/contexts/confirmDialog", () => ({ useConfirm: () => mocks.confirm }));
@@ -18,6 +20,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   mocks.confirm.mockResolvedValue(true);
   mocks.deleteSnapshot.mockResolvedValue({});
+  mocks.applySnapshot.mockResolvedValue({ name: "pool/windows-restored" });
   mocks.fetchMasters.mockResolvedValue(undefined);
 });
 
@@ -75,4 +78,61 @@ it("does not rollback when snapshot confirmation is canceled", async () => {
   await act(() => result.current.handleRollbackSnapshot("stable", "pool/windows"));
 
   expect(mocks.rollbackImageSnapshot).not.toHaveBeenCalled();
+});
+
+it("applies a restore point to a new image and refreshes the list", async () => {
+  mocks.confirm.mockResolvedValue("pool/windows-restored");
+  const { result } = renderHook(() => useMasterManager());
+
+  await act(() => result.current.handleApplySnapshot("stable", "pool/windows"));
+  await act(async () => {});
+
+  expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({
+    showInput: true,
+    defaultValue: expect.stringMatching(/^windows-stable-restore-\d{8}-\d{6}$/),
+  }));
+  expect(mocks.applySnapshot).toHaveBeenCalledWith(
+    "pool/windows",
+    "stable",
+    "pool/windows-restored"
+  );
+  expect(mocks.fetchMasters).toHaveBeenCalledOnce();
+  expect(mocks.success).toHaveBeenCalledWith(
+    "Image Management",
+    'Created pool/windows-restored from restore point "stable"'
+  );
+});
+
+it("does not apply when restore-point confirmation is canceled", async () => {
+  mocks.confirm.mockResolvedValue(false);
+  const { result } = renderHook(() => useMasterManager());
+
+  await act(() => result.current.handleApplySnapshot("stable", "pool/windows"));
+
+  expect(mocks.applySnapshot).not.toHaveBeenCalled();
+  expect(mocks.fetchMasters).not.toHaveBeenCalled();
+});
+
+it("rejects a blank new image name", async () => {
+  mocks.confirm.mockResolvedValue("   ");
+  const { result } = renderHook(() => useMasterManager());
+
+  await act(() => result.current.handleApplySnapshot("stable", "pool/windows"));
+
+  expect(mocks.applySnapshot).not.toHaveBeenCalled();
+  expect(mocks.error).toHaveBeenCalledWith(
+    "Image Management",
+    "Enter a name for the new image"
+  );
+});
+
+it("shows an error when applying a restore point fails", async () => {
+  mocks.confirm.mockResolvedValue("pool/windows-restored");
+  mocks.applySnapshot.mockRejectedValue({ error: "image already exists" });
+  const { result } = renderHook(() => useMasterManager());
+
+  await act(() => result.current.handleApplySnapshot("stable", "pool/windows"));
+
+  expect(mocks.error).toHaveBeenCalledWith("image already exists");
+  expect(mocks.fetchMasters).not.toHaveBeenCalled();
 });

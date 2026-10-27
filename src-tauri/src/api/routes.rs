@@ -35,7 +35,7 @@ use crate::api::handlers::{
     dhcp_reconciliation::{inspect_dhcp_reconciliation, repair_dhcp_reconciliation},
     disks::{create_pool, list_disks, pool_exists, rename_disk},
     images::{
-        clone_image, create_image, create_snapshot, delete_image, delete_snapshot,
+        apply_snapshot, clone_image, create_image, create_snapshot, delete_image, delete_snapshot,
         get_driver_readiness, get_image, get_image_health, get_image_info, get_snapshots,
         import_existing_images, import_image, list_images, list_masters, rename_image,
         resize_image, rollback_snapshot, set_default_image, update_image, verify_image,
@@ -382,6 +382,10 @@ fn image_routes() -> Router<AppState> {
         .route(
             "/api/images/{id}/snapshots/{snapshot_name}",
             delete(delete_snapshot),
+        )
+        .route(
+            "/api/images/{id}/snapshots/{snapshot_name}/apply",
+            post(apply_snapshot),
         )
         .route(
             "/api/images/{id}/snapshots/{snapshot_name}/rollback",
