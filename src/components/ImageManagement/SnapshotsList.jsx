@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui";
 import { Badge } from "@/components/ui/badge";
 import { useMasterManager } from "@/hooks/useMasterManager";
-import { ChevronDown, ChevronRight, History } from "lucide-react";
+import { ChevronDown, ChevronRight, CopyPlus, History } from "lucide-react";
 import { RotateCcw, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 
@@ -26,6 +26,7 @@ const ChainNode = ({
   newerSnapshots,
   handleDeleteSnapshot,
   handleRollbackSnapshot,
+  handleApplySnapshot,
 }) => (
   <li
     role="treeitem"
@@ -57,6 +58,16 @@ const ChainNode = ({
         </div>
         <div className="flex shrink-0 justify-end gap-1 sm:space-x-1">
           <Button
+            onClick={() => handleApplySnapshot(snap.name, masterName)}
+            variant="secondary"
+            size="icon"
+            className="min-h-[36px] min-w-[36px]"
+            title={`Apply ${snap.name} as new image`}
+            aria-label={`Apply ${snap.name} as new image`}
+          >
+            <CopyPlus className="h-4 w-4" />
+          </Button>
+          <Button
             onClick={() =>
               handleRollbackSnapshot(snap.name, masterName, newerSnapshots)
             }
@@ -83,7 +94,11 @@ const ChainNode = ({
 );
 
 export const SnapshotsList = ({ master }) => {
-  const { handleDeleteSnapshot, handleRollbackSnapshot } = useMasterManager();
+  const {
+    handleDeleteSnapshot,
+    handleRollbackSnapshot,
+    handleApplySnapshot,
+  } = useMasterManager();
   const [expanded, setExpanded] = useState(true);
 
   const snapshots = useMemo(
@@ -146,6 +161,7 @@ export const SnapshotsList = ({ master }) => {
                 newerSnapshots={snapshots.slice(index + 1)}
                 handleDeleteSnapshot={handleDeleteSnapshot}
                 handleRollbackSnapshot={handleRollbackSnapshot}
+                handleApplySnapshot={handleApplySnapshot}
               />
             ))}
           </ol>

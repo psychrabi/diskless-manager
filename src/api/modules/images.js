@@ -59,6 +59,16 @@ export async function rollbackImageSnapshot(masterName, snapshotName, newerSnaps
   );
 }
 
+export async function applySnapshot(masterName, snapshotName, newName) {
+  return apiRequest(
+    `/api/images/${encodeURIComponent(masterName)}/snapshots/${encodeURIComponent(snapshotName)}/apply`,
+    {
+      method: "POST",
+      body: JSON.stringify({ new_name: newName }),
+    },
+  );
+}
+
 export async function setDefaultImage(masterName) {
   return apiRequest(
     `/api/images/${encodeURIComponent(masterName)}/set-default`,

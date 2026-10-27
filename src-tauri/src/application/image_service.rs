@@ -310,12 +310,56 @@ impl ImageService {
         .await
     }
 
+    /// Create a new master from a snapshot without rolling back the source.
+    /// The source image and its newer snapshots are left untouched.
+    pub async fn apply_snapshot(
+        &self,
+        source_id: &str,
+        snapshot_name: &str,
+        new_name: &str,
+    ) -> Result<Image> {
+        let source_id = source_id.to_owned();
+        let snapshot_name = snapshot_name.to_owned();
+        let new_name = new_name.to_owned();
+        self.run_blocking(move |service| {
+            Box::pin(async move {
+                service
+                    .create_image_from_snapshot(
+                        &source_id,
+                        &snapshot_name,
+                        &new_name,
+                        ImageKind::Master,
+                    )
+                    .await
+            })
+        })
+        .await
+    }
+
     async fn clone_image_blocking(
         &self,
         source_id: &str,
         snapshot_name: &str,
         new_name: &str,
     ) -> Result<Image> {
+        self.create_image_from_snapshot(source_id, snapshot_name, new_name, ImageKind::Clone)
+            .await
+    }
+
+    /// Clone a snapshot into a new dataset and persist it as either a dependent
+    /// clone or an independent logical master. Neither path promotes or alters
+    /// the source snapshot.
+    async fn create_image_from_snapshot(
+        &self,
+        source_id: &str,
+        snapshot_name: &str,
+        new_name: &str,
+        kind: ImageKind,
+    ) -> Result<Image> {
+        if !matches!(kind, ImageKind::Master | ImageKind::Clone) {
+            bail!("snapshot derivatives must be a master or clone");
+        }
+
         validate_zfs_name(new_name)?;
 
         if snapshot_name.trim().is_empty() {
@@ -325,7 +369,7 @@ impl ImageService {
         let source = self.get(source_id).await?;
 
         /*
-         * A clone can be created from either:
+         * A new image can be created from either:
          *
          *     master -> snapshot -> clone
          *
@@ -338,7 +382,7 @@ impl ImageService {
         match source.kind {
             ImageKind::Master | ImageKind::Clone => {}
             ImageKind::Snapshot => {
-                bail!("cannot clone a snapshot image directly");
+                bail!("cannot create an image from a snapshot record directly");
             }
         }
 
@@ -386,13 +430,14 @@ impl ImageService {
             .context("failed to clone ZFS snapshot")?;
 
         let now = Utc::now();
+        let is_clone = kind == ImageKind::Clone;
 
         let image = Image {
             id: Uuid::new_v4().to_string(),
 
             name: destination.clone(),
 
-            kind: ImageKind::Clone,
+            kind,
 
             os_type: source.os_type,
 
@@ -404,17 +449,22 @@ impl ImageService {
 
             status: "ready".to_string(),
 
-            description: Some(format!("Clone of {}@{}", source.name, snapshot.name)),
+            description: Some(if is_clone {
+                format!("Clone of {}@{}", source.name, snapshot.name)
+            } else {
+                format!("Restore point of {}@{}", source.name, snapshot.name)
+            }),
 
             /*
-             * Keep the logical source image.
+             * A clone keeps its logical source image. An applied restore point
+             * becomes a master so it can be assigned to clients directly.
              */
-            parent_id: Some(source.id.clone()),
+            parent_id: is_clone.then(|| source.id.clone()),
 
             /*
              * Record the exact snapshot used to create this clone.
              */
-            source_snapshot: Some(snapshot.name.clone()),
+            source_snapshot: is_clone.then(|| snapshot.name.clone()),
 
             checksum: None,
 
@@ -428,7 +478,7 @@ impl ImageService {
         if let Err(error) = self.repository.insert(&image).await {
             let _ = self.backend.destroy(&destination);
 
-            return Err(error).context("failed to persist cloned image");
+            return Err(error).context("failed to persist image from snapshot");
         }
 
         Ok(image)
@@ -1504,6 +1554,8 @@ mod storage_presence_tests {
         boot_probe: BootProbe,
         promoted: Arc<std::sync::atomic::AtomicBool>,
         imports: Arc<std::sync::Mutex<Vec<String>>>,
+        log: Arc<std::sync::Mutex<Vec<String>>>,
+        allow_destroy: bool,
     }
     impl ImageBackend for FakeStorage {
         fn clone_origin(&self, _: &str) -> Result<Option<String>> {
@@ -1521,8 +1573,12 @@ mod storage_presence_tests {
             }
             Ok(self.present.contains(name))
         }
-        fn destroy(&self, _: &str) -> Result<()> {
-            bail!("unexpected destroy")
+        fn destroy(&self, name: &str) -> Result<()> {
+            if !self.allow_destroy {
+                bail!("unexpected destroy");
+            }
+            self.log.lock().unwrap().push(format!("destroy:{name}"));
+            Ok(())
         }
         fn destroy_snapshot(&self, _: &str, _: &str) -> Result<()> {
             bail!("unexpected snapshot destroy")
@@ -1533,8 +1589,12 @@ mod storage_presence_tests {
         fn rename(&self, _: &str, _: &str) -> Result<()> {
             unreachable!()
         }
-        fn clone_image(&self, _: &str, _: &str) -> Result<()> {
-            unreachable!()
+        fn clone_image(&self, source: &str, destination: &str) -> Result<()> {
+            self.log
+                .lock()
+                .unwrap()
+                .push(format!("clone:{source}:{destination}"));
+            Ok(())
         }
         fn create_snapshot(&self, _: &str, _: &str) -> Result<()> {
             unreachable!()
@@ -1611,9 +1671,34 @@ mod storage_presence_tests {
                 snapshots: Vec::new(),
                 promoted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 imports: Arc::new(std::sync::Mutex::new(Vec::new())),
+                allow_destroy: false,
+                log: Arc::new(std::sync::Mutex::new(Vec::new())),
             }),
         )
     }
+    async fn service_with_log(
+        present: &[&str],
+        log: Arc<std::sync::Mutex<Vec<String>>>,
+    ) -> ImageService {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        ImageService::with_backend(
+            ImageRepository::new(pool),
+            Arc::new(FakeStorage {
+                present: present.iter().map(|name| name.to_string()).collect(),
+                virtual_size: 50 * 1024 * 1024 * 1024,
+                fail: false,
+                fail_rollback: false,
+                boot_probe: BootProbe::default(),
+                snapshots: Vec::new(),
+                promoted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                imports: Arc::new(std::sync::Mutex::new(Vec::new())),
+                log,
+                allow_destroy: true,
+            }),
+        )
+    }
+
     fn image(id: &str, name: &str, parent: Option<&str>) -> Image {
         Image {
             id: id.into(),
@@ -1722,6 +1807,8 @@ mod storage_presence_tests {
             snapshots: Vec::new(),
             promoted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             imports: Arc::new(std::sync::Mutex::new(Vec::new())),
+            allow_destroy: false,
+            log: Arc::new(std::sync::Mutex::new(Vec::new())),
         });
         let mut master = image("master", "pool/image", None);
         master.os_type = OsType::Windows;
@@ -1751,6 +1838,8 @@ mod storage_presence_tests {
             snapshots: Vec::new(),
             promoted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             imports: Arc::clone(&imports),
+            allow_destroy: false,
+            log: Arc::new(std::sync::Mutex::new(Vec::new())),
         };
 
         import_source(
@@ -1888,6 +1977,8 @@ mod storage_presence_tests {
             snapshots: Vec::new(),
             promoted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             imports: Arc::new(std::sync::Mutex::new(Vec::new())),
+            allow_destroy: false,
+            log: Arc::new(std::sync::Mutex::new(Vec::new())),
         });
         let master = image("master", "pool/image", None);
         let mut old = image("old", "old", Some("master"));
@@ -1971,6 +2062,8 @@ mod storage_presence_tests {
             snapshots: vec!["manual-backup".into()],
             promoted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             imports: Arc::new(std::sync::Mutex::new(Vec::new())),
+            allow_destroy: false,
+            log: Arc::new(std::sync::Mutex::new(Vec::new())),
         });
         let now = Utc::now();
         let master = image("master", "pool/image", None);
@@ -2096,6 +2189,8 @@ mod storage_presence_tests {
                 snapshots: Vec::new(),
                 promoted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 imports: Arc::new(std::sync::Mutex::new(Vec::new())),
+                allow_destroy: false,
+                log: Arc::new(std::sync::Mutex::new(Vec::new())),
             }),
         );
         let mut current = image("current", "pool/current", None);
@@ -2173,6 +2268,8 @@ mod storage_presence_tests {
             snapshots: Vec::new(),
             promoted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             imports: Arc::new(std::sync::Mutex::new(Vec::new())),
+            allow_destroy: false,
+            log: Arc::new(std::sync::Mutex::new(Vec::new())),
         });
         assert!(service
             .delete("candidate")
@@ -2197,6 +2294,8 @@ mod storage_presence_tests {
             snapshots: Vec::new(),
             promoted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             imports: Arc::new(std::sync::Mutex::new(Vec::new())),
+            allow_destroy: false,
+            log: Arc::new(std::sync::Mutex::new(Vec::new())),
         });
 
         service.delete("candidate").await.unwrap();
@@ -2266,5 +2365,181 @@ mod storage_presence_tests {
             .to_string()
             .contains("dependent"));
         assert_eq!(service.repository.list().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn applying_a_snapshot_creates_an_assignable_master_and_preserves_the_source() {
+        let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let service = service_with_log(&["pool/image"], log.clone()).await;
+        service
+            .repository
+            .insert(&image("master", "pool/image", None))
+            .await
+            .unwrap();
+        service
+            .repository
+            .insert(&image("snap", "stable", Some("master")))
+            .await
+            .unwrap();
+
+        let applied = service
+            .apply_snapshot("master", "stable", "image-restored")
+            .await
+            .unwrap();
+
+        assert_eq!(applied.name, "pool/image-restored");
+        assert_eq!(applied.kind, ImageKind::Master);
+        assert_eq!(applied.parent_id, None);
+        assert_eq!(applied.source_snapshot, None);
+        assert_eq!(applied.status, "ready");
+        assert_eq!(
+            applied.description.as_deref(),
+            Some("Restore point of pool/image@stable")
+        );
+
+        let source_snapshots = service.snapshots("master").await.unwrap();
+        assert_eq!(source_snapshots.len(), 1);
+        assert_eq!(source_snapshots[0].id, "snap");
+        assert_eq!(
+            log.lock().unwrap().as_slice(),
+            ["clone:pool/image@stable:pool/image-restored"]
+        );
+    }
+
+    #[tokio::test]
+    async fn cloning_a_snapshot_still_records_a_dependent_clone() {
+        let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let service = service_with_log(&["pool/image"], log.clone()).await;
+        service
+            .repository
+            .insert(&image("master", "pool/image", None))
+            .await
+            .unwrap();
+        service
+            .repository
+            .insert(&image("snap", "stable", Some("master")))
+            .await
+            .unwrap();
+
+        let clone = service
+            .clone_image("master", "stable", "image-clone")
+            .await
+            .unwrap();
+
+        assert_eq!(clone.kind, ImageKind::Clone);
+        assert_eq!(clone.parent_id.as_deref(), Some("master"));
+        assert_eq!(clone.source_snapshot.as_deref(), Some("stable"));
+        assert_eq!(
+            log.lock().unwrap().as_slice(),
+            ["clone:pool/image@stable:pool/image-clone"]
+        );
+    }
+
+    #[tokio::test]
+    async fn applying_a_missing_snapshot_fails_without_creating_an_image() {
+        let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let service = service_with_log(&["pool/image"], log.clone()).await;
+        service
+            .repository
+            .insert(&image("master", "pool/image", None))
+            .await
+            .unwrap();
+
+        let error = service
+            .apply_snapshot("master", "missing", "image-restored")
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("snapshot 'missing' not found"));
+        assert!(log.lock().unwrap().is_empty());
+        assert!(service.snapshots("master").await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn applying_from_a_snapshot_record_is_rejected() {
+        let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let service = service_with_log(&["pool/image"], log.clone()).await;
+        service
+            .repository
+            .insert(&image("master", "pool/image", None))
+            .await
+            .unwrap();
+        service
+            .repository
+            .insert(&image("snap", "stable", Some("master")))
+            .await
+            .unwrap();
+
+        let error = service
+            .apply_snapshot("snap", "stable", "image-restored")
+            .await
+            .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("cannot create an image from a snapshot record directly"));
+        assert!(log.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn applying_to_an_existing_dataset_is_rejected() {
+        let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let service = service_with_log(&["pool/image", "pool/existing"], log.clone()).await;
+        service
+            .repository
+            .insert(&image("master", "pool/image", None))
+            .await
+            .unwrap();
+        service
+            .repository
+            .insert(&image("snap", "stable", Some("master")))
+            .await
+            .unwrap();
+
+        let error = service
+            .apply_snapshot("master", "stable", "existing")
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("already exists"));
+        assert!(log.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn applying_destroys_the_clone_when_metadata_insertion_fails() {
+        let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let service = service_with_log(&["pool/image"], log.clone()).await;
+        service
+            .repository
+            .insert(&image("master", "pool/image", None))
+            .await
+            .unwrap();
+        service
+            .repository
+            .insert(&image("snap", "stable", Some("master")))
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TRIGGER fail_apply_insert BEFORE INSERT ON images \
+             BEGIN SELECT RAISE(ABORT, 'forced insert failure'); END",
+        )
+        .execute(service.repository.test_pool())
+        .await
+        .unwrap();
+
+        let error = service
+            .apply_snapshot("master", "stable", "image-restored")
+            .await
+            .unwrap_err();
+
+        assert!(format!("{error:#}").contains("failed to persist image from snapshot"));
+        assert_eq!(
+            log.lock().unwrap().as_slice(),
+            [
+                "clone:pool/image@stable:pool/image-restored",
+                "destroy:pool/image-restored"
+            ]
+        );
+        assert_eq!(service.snapshots("master").await.unwrap().len(), 1);
     }
 }

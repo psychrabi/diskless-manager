@@ -10,12 +10,12 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-type ImageDeleteError = (
+type ImageApiError = (
     StatusCode,
     Json<crate::api::handlers::clients::ErrorResponse>,
 );
 
-fn image_delete_error(status: StatusCode, message: impl Into<String>) -> ImageDeleteError {
+fn image_api_error(status: StatusCode, message: impl Into<String>) -> ImageApiError {
     (
         status,
         Json(crate::api::handlers::clients::ErrorResponse {
@@ -271,12 +271,12 @@ pub async fn rename_image(
 pub async fn delete_image(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<(), ImageDeleteError> {
+) -> Result<(), ImageApiError> {
     if image_reserved(&state, &id)
         .await
-        .map_err(|error| image_delete_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
+        .map_err(|error| image_api_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
     {
-        return Err(image_delete_error(
+        return Err(image_api_error(
             StatusCode::CONFLICT,
             "Image storage is reserved by an unfinished client installation session",
         ));
@@ -303,19 +303,16 @@ pub async fn delete_image(
              * - image is marked as default
              */
             if message.contains("while dependent snapshots or clones exist") {
-                return Err(image_delete_error(StatusCode::CONFLICT, message));
+                return Err(image_api_error(StatusCode::CONFLICT, message));
             }
 
             if message.contains("cannot delete the default image")
                 || message.contains("required by driver revisions or super sessions")
             {
-                return Err(image_delete_error(StatusCode::CONFLICT, message));
+                return Err(image_api_error(StatusCode::CONFLICT, message));
             }
 
-            Err(image_delete_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                message,
-            ))
+            Err(image_api_error(StatusCode::INTERNAL_SERVER_ERROR, message))
         }
     }
 }
@@ -372,6 +369,56 @@ pub async fn clone_image(
             log::error!("Failed to clone image '{}': {}", id, error);
 
             StatusCode::INTERNAL_SERVER_ERROR
+        })
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ApplySnapshotRequest {
+    pub new_name: String,
+}
+
+/// Create a new master from a snapshot without rolling back the source image.
+pub async fn apply_snapshot(
+    State(state): State<AppState>,
+    axum::Extension(claims): axum::Extension<crate::types::Claims>,
+    Path((id, snapshot_name)): Path<(String, String)>,
+    Json(request): Json<ApplySnapshotRequest>,
+) -> Result<Json<Image>, ImageApiError> {
+    if claims.role != "admin" {
+        return Err(image_api_error(
+            StatusCode::FORBIDDEN,
+            "Administrator role required",
+        ));
+    }
+
+    let service = image_service(&state);
+
+    service
+        .apply_snapshot(&id, &snapshot_name, &request.new_name)
+        .await
+        .map(Json)
+        .map_err(|error| {
+            let message = format!("{error:#}");
+
+            log::error!(
+                "Failed to apply snapshot '{}@{}': {message}",
+                id,
+                snapshot_name
+            );
+
+            let status = if message.contains("already exists") {
+                StatusCode::CONFLICT
+            } else if message.contains("not found") {
+                StatusCode::NOT_FOUND
+            } else if message.contains("failed to clone ZFS snapshot")
+                || message.contains("failed to persist")
+            {
+                StatusCode::INTERNAL_SERVER_ERROR
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+
+            image_api_error(status, message)
         })
 }
 
@@ -483,7 +530,7 @@ pub async fn get_image_health(
 pub async fn delete_snapshot(
     State(state): State<AppState>,
     Path((master_name, snapshot_name)): Path<(String, String)>,
-) -> Result<(), ImageDeleteError> {
+) -> Result<(), ImageApiError> {
     let service = image_service(&state);
 
     let master = service.get(&master_name).await.map_err(|error| {
@@ -497,21 +544,21 @@ pub async fn delete_snapshot(
             "Failed to find image '{}' for snapshot deletion: {message}",
             master_name
         );
-        image_delete_error(status, message)
+        image_api_error(status, message)
     })?;
 
     let snapshots = service.snapshots(&master.id).await.map_err(|error| {
         let message = format!("{error:#}");
         log::error!("Failed to list snapshots for '{}': {message}", master.name);
 
-        image_delete_error(StatusCode::INTERNAL_SERVER_ERROR, message)
+        image_api_error(StatusCode::INTERNAL_SERVER_ERROR, message)
     })?;
 
     let snapshot = snapshots
         .into_iter()
         .find(|image| image.name == snapshot_name)
         .ok_or_else(|| {
-            image_delete_error(
+            image_api_error(
                 StatusCode::NOT_FOUND,
                 format!(
                     "Snapshot '{}' was not found for image '{}'",
@@ -532,7 +579,7 @@ pub async fn delete_snapshot(
         } else {
             StatusCode::INTERNAL_SERVER_ERROR
         };
-        image_delete_error(status, message)
+        image_api_error(status, message)
     })
 }
 

@@ -4,6 +4,7 @@ import { expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   handleDeleteSnapshot: vi.fn(),
   handleRollbackSnapshot: vi.fn(),
+  handleApplySnapshot: vi.fn(),
 }));
 
 vi.mock("@/hooks/useMasterManager", () => ({
@@ -44,4 +45,21 @@ it("passes the exact newer snapshots to the rollback confirmation", () => {
       { name: "snap-c", created: "2026-10-03", used: "1M" },
     ],
   );
+});
+
+it("applies a snapshot to a new image without touching the chain", () => {
+  mocks.handleApplySnapshot.mockClear();
+  render(<SnapshotsList master={{
+    name: "cachyos",
+    snapshots: [
+      { name: "snap-a", created: "2026-10-01", used: "1M" },
+      { name: "snap-b", created: "2026-10-02", used: "1M" },
+    ],
+  }} />);
+
+  fireEvent.click(screen.getByTitle("Apply snap-a as new image"));
+
+  expect(mocks.handleApplySnapshot).toHaveBeenCalledWith("snap-a", "cachyos");
+  expect(mocks.handleRollbackSnapshot).not.toHaveBeenCalled();
+  expect(mocks.handleDeleteSnapshot).not.toHaveBeenCalled();
 });
