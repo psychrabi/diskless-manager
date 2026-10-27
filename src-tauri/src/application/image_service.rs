@@ -476,7 +476,13 @@ impl ImageService {
         };
 
         if let Err(error) = self.repository.insert(&image).await {
-            let _ = self.backend.destroy(&destination);
+            if let Err(cleanup_error) = self.backend.destroy(&destination) {
+                log::error!(
+                    "Failed to remove image dataset '{}' after metadata insertion failed: {}",
+                    destination,
+                    cleanup_error
+                );
+            }
 
             return Err(error).context("failed to persist image from snapshot");
         }
