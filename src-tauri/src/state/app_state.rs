@@ -171,6 +171,29 @@ impl AppState {
         )
         .recover_interrupted()
         .await?;
+        let installations =
+            crate::persistence::repositories::installation::InstallationRepository::new(
+                state.db_pool.clone(),
+            );
+        for session in installations.saving_sessions().await? {
+            crate::application::installation_service::InstallationService::new(state.clone())
+                .resume_saving(session.id);
+        }
+        for session in installations.published_sessions().await? {
+            crate::application::installation_service::InstallationService::new(state.clone())
+                .resume_published_cleanup(session.id);
+        }
+        let deadline_service =
+            crate::application::installation_service::InstallationService::new(state.clone());
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                if let Err(error) = deadline_service.sweep_deadlines().await {
+                    warn!("installation deadline sweep failed: {error}");
+                }
+            }
+        });
         state.hardware_identity_service().recover_pending().await?;
         let interrupted =
             crate::application::windows_servicing::recover_interrupted_revisions(&state.db_pool)

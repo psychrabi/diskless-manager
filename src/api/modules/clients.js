@@ -18,12 +18,6 @@ export async function updateClient(id, request) {
   });
 }
 
-export function completeClientInstallation(id) {
-  return apiRequest(`/api/clients/${encodeURIComponent(id)}/installation/complete`, {
-    method: "POST",
-  });
-}
-
 export async function exitLegacySuper(id, snapshot) {
   return apiRequest(`/api/clients/${encodeURIComponent(id)}/legacy-super/exit`, {
     method: "POST",

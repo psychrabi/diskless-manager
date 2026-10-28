@@ -8,6 +8,7 @@ const { api, store, toast, confirm } = vi.hoisted(() => ({
     list: vi.fn(),
     start: vi.fn(),
     cancel: vi.fn(),
+    retry: vi.fn(),
     closeRecovery: vi.fn(),
     identity: vi.fn(),
     capture: vi.fn(),
@@ -24,6 +25,7 @@ vi.mock("@/api/modules/clientProvisioning", () => ({
   listInstallations: api.list,
   startInstallation: api.start,
   cancelInstallation: api.cancel,
+  retryInstallation: api.retry,
   closeInstallationRecovery: api.closeRecovery,
   getHardwareIdentity: api.identity,
   captureHardwareIdentity: api.capture,
@@ -31,6 +33,7 @@ vi.mock("@/api/modules/clientProvisioning", () => ({
   removeHardwareIdentity: api.remove,
   requestHardwareInventory: api.inventory,
 }));
+vi.mock("@/api/modules/installerMedia", () => ({ listInstallerMedia: vi.fn().mockResolvedValue([{ id: "media-1", display_name: "Ubuntu ISO", media_type: "ubuntu_iso", validation_state: "valid" }]) }));
 // A stable fetchClients identity keeps the mount effect from re-running each render.
 vi.mock("@/store/useAppStore", () => {
   const fetchClients = vi.fn().mockResolvedValue([]);
@@ -67,6 +70,7 @@ function installation(state, progress = 40) {
       error: null,
     },
     events: [],
+    actions: state === "installing" ? ["cancel"] : state === "cancelled" ? ["close"] : [],
   };
 }
 
@@ -89,7 +93,7 @@ beforeEach(() => {
   confirm.mockResolvedValue(true);
   api.list.mockResolvedValue([]);
   api.identity.mockResolvedValue({ profile: null, cache: null });
-  api.start.mockResolvedValue({ id: "session-ready", state: "ready", progress: 0 });
+    api.start.mockResolvedValue({ id: "session-ready", state: "waiting", progress: 0 });
   api.cancel.mockResolvedValue({ status: "cancelled" });
   api.closeRecovery.mockResolvedValue({ status: "completed" });
 });
@@ -103,11 +107,13 @@ describe("Client provisioning page", () => {
     await selectClient(user);
 
     const method = screen.getByLabelText("Installation method");
-    const prepare = screen.getByRole("button", { name: "Prepare installation" });
-    await waitFor(() => expect(prepare).toBeEnabled());
+    const media = screen.getByLabelText("Installer media");
+    await user.selectOptions(media, "media-1");
+    await user.selectOptions(method, "ubuntu");
+    const prepare = screen.getByRole("button", { name: "Create verified image" });
 
     // Unattended Linux needs an explicit username and a password hash.
-    await user.selectOptions(method, "ubuntu");
+    await user.type(screen.getByLabelText("Published image name"), "ubuntu-workstations");
     expect(prepare).toBeDisabled();
     await user.type(screen.getByLabelText("Linux username"), "operator");
     await user.type(screen.getByLabelText("SHA-512 password hash"), passwordHash);
@@ -122,6 +128,10 @@ describe("Client provisioning page", () => {
     await waitFor(() =>
       expect(api.start).toHaveBeenCalledWith("client-1", {
         recipe: "ubuntu",
+        media_id: "media-1",
+        image_name: "ubuntu-workstations",
+        size_gb: undefined,
+        assign_on_ready: false,
         confirm_erase: true,
         username: "operator",
         password_hash: passwordHash,
@@ -188,6 +198,37 @@ describe("Client provisioning page", () => {
     );
   });
 
+  it("shows the factory phase and prompts for the verification boot", async () => {
+    const user = userEvent.setup();
+    api.list.mockResolvedValue([
+      {
+        session: {
+          id: "session-verifying",
+          kind: "factory",
+          recipe: "windows",
+          state: "verifying",
+          progress: 90,
+          attempt: 1,
+          image_name: "pool/windows-new",
+          cleanup_state: "pending",
+          assignment_state: "not_requested",
+          error: null,
+        },
+        events: [],
+        actions: [],
+      },
+    ]);
+    renderPage();
+    await selectClient(user);
+
+    const article = await screen.findByRole("article");
+    const stepper = within(article).getByRole("list", { name: "Image factory phase" });
+    expect(within(stepper).getByText("5. Verify")).toHaveAttribute("aria-current", "step");
+    expect(within(article).getByRole("status")).toHaveTextContent(
+      "Power on PC001 so it can PXE boot and report the verification result.",
+    );
+  });
+
   it("shows recorded session errors and its events", async () => {
     const user = userEvent.setup();
     api.list.mockResolvedValue([
@@ -202,6 +243,7 @@ describe("Client provisioning page", () => {
         events: [
           { id: 2, state: "failed", message: "Installer failed; inspect console", created_at: "2026-10-25T08:00:00Z" },
         ],
+        actions: ["close"],
       },
     ]);
     renderPage();

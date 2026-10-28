@@ -73,6 +73,24 @@ pub struct ReporterConfig {
     /// this claim matches the open candidate and the iSCSI session is live.
     #[serde(default)]
     pub image_revision: Option<String>,
+    #[serde(default)]
+    pub installation_verification: bool,
+}
+
+fn verification_response(status: u16, body: &str) -> Result<bool> {
+    match status {
+        204 => Ok(false),
+        200 => {
+            let response: serde_json::Value =
+                serde_json::from_str(body).context("invalid installation verification response")?;
+            anyhow::ensure!(
+                response["status"] == "verified",
+                "verification was not accepted"
+            );
+            Ok(true)
+        }
+        _ => bail!("installation verification returned HTTP {status}"),
+    }
 }
 
 impl ReporterConfig {
@@ -313,6 +331,17 @@ fn run_report_client_with_config(config: ReporterConfig) -> Result<()> {
     };
     report.validate()?;
 
+    if config.installation_verification {
+        if post_verification(&config, &report, &boot.mac_address)? {
+            run_bounded("shutdown.exe", &["/s", "/t", "0", "/f"])
+                .context("verified installation could not be shut down")?;
+            return Ok(());
+        }
+        let mut config = config;
+        config.installation_verification = false;
+        return run_report_client_with_config(config);
+    }
+
     let exported = if config.export_package {
         let infs = collect_published_nic_infs()?;
         Some(export_driver_packages(&infs)?)
@@ -325,6 +354,49 @@ fn run_report_client_with_config(config: ReporterConfig) -> Result<()> {
         exported.as_ref().map(|(_, path)| path.as_path()),
     )?;
     Ok(())
+}
+
+fn post_verification(config: &ReporterConfig, report: &ClientReport, mac: &str) -> Result<bool> {
+    config.report_endpoint()?;
+    let endpoint = format!(
+        "{}/api/pxe/installation-verifications",
+        config.server_url.trim_end_matches('/')
+    );
+    let attempt = report
+        .target_iqn
+        .rsplit('.')
+        .next()
+        .context("verification target omitted the attempt number")?
+        .parse::<i64>()
+        .context("verification target has an invalid attempt number")?;
+    let temp = tempfile::tempdir().context("failed to stage verification report")?;
+    let body_path = temp.path().join("verification.json");
+    std::fs::write(
+        &body_path,
+        serde_json::to_vec(&serde_json::json!({
+            "target_iqn": &report.target_iqn,
+            "attempt": attempt,
+            "os_family": "windows",
+            "os_version": &report.windows_version,
+            "architecture": &report.architecture,
+            "boot_nic_ids": &report.boot_nic_ids,
+            "boot_nic_mac": mac,
+        }))?,
+    )?;
+    let script = format!(
+        "$body=[IO.File]::ReadAllText('{}'); try {{ $r=Invoke-WebRequest -Uri '{endpoint}' -Method Post -ContentType 'application/json' -Body $body -UseBasicParsing -TimeoutSec {}; $s=[int]$r.StatusCode; $c=$r.Content }} catch {{ $r=$_.Exception.Response; if ($null -eq $r) {{ throw }}; $s=[int]$r.StatusCode; $c='' }}; [Console]::Out.WriteLine(\"$s`n$c\")",
+        body_path.display().to_string().replace('\'', "''"),
+        COMMAND_TIMEOUT.as_secs(),
+    );
+    let response = run_bounded(
+        "powershell",
+        &["-NoProfile", "-NonInteractive", "-Command", &script],
+    )?;
+    let (status, body) = response
+        .trim_end()
+        .split_once('\n')
+        .context("verification response omitted its HTTP status")?;
+    verification_response(status.trim().parse()?, body.trim())
 }
 
 #[cfg(windows)]
@@ -581,6 +653,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn verification_response_shuts_down_only_after_publication() {
+        assert!(verification_response(200, r#"{"status":"verified"}"#).unwrap());
+        assert!(!verification_response(204, "").unwrap());
+        assert!(verification_response(200, r#"{"status":"pending"}"#).is_err());
+        assert!(verification_response(503, "").is_err());
+    }
+
+    #[test]
     fn adapter_and_pnp_inventory_parse_single_and_multiple() {
         let single = r#"{"Name":"Ethernet","MacAddress":"02-00-00-00-00-01","InterfaceDescription":"Intel NIC","Status":"Up","ServiceName":"e1dexpress","PnPDeviceID":"PCI\\VEN_8086&DEV_15F3","HardwareIds":["PCI\\VEN_8086&DEV_15F3","PCI\\VEN_8086"],"PublishedInf":"oem10.inf","TargetIqn":"iqn.2026-01.example:client-1"}"#;
         assert_eq!(parse_net_adapters(single).unwrap().len(), 1);
@@ -728,6 +808,7 @@ mod tests {
             client_id: Some("client-1".into()),
             export_package: true,
             image_revision: None,
+            installation_verification: false,
         };
         assert!(config("https://user:secret@example.test")
             .report_endpoint()

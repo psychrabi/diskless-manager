@@ -202,6 +202,31 @@ impl ImageRepository {
         Ok(())
     }
 
+    pub async fn publish_verified_draft(
+        &self,
+        session_id: &str,
+        image_id: &str,
+        target_iqn: &str,
+        attempt: i64,
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        let now = Utc::now().to_rfc3339();
+        let image = sqlx::query("UPDATE images SET status='ready',description='Published after verified normal boot',updated_at=? WHERE id=? AND status='draft'")
+            .bind(&now).bind(image_id).execute(&mut *tx).await?.rows_affected();
+        if image != 1 {
+            anyhow::bail!("verified draft is no longer publishable");
+        }
+        let session = sqlx::query("UPDATE installation_sessions SET state='published',published_image_id=?,progress=100,phase_deadline=NULL,updated_at=? WHERE id=? AND kind='factory' AND legacy=0 AND closed_at IS NULL AND state='verifying' AND verification_target_iqn=? AND attempt=? AND draft_image_id=?")
+            .bind(image_id).bind(&now).bind(session_id).bind(target_iqn).bind(attempt).bind(image_id).execute(&mut *tx).await?.rows_affected();
+        if session != 1 {
+            anyhow::bail!("verification attempt is no longer current");
+        }
+        sqlx::query("INSERT INTO installation_events(session_id,state,progress,message,actor,created_at) VALUES (?,'published',100,'Normal boot verified; image published','verification',?)")
+            .bind(session_id).bind(now).execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn delete(&self, id: &str) -> Result<bool> {
         let (transaction, deleted) = self.begin_delete(id, false).await?;
         transaction.commit().await?;
@@ -253,7 +278,7 @@ impl ImageRepository {
 
     pub async fn has_pending_installation(&self, image_id: &str) -> Result<bool> {
         let exists: i64 = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM installation_sessions WHERE image_id = ? AND state != 'completed')",
+            "SELECT EXISTS(SELECT 1 FROM installation_sessions WHERE closed_at IS NULL AND ? IN (draft_image_id, verification_image_id, published_image_id))",
         )
         .bind(image_id)
         .fetch_one(&self.pool)

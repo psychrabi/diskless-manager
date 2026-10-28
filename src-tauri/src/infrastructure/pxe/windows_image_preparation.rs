@@ -20,7 +20,10 @@ use tempfile::TempDir;
 pub struct WindowsReporterInstallConfig {
     pub server_url: String,
     pub export_package: bool,
-    pub image_revision: String,
+    #[serde(default)]
+    pub installation_verification: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_revision: Option<String>,
 }
 
 fn default_image_index() -> u32 {
@@ -189,6 +192,7 @@ impl WindowsImagePreparer {
     pub fn prepare_volume(
         &self,
         request: WindowsImagePreparationRequest,
+        allow_empty_drivers: bool,
     ) -> Result<WindowsImagePreparationResult> {
         if request.iscsi.is_some() || !request.image_path.is_dir() || !request.driver_root.is_dir()
         {
@@ -197,6 +201,7 @@ impl WindowsImagePreparer {
         let architecture = windows_image_architecture(&request.image_path)?;
         let selected =
             selected_driver_services(&request.driver_root, request.recursive, architecture)?;
+        ensure_driver_selection(&selected, allow_empty_drivers)?;
         let system_hive = find_system_hive(&request.image_path)?;
         let live_hive =
             PathBuf::from(std::env::var_os("SystemRoot").context("SystemRoot is not set")?)
@@ -209,11 +214,15 @@ impl WindowsImagePreparer {
                 validate_reporter_config(reporter)?;
             }
         }
-        let drivers_added = self.driver_injector.add_drivers(
-            &request.image_path,
-            &request.driver_root,
-            request.recursive,
-        )?;
+        let drivers_added = if selected.is_empty() {
+            0
+        } else {
+            self.driver_injector.add_drivers(
+                &request.image_path,
+                &request.driver_root,
+                request.recursive,
+            )?
+        };
         let profiles = missing_service_profiles(MissingServiceProfileRequest {
             armer: &self.boot_armer,
             hive: &system_hive,
@@ -363,10 +372,11 @@ fn install_reporter(
 
 fn validate_reporter_config(config: &WindowsReporterInstallConfig) -> Result<()> {
     validate_report_origin(&config.server_url)?;
-    if !config.export_package
-        || config.image_revision.trim().is_empty()
-        || config.image_revision.len() > 128
-    {
+    let valid_revision = config
+        .image_revision
+        .as_deref()
+        .is_some_and(|revision| !revision.trim().is_empty() && revision.len() <= 128);
+    if !config.installation_verification && (!config.export_package || !valid_revision) {
         bail!("offline reporter configuration must contain an HTTP(S) origin, package export, and valid image revision");
     }
     Ok(())
@@ -603,6 +613,14 @@ fn selected_driver_services(
     Ok(services.into_iter().collect())
 }
 
+fn ensure_driver_selection(services: &[String], allow_empty_drivers: bool) -> Result<()> {
+    anyhow::ensure!(
+        allow_empty_drivers || !services.is_empty(),
+        "driver root contains no supported Windows driver packages"
+    );
+    Ok(())
+}
+
 pub fn servicing_available() -> bool {
     WindowsDriverInjector::new().is_ok() && WindowsBootArmer::new().is_ok()
 }
@@ -764,6 +782,13 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("associated NIC service"));
+    }
+
+    #[test]
+    fn adaptation_can_continue_without_a_matching_network_driver() {
+        assert!(ensure_driver_selection(&[], true).is_ok());
+        assert!(ensure_driver_selection(&[], false).is_err());
+        assert!(ensure_driver_selection(&["e1d".into()], false).is_ok());
     }
 
     #[test]

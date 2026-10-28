@@ -487,6 +487,68 @@ impl StorageService {
         Ok(())
     }
 
+    pub fn create_owned_session_target(&self, desired: &IscsiTargetSpec) -> Result<()> {
+        anyhow::ensure!(
+            !self.iscsi.target_exists(&desired.target_iqn)?,
+            "session target already exists"
+        );
+        self.iscsi.verify_named_file_lun_mappings(desired)?;
+        self.iscsi
+            .create_target_transaction(desired)
+            .context("failed to create owned session target")?;
+        let verification = (|| -> Result<()> {
+            let actual = self.iscsi.list_target_luns(&desired.target_iqn)?;
+            anyhow::ensure!(
+                actual.len() == desired.luns.len()
+                    && desired.luns.iter().all(|expected| actual
+                        .iter()
+                        .any(|lun| lun.lun == expected.lun && lun.backstore == expected.backstore)),
+                "session target does not expose exactly the requested LUNs"
+            );
+            anyhow::ensure!(
+                self.iscsi.inspect_target(desired)?.is_ready(),
+                "session target is incomplete"
+            );
+            Ok(())
+        })();
+        verification?;
+        Ok(())
+    }
+
+    pub fn verify_owned_session_target(&self, desired: &IscsiTargetSpec) -> Result<()> {
+        self.iscsi.verify_named_file_lun_mappings(desired)?;
+        let actual = self.iscsi.list_target_luns(&desired.target_iqn)?;
+        anyhow::ensure!(
+            actual.len() == desired.luns.len()
+                && desired.luns.iter().all(|expected| actual
+                    .iter()
+                    .any(|lun| lun.lun == expected.lun && lun.backstore == expected.backstore)),
+            "session target does not expose exactly the expected LUNs"
+        );
+        anyhow::ensure!(
+            self.iscsi.inspect_target(desired)?.is_ready(),
+            "session target is incomplete"
+        );
+        Ok(())
+    }
+
+    pub fn session_target_exists(&self, target_iqn: &str) -> Result<bool> {
+        self.iscsi.target_exists(target_iqn)
+    }
+
+    pub fn remove_owned_session_target(&self, target_iqn: &str) -> Result<()> {
+        anyhow::ensure!(
+            !crate::infrastructure::iscsi::target_has_active_sessions(target_iqn)?,
+            "session target still has active initiators"
+        );
+        if self.iscsi.target_exists(target_iqn)? {
+            self.iscsi
+                .remove_target(target_iqn)
+                .context("failed to remove session-owned target")?;
+        }
+        Ok(())
+    }
+
     /// Replace the client's current target with an isolated Super-session target.
     /// The old target object is removed while its normal and game backstores remain owned by the client.
     pub fn create_super_session_target(

@@ -303,6 +303,30 @@ impl Fixture {
         .await
     }
 
+    async fn scoped_get_bytes(&self, uri: &str, peer: &str) -> (StatusCode, Vec<u8>) {
+        let request = Request::builder()
+            .method("GET")
+            .uri(uri)
+            .extension(ConnectInfo(
+                format!("{peer}:40000")
+                    .parse::<SocketAddr>()
+                    .expect("test peer address"),
+            ))
+            .body(Body::empty())
+            .expect("request builds");
+        let response = self
+            .boot_app
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("in-process request");
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body");
+        (status, bytes.to_vec())
+    }
+
     async fn send(
         &self,
         app: &Router,
@@ -380,20 +404,20 @@ impl Fixture {
                 .fetch_one(&self.state.db_pool)
                 .await
                 .expect("catalog checksum");
-        sqlx::query("INSERT INTO installation_sessions (id, client_id, media_id, image_id, master, media_checksum, target_iqn, expected_bytes, source_ip, firmware, recipe, token, config_json, state, progress, created_at, updated_at, expires_at) VALUES (?, ?, ?, 'image-a', 'diskless/master', ?, ?, ?, ?, 'uefi', ?, ?, ?, 'booting', 0, ?, ?, ?)")
+        sqlx::query("INSERT INTO installation_sessions (id,client_id,kind,recipe,media_id,media_checksum,draft_image_id,size_gb,expected_bytes,prior_master,target_iqn,source_ip,firmware,token,config_json,state,progress,phase_deadline,created_at,updated_at) VALUES (?,?,'factory',?,?,?,'image-a',20,?,'diskless/master',?,?, 'uefi',?,?,'installing',0,?,?,?)")
             .bind(id)
             .bind(&self.client_id)
+            .bind(recipe)
             .bind(media_id)
             .bind(&checksum)
-            .bind(TARGET_IQN)
             .bind(DISK_BYTES as i64)
+            .bind(format!("{TARGET_IQN}:install"))
             .bind(CLIENT_IP)
-            .bind(recipe)
             .bind(token)
             .bind(json!({"username":"operator","password_hash":format!("$6$salt${}", "a".repeat(86))}).to_string())
-            .bind(Utc::now().to_rfc3339())
-            .bind(Utc::now().to_rfc3339())
             .bind((Utc::now() + chrono::Duration::hours(1)).to_rfc3339())
+            .bind(Utc::now().to_rfc3339())
+            .bind(Utc::now().to_rfc3339())
             .execute(&self.state.db_pool)
             .await
             .expect("inserted session");
@@ -595,7 +619,7 @@ async fn fixture() -> Fixture {
         client_mutations: crate::state::ClientMutationLocks::default(),
         settings: Arc::new(tokio::sync::RwLock::new(settings)),
         db_pool: pool,
-        config_path: std::path::PathBuf::new(),
+        config_path: root.path().join("config.json"),
         client_ips: Arc::new(tokio::sync::RwLock::new(Vec::new())),
         metrics_collector: Arc::new(crate::metrics::MetricsCollector::default()),
         ssh_executor: Arc::new(crate::ssh_executor::SshExecutor::new()),
@@ -629,10 +653,9 @@ async fn installation_session_prepares_boots_reports_and_revokes_scoped_access()
         )
         .await;
     assert_eq!(status, StatusCode::OK, "prepare failed: {session}");
-    assert_eq!(session["state"], "ready");
+    assert_eq!(session["state"], "manual");
     assert_eq!(session["progress"], 0);
     assert_eq!(session["expected_bytes"], DISK_BYTES as i64);
-    assert_eq!(session["target_iqn"], TARGET_IQN);
     assert!(
         session.get("token").is_none(),
         "management responses must not leak the boot credential: {session}"
@@ -658,14 +681,17 @@ async fn installation_session_prepares_boots_reports_and_revokes_scoped_access()
         .expect("boot dispatch")
         .expect("session owns the boot payload");
     assert!(
-        script.contains(&format!(
-            "sanhook --drive 0x81 iscsi:192.0.2.1:::0:{TARGET_IQN}"
-        )),
+        script
+            .contains("sanhook --drive 0x81 iscsi:192.0.2.1:::0:iqn.2024-01.com.diskless:install."),
+        "{script}"
+    );
+    assert!(
+        script.contains("sanboot --no-describe iscsi:192.0.2.1:::1:"),
         "{script}"
     );
     assert!(script.contains("set keep-san 1"), "{script}");
     let (state, _, _) = fixture.session(&id).await;
-    assert_eq!(state, "booting");
+    assert_eq!(state, "manual");
 
     // Scoped payload fetch is authorized by the session token and client address only.
     let (status, body) = fixture
@@ -673,7 +699,7 @@ async fn installation_session_prepares_boots_reports_and_revokes_scoped_access()
         .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(
-        body.contains("sanhook") && body.contains(TARGET_IQN),
+        body.contains("sanhook") && body.contains(":install."),
         "{body}"
     );
     assert_eq!(
@@ -694,7 +720,7 @@ async fn installation_session_prepares_boots_reports_and_revokes_scoped_access()
         StatusCode::FORBIDDEN
     );
 
-    // Progress reporting is monotonic and cannot claim completion from the client.
+    // Manual boots do not have an installer reporter or completion signal.
     let report = format!("/api/installer/{id}/{token}/report");
     assert_eq!(
         fixture
@@ -702,17 +728,6 @@ async fn installation_session_prepares_boots_reports_and_revokes_scoped_access()
                 &report,
                 CLIENT_IP,
                 Some(json!({"state": "installing", "progress": 40, "message": "partitioning"}))
-            )
-            .await
-            .0,
-        StatusCode::OK
-    );
-    assert_eq!(
-        fixture
-            .scoped(
-                &report,
-                CLIENT_IP,
-                Some(json!({"state": "installing", "progress": 10, "message": "reordered"}))
             )
             .await
             .0,
@@ -740,10 +755,7 @@ async fn installation_session_prepares_boots_reports_and_revokes_scoped_access()
             .0,
         StatusCode::FORBIDDEN
     );
-    let (state, progress, _) = fixture.session(&id).await;
-    assert_eq!((state.as_str(), progress), ("installing", 40));
-
-    // Management listing exposes progress and events, still without the credential.
+    // Management listing exposes the session without its boot credential.
     let (status, listed) = fixture
         .management(
             "GET",
@@ -752,16 +764,8 @@ async fn installation_session_prepares_boots_reports_and_revokes_scoped_access()
         )
         .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(listed[0]["session"]["state"], "installing");
-    assert_eq!(listed[0]["session"]["progress"], 40);
+    assert_eq!(listed[0]["session"]["state"], "manual");
     assert!(listed[0]["session"].get("token").is_none());
-    let events = listed[0]["events"].as_array().expect("events");
-    assert!(
-        events
-            .iter()
-            .any(|event| event["message"] == "partitioning"),
-        "{events:?}"
-    );
 
     // Cancelling revokes the boot credential; recovery still owns the disk.
     assert_eq!(
@@ -806,24 +810,6 @@ async fn installation_sessions_are_denied_when_the_media_revision_changes() {
     let fixture = fixture().await;
     let (id, token) = prepared_session(&fixture).await;
 
-    // The durable guard refuses to reassign the client while the session owns the disk.
-    let reassignment =
-        sqlx::query("UPDATE clients SET installer_media_id = 'media-linux' WHERE id = ?")
-            .bind(&fixture.client_id)
-            .execute(&fixture.state.db_pool)
-            .await;
-    let error = reassignment
-        .expect_err("reassignment must be refused")
-        .to_string();
-    assert!(error.contains("reserved installation session"), "{error}");
-    let media_id: Option<String> =
-        sqlx::query_scalar("SELECT installer_media_id FROM clients WHERE id = ?")
-            .bind(&fixture.client_id)
-            .fetch_one(&fixture.state.db_pool)
-            .await
-            .expect("client assignment");
-    assert_eq!(media_id.as_deref(), Some("media-a"));
-
     // Re-uploading the ISO gives the catalog entry a new revision.
     let root = fixture.state.settings.read().await.http.root_dir.clone();
     let media_file = std::path::Path::new(&root).join("installer-media/media-a.iso");
@@ -847,7 +833,7 @@ async fn installation_sessions_are_denied_when_the_media_revision_changes() {
     );
     assert_eq!(
         fixture.session(&id).await.0,
-        "ready",
+        "manual",
         "a denied boot must not advance the session"
     );
     assert_eq!(
@@ -877,7 +863,7 @@ async fn installation_boot_is_denied_when_the_assigned_disk_is_resized() {
         format!("{error:#}").contains("installation disk size changed"),
         "{error:#}"
     );
-    assert_eq!(fixture.session(&id).await.0, "ready");
+    assert_eq!(fixture.session(&id).await.0, "manual");
     assert_eq!(
         fixture
             .scoped_get(&format!("/api/installer/{id}/{token}/boot"), CLIENT_IP)
@@ -895,8 +881,7 @@ async fn installation_boot_rejects_a_session_bound_to_a_different_assignment() {
         .execute(&fixture.state.db_pool)
         .await
         .expect("assign linux media");
-    // An imported or restored session can disagree with the client row without
-    // passing through the durable reassignment guard.
+    // The report source binding is independent of the client's mutable assignment.
     fixture
         .insert_session(
             "drifted-session",
@@ -905,20 +890,22 @@ async fn installation_boot_rejects_a_session_bound_to_a_different_assignment() {
             &"f".repeat(64),
         )
         .await;
-    sqlx::query("UPDATE installation_sessions SET target_iqn = 'iqn.2026-10.test:other-client' WHERE id = 'drifted-session'")
-        .execute(&fixture.state.db_pool)
-        .await
-        .expect("drift session target");
+    sqlx::query(
+        "UPDATE installation_sessions SET source_ip = '192.0.2.99' WHERE id = 'drifted-session'",
+    )
+    .execute(&fixture.state.db_pool)
+    .await
+    .expect("drift session target");
 
     let error = InstallationService::new(fixture.state.clone())
         .boot_for_client(&fixture.client_id)
         .await
         .expect_err("a drifted session must deny boot");
     assert!(
-        format!("{error:#}").contains("installation client assignment changed"),
+        format!("{error:#}").contains("installation client boot identity changed"),
         "{error:#}"
     );
-    assert_eq!(fixture.session("drifted-session").await.0, "booting");
+    assert_eq!(fixture.session("drifted-session").await.0, "installing");
     assert_eq!(
         fixture
             .scoped_get(
@@ -1084,11 +1071,16 @@ async fn unattended_linux_payloads_are_recipe_scoped_and_token_bound() {
     assert_eq!(status, StatusCode::OK, "{user_data}");
     assert!(user_data.contains("autoinstall:") && user_data.contains("username: operator"));
     assert!(user_data.contains(&format!("password: '$6$salt${}'", "a".repeat(86))));
-    assert!(user_data
-        .contains("/dev/disk/by-path/ip-192.0.2.1:3260-iscsi-iqn.2026-10.test:client-a-lun-0"));
+    assert!(user_data.contains(
+        "/dev/disk/by-path/ip-192.0.2.1:3260-iscsi-iqn.2026-10.test:client-a:install-lun-0"
+    ));
     assert!(user_data.contains(&format!("{base}/disk-gate.sh")));
     assert!(user_data.contains(&format!("{base}/linux-finalize.sh")));
     assert!(user_data.contains(&format!("{base}/report")));
+    assert!(
+        user_data.contains("packages: [open-iscsi, curl]"),
+        "the installed OS needs curl for the verification reporter"
+    );
 
     let (status, meta_data) = fixture
         .scoped_get(&format!("{base}/meta-data"), CLIENT_IP)
@@ -1109,8 +1101,11 @@ async fn unattended_linux_payloads_are_recipe_scoped_and_token_bound() {
         .scoped_get(&format!("{base}/linux-finalize.sh"), CLIENT_IP)
         .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(finalize.contains("iqn.2026-01.client:client.client-a"));
-    assert!(finalize.contains(TARGET_IQN));
+    assert!(finalize.contains("/api/pxe/installation-verifications"));
+    assert!(finalize.contains("diskless-verify-boot.service"));
+    assert!(finalize.contains("systemctl poweroff --no-block"));
+    assert!(!finalize.contains("python3"));
+    assert!(!finalize.contains("$6$salt$"));
 
     // The cataloged Linux ISO streams over the same scoped credential.
     let (status, media) = fixture
@@ -1154,29 +1149,231 @@ async fn unattended_linux_payloads_are_recipe_scoped_and_token_bound() {
     );
     let (state, progress, _) = fixture.session("linux-session").await;
     assert_eq!((state.as_str(), progress), ("installing", 55));
+}
 
-    // The RHEL recipe reuses the same session plumbing with its own answer file.
-    sqlx::query("UPDATE installation_sessions SET state = 'completed' WHERE id = 'linux-session'")
+#[tokio::test]
+async fn draft_and_verifying_images_cannot_be_assigned_from_the_client_api() {
+    let fixture = fixture().await;
+    let now = Utc::now();
+    let images = ImageRepository::new(fixture.state.db_pool.clone());
+    images
+        .insert(&Image {
+            id: "draft-image".into(),
+            name: "diskless/draft".into(),
+            kind: ImageKind::Master,
+            os_type: OsType::Windows,
+            size_gb: 20,
+            path: std::path::PathBuf::from("/dev/zvol/diskless/draft"),
+            format: ImageFormat::Raw,
+            status: "draft".into(),
+            description: None,
+            parent_id: None,
+            source_snapshot: None,
+            checksum: None,
+            is_default: false,
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .expect("draft image");
+    let (status, body) = fixture
+        .management(
+            "PUT",
+            &format!("/api/clients/{}", fixture.client_id),
+            Some(json!({ "master": "diskless/draft" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    let message = body["message"]
+        .as_str()
+        .or_else(|| body["error"].as_str())
+        .expect("error message");
+    assert!(message.contains("image factory"), "{body}");
+}
+
+#[tokio::test]
+async fn opt_in_assignment_moves_only_the_published_session_owner() {
+    let fixture = fixture().await;
+    let client = fixture.client_id.clone();
+    let checksum: String =
+        sqlx::query_scalar("SELECT checksum FROM installer_media WHERE id = 'media-a'")
+            .fetch_one(&fixture.state.db_pool)
+            .await
+            .expect("catalog checksum");
+    let now = Utc::now().to_rfc3339();
+    sqlx::query("INSERT INTO installation_sessions (id,client_id,kind,recipe,media_id,media_checksum,image_name,size_gb,published_image_id,assign_on_ready,assignment_state,state,progress,cleanup_state,token,config_json,source_ip,firmware,created_at,updated_at) VALUES ('assign-session',?,'factory','windows','media-a',?,'diskless/windows-b',20,'image-b',1,'pending','published',100,'pending','','{}',?,'uefi',?,?)")
+        .bind(&client)
+        .bind(&checksum)
+        .bind(CLIENT_IP)
+        .bind(&now)
+        .bind(&now)
         .execute(&fixture.state.db_pool)
         .await
-        .expect("close ubuntu session");
-    let rhel_token = "e".repeat(64);
+        .expect("published session");
+    let repository = crate::persistence::repositories::installation::InstallationRepository::new(
+        fixture.state.db_pool.clone(),
+    );
+    let session = repository
+        .get("assign-session")
+        .await
+        .expect("read session")
+        .expect("published session exists");
+
+    // The reservation trigger still rejects any change other than the
+    // session-owned master assignment.
+    assert!(
+        sqlx::query("UPDATE clients SET snapshot='diskless/windows-b@rev-1' WHERE id=?")
+            .bind(&client)
+            .execute(&fixture.state.db_pool)
+            .await
+            .is_err()
+    );
+
+    repository
+        .assign_published_image(&session.id, "diskless/windows-b")
+        .await
+        .expect("assign published image");
+    let (master, snapshot, writeback, block_device): (
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) = sqlx::query_as("SELECT master,snapshot,writeback,block_device FROM clients WHERE id=?")
+        .bind(&client)
+        .fetch_one(&fixture.state.db_pool)
+        .await
+        .expect("assigned client");
+    assert_eq!(master, "diskless/windows-b");
+    assert_eq!(snapshot, None);
+    assert_eq!(writeback, None);
+    assert_eq!(
+        block_device.as_deref(),
+        Some("/dev/zvol/diskless/windows-b")
+    );
+
+    repository
+        .finish_published_cleanup(&session, None)
+        .await
+        .expect("finish cleanup");
+    let (assignment, closed): (String, Option<String>) =
+        sqlx::query_as("SELECT assignment_state,closed_at FROM installation_sessions WHERE id=?")
+            .bind(&session.id)
+            .fetch_one(&fixture.state.db_pool)
+            .await
+            .expect("session state");
+    assert_eq!(assignment, "applied");
+    assert!(closed.is_some());
+}
+
+#[tokio::test]
+async fn winpe_adaptation_selects_a_checksummed_catalog_driver_bundle() {
+    let fixture = fixture().await;
+    let token = "e".repeat(64);
     fixture
-        .insert_session("rhel-session", "media-linux", "rhel", &rhel_token)
+        .insert_session("windows-adapt", "media-a", "windows", &token)
         .await;
-    let rhel = format!("/api/installer/rhel-session/{rhel_token}");
-    let (status, kickstart) = fixture
-        .scoped_get(&format!("{rhel}/ks.cfg"), CLIENT_IP)
+
+    // Only cataloged packages are eligible; the fixture writes one signed,
+    // network-class package matching the reported boot NIC hardware ID.
+    let package_id = "8b5b0f6e-5d5a-4c1f-9a52-0f6f2b6e6f01";
+    let catalog = fixture_root(&fixture).await.join("pxe/network-drivers");
+    let package = catalog.join("drivers").join(package_id);
+    std::fs::create_dir_all(&package).expect("package directory");
+    std::fs::write(
+        package.join("nic.inf"),
+        "[Version]\nSignature=\"$Windows NT$\"\nClass=Net\nClassGuid={4d36e972-e325-11ce-bfc1-08002be10318}\nProvider=%Vendor%\nCatalogFile=nic.cat\n[Manufacturer]\n%Vendor%=Vendor,NTamd64\n[Vendor.NTamd64]\n%Device%=Install,PCI\\VEN_8086&DEV_15F3\n[Install.NT.Services]\nAddService=NetKVM,2,NicInstall\n[Strings]\nVendor=\"Vendor\"\nDevice=\"Test NIC\"\n",
+    )
+    .expect("inf");
+    std::fs::write(package.join("nic.cat"), "synthetic catalog").expect("catalog file");
+    std::fs::write(
+        catalog.join("index.json"),
+        serde_json::to_vec(&json!({
+            "version": 2,
+            "drivers": [{
+                "id": package_id,
+                "name": "Test NIC",
+                "inf_files": ["nic.inf"],
+                "architectures": ["x64"],
+                "hardware_ids": ["PCI\\VEN_8086&DEV_15F3"],
+                "catalog_files": ["nic.cat"],
+                "imported_at": "2026-01-01T00:00:00Z"
+            }]
+        }))
+        .expect("catalog json"),
+    )
+    .expect("catalog");
+
+    let base = format!("/api/installer/windows-adapt/{token}");
+    let (status, body) = fixture
+        .scoped(
+            &format!("{base}/adaptation"),
+            CLIENT_IP,
+            Some(json!({
+                "boot_nic_ids": ["PCI\\VEN_8086&DEV_15F3"],
+                "boot_nic_mac": "02:00:00:00:00:01"
+            })),
+        )
         .await;
-    assert_eq!(status, StatusCode::OK, "{kickstart}");
-    assert!(kickstart.contains("ignoredisk --only-use=disk/by-path/ip-192.0.2.1:3260-iscsi-iqn.2026-10.test:client-a-lun-0"), "{kickstart}");
-    assert!(kickstart.contains("--iscrypted"));
-    assert!(kickstart.contains(&format!("{rhel}/report")));
-    let (status, rhel_boot) = fixture.scoped_get(&format!("{rhel}/boot"), CLIENT_IP).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let manifest: Value = serde_json::from_str(&body).expect("manifest json");
+    assert_eq!(manifest["driver_packages"], json!([package_id]));
+    assert_eq!(manifest["reporter"]["installation_verification"], true);
+    assert!(manifest["reporter"].get("client_id").is_none());
+    let checksum = manifest["driver_bundle_sha256"]
+        .as_str()
+        .expect("bundle checksum")
+        .to_owned();
+    let expected_bytes = manifest["driver_bundle_bytes"]
+        .as_u64()
+        .expect("bundle size");
+    assert!(manifest["driver_bundle_url"]
+        .as_str()
+        .is_some_and(|url| url.ends_with(&format!("{base}/adaptation/drivers.zip"))));
+
+    let (status, bundle) = fixture
+        .scoped_get_bytes(&format!("{base}/adaptation/drivers.zip"), CLIENT_IP)
+        .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(rhel_boot.contains("rd.iscsi.firmware=1"));
-    assert!(rhel_boot.contains("inst.ks="));
-    assert!(rhel_boot.contains(&format!("{rhel}/ks.cfg")));
-    assert!(rhel_boot.contains("inst.stage2="));
-    assert!(rhel_boot.contains(&format!("{rhel}/initrd")));
+    assert_eq!(bundle.len() as u64, expected_bytes);
+    assert_eq!(format!("{:x}", Sha256::digest(&bundle)), checksum);
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bundle)).expect("zip archive");
+    let names = (0..archive.len())
+        .map(|index| {
+            archive
+                .by_index(index)
+                .expect("zip entry")
+                .name()
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        names.contains(&format!("{package_id}/nic.inf")),
+        "{names:?}"
+    );
+
+    // The same scoped route rejects another client's address and a wrong token.
+    assert_eq!(
+        fixture
+            .scoped_get_bytes(&format!("{base}/adaptation/drivers.zip"), "192.0.2.99")
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        fixture
+            .scoped_get_bytes(
+                &format!(
+                    "/api/installer/windows-adapt/{}/adaptation/drivers.zip",
+                    "f".repeat(64)
+                ),
+                CLIENT_IP
+            )
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+}
+
+async fn fixture_root(fixture: &Fixture) -> std::path::PathBuf {
+    std::path::PathBuf::from(&fixture.state.settings.read().await.http.root_dir)
 }

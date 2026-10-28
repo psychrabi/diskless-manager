@@ -176,6 +176,13 @@ pub async fn ensure_client_boot_ready(
         "requesting MAC no longer belongs to this client"
     );
     anyhow::ensure!(client.enabled, "client was disabled before boot readiness");
+    if let Some(script) =
+        crate::application::installation_service::InstallationService::new(state.clone())
+            .boot_for_client(id.as_str())
+            .await?
+    {
+        return Ok(script);
+    }
     let pending_legacy_exit: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM legacy_super_exits WHERE client_id = ?")
             .bind(id.as_str())
@@ -247,22 +254,6 @@ pub async fn ensure_client_boot_ready(
     )
     .await?
     .context("client has no storage configuration")?;
-    let installer_media = if let Some(media_id) = client.installer_media_id.as_deref() {
-        let media = state
-            .application
-            .installer_media
-            .get(media_id)
-            .await?
-            .context("client installer media is no longer cataloged")?;
-        anyhow::ensure!(
-            media.validation_state == crate::persistence::StructuralValidationState::Valid,
-            "client installer media has not passed structural validation"
-        );
-        spec.installer_iso = Some(media.managed_path.clone());
-        Some(media)
-    } else {
-        None
-    };
     let super_boot = match session.as_ref() {
         Some(session) if session.state == crate::persistence::SuperSessionState::Active => {
             let result = async {
@@ -332,12 +323,7 @@ pub async fn ensure_client_boot_ready(
                 elapsed_ms = storage_started.elapsed().as_millis(),
                 "PXE storage readiness ensured"
             );
-            installer_media.map(|media| {
-                crate::infrastructure::dhcp::SuperBootReservation::Installer {
-                    media_type: media.media_type,
-                    firmware: client.pxe_mode.clone(),
-                }
-            })
+            None
         }
     };
 
@@ -360,16 +346,7 @@ pub async fn ensure_client_boot_ready(
     // validation denies boot instead of silently falling back to the generic
     // installer menu, which is bound to neither the client's disk size nor session.
     let script =
-        match crate::application::installation_service::InstallationService::new(state.clone())
-            .boot_for_client(id.as_str())
-            .await?
-        {
-            Some(script) => script,
-            None => {
-                render_client_menu(&clients, &client, &settings, super_boot, assigned_windows)
-                    .await?
-            }
-        };
+        render_client_menu(&clients, &client, &settings, super_boot, assigned_windows).await?;
     let fingerprint =
         crate::application::client_lifecycle::lifecycle_fingerprint(state, &client).await?;
     sqlx::query("INSERT INTO client_offline_resets(client_id, fingerprint, offline_since, completed, failures, retry_after, last_error) VALUES (?, ?, NULL, 0, 0, 0, NULL) ON CONFLICT(client_id) DO UPDATE SET fingerprint = excluded.fingerprint, offline_since = NULL, completed = 0, failures = 0, retry_after = 0, last_error = NULL")

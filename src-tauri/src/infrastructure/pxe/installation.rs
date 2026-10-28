@@ -181,7 +181,7 @@ impl RenderContext<'_> {
             ""
         };
         let commands=match s.recipe.as_str() {
-            "interactive"=>format!("sanhook --drive 0x81 iscsi:{}:::0:{} || goto failed\nsanboot --no-describe iscsi:{}:::2:{} || goto failed\n",self.server,s.target_iqn,self.server,s.target_iqn),
+            "interactive"=>format!("sanhook --drive 0x81 iscsi:{}:::0:{} || goto failed\nsanboot --no-describe iscsi:{}:::1:{} || goto failed\n",self.server,s.target_iqn,self.server,s.target_iqn),
             "windows"=>format!("sanhook --drive 0x80 iscsi:{}:::0:{} || goto failed\nkernel {}/boot/winpe/wimboot || goto failed\ninitrd {}/boot/winpe/BCD BCD || goto failed\ninitrd {}/boot/winpe/boot.sdi boot.sdi || goto failed\ninitrd {}/boot/winpe/boot-installer.wim boot.wim || goto failed\ninitrd {url}/startnet.cmd startnet.cmd || goto failed\ninitrd {url}/install.ps1 install.ps1 || goto failed\nboot || goto failed\n",self.server,s.target_iqn,self.base,self.base,self.base,self.base),
             "ubuntu"=>format!("sanhook --drive 0x80 iscsi:{}:::0:{} || goto failed\nkernel {url}/vmlinuz ip=dhcp boot=casper url={url}/media.iso autoinstall ds=nocloud-net;s={url}/ --- || goto failed\ninitrd {url}/initrd || goto failed\nboot || goto failed\n",self.server,s.target_iqn),
             "rhel"=>format!("sanhook --drive 0x80 iscsi:{}:::0:{} || goto failed\nkernel {url}/vmlinuz ip=dhcp rd.iscsi.firmware=1 inst.ks={url}/ks.cfg inst.repo={url}/ inst.stage2={url}/ || goto failed\ninitrd {url}/initrd || goto failed\nboot || goto failed\n",self.server,s.target_iqn),
@@ -207,10 +207,15 @@ impl RenderContext<'_> {
         } else {
             ""
         };
+        let verify_url = format!("{}/api/pxe/installation-verifications", self.base);
         for (key, value) in [
+            ("@@VERIFY_URL@@", verify_url.as_str()),
             ("@@IQN@@", self.session.target_iqn.as_str()),
             ("@@PORTAL@@", self.server),
-            ("@@BYTES@@", &self.session.expected_bytes.to_string()),
+            (
+                "@@BYTES@@",
+                &self.session.expected_bytes.unwrap_or_default().to_string(),
+            ),
             ("@@REPORT@@", &format!("{}/report", self.url())),
             ("@@CHAP_USER@@", chap_user),
             ("@@CHAP_SECRET@@", chap_secret),
@@ -226,7 +231,10 @@ impl RenderContext<'_> {
     pub fn windows_script(&self) -> String {
         include_str!("installer/install.ps1")
             .replace("@@IQN@@", &self.session.target_iqn)
-            .replace("@@BYTES@@", &self.session.expected_bytes.to_string())
+            .replace(
+                "@@BYTES@@",
+                &self.session.expected_bytes.unwrap_or_default().to_string(),
+            )
             .replace("@@URL@@", &self.url())
     }
     pub fn ubuntu(&self) -> String {
@@ -235,7 +243,7 @@ impl RenderContext<'_> {
             "/dev/disk/by-path/ip-{}:3260-iscsi-{}-lun-0",
             self.server, self.session.target_iqn
         );
-        format!("#cloud-config\nautoinstall:\n  version: 1\n  identity:\n    hostname: diskless-client\n    username: {}\n    password: '{}'\n  early-commands:\n    - 'wget -q -O /run/diskless-gate.sh {url}/disk-gate.sh && sh /run/diskless-gate.sh'\n  storage:\n    config:\n      - {{id: disk0, type: disk, path: '{path}', ptable: gpt, wipe: superblock-recursive, grub_device: false}}\n      - {{id: esp, type: partition, device: disk0, size: 536870912, flag: boot, grub_device: true}}\n      - {{id: esp-fs, type: format, volume: esp, fstype: fat32}}\n      - {{id: esp-mount, type: mount, device: esp-fs, path: /boot/efi}}\n      - {{id: root, type: partition, device: disk0, size: -1}}\n      - {{id: root-fs, type: format, volume: root, fstype: ext4}}\n      - {{id: root-mount, type: mount, device: root-fs, path: /}}\n  packages: [open-iscsi]\n  late-commands:\n    - 'wget -q -O /run/diskless-finalize.sh {url}/linux-finalize.sh && sh /run/diskless-finalize.sh /target ubuntu'\n    - 'wget -q -O /dev/null --header=Content-Type:application/json --post-data=\"{{\\\"state\\\":\\\"installing\\\",\\\"progress\\\":95,\\\"message\\\":\\\"Installation finished; administrator must verify offline\\\"}}\" {url}/report'\n  error-commands:\n    - 'wget -q -O /dev/null --header=Content-Type:application/json --post-data=\"{{\\\"state\\\":\\\"failed\\\",\\\"progress\\\":10,\\\"message\\\":\\\"Ubuntu installer failed; inspect console\\\"}}\" {url}/report'\n  shutdown: poweroff\n",self.username,self.password_hash)
+        format!("#cloud-config\nautoinstall:\n  version: 1\n  identity:\n    hostname: diskless-client\n    username: {}\n    password: '{}'\n  early-commands:\n    - 'wget -q -O /run/diskless-gate.sh {url}/disk-gate.sh && sh /run/diskless-gate.sh'\n  storage:\n    config:\n      - {{id: disk0, type: disk, path: '{path}', ptable: gpt, wipe: superblock-recursive, grub_device: false}}\n      - {{id: esp, type: partition, device: disk0, size: 536870912, flag: boot, grub_device: true}}\n      - {{id: esp-fs, type: format, volume: esp, fstype: fat32}}\n      - {{id: esp-mount, type: mount, device: esp-fs, path: /boot/efi}}\n      - {{id: root, type: partition, device: disk0, size: -1}}\n      - {{id: root-fs, type: format, volume: root, fstype: ext4}}\n      - {{id: root-mount, type: mount, device: root-fs, path: /}}\n  packages: [open-iscsi, curl]\n  late-commands:\n    - 'wget -q -O /run/diskless-finalize.sh {url}/linux-finalize.sh && sh /run/diskless-finalize.sh /target ubuntu'\n    - 'wget -q -O /dev/null --header=Content-Type:application/json --post-data=\"{{\\\"state\\\":\\\"installing\\\",\\\"progress\\\":95,\\\"message\\\":\\\"Installation finished; administrator must verify offline\\\"}}\" {url}/report'\n  error-commands:\n    - 'wget -q -O /dev/null --header=Content-Type:application/json --post-data=\"{{\\\"state\\\":\\\"failed\\\",\\\"progress\\\":10,\\\"message\\\":\\\"Ubuntu installer failed; inspect console\\\"}}\" {url}/report'\n  shutdown: poweroff\n",self.username,self.password_hash)
     }
     pub fn kickstart(&self) -> String {
         let url = self.url();
@@ -243,7 +251,7 @@ impl RenderContext<'_> {
             "disk/by-path/ip-{}:3260-iscsi-{}-lun-0",
             self.server, self.session.target_iqn
         );
-        format!("#version=RHEL9\ntext\npoweroff\nurl --url={url}/\nlang en_US.UTF-8\nkeyboard us\ntimezone UTC --utc\nrootpw --lock\nuser --name={} --password={} --iscrypted --groups=wheel\nnetwork --bootproto=dhcp --activate\n%pre --interpreter=/bin/sh --erroronfail\ncurl -fsS {url}/disk-gate.sh -o /run/diskless-gate.sh\nsh /run/diskless-gate.sh\n%end\nignoredisk --only-use={bypath}\nclearpart --all --initlabel --drives={bypath}\nbootloader --boot-drive={bypath}\npart /boot/efi --fstype=efi --size=512 --ondisk={bypath}\npart /boot --fstype=xfs --size=1024 --ondisk={bypath}\npart / --fstype=xfs --grow --size=4096 --ondisk={bypath}\n%packages\n@^minimal-environment\niscsi-initiator-utils\n%end\n%post --nochroot --erroronfail\ncurl -fsS {url}/linux-finalize.sh -o /run/diskless-finalize.sh\nsh /run/diskless-finalize.sh /mnt/sysroot rhel\ncurl -fsS -H Content-Type:application/json -d '{{\"state\":\"installing\",\"progress\":95,\"message\":\"Installation finished; verify offline\"}}' {url}/report\n%end\n",self.username,self.password_hash)
+        format!("#version=RHEL9\ntext\npoweroff\nurl --url={url}/\nlang en_US.UTF-8\nkeyboard us\ntimezone UTC --utc\nrootpw --lock\nuser --name={} --password={} --iscrypted --groups=wheel\nnetwork --bootproto=dhcp --activate\n%pre --interpreter=/bin/sh --erroronfail\ncurl -fsS {url}/disk-gate.sh -o /run/diskless-gate.sh\nsh /run/diskless-gate.sh\n%end\nignoredisk --only-use={bypath}\nclearpart --all --initlabel --drives={bypath}\nbootloader --boot-drive={bypath}\npart /boot/efi --fstype=efi --size=512 --ondisk={bypath}\npart /boot --fstype=xfs --size=1024 --ondisk={bypath}\npart / --fstype=xfs --grow --size=4096 --ondisk={bypath}\n%packages\n@^minimal-environment\niscsi-initiator-utils\ncurl\n%end\n%post --nochroot --erroronfail\ncurl -fsS {url}/linux-finalize.sh -o /run/diskless-finalize.sh\nsh /run/diskless-finalize.sh /mnt/sysroot rhel\ncurl -fsS -H Content-Type:application/json -d '{{\"state\":\"installing\",\"progress\":95,\"message\":\"Installation finished; verify offline\"}}' {url}/report\n%end\n",self.username,self.password_hash)
     }
 }
 
@@ -288,6 +296,16 @@ mod tests {
             assert!(windows.find(check).unwrap() < windows.find("Clear-Disk").unwrap());
         }
         assert!(windows.find("Invoke-WebRequest").unwrap() < windows.find("Clear-Disk").unwrap());
+        assert!(
+            windows.contains("$Base/adaptation")
+                && windows.contains("driver_bundle_sha256")
+                && windows.contains("boot_arm = $Manifest.boot_arm"),
+            "WinPE must fetch the server-selected adaptation manifest"
+        );
+        assert!(
+            windows.find("driver_bundle_sha256").unwrap() < windows.find("adapt-volume").unwrap(),
+            "the driver bundle is verified before adaptation"
+        );
         let linux = include_str!("installer/disk-gate.sh");
         assert!(linux.contains("blockdev --getsize64"));
         assert!(linux.contains("$SESSION/targetname"));

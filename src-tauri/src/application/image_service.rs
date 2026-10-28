@@ -87,6 +87,18 @@ impl ImageService {
 
     pub async fn list(&self) -> Result<Vec<Image>> {
         let mut images = self.repository.list().await?;
+        let hidden: HashSet<String> = images
+            .iter()
+            .filter(|image| matches!(image.status.as_str(), "draft" | "verifying"))
+            .map(|image| image.id.clone())
+            .collect();
+        images.retain(|image| !matches!(image.status.as_str(), "draft" | "verifying"));
+        images.retain(|image| {
+            image
+                .parent_id
+                .as_ref()
+                .map_or(true, |parent| !hidden.contains(parent))
+        });
         if images.is_empty() {
             return Ok(images);
         }
@@ -131,12 +143,106 @@ impl ImageService {
 
     pub async fn create(&self, request: CreateImageRequest) -> Result<Image> {
         self.run_blocking(move |service| {
-            Box::pin(async move { service.create_blocking(request).await })
+            Box::pin(async move { service.create_blocking(request, "ready").await })
         })
         .await
     }
 
-    async fn create_blocking(&self, request: CreateImageRequest) -> Result<Image> {
+    pub async fn create_draft(&self, request: CreateImageRequest) -> Result<Image> {
+        self.run_blocking(move |service| {
+            Box::pin(async move { service.create_blocking(request, "draft").await })
+        })
+        .await
+    }
+
+    pub async fn publish_draft(&self, id: &str, description: String) -> Result<Image> {
+        let id = id.to_owned();
+        self.run_blocking(move |service| {
+            Box::pin(async move {
+                let mut image = service.get(&id).await?;
+                anyhow::ensure!(
+                    image.status == "draft",
+                    "only a draft image can be published"
+                );
+                image.status = "ready".into();
+                image.description = Some(description);
+                image.updated_at = Utc::now();
+                service.repository.update(&image).await?;
+                Ok(image)
+            })
+        })
+        .await
+    }
+
+    pub async fn publish_verified_draft(
+        &self,
+        session_id: &str,
+        image_id: &str,
+        target_iqn: &str,
+        attempt: i64,
+    ) -> Result<()> {
+        self.repository
+            .publish_verified_draft(session_id, image_id, target_iqn, attempt)
+            .await
+    }
+
+    /// Delete a private image only when its current lifecycle status matches the caller's.
+    pub async fn delete_session_image(&self, id: &str, status: &str) -> Result<()> {
+        let image = self.get(id).await?;
+        anyhow::ensure!(image.status == status, "session image status changed");
+        let id = id.to_owned();
+        let status = status.to_owned();
+        self.run_blocking(move |service| {
+            Box::pin(async move { service.delete_private_blocking(&id, &status).await })
+        })
+        .await
+    }
+
+    async fn delete_private_blocking(&self, id: &str, status: &str) -> Result<()> {
+        let image = self.get(id).await?;
+        anyhow::ensure!(image.status == status, "session image status changed");
+        let storage_name = match image.kind {
+            ImageKind::Snapshot => {
+                let parent = image
+                    .parent_id
+                    .as_deref()
+                    .context("session snapshot has no parent")?;
+                format!("{}@{}", self.get(parent).await?.name, image.name)
+            }
+            ImageKind::Master | ImageKind::Clone => image.name.clone(),
+        };
+        if image.kind != ImageKind::Snapshot {
+            anyhow::ensure!(
+                !self
+                    .repository
+                    .list()
+                    .await?
+                    .iter()
+                    .any(|item| item.parent_id.as_deref() == Some(&image.id)),
+                "session image has dependent snapshots or clones"
+            );
+        }
+        let missing = !self.backend.exists(&storage_name)?;
+        let (transaction, _) = self.repository.begin_delete(&image.id, missing).await?;
+        if !missing {
+            let destroyed = if image.kind == ImageKind::Snapshot {
+                let (parent, snapshot) = storage_name
+                    .rsplit_once('@')
+                    .context("snapshot name is invalid")?;
+                self.backend.destroy_snapshot(parent, snapshot)
+            } else {
+                self.backend.destroy(&storage_name)
+            };
+            if let Err(error) = destroyed {
+                drop(transaction);
+                return Err(error).context("failed to destroy session image storage");
+            }
+        }
+        transaction.commit().await?;
+        Ok(())
+    }
+
+    async fn create_blocking(&self, request: CreateImageRequest, status: &str) -> Result<Image> {
         validate_create_request(&request)?;
 
         let os_type = request.os_type.parse::<OsType>()?;
@@ -182,7 +288,7 @@ impl ImageService {
 
             format,
 
-            status: "ready".to_string(),
+            status: status.to_string(),
 
             description: request.description,
 
@@ -221,6 +327,7 @@ impl ImageService {
         validate_zfs_name(new_name)?;
 
         let mut image = self.get(id).await?;
+        ensure_public_image(&image)?;
 
         if image.parent_id.is_some() {
             bail!("snapshots cannot be renamed as images");
@@ -261,6 +368,14 @@ impl ImageService {
 
     async fn update_blocking(&self, id: &str, request: UpdateImageRequest) -> Result<Image> {
         let mut image = self.get(id).await?;
+        ensure_public_image(&image)?;
+        anyhow::ensure!(
+            !request
+                .status
+                .as_deref()
+                .is_some_and(|status| matches!(status, "draft" | "verifying")),
+            "private image statuses are managed by installation sessions"
+        );
 
         if let Some(name) = request.name {
             // Already on a blocking-pool thread: call the inner job directly
@@ -329,6 +444,8 @@ impl ImageService {
                         &snapshot_name,
                         &new_name,
                         ImageKind::Master,
+                        "ready",
+                        false,
                     )
                     .await
             })
@@ -342,8 +459,15 @@ impl ImageService {
         snapshot_name: &str,
         new_name: &str,
     ) -> Result<Image> {
-        self.create_image_from_snapshot(source_id, snapshot_name, new_name, ImageKind::Clone)
-            .await
+        self.create_image_from_snapshot(
+            source_id,
+            snapshot_name,
+            new_name,
+            ImageKind::Clone,
+            "ready",
+            false,
+        )
+        .await
     }
 
     /// Clone a snapshot into a new dataset and persist it as either a dependent
@@ -355,6 +479,8 @@ impl ImageService {
         snapshot_name: &str,
         new_name: &str,
         kind: ImageKind,
+        status: &str,
+        allow_draft_source: bool,
     ) -> Result<Image> {
         if !matches!(kind, ImageKind::Master | ImageKind::Clone) {
             bail!("snapshot derivatives must be a master or clone");
@@ -367,6 +493,9 @@ impl ImageService {
         }
 
         let source = self.get(source_id).await?;
+        if !allow_draft_source {
+            ensure_public_image(&source)?;
+        }
 
         /*
          * A new image can be created from either:
@@ -390,7 +519,19 @@ impl ImageService {
          * Snapshots belonging to this image are represented by child
          * Image records.
          */
-        let snapshots = self.snapshots(&source.id).await?;
+        let snapshots = if allow_draft_source {
+            self.repository
+                .list()
+                .await?
+                .into_iter()
+                .filter(|image| {
+                    image.kind == ImageKind::Snapshot
+                        && image.parent_id.as_deref() == Some(source.id.as_str())
+                })
+                .collect()
+        } else {
+            self.snapshots(&source.id).await?
+        };
 
         let snapshot = snapshots
             .iter()
@@ -447,7 +588,7 @@ impl ImageService {
 
             format: source.format,
 
-            status: "ready".to_string(),
+            status: status.to_owned(),
 
             description: Some(if is_clone {
                 format!("Clone of {}@{}", source.name, snapshot.name)
@@ -493,6 +634,7 @@ impl ImageService {
     /// Publish a completed servicing clone without ZFS promotion, preserving source snapshots.
     pub async fn publish_serviced_clone(&self, id: &str) -> Result<Image> {
         let mut image = self.get(id).await?;
+        ensure_public_image(&image)?;
         if image.kind != ImageKind::Clone
             || image.status != "preparing"
             || self.snapshots(id).await?.is_empty()
@@ -761,6 +903,7 @@ impl ImageService {
         }
 
         let mut image = self.get(id).await?;
+        ensure_public_image(&image)?;
 
         if new_size_gb < image.size_gb {
             bail!(
@@ -1125,15 +1268,86 @@ impl ImageService {
         let id = id.to_owned();
         let snapshot_name = snapshot_name.to_owned();
         self.run_blocking(move |service| {
-            Box::pin(async move { service.create_snapshot_blocking(&id, &snapshot_name).await })
+            Box::pin(async move {
+                service
+                    .create_snapshot_blocking(&id, &snapshot_name, false)
+                    .await
+            })
         })
         .await
     }
 
-    async fn create_snapshot_blocking(&self, id: &str, snapshot_name: &str) -> Result<Image> {
+    pub async fn create_draft_snapshot(&self, id: &str, snapshot_name: &str) -> Result<Image> {
+        let id = id.to_owned();
+        let snapshot_name = snapshot_name.to_owned();
+        self.run_blocking(move |service| {
+            Box::pin(async move {
+                let source = service.get(&id).await?;
+                anyhow::ensure!(
+                    source.status == "draft",
+                    "snapshot source is not a session draft"
+                );
+                service
+                    .create_snapshot_blocking(&id, &snapshot_name, true)
+                    .await
+            })
+        })
+        .await
+    }
+
+    pub async fn delete_session_snapshot(
+        &self,
+        source_id: &str,
+        snapshot_name: &str,
+    ) -> Result<()> {
+        let snapshots = self.repository.list().await?;
+        let snapshot = snapshots
+            .into_iter()
+            .find(|image| {
+                image.kind == ImageKind::Snapshot
+                    && image.parent_id.as_deref() == Some(source_id)
+                    && image.name == snapshot_name
+            })
+            .context("session snapshot record is missing")?;
+        self.delete_session_image(&snapshot.id, "verifying").await
+    }
+
+    pub async fn create_verification_candidate(
+        &self,
+        id: &str,
+        snapshot: &str,
+        name: &str,
+    ) -> Result<Image> {
+        let (id, snapshot, name) = (id.to_owned(), snapshot.to_owned(), name.to_owned());
+        self.run_blocking(move |service| {
+            Box::pin(async move {
+                service
+                    .create_image_from_snapshot(
+                        &id,
+                        &snapshot,
+                        &name,
+                        ImageKind::Clone,
+                        "verifying",
+                        true,
+                    )
+                    .await
+            })
+        })
+        .await
+    }
+
+    async fn create_snapshot_blocking(
+        &self,
+        id: &str,
+        snapshot_name: &str,
+        allow_draft: bool,
+    ) -> Result<Image> {
         validate_zfs_name(snapshot_name)?;
 
         let source = self.get(id).await?;
+        if !allow_draft {
+            ensure_public_image(&source)?;
+        }
 
         /*
          * Masters and clones are ZFS volumes and may have snapshots.
@@ -1150,7 +1364,19 @@ impl ImageService {
         /*
          * Prevent duplicate snapshot names for this image.
          */
-        let existing_snapshots = self.snapshots(&source.id).await?;
+        let existing_snapshots: Vec<Image> = if allow_draft {
+            self.repository
+                .list()
+                .await?
+                .into_iter()
+                .filter(|image| {
+                    image.kind == ImageKind::Snapshot
+                        && image.parent_id.as_deref() == Some(source.id.as_str())
+                })
+                .collect()
+        } else {
+            self.snapshots(&source.id).await?
+        };
 
         if existing_snapshots
             .iter()
@@ -1184,7 +1410,7 @@ impl ImageService {
 
             format: source.format,
 
-            status: "ready".to_string(),
+            status: if allow_draft { "verifying" } else { "ready" }.to_owned(),
 
             description: Some(format!("Snapshot of {}", source.name)),
 
@@ -1223,6 +1449,7 @@ impl ImageService {
 
     async fn delete_blocking(&self, id: &str) -> Result<()> {
         let image = self.get(id).await?;
+        ensure_public_image(&image)?;
 
         if image.is_default && self.backend.exists(&image.name)? {
             bail!("cannot delete the default image");
@@ -1281,6 +1508,7 @@ impl ImageService {
 
     pub async fn set_default(&self, id_or_name: &str) -> Result<Image> {
         let image = self.get(id_or_name).await?;
+        ensure_public_image(&image)?;
 
         if image.kind == ImageKind::Snapshot {
             bail!("a snapshot cannot be the default image");
@@ -1292,6 +1520,8 @@ impl ImageService {
     }
 
     pub async fn snapshots(&self, id: &str) -> Result<Vec<Image>> {
+        let parent = self.get(id).await?;
+        ensure_public_image(&parent)?;
         let images = self.repository.list().await?;
 
         Ok(images
@@ -1509,6 +1739,14 @@ fn parse_size_gb(value: &str) -> Option<u64> {
     )
 }
 
+fn ensure_public_image(image: &Image) -> Result<()> {
+    anyhow::ensure!(
+        !matches!(image.status.as_str(), "draft" | "verifying"),
+        "image is owned by an active installation session"
+    );
+    Ok(())
+}
+
 fn validate_create_request(request: &CreateImageRequest) -> Result<()> {
     if request.name.trim().is_empty() {
         bail!("image name cannot be empty");
@@ -1589,8 +1827,9 @@ mod storage_presence_tests {
         fn destroy_snapshot(&self, _: &str, _: &str) -> Result<()> {
             bail!("unexpected snapshot destroy")
         }
-        fn create_volume(&self, _: &str, _: u64) -> Result<()> {
-            unreachable!()
+        fn create_volume(&self, name: &str, _: u64) -> Result<()> {
+            self.log.lock().unwrap().push(format!("create:{name}"));
+            Ok(())
         }
         fn rename(&self, _: &str, _: &str) -> Result<()> {
             unreachable!()
@@ -1602,8 +1841,12 @@ mod storage_presence_tests {
                 .push(format!("clone:{source}:{destination}"));
             Ok(())
         }
-        fn create_snapshot(&self, _: &str, _: &str) -> Result<()> {
-            unreachable!()
+        fn create_snapshot(&self, source: &str, snapshot: &str) -> Result<()> {
+            self.log
+                .lock()
+                .unwrap()
+                .push(format!("snapshot:{source}@{snapshot}"));
+            Ok(())
         }
         fn rollback_snapshot(&self, _: &str, _: &str) -> Result<()> {
             if self.fail_rollback {
@@ -1649,10 +1892,10 @@ mod storage_presence_tests {
             Ok(self.boot_probe.clone())
         }
         fn set_os_type(&self, _: &str, _: &str) -> Result<()> {
-            unreachable!()
+            Ok(())
         }
         fn image_parent(&self) -> Result<String> {
-            unreachable!()
+            Ok("pool/images".into())
         }
     }
     async fn service(present: &[&str], fail: bool) -> ImageService {
@@ -1727,6 +1970,63 @@ mod storage_presence_tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
+    }
+
+    #[tokio::test]
+    async fn factory_drafts_are_hidden_from_public_image_lists() {
+        let service = service(&[], false).await;
+        let draft = service
+            .create_draft(CreateImageRequest {
+                name: "factory-draft".into(),
+                os_type: "linux".into(),
+                size_gb: 20,
+                format: None,
+                description: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(draft.status, "draft");
+        assert!(service.list().await.unwrap().is_empty());
+        assert!(service.rename(&draft.id, "renamed").await.is_err());
+        assert!(service.resize(&draft.id, 30).await.is_err());
+        assert!(service.create_snapshot(&draft.id, "unsafe").await.is_err());
+        assert!(service.delete(&draft.id).await.is_err());
+        let published = service
+            .publish_draft(&draft.id, "verified factory image".into())
+            .await
+            .unwrap();
+        assert_eq!(published.status, "ready");
+        assert_eq!(
+            published.description.as_deref(),
+            Some("verified factory image")
+        );
+    }
+
+    #[tokio::test]
+    async fn verification_candidates_and_draft_snapshots_remain_private() {
+        let service = service(&[], false).await;
+        let draft = service
+            .create_draft(CreateImageRequest {
+                name: "factory-private".into(),
+                os_type: "linux".into(),
+                size_gb: 20,
+                format: None,
+                description: None,
+            })
+            .await
+            .unwrap();
+        let snapshot = service
+            .create_draft_snapshot(&draft.id, "verified")
+            .await
+            .unwrap();
+        let candidate = service
+            .create_verification_candidate(&draft.id, &snapshot.name, "verify-private")
+            .await
+            .unwrap();
+        assert_eq!(candidate.status, "verifying");
+        assert!(service.list().await.unwrap().is_empty());
+        assert!(service.rename(&candidate.id, "public-name").await.is_err());
+        assert!(service.delete(&candidate.id).await.is_err());
     }
 
     #[tokio::test]

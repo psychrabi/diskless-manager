@@ -5,6 +5,7 @@ export const listInstallations = (id) => apiRequest(`${clientPath(id)}/installat
 export const startInstallation = (id, request) => post(`${clientPath(id)}/installation-sessions`, request);
 export const cancelInstallation = (id) => post(`/api/installation-sessions/${encodeURIComponent(id)}/cancel`);
 export const closeInstallationRecovery = (id) => post(`/api/installation-sessions/${encodeURIComponent(id)}/close-recovery`);
+export const retryInstallation = (id) => post(`/api/installation-sessions/${encodeURIComponent(id)}/retry`);
 export const getHardwareIdentity = (id) => apiRequest(`${clientPath(id)}/identity`);
 export const captureHardwareIdentity = (id) => post(`${clientPath(id)}/identity/capture`);
 export const applyHardwareIdentity = (id) => post(`${clientPath(id)}/identity/apply`);

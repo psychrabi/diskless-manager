@@ -22,9 +22,7 @@ use crate::api::handlers::{
     client_delete::delete_client,
     client_storage::delete_client_writeback,
     client_update::update_client,
-    clients::{
-        complete_client_installation, create_client, exit_legacy_super, request_inventory_boot,
-    },
+    clients::{create_client, exit_legacy_super, request_inventory_boot},
     clients_v2::{get_client, get_client_boot_history, list_clients},
     config::get_config,
     control::{
@@ -235,6 +233,18 @@ pub fn create_app(state: AppState) -> Router {
             "/api/installation-sessions/{id}/close-recovery",
             post(crate::api::handlers::installation::close_recovery),
         )
+        .route(
+            "/api/installation-sessions/{id}/close",
+            post(crate::api::handlers::installation::close_recovery),
+        )
+        .route(
+            "/api/installation-sessions/{id}/retry-cleanup",
+            post(crate::api::handlers::installation::close_recovery),
+        )
+        .route(
+            "/api/installation-sessions/{id}/retry",
+            post(crate::api::handlers::installation::retry),
+        )
         .merge(client_routes())
         .merge(image_routes())
         .merge(installer_media_routes(media_body_limit))
@@ -318,10 +328,6 @@ fn client_routes() -> Router<AppState> {
         .route(
             "/api/clients/{id}/boot-history",
             get(get_client_boot_history),
-        )
-        .route(
-            "/api/clients/{id}/installation/complete",
-            post(complete_client_installation),
         )
         .route("/api/clients/{id}/super/status", get(super_status))
         .route("/api/clients/{id}/super/enter", post(enter_super))

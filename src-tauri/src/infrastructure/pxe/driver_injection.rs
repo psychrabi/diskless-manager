@@ -3,9 +3,10 @@ use super::windows_inf::{inspect_inf_file, WindowsInfMetadata};
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::ffi::OsStr;
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use uuid::Uuid;
@@ -81,16 +82,43 @@ pub struct DriverInjectionStatus {
     pub iso_ready: bool,
 }
 
+/// Per-installation bounded driver bundle. `sha256`/`bytes` cover the exact
+/// file the WinPE installer downloads.
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionDriverBundle {
+    pub path: PathBuf,
+    pub sha256: String,
+    pub bytes: u64,
+    pub package_ids: Vec<String>,
+}
+
+// WinPE runs from a RAM disk, so a session bundle is deliberately much smaller
+// than the 1 GiB catalog import limit.
+const MAX_SESSION_BUNDLE_FILES: usize = 4096;
+const MAX_SESSION_BUNDLE_FILE_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_SESSION_BUNDLE_BYTES: u64 = 512 * 1024 * 1024;
+
 #[derive(Debug, Clone)]
 pub struct NetworkDriverInjectionPlugin {
     root_dir: PathBuf,
+    bundle_root: PathBuf,
 }
 
 impl NetworkDriverInjectionPlugin {
     pub fn new(root_dir: impl Into<PathBuf>) -> Self {
+        let root_dir = root_dir.into();
+        let bundle_root = root_dir.join("installer-bundles");
         Self {
-            root_dir: root_dir.into(),
+            root_dir,
+            bundle_root,
         }
+    }
+
+    /// Place session bundles outside the publicly served HTTP boot root. The
+    /// administrators' web server must never expose them without a token.
+    pub fn with_bundle_directory(mut self, directory: impl Into<PathBuf>) -> Self {
+        self.bundle_root = directory.into();
+        self
     }
 
     fn media_dir(&self) -> PathBuf {
@@ -366,6 +394,124 @@ endlocal
         .to_string()
     }
 
+    fn bundle_dir(&self) -> PathBuf {
+        self.bundle_root.clone()
+    }
+
+    /// Build (or reuse) the bundle for one installation session from cataloged
+    /// packages only. Reuse makes the manifest checksum stable for the attempt.
+    pub fn build_session_bundle(
+        &self,
+        session_id: &str,
+        package_ids: &[String],
+    ) -> Result<SessionDriverBundle> {
+        if session_id.is_empty()
+            || session_id.len() > 64
+            || !session_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        {
+            bail!("invalid installation session identifier for a driver bundle");
+        }
+        if package_ids.is_empty() {
+            bail!("a driver bundle requires at least one selected package");
+        }
+        let directory = self.bundle_dir();
+        fs::create_dir_all(&directory)?;
+        let output = directory.join(format!("{session_id}.zip"));
+        if !output.is_file() {
+            let staging = directory.join(format!(".{session_id}-{}.tmp", Uuid::new_v4().simple()));
+            let built = (|| -> Result<()> {
+                let file = fs::File::create(&staging)
+                    .with_context(|| format!("failed to create {}", staging.display()))?;
+                let mut archive = zip::ZipWriter::new(file);
+                let options = zip::write::SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Deflated);
+                let mut files = 0usize;
+                let mut uncompressed = 0u64;
+                for id in package_ids {
+                    let package = self.package_directory(id)?;
+                    add_session_package(
+                        &mut archive,
+                        options,
+                        &package,
+                        id,
+                        &mut files,
+                        &mut uncompressed,
+                    )?;
+                }
+                archive
+                    .finish()
+                    .context("failed to finalize the session driver bundle")?;
+                Ok(())
+            })();
+            if let Err(error) = built {
+                let _ = fs::remove_file(&staging);
+                return Err(error);
+            }
+            fs::rename(&staging, &output)
+                .with_context(|| format!("failed to publish {}", output.display()))?;
+        }
+        // The installer fetches the bundle without repeating its NIC inventory.
+        fs::write(
+            directory.join(format!("{session_id}.json")),
+            serde_json::to_vec(&package_ids)?,
+        )?;
+        let bytes = fs::metadata(&output)?.len();
+        let mut file = fs::File::open(&output)?;
+        let mut hasher = Sha256::new();
+        let mut buffer = [0u8; 64 * 1024];
+        loop {
+            let read = file.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+        }
+        Ok(SessionDriverBundle {
+            path: output,
+            sha256: format!("{:x}", hasher.finalize()),
+            bytes,
+            package_ids: package_ids.to_vec(),
+        })
+    }
+
+    /// Return the bundle a session already negotiated, rebuilding it from the
+    /// recorded package IDs so the checksum stays stable.
+    pub fn existing_session_bundle(&self, session_id: &str) -> Result<Option<SessionDriverBundle>> {
+        let sidecar = self.bundle_dir().join(format!("{session_id}.json"));
+        if !sidecar.is_file() {
+            return Ok(None);
+        }
+        let ids: Vec<String> = serde_json::from_slice(&fs::read(&sidecar)?)?;
+        if ids.is_empty() {
+            return Ok(None);
+        }
+        self.build_session_bundle(session_id, &ids).map(Some)
+    }
+
+    /// Remove a session's bundle after publication/cleanup. Missing files are fine.
+    pub fn remove_session_bundle(&self, session_id: &str) -> Result<()> {
+        if session_id.is_empty()
+            || session_id.len() > 64
+            || !session_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        {
+            bail!("invalid installation session identifier for a driver bundle");
+        }
+        for path in [
+            self.bundle_dir().join(format!("{session_id}.zip")),
+            self.bundle_dir().join(format!("{session_id}.json")),
+        ] {
+            if path.is_file() {
+                fs::remove_file(&path)
+                    .with_context(|| format!("failed to remove {}", path.display()))?;
+            }
+        }
+        Ok(())
+    }
+
     fn load_catalog(&self) -> Result<DriverCatalog> {
         let path = self.catalog_path();
         if !path.is_file() {
@@ -445,6 +591,58 @@ endlocal
 
         Ok(())
     }
+}
+
+fn add_session_package<W: Write + std::io::Seek>(
+    archive: &mut zip::ZipWriter<W>,
+    options: zip::write::SimpleFileOptions,
+    package_dir: &Path,
+    package_id: &str,
+    files: &mut usize,
+    uncompressed: &mut u64,
+) -> Result<()> {
+    let mut pending = vec![package_dir.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(&directory)
+            .with_context(|| format!("failed to read {}", directory.display()))?
+        {
+            let path = entry?.path();
+            let metadata = fs::symlink_metadata(&path)?;
+            if metadata.file_type().is_symlink() {
+                bail!("driver bundle package contains a symbolic link");
+            }
+            if metadata.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            if !metadata.is_file() {
+                continue;
+            }
+            *files += 1;
+            if *files > MAX_SESSION_BUNDLE_FILES {
+                bail!("driver bundle exceeds its file limit");
+            }
+            if metadata.len() > MAX_SESSION_BUNDLE_FILE_BYTES {
+                bail!("driver bundle contains an oversized file");
+            }
+            *uncompressed = uncompressed
+                .checked_add(metadata.len())
+                .context("driver bundle size overflow")?;
+            if *uncompressed > MAX_SESSION_BUNDLE_BYTES {
+                bail!("driver bundle exceeds its uncompressed size limit");
+            }
+            let relative = path
+                .strip_prefix(package_dir)
+                .context("driver bundle path escaped its package")?;
+            let relative = relative.to_string_lossy().replace('\\', "/");
+            if relative.is_empty() || relative.starts_with('/') || relative.contains("../") {
+                bail!("unsafe driver bundle path");
+            }
+            archive.start_file(format!("{package_id}/{relative}"), options)?;
+            archive.write_all(&fs::read(&path)?)?;
+        }
+    }
+    Ok(())
 }
 
 fn validate_network_package(package_dir: &Path) -> Result<()> {
@@ -794,7 +992,6 @@ fn require_package_catalog(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write as _;
     use std::process::Command;
 
     fn write_zip(path: &Path, entries: &[(&str, &[u8])]) {

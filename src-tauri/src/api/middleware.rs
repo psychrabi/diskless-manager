@@ -27,7 +27,7 @@ impl AuthRateLimiter {
     }
 
     /// Returns true if the request is allowed, false if rate-limited.
-    async fn check(&self, ip: &str) -> bool {
+    pub(crate) async fn check(&self, ip: &str) -> bool {
         let now = Instant::now();
         let window = Duration::from_secs(60);
         let max_attempts = 10;

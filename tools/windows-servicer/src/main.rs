@@ -11,7 +11,7 @@
 
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
-#[cfg(windows)]
+#[cfg(all(windows, feature = "gui"))]
 mod gui;
 #[path = "../../../src-tauri/src/infrastructure/pxe/windows_boot_arming.rs"]
 mod windows_boot_arming;
@@ -82,25 +82,27 @@ fn main() {
         })
         .map(|_| 0)
         .unwrap_or_else(report_output_error),
-        Some(command @ ("prepare" | "prepare-volume")) => match run_prepare(command) {
-            Ok(result) => write_json(&WindowsServicerResponse {
-                protocol_version: PROTOCOL_VERSION,
-                ok: true,
-                result: Some(result),
-                error: None,
-            })
-            .map(|_| 0)
-            .unwrap_or_else(report_output_error),
-            Err(error) => {
-                let _ = write_json(&WindowsServicerResponse {
+        Some(command @ ("prepare" | "prepare-volume" | "adapt-volume")) => {
+            match run_prepare(command) {
+                Ok(result) => write_json(&WindowsServicerResponse {
                     protocol_version: PROTOCOL_VERSION,
-                    ok: false,
-                    result: None,
-                    error: Some(format!("{error:#}")),
-                });
-                1
+                    ok: true,
+                    result: Some(result),
+                    error: None,
+                })
+                .map(|_| 0)
+                .unwrap_or_else(report_output_error),
+                Err(error) => {
+                    let _ = write_json(&WindowsServicerResponse {
+                        protocol_version: PROTOCOL_VERSION,
+                        ok: false,
+                        result: None,
+                        error: Some(format!("{error:#}")),
+                    });
+                    1
+                }
             }
-        },
+        }
         Some(command @ ("check-volume" | "check-volume-local")) => {
             let result =
                 (|| -> anyhow::Result<windows_volume_safety::WindowsVolumeSafetyResult> {
@@ -214,15 +216,15 @@ fn main() {
             eprintln!("usage: diskless-windows-servicer <capabilities|prepare|report-client|collect-nic|install-nic-drivers|report-service>");
             2
         }
-        None if cfg!(windows) => {
-            #[cfg(windows)]
+        None if cfg!(all(windows, feature = "gui")) => {
+            #[cfg(all(windows, feature = "gui"))]
             {
                 gui::run().map(|_| 0).unwrap_or_else(|error| {
                     eprintln!("GUI failed: {error:#}");
                     1
                 })
             }
-            #[cfg(not(windows))]
+            #[cfg(not(all(windows, feature = "gui")))]
             unreachable!();
         }
         None => {
@@ -312,8 +314,8 @@ fn run_prepare(command: &str) -> anyhow::Result<WindowsImagePreparationResult> {
         .map_err(|error| anyhow::anyhow!("invalid WindowsImagePreparationRequest JSON: {error}"))?;
 
     let preparer = WindowsImagePreparer::new()?;
-    if command == "prepare-volume" {
-        preparer.prepare_volume(request)
+    if matches!(command, "prepare-volume" | "adapt-volume") {
+        preparer.prepare_volume(request, command == "adapt-volume")
     } else {
         preparer.prepare(request)
     }

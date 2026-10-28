@@ -307,6 +307,37 @@ async fn ensure_installation_master_is_exclusive(
     Ok(())
 }
 
+async fn ensure_public_image_assignment(
+    state: &AppState,
+    master: &str,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    let status: Option<String> =
+        sqlx::query_scalar("SELECT status FROM images WHERE id=? OR name=? LIMIT 1")
+            .bind(master)
+            .bind(master)
+            .fetch_optional(&state.db_pool)
+            .await
+            .map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        status: 500,
+                        error: "Could not validate image assignment".into(),
+                    }),
+                )
+            })?;
+    if status.is_some_and(|value| value != "ready") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                status: 400,
+                error: "Only published ready images can be assigned".into(),
+            }),
+        ));
+    }
+    Ok(())
+}
+
 fn is_unprovisioned_enrollment(client: &Client) -> bool {
     client.master == "pending"
         && client.snapshot.is_none()
@@ -522,23 +553,23 @@ pub async fn create_client(
             }),
         ));
     }
+    if request.installer_media_id.is_some() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                status: 400,
+                error: "Installer media is selected when creating an isolated image session".into(),
+            }),
+        ));
+    }
 
     info!("Creating client: {:?}", request);
 
     let settings = state.settings.read().await.clone();
 
-    let installer_media =
-        installer_media_for_assignment(&state, request.installer_media_id.as_deref(), true)
-            .await
-            .map_err(|error| {
-                (
-                    StatusCode::BAD_REQUEST,
-                    Json(ErrorResponse {
-                        status: 400,
-                        error: format!("Invalid installation media: {error:#}"),
-                    }),
-                )
-            })?;
+    ensure_public_image_assignment(&state, &request.master).await?;
+
+    let installer_media: Option<crate::persistence::InstallerMedia> = None;
     let _installation_master_guard = if installer_media.is_some() {
         let resource = format!("installation-master:{}", request.master);
         Some(state.client_mutations.lock_resource(&resource).await)
@@ -709,7 +740,7 @@ pub async fn update_client(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Extension(claims): Extension<crate::types::Claims>,
-    Json(mut request): Json<UpdateClientRequest>,
+    Json(request): Json<UpdateClientRequest>,
 ) -> Result<Json<Client>, (StatusCode, Json<ErrorResponse>)> {
     info!("Updating client: {:?}", request);
     let _client_guard = state.client_mutations.lock_client(&id).await;
@@ -754,6 +785,35 @@ pub async fn update_client(
             }),
         )
     })?;
+
+    // Drafts and verification candidates are session-owned; only a verified
+    // publication may make an image assignable. UI hiding is supplemental.
+    if let Some(master) = request.master.as_deref() {
+        if !master.trim().is_empty() && master != "pending" {
+            let image = ImageRepository::new(state.db_pool.clone())
+                .get(master)
+                .await
+                .map_err(|error| {
+                    tracing::error!(client_id = %id, %error, "failed to validate image assignment");
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ErrorResponse {
+                            status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                            error: "Failed to validate the assigned image".into(),
+                        }),
+                    )
+                })?;
+            if image.is_some_and(|image| matches!(image.status.as_str(), "draft" | "verifying")) {
+                return Err((
+                    StatusCode::CONFLICT,
+                    Json(ErrorResponse {
+                        status: StatusCode::CONFLICT.as_u16(),
+                        error: "Image is still in the image factory and cannot be assigned until verified publication".into(),
+                    }),
+                ));
+            }
+        }
+    }
 
     let reserved = crate::application::client_storage_reservations::has_storage_reservation(
         &state.db_pool,
@@ -814,26 +874,15 @@ pub async fn update_client(
         }
     }
 
-    if request.action.as_deref() == Some("complete_installation") {
-        rewrite_complete_installation(&state, &claims, &existing_client, &mut request).await?;
-    }
-
-    if request.installer_media_id.is_some() && request.master.is_none() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                status: 400,
-                error: "Installer mode changes require a full client update".into(),
-            }),
-        ));
+    if request.installer_media_id.is_some() {
+        return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse { status: 400, error: "Installer media cannot be attached to a client target; use an isolated image session".into() })));
     }
     let full_form_update = request.master.is_some();
     let effective_master = request.master.as_deref().unwrap_or(&existing_client.master);
-    let effective_media_id = if full_form_update {
-        request.installer_media_id.as_deref()
-    } else {
-        existing_client.installer_media_id.as_deref()
-    };
+    if full_form_update {
+        ensure_public_image_assignment(&state, effective_master).await?;
+    }
+    let effective_media_id: Option<&str> = None;
     let media_changed = effective_media_id != existing_client.installer_media_id.as_deref();
     let installer_media = installer_media_for_assignment(&state, effective_media_id, media_changed)
         .await
@@ -1926,110 +1975,6 @@ async fn update_client_assignment(
     refresh_dhcp(&state, &settings, "updating client").await;
 
     Ok(Json(client))
-}
-
-async fn rewrite_complete_installation(
-    state: &AppState,
-    claims: &crate::types::Claims,
-    existing_client: &Client,
-    request: &mut UpdateClientRequest,
-) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                status: 403,
-                error: "Only administrators can complete OS installation".into(),
-            }),
-        ));
-    }
-    if existing_client.installer_media_id.is_none() || existing_client.snapshot.is_some() {
-        return Err((
-            StatusCode::CONFLICT,
-            Json(ErrorResponse {
-                status: 409,
-                error: "Client is not in direct-master OS installation mode".into(),
-            }),
-        ));
-    }
-    let target_iqn = existing_client
-        .target_iqn
-        .as_deref()
-        .filter(|target| !target.trim().is_empty())
-        .ok_or_else(|| {
-            (
-                StatusCode::CONFLICT,
-                Json(ErrorResponse {
-                    status: 409,
-                    error: "Client has no iSCSI target to verify".into(),
-                }),
-            )
-        })?;
-    let active =
-        crate::infrastructure::iscsi::target_has_active_sessions(target_iqn).map_err(|error| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    status: 500,
-                    error: format!("Failed to check client iSCSI sessions: {error}"),
-                }),
-            )
-        })?;
-    if active {
-        return Err((
-                    StatusCode::CONFLICT,
-                    Json(ErrorResponse {
-                            status: 409,
-                            error: "Client must be powered off with no active iSCSI session before completing installation".into(),
-                    }),
-            ));
-    }
-    let images = image_service(state);
-    let image = images.get(&existing_client.master).await.map_err(|error| {
-        (
-            StatusCode::CONFLICT,
-            Json(ErrorResponse {
-                status: 409,
-                error: format!("Installation master is unavailable: {error:#}"),
-            }),
-        )
-    })?;
-    let snapshot_name = format!("installed-{}", uuid::Uuid::new_v4().simple());
-    let snapshot = images
-        .create_snapshot(&image.id, &snapshot_name)
-        .await
-        .map_err(|error| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    status: 500,
-                    error: format!("Failed to snapshot installed OS: {error:#}"),
-                }),
-            )
-        })?;
-    request.master = Some(image.name.clone());
-    request.snapshot = Some(format!("{}@{}", image.name, snapshot.name));
-    request.installer_media_id = None;
-    request.use_game_disk = Some(false);
-    request.action = None;
-    Ok(())
-}
-
-pub async fn complete_client_installation(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Extension(claims): Extension<crate::types::Claims>,
-) -> Result<Json<Client>, (StatusCode, Json<ErrorResponse>)> {
-    update_client(
-        State(state),
-        Path(id),
-        Extension(claims),
-        Json(UpdateClientRequest {
-            action: Some("complete_installation".into()),
-            ..UpdateClientRequest::default()
-        }),
-    )
-    .await
 }
 
 #[derive(Debug, serde::Deserialize)]

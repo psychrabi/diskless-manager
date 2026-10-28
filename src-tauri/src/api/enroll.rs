@@ -2,8 +2,9 @@ use crate::api::util::spawn_client_locked;
 use axum::{
     extract::{ConnectInfo, Path, State},
     http::{header, StatusCode},
+    middleware::Next,
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use log::info;
@@ -39,6 +40,17 @@ fn client_name_from_mac(mac: &MacAddress) -> String {
 /// Enroll an unknown PXE client, then collect its hardware inventory before
 /// an administrator enables it and assigns an image.
 pub fn enroll_router(state: AppState) -> Router {
+    let verification_router = Router::new()
+        .route(
+            "/api/pxe/installation-verifications",
+            post(crate::api::handlers::installation::verify_normal_boot)
+                .layer(axum::extract::DefaultBodyLimit::max(64 * 1024)),
+        )
+        .with_state(state.clone())
+        .layer(axum::middleware::from_fn_with_state(
+            crate::api::middleware::AuthRateLimiter::new(),
+            rate_limit_installation_verification,
+        ));
     Router::new()
         .route("/enroll/{mac}", get(enroll_client))
         .route("/inventory/{mac}", axum::routing::post(submit_inventory))
@@ -49,10 +61,38 @@ pub fn enroll_router(state: AppState) -> Router {
             axum::routing::post(crate::api::handlers::installation::report),
         )
         .route(
+            "/api/installer/{id}/{token}/adaptation",
+            post(crate::api::handlers::installation::adaptation)
+                .layer(axum::extract::DefaultBodyLimit::max(64 * 1024)),
+        )
+        .route(
+            "/api/installer/{id}/{token}/adaptation/drivers.zip",
+            get(crate::api::handlers::installation::adaptation_bundle),
+        )
+        .route(
             "/api/installer/{id}/{token}/{*asset}",
             get(crate::api::handlers::installation::payload),
         )
+        .merge(verification_router)
         .with_state(state)
+        .layer(tower::limit::ConcurrencyLimitLayer::new(16))
+}
+
+async fn rate_limit_installation_verification(
+    axum::extract::State(limiter): axum::extract::State<crate::api::middleware::AuthRateLimiter>,
+    request: axum::http::Request<axum::body::Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    let peer = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?
+        .0
+        .ip();
+    if !limiter.check(&peer.to_string()).await {
+        return Err(StatusCode::TOO_MANY_REQUESTS);
+    }
+    Ok(next.run(request).await)
 }
 
 /// Record a boot failure only when the registered client is reporting from its

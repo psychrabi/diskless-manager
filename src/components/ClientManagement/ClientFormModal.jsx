@@ -1,7 +1,6 @@
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import {
   addClient,
-  completeClientInstallation,
   deleteClientWriteback,
   getClientNvmeOfStatus,
   prepareClientNvmeOf,
@@ -9,7 +8,6 @@ import {
   rotateChapSecret,
   updateClient,
 } from "@/api/modules/clients";
-import { listInstallerMedia } from "@/api/modules/installerMedia";
 import { prepareWindowsAssignment } from "@/api/modules/windowsServicing";
 import { listGameDisks } from "@/api/modules/zfs";
 import { readConfig } from "@/api/modules/config";
@@ -59,7 +57,6 @@ const formDefaults = {
   chap_enabled: false,
   use_game_disk: false,
   game_disks: [],
-  installer_media_id: "",
 };
 
 const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) => {
@@ -94,9 +91,6 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
   // `null` means not fetched yet (loading); an array may be empty.
   const [gameDisks, setGameDisks] = useState(null);
   const [deletingWriteback, setDeletingWriteback] = useState(false);
-  const [installerMedia, setInstallerMedia] = useState(null);
-  const [installationMode, setInstallationMode] = useState(Boolean(client?.installer_media_id));
-  const [completingInstallation, setCompletingInstallation] = useState(false);
   const [preparingWindowsDrivers, setPreparingWindowsDrivers] = useState(false);
 
   const {
@@ -117,8 +111,6 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
       reset({
         ...formDefaults,
         ...client,
-        keep_writeback: client.installer_media_id ? false : client.keep_writeback ?? false,
-        installer_media_id: client.installer_media_id || "",
       });
     }
   }, [client, isOpen, reset]);
@@ -152,20 +144,6 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
         if (!cancelled) setLiveWindowsServicingProfile(config?.settings?.windows_servicing ?? {});
       },
       () => {},
-    );
-    return () => { cancelled = true; };
-  }, [isOpen]);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    let cancelled = false;
-    listInstallerMedia().then(
-      (media) => {
-        if (!cancelled) setInstallerMedia(media ?? []);
-      },
-      () => {
-        if (!cancelled) setInstallerMedia([]);
-      },
     );
     return () => { cancelled = true; };
   }, [isOpen]);
@@ -265,31 +243,15 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
   };
 
   const onSubmit = async (data) => {
-    if (installationMode) {
-      if (!data.installer_media_id) {
-        error("Client Management", "Select a validated installation image first.");
-        return;
-      }
-      const selectedMedia = installerMedia?.find((item) => item.id === data.installer_media_id);
-      const approved = await confirm({
-        title: "Use this image for OS installation?",
-        description: `${selectedMedia?.display_name || "The selected installer"} will boot with ${data.master} as its writable disk. Installation writes directly to the master image, so use an empty image and keep it unassigned to other clients until installation is complete.`,
-        confirmText: "Use for OS installation",
-        cancelText: "Cancel",
-        size: "2xl",
-      });
-      if (!approved) return;
-    }
     let request = {
       name: data.name,
       mac: data.mac,
       ip: data.ip,
       master: data.master,
-      snapshot: installationMode ? null : data.snapshot || null,
-      installer_media_id: installationMode ? data.installer_media_id || null : null,
-      keep_writeback: installationMode ? false : data.keep_writeback,
-      use_game_disk: installationMode ? false : data.use_game_disk,
-      game_disks: installationMode ? [] : data.game_disks || [],
+      snapshot: data.snapshot || null,
+      keep_writeback: data.keep_writeback,
+      use_game_disk: data.use_game_disk,
+      game_disks: data.game_disks || [],
       enabled: data.enabled ?? true,
       ...(chapFeatureEnabled ? { chap_enabled: Boolean(data.chap_enabled) } : {}),
     };
@@ -311,7 +273,6 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
         Boolean(dirtyFields.mac);
       if (
         assignmentChanged &&
-        !installationMode &&
         windowsServicingConfigured &&
         selectedImage?.os_type === "windows"
       ) {
@@ -355,7 +316,6 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
           "name",
           "mac",
           "ip",
-          "installer_media_id",
           "keep_writeback",
           "use_game_disk",
           "game_disks",
@@ -370,12 +330,10 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
         if (
           preparedAssignment ||
           dirtyFields.master ||
-          dirtyFields.snapshot ||
-          dirtyFields.installer_media_id
+          dirtyFields.snapshot
         ) {
           update.master = request.master;
           update.snapshot = request.snapshot;
-          update.installer_media_id = request.installer_media_id;
         }
         await updateClient(client.id, update);
         success(
@@ -391,31 +349,12 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
     }
   };
 
-  const handleCompleteInstallation = async () => {
-    if (!client?.id || completingInstallation) return;
-    setCompletingInstallation(true);
-    try {
-      await completeClientInstallation(client.id);
-      success("Client Management", "Installation snapshot created and assigned for OS boot.");
-      onClose();
-      await refresh();
-    } catch (e) {
-      error("Client Management", e);
-    } finally {
-      setCompletingInstallation(false);
-    }
-  };
-
   const selectedMaster = useWatch({
     control,
     name: "master",
   });
 
-  const selectedInstallerMediaId = useWatch({ control, name: "installer_media_id" });
   const selectedMasterOs = masters?.find((master) => master.name === selectedMaster)?.os_type;
-  const availableInstallerMedia = (installerMedia ?? []).filter(
-    (media) => media.validation_state === "valid",
-  );
 
   const keepWriteback = useWatch({
     control,
@@ -544,7 +483,7 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
     <Dialog
       open={isOpen}
       onOpenChange={(open) => {
-        if (!open && !deletingWriteback && !completingInstallation) onClose();
+        if (!open && !deletingWriteback) onClose();
       }}
     >
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
@@ -624,68 +563,6 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
             </FieldContent>
           </Field>
 
-          <fieldset className="grid gap-2">
-            <legend className="text-sm font-medium">Client boot mode</legend>
-            <div className="flex flex-wrap gap-4 text-sm">
-              <label className="flex items-center gap-2">
-                <input
-                  type="radio"
-                  name="client-boot-mode"
-                  checked={!installationMode}
-                  onChange={() => {
-                    setInstallationMode(false);
-                    setValue("installer_media_id", "", {
-                      shouldValidate: true,
-                      shouldDirty: true,
-                    });
-                  }}
-                />
-                OS boot
-              </label>
-              <label className="flex items-center gap-2">
-                <input
-                  type="radio"
-                  name="client-boot-mode"
-                  checked={installationMode}
-                  onChange={() => {
-                    setInstallationMode(true);
-                    setValue("snapshot", "", { shouldValidate: true, shouldDirty: true });
-                    setValue("keep_writeback", false, { shouldDirty: true });
-                    setValue("use_game_disk", false, { shouldValidate: true, shouldDirty: true });
-                    setValue("game_disks", [], { shouldValidate: true, shouldDirty: true });
-                  }}
-                />
-                OS installation
-              </label>
-            </div>
-            {installationMode && (
-              <Field>
-                <FieldLabel htmlFor="installer-media">Installation image</FieldLabel>
-                <FieldContent>
-                  <NativeSelect
-                    id="installer-media"
-                    disabled={!selectedMaster || installerMedia === null}
-                    {...register("installer_media_id")}
-                  >
-                    <NativeSelectOption value="">Select installation image ...</NativeSelectOption>
-                    {availableInstallerMedia.map((media) => (
-                      <NativeSelectOption key={media.id} value={media.id}>
-                        {media.display_name}
-                      </NativeSelectOption>
-                    ))}
-                  </NativeSelect>
-                  <FieldDescription>
-                    {installerMedia === null
-                      ? "Loading installer catalog…"
-                      : availableInstallerMedia.length === 0
-                        ? "No validated installer ISO is available."
-                        : "The selected ISO will be attached as read-only LUN 1."}
-                  </FieldDescription>
-                </FieldContent>
-              </Field>
-            )}
-          </fieldset>
-
           <Field>
             <FieldLabel htmlFor="master">Select Image</FieldLabel>
             <FieldContent>
@@ -699,10 +576,6 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
                     shouldValidate: true,
                     shouldDirty: true,
                   });
-                  setValue("installer_media_id", "", {
-                    shouldValidate: true,
-                    shouldDirty: true,
-                  });
                 }}
               >
                 <NativeSelectOption value="">Select image ...</NativeSelectOption>
@@ -713,7 +586,7 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
                 ))}
               </NativeSelect>
               <FieldError>{errors.master?.message}</FieldError>
-              {selectedMasterOs === "windows" && !installationMode && !client?.id && (
+              {selectedMasterOs === "windows" && !client?.id && (
                 <p className="text-xs text-muted-foreground" data-testid="windows-driver-hint">
                   Boot tests do not block assignment. {windowsServicingConfigured
                     ? "Saving prepares the image with catalog drivers for inventoried clients."
@@ -723,7 +596,7 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
             </FieldContent>
           </Field>
 
-          {!installationMode && <Field>
+          <Field>
             <FieldLabel htmlFor="snapshot">Select Snapshot</FieldLabel>
             <FieldContent>
               <NativeSelect
@@ -750,9 +623,9 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
               </NativeSelect>
               <FieldError>{errors.snapshot?.message}</FieldError>
             </FieldContent>
-          </Field>}
+          </Field>
 
-          {!installationMode && <Field orientation="horizontal">
+          <Field orientation="horizontal">
             <Checkbox
               id="keep-writeback"
               checked={Boolean(keepWriteback)}
@@ -772,9 +645,9 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
                 (non-persistent mode)
               </FieldDescription>
             </FieldContent>
-          </Field>}
+          </Field>
 
-          {!installationMode && <div>
+          <div>
             <Field orientation="horizontal">
               <Checkbox
                 id="use-game-disk"
@@ -802,7 +675,7 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
                 />
               </div>
             )}
-          </div>}
+          </div>
 
           {chapFeatureEnabled && (
             <div>
@@ -994,50 +867,24 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
             </div>
           )}
 
-          {client?.id && client.installer_media_id && (
-            <section className="rounded-lg border border-border bg-muted/30 p-4" aria-live="polite">
-              <div className="font-medium">OS installation</div>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Shut down the client before completing installation. The server checks for active iSCSI sessions.
-              </p>
-              {completingInstallation && (
-                <div className="mt-3 space-y-2">
-                  <p className="text-sm">Creating a snapshot and switching the client to OS boot…</p>
-                  <Progress value={null} aria-label="Completing OS installation" />
-                </div>
-              )}
-            </section>
-          )}
-
           <DialogFooter className="pt-2">
-            {user?.role === "admin" && client?.id && client.installer_media_id && (
-              <Button
-                type="button"
-                variant="default"
-                disabled={completingInstallation || isSubmitting || isDirty}
-                onClick={handleCompleteInstallation}
-              >
-                {completingInstallation ? <Spinner data-icon="inline-start" /> : <Save data-icon="inline-start" />}
-                {completingInstallation ? "Completing installation…" : "Installation Completed"}
-              </Button>
-            )}
             {user?.role === "admin" && client?.id && client?.snapshot && client?.writeback && (
               <Button
                 type="button"
                 variant="destructive"
-                disabled={deletingWriteback || completingInstallation || client.status?.toLowerCase() === "online"}
+                disabled={deletingWriteback || client.status?.toLowerCase() === "online"}
                 onClick={handleDeleteWriteback}
               >
                 {deletingWriteback ? <Spinner data-icon="inline-start" /> : <Trash2 data-icon="inline-start" />}
                 {deletingWriteback ? "Deleting..." : "Delete Writeback"}
               </Button>
             )}
-            <Button type="button" variant="ghost" disabled={deletingWriteback || completingInstallation} onClick={() => onClose()}>
+            <Button type="button" variant="ghost" disabled={deletingWriteback} onClick={() => onClose()}>
               Cancel
             </Button>
             <Button
               type="submit"
-              disabled={deletingWriteback || completingInstallation || isSubmitting || !isDirty || !isValid || (installationMode && !selectedInstallerMediaId)}
+              disabled={deletingWriteback || isSubmitting || !isDirty || !isValid}
             >
               {isSubmitting ? (
                 <Spinner data-icon="inline-start" />

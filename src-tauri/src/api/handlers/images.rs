@@ -27,7 +27,7 @@ fn image_api_error(status: StatusCode, message: impl Into<String>) -> ImageApiEr
 
 async fn image_reserved(state: &AppState, image_id: &str) -> anyhow::Result<bool> {
     let reserved: i64 = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM installation_sessions WHERE image_id=? AND state!='completed')",
+        "SELECT EXISTS(SELECT 1 FROM installation_sessions WHERE closed_at IS NULL AND ? IN (draft_image_id,verification_image_id,published_image_id))",
     )
     .bind(image_id)
     .fetch_one(&state.db_pool)
@@ -135,6 +135,9 @@ pub async fn get_driver_readiness(
         StatusCode::NOT_FOUND
     })?;
     let image = image.ok_or(StatusCode::NOT_FOUND)?;
+    if matches!(image.status.as_str(), "draft" | "verifying") {
+        return Err(StatusCode::NOT_FOUND);
+    }
     let mut revisions = repository
         .list_driver_revisions(&image.id)
         .await
@@ -176,11 +179,22 @@ pub async fn get_image(
 ) -> Result<Json<Image>, StatusCode> {
     let service = image_service(&state);
 
-    service.get(&id).await.map(Json).map_err(|error| {
-        log::error!("Failed to get image '{}': {}", id, error);
+    service
+        .get(&id)
+        .await
+        .and_then(|image| {
+            anyhow::ensure!(
+                !matches!(image.status.as_str(), "draft" | "verifying"),
+                "image not found"
+            );
+            Ok(image)
+        })
+        .map(Json)
+        .map_err(|error| {
+            log::error!("Failed to get image '{}': {}", id, error);
 
-        StatusCode::NOT_FOUND
-    })
+            StatusCode::NOT_FOUND
+        })
 }
 
 pub async fn get_snapshots(

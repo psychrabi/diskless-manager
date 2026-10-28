@@ -8,10 +8,8 @@ import { prepareWindowsAssignment } from "@/api/modules/windowsServicing";
 import { useAppStore } from "@/store/useAppStore";
 import { listGameDisks } from "@/api/modules/zfs";
 import ClientFormModal from "./ClientFormModal";
-import { listInstallerMedia } from "@/api/modules/installerMedia";
 import { readConfig } from "@/api/modules/config";
 
-vi.mock("@/api/modules/installerMedia", () => ({ listInstallerMedia: vi.fn().mockResolvedValue([]) }));
 vi.mock("@/api/modules/config", () => ({ readConfig: vi.fn() }));
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -83,7 +81,7 @@ it("saves an unchecked keep-writeback setting as false", async () => {
   expect(updateClient).toHaveBeenCalledWith("six", { keep_writeback: false });
 });
 
-it.each([false, true])("clears installation media with a full OS-boot assignment (change image: %s)", async (changeImage) => {
+it("does not offer the legacy in-place installation mode", async () => {
   const user = userEvent.setup();
   const client = {
     id: "pc002", name: "pc002", mac: "52:54:00:11:00:02", ip: "192.168.123.10",
@@ -91,62 +89,12 @@ it.each([false, true])("clears installation media with a full OS-boot assignment
   };
   render(<ClientFormModal client={client} masters={[
     { name: "linux", os_type: "linux", snapshots: [] },
-    { name: "other-linux", os_type: "linux", snapshots: [] },
   ]} isOpen onClose={() => {}} refresh={() => {}} />);
-  await user.click(screen.getByRole("radio", { name: "OS boot" }));
-  if (changeImage) {
-    fireEvent.change(screen.getByLabelText("Select Image"), { target: { value: "other-linux" } });
-  }
+  expect(screen.queryByText("Client boot mode")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Installation Completed" })).not.toBeInTheDocument();
+  await user.click(screen.getByRole("checkbox", { name: /Keep Writeback/ }));
   await user.click(screen.getByRole("button", { name: "Save" }));
-  await waitFor(() => expect(updateClient).toHaveBeenCalledWith("pc002", expect.objectContaining({
-    master: changeImage ? "other-linux" : "linux", snapshot: null, installer_media_id: null,
-  })));
-});
-
-it("sends the selected installer together with its image when entering installation mode", async () => {
-  const user = userEvent.setup();
-  listInstallerMedia.mockResolvedValueOnce([
-    { id: "live-iso", display_name: "Linux Live", media_type: "linux_iso", validation_state: "valid" },
-  ]);
-  confirm.mockResolvedValueOnce(true);
-  const client = {
-    id: "pc002", name: "pc002", mac: "52:54:00:11:00:02", ip: "192.168.123.10",
-    master: "linux", snapshot: null,
-  };
-  render(<ClientFormModal client={client} masters={[
-    { name: "linux", os_type: "linux", snapshots: [] },
-  ]} isOpen onClose={() => {}} refresh={() => {}} />);
-  await user.click(screen.getByRole("radio", { name: "OS installation" }));
-  await screen.findByRole("option", { name: "Linux Live" });
-  await user.selectOptions(screen.getByLabelText("Installation image"), "live-iso");
-  await user.click(screen.getByRole("button", { name: "Save" }));
-  await waitFor(() => expect(updateClient).toHaveBeenCalledWith("pc002", expect.objectContaining({
-    master: "linux", snapshot: null, installer_media_id: "live-iso",
-  })));
-});
-
-it("offers any valid installer ISO regardless of the selected image OS", async () => {
-  const user = userEvent.setup();
-  listInstallerMedia.mockResolvedValueOnce([
-    { id: "windows-iso", display_name: "Windows Setup", media_type: "windows_iso", validation_state: "valid" },
-    { id: "other-iso", display_name: "Other Tool", media_type: "other_iso", validation_state: "valid" },
-  ]);
-  confirm.mockResolvedValueOnce(true);
-  const client = {
-    id: "pc002", name: "pc002", mac: "52:54:00:11:00:02", ip: "192.168.123.10",
-    master: "linux", snapshot: null,
-  };
-  render(<ClientFormModal client={client} masters={[
-    { name: "linux", os_type: "linux", snapshots: [] },
-  ]} isOpen onClose={() => {}} refresh={() => {}} />);
-  await user.click(screen.getByRole("radio", { name: "OS installation" }));
-  expect(await screen.findByRole("option", { name: "Windows Setup" })).toBeInTheDocument();
-  expect(screen.getByRole("option", { name: "Other Tool" })).toBeInTheDocument();
-  await user.selectOptions(screen.getByLabelText("Installation image"), "windows-iso");
-  await user.click(screen.getByRole("button", { name: "Save" }));
-  await waitFor(() => expect(updateClient).toHaveBeenCalledWith("pc002", expect.objectContaining({
-    master: "linux", snapshot: null, installer_media_id: "windows-iso",
-  })));
+  await waitFor(() => expect(updateClient).toHaveBeenCalledWith("pc002", expect.not.objectContaining({ installer_media_id: expect.anything() })));
 });
 
 it("ignores an earlier client's status response after switching clients", async () => {

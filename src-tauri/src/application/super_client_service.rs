@@ -652,7 +652,7 @@ impl SuperClientService {
     }
 
     async fn validate_no_conflicting_disk_owner(&self, client_id: &str) -> Result<()> {
-        let installation: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM installation_sessions WHERE client_id = ? AND state <> 'completed')")
+        let installation: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM installation_sessions WHERE client_id = ? AND closed_at IS NULL)")
             .bind(client_id).fetch_one(self.sessions.pool()).await?;
         anyhow::ensure!(!installation, "unfinished installation owns this client's disk; finish installer recovery before changing Super mode");
         let identity: bool = sqlx::query_scalar(
@@ -2733,7 +2733,7 @@ mod tests {
     #[tokio::test]
     async fn super_refuses_identity_and_unfinished_installation_owners() {
         let (service, _, sessions, _, _, client, _root) = fixture().await;
-        sqlx::query("INSERT INTO installation_sessions(id,client_id,media_id,image_id,master,media_checksum,target_iqn,expected_bytes,source_ip,firmware,recipe,token,state,created_at,updated_at,expires_at) VALUES ('install',?,'media-1','master-id','pool/master','synthetic','iqn.test:client-a',50,'192.0.2.1','bios','interactive','synthetic','failed','now','now','later')")
+        sqlx::query("INSERT INTO installation_sessions(id,client_id,kind,recipe,media_checksum,prior_master,target_iqn,source_ip,firmware,token,state,created_at,updated_at) VALUES ('install',?,'manual','interactive','synthetic','pool/master','iqn.test:install','192.0.2.1','bios','synthetic','failed','now','now')")
             .bind(client.id.as_str()).execute(sessions.pool()).await.unwrap();
         let error = service
             .enter(client.id.as_str(), true, true)
@@ -2746,7 +2746,7 @@ mod tests {
             .is_err());
         let pending = active_session(&client, SuperSessionState::Saving);
         assert!(service.recover_one(pending).await.is_err());
-        sqlx::query("UPDATE installation_sessions SET state = 'completed'")
+        sqlx::query("UPDATE installation_sessions SET state = 'completed', closed_at = 'now'")
             .execute(sessions.pool())
             .await
             .unwrap();

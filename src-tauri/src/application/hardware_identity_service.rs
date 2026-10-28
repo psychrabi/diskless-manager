@@ -248,7 +248,7 @@ impl HardwareIdentityService {
         .await?;
         ensure!(pending_super == 0, "managed Super session is pending");
         let pending_installation: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM installation_sessions WHERE client_id=? AND state<>'completed'",
+            "SELECT COUNT(*) FROM installation_sessions WHERE client_id=? AND closed_at IS NULL",
         )
         .bind(client_id)
         .fetch_one(&self.deps.repository.pool)

@@ -211,11 +211,12 @@ pub async fn prepare_managed(
                     .clone()
                     .context("a report server URL is required for managed commits")?,
                 export_package: true,
-                image_revision: revision
+                installation_verification: false,
+                image_revision: Some(revision
                     .as_ref()
                     .context("committed preparation has no candidate revision")?
                     .id
-                    .clone(),
+                    .clone()),
             })
         } else {
             None
