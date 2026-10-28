@@ -517,7 +517,7 @@ fn system_routes() -> Router<AppState> {
         .route("/api/zfs/pools/stats", get(get_zpool_stats))
         .route("/api/zfs/datasets", get(list_datasets).post(create_dataset))
         .route("/api/zfs/game-disks", get(list_game_disks))
-        .route("/api/zfs/datasets/{dataset}", delete(delete_dataset))
+        .route("/api/zfs/datasets/{*dataset}", delete(delete_dataset))
         .route("/api/dashboard/clients", get(get_client_overview))
         .route(
             "/api/dashboard/clients/io-metrics",

@@ -74,6 +74,27 @@ async fn request(
         .status()
 }
 
+#[tokio::test]
+async fn delete_dataset_route_matches_full_zfs_dataset_names() {
+    let (_state, app, admin, _user) = setup().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/zfs/datasets/tank/images/client-disk")
+                .header("authorization", format!("Bearer {admin}"))
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Route matching succeeds and reaches the JSON extractor, which rejects
+    // the missing `recursive` field before any destructive handler work.
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
 async fn assert_revoked(app: &Router, token: &str) {
     assert_eq!(
         request(app, "GET", "/api/clients", token, json!(null)).await,
