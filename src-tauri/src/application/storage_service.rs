@@ -492,10 +492,10 @@ impl StorageService {
             !self.iscsi.target_exists(&desired.target_iqn)?,
             "session target already exists"
         );
-        self.iscsi.verify_named_file_lun_mappings(desired)?;
         self.iscsi
             .create_target_transaction(desired)
             .context("failed to create owned session target")?;
+        self.iscsi.verify_named_file_lun_mappings(desired)?;
         let verification = (|| -> Result<()> {
             let actual = self.iscsi.list_target_luns(&desired.target_iqn)?;
             anyhow::ensure!(

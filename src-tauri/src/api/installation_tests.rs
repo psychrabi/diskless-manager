@@ -146,6 +146,8 @@ impl ImageBackend for FakeImageBackend {
 struct FakeIscsi {
     target: Mutex<Option<IscsiTargetSpec>>,
     active_session: AtomicBool,
+    file_lun_verified: AtomicBool,
+    fail_file_lun_verification: AtomicBool,
 }
 
 impl IscsiProvisioner for FakeIscsi {
@@ -226,8 +228,21 @@ impl IscsiProvisioner for FakeIscsi {
             .any(|lun| lun.backing == IscsiLunBacking::File)
         {
             anyhow::ensure!(
+                self.target
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .is_some_and(|target| target.target_iqn == spec.target_iqn),
+                "target and named initiator mapping must exist before file-LUN verification"
+            );
+            anyhow::ensure!(
                 spec.initiator_iqn.is_some(),
                 "named file LUN mapping is missing"
+            );
+            self.file_lun_verified.store(true, Ordering::SeqCst);
+            anyhow::ensure!(
+                !self.fail_file_lun_verification.load(Ordering::SeqCst),
+                "injected named file-LUN verification failure"
             );
         }
         Ok(())
@@ -246,6 +261,7 @@ struct Fixture {
     client_id: String,
     identity_client_id: String,
     backend: Arc<FakeImageBackend>,
+    iscsi: Arc<FakeIscsi>,
     /// Keeps the managed media directory alive for the test's lifetime.
     _root: tempfile::TempDir,
 }
@@ -635,8 +651,97 @@ async fn fixture() -> Fixture {
         client_id,
         identity_client_id,
         backend,
+        iscsi,
         _root: root,
     }
+}
+
+#[tokio::test]
+async fn interactive_iso_creates_target_before_verifying_readonly_file_lun() {
+    let fixture = fixture().await;
+    let (status, session) = fixture
+        .management(
+            "POST",
+            &format!("/api/clients/{}/installation-sessions", fixture.client_id),
+            Some(json!({"recipe": "interactive", "confirm_erase": true})),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::OK, "manual session failed: {session}");
+    assert_eq!(session["state"], "manual");
+    assert!(fixture.iscsi.file_lun_verified.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn missing_winpe_prerequisite_fails_before_creating_session_or_draft() {
+    let fixture = fixture().await;
+    let (status, error) = fixture
+        .management(
+            "POST",
+            &format!("/api/clients/{}/installation-sessions", fixture.client_id),
+            Some(json!({
+                "recipe": "windows",
+                "size_gb": 50,
+                "image_name": "windows-11-tiny",
+                "confirm_erase": true
+            })),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::CONFLICT, "unexpected response: {error}");
+    assert!(error["message"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("dedicated WinPE installer prerequisite missing: wimboot"));
+    let session_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM installation_sessions")
+        .fetch_one(&fixture.state.db_pool)
+        .await
+        .expect("count sessions");
+    assert_eq!(
+        session_count, 0,
+        "prerequisite failure must not persist a session"
+    );
+    let datasets = fixture.backend.datasets.lock().unwrap();
+    assert!(datasets
+        .iter()
+        .all(|dataset| !dataset.starts_with("diskless/images/")));
+    drop(datasets);
+    assert!(fixture.iscsi.target.lock().unwrap().is_none());
+}
+
+#[tokio::test]
+async fn file_lun_verification_failure_rolls_back_target_and_draft() {
+    let fixture = fixture().await;
+    fixture
+        .iscsi
+        .fail_file_lun_verification
+        .store(true, Ordering::SeqCst);
+    let (status, error) = fixture
+        .management(
+            "POST",
+            &format!("/api/clients/{}/installation-sessions", fixture.client_id),
+            Some(json!({"recipe": "interactive", "confirm_erase": true})),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::CONFLICT, "unexpected response: {error}");
+    assert!(error["message"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("failed to create verified installer target"));
+    assert!(fixture.iscsi.target.lock().unwrap().is_none());
+    {
+        let datasets = fixture.backend.datasets.lock().unwrap();
+        assert!(datasets
+            .iter()
+            .all(|dataset| !dataset.starts_with("diskless/images/")));
+    }
+    let session_id: String = sqlx::query_scalar("SELECT id FROM installation_sessions LIMIT 1")
+        .fetch_one(&fixture.state.db_pool)
+        .await
+        .expect("failed session remains recorded for audit");
+    let (state, _, _) = fixture.session(&session_id).await;
+    assert_eq!(state, "failed");
 }
 
 #[tokio::test]
