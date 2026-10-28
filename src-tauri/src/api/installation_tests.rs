@@ -148,6 +148,8 @@ struct FakeIscsi {
     active_session: AtomicBool,
     file_lun_verified: AtomicBool,
     fail_file_lun_verification: AtomicBool,
+    /// Backstores detached by an explicit ownership-scoped removal.
+    removed_backstores: Mutex<Vec<String>>,
 }
 
 impl IscsiProvisioner for FakeIscsi {
@@ -166,7 +168,11 @@ impl IscsiProvisioner for FakeIscsi {
         *self.target.lock().unwrap() = None;
         Ok(())
     }
-    fn remove_target_with_backstores(&self, _: &str, _: &[String]) -> anyhow::Result<()> {
+    fn remove_target_with_backstores(&self, _: &str, backstores: &[String]) -> anyhow::Result<()> {
+        self.removed_backstores
+            .lock()
+            .unwrap()
+            .extend(backstores.iter().cloned());
         *self.target.lock().unwrap() = None;
         Ok(())
     }
@@ -1476,6 +1482,245 @@ async fn winpe_adaptation_selects_a_checksummed_catalog_driver_bundle() {
             .await
             .0,
         StatusCode::FORBIDDEN
+    );
+}
+
+/// A session that stopped without cleaning up (deadline expiry, installer
+/// failure) must be closable by an administrator once the client is off,
+/// removing its draft image and session-owned target.
+#[tokio::test]
+async fn stopped_session_cleanup_removes_the_draft_and_closes_the_session() {
+    let fixture = fixture().await;
+    let (id, _token) = prepared_session(&fixture).await;
+    let service = InstallationService::new(fixture.state.clone());
+    let session = service
+        .repository
+        .get(&id)
+        .await
+        .expect("session lookup")
+        .expect("session");
+    assert_eq!(session.state, "manual");
+    let draft = session.draft_image_id.clone().expect("draft image");
+    service
+        .repository
+        .transition(
+            &session,
+            "recovery_required",
+            session.progress,
+            "Installation phase deadline expired; verify the client is powered off before cleanup",
+        )
+        .await
+        .expect("deadline transition");
+
+    let (status, error) = fixture
+        .management(
+            "POST",
+            &format!("/api/installation-sessions/{id}/close-recovery"),
+            None,
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::OK, "close recovery failed: {error}");
+    assert_eq!(fixture.session(&id).await.0, "completed");
+    let remaining: Option<String> = sqlx::query_scalar("SELECT id FROM images WHERE id = ?")
+        .bind(&draft)
+        .fetch_optional(&fixture.state.db_pool)
+        .await
+        .expect("image lookup");
+    assert_eq!(remaining, None, "the session draft must be removed");
+    assert!(
+        fixture
+            .iscsi
+            .target
+            .lock()
+            .expect("target lock")
+            .as_ref()
+            .is_none_or(|target| target.target_iqn != session.target_iqn),
+        "the session target must be removed"
+    );
+}
+
+/// An interrupted cleanup that removed the session target but left its LUN
+/// backstores must still release them; a leftover backstore keeps the draft
+/// zvol open, so the draft could never be destroyed.
+#[tokio::test]
+async fn stopped_session_cleanup_releases_orphaned_lun_backstores() {
+    let fixture = fixture().await;
+    let (id, _token) = prepared_session(&fixture).await;
+    let service = InstallationService::new(fixture.state.clone());
+    let session = service
+        .repository
+        .get(&id)
+        .await
+        .expect("session lookup")
+        .expect("session");
+    let short = session
+        .target_iqn
+        .rsplit_once(":install.")
+        .map(|(_, short)| short.to_owned())
+        .expect("installation target naming");
+    // The target was deleted by an earlier attempt; only the backstores remain.
+    *fixture.iscsi.target.lock().expect("target lock") = None;
+    service
+        .repository
+        .transition(
+            &session,
+            "recovery_required",
+            session.progress,
+            "Installation phase deadline expired; verify the client is powered off before cleanup",
+        )
+        .await
+        .expect("deadline transition");
+
+    let (status, error) = fixture
+        .management(
+            "POST",
+            &format!("/api/installation-sessions/{id}/close-recovery"),
+            None,
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::OK, "close recovery failed: {error}");
+    let removed = fixture
+        .iscsi
+        .removed_backstores
+        .lock()
+        .expect("backstore log")
+        .clone();
+    for expected in [format!("install_{short}"), format!("install_media_{short}")] {
+        assert!(
+            removed.contains(&expected),
+            "{expected} was not released: {removed:?}"
+        );
+    }
+    assert_eq!(fixture.session(&id).await.0, "completed");
+}
+
+/// A cleanup failure is recorded on the session without replacing the real
+/// error with a rejected same-state transition.
+#[tokio::test]
+async fn cleanup_failure_is_recorded_without_a_state_transition() {
+    let fixture = fixture().await;
+    let (id, _token) = prepared_session(&fixture).await;
+    let service = InstallationService::new(fixture.state.clone());
+    let session = service
+        .repository
+        .get(&id)
+        .await
+        .expect("session lookup")
+        .expect("session");
+    service
+        .repository
+        .transition(&session, "recovery_required", session.progress, "deadline")
+        .await
+        .expect("deadline transition");
+
+    service
+        .repository
+        .record_cleanup_failure(&id, "Draft cleanup failed; resources remain reserved")
+        .await
+        .expect("failure recorded");
+
+    let (state, _, _) = fixture.session(&id).await;
+    assert_eq!(
+        state, "recovery_required",
+        "cleanup failure keeps the session stopped"
+    );
+    let (error, cleanup_state): (Option<String>, String) =
+        sqlx::query_as("SELECT error, cleanup_state FROM installation_sessions WHERE id = ?")
+            .bind(&id)
+            .fetch_one(&fixture.state.db_pool)
+            .await
+            .expect("session row");
+    assert_eq!(
+        error.as_deref(),
+        Some("Draft cleanup failed; resources remain reserved")
+    );
+    assert_eq!(cleanup_state, "failed");
+    let events: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM installation_events WHERE session_id = ? AND message = ?",
+    )
+    .bind(&id)
+    .bind("Draft cleanup failed; resources remain reserved")
+    .fetch_one(&fixture.state.db_pool)
+    .await
+    .expect("events");
+    assert_eq!(events, 1);
+}
+
+/// A failed preparation whose rollback already removed the draft image must
+/// still be closable: retrying cleanup has to be safe for resources that are
+/// already gone.
+#[tokio::test]
+async fn failed_session_whose_rollback_already_removed_the_draft_can_be_closed() {
+    let fixture = fixture().await;
+    let (id, _token) = prepared_session(&fixture).await;
+    let now = Utc::now().to_rfc3339();
+    sqlx::query("UPDATE installation_sessions SET state='failed', error=?, cleanup_state='complete', closed_at=?, token='', updated_at=? WHERE id=?")
+        .bind("Session target creation failed; preparation rollback was attempted")
+        .bind(&now)
+        .bind(&now)
+        .bind(&id)
+        .execute(&fixture.state.db_pool)
+        .await
+        .expect("failed session");
+    // The rollback removed the private draft and its dataset.
+    let removed = sqlx::query("DELETE FROM images WHERE id = (SELECT draft_image_id FROM installation_sessions WHERE id = ?)")
+        .bind(&id)
+        .execute(&fixture.state.db_pool)
+        .await
+        .expect("removed draft")
+        .rows_affected();
+    assert_eq!(removed, 1, "the draft row must be gone before cleanup");
+
+    let (status, error) = fixture
+        .management(
+            "POST",
+            &format!("/api/installation-sessions/{id}/close-recovery"),
+            None,
+        )
+        .await;
+
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "closing an already-rolled-back failure must succeed: {error}"
+    );
+}
+
+/// A configured TLS certificate must not move WinPE payloads onto `https://`:
+/// the generated Apache vhost serves boot files over plain HTTP, so an https
+/// URL fails the TLS handshake before wimboot is ever downloaded.
+#[tokio::test]
+async fn windows_boot_payload_uses_the_plain_http_boot_server() {
+    let fixture = fixture().await;
+    fixture.state.settings.write().await.http.tls_enabled = true;
+    let token = "f".repeat(64);
+    fixture
+        .insert_session("windows-plain-http", "media-a", "windows", &token)
+        .await;
+
+    let (status, script) = fixture
+        .scoped_get(
+            &format!("/api/installer/windows-plain-http/{token}/boot"),
+            CLIENT_IP,
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::OK, "{script}");
+    // WinPE kernel and initrd come from the Apache boot vhost, while the
+    // scoped payloads come from the enrollment listener that serves them.
+    assert!(
+        script.contains("kernel http://192.0.2.1:8080/boot/winpe/wimboot"),
+        "{script}"
+    );
+    assert!(
+        script.contains("initrd http://192.0.2.1:4237/api/installer/windows-plain-http/"),
+        "{script}"
+    );
+    assert!(
+        !script.contains("https://"),
+        "WinPE payloads must stay on the plain HTTP vhost: {script}"
     );
 }
 

@@ -168,6 +168,19 @@ mod tests {
     use super::render_apache_config;
     use crate::core::config::Settings;
 
+    /// The vhost above cannot terminate TLS, so a configured certificate must
+    /// never produce `https://` boot payload URLs: iPXE fails the handshake.
+    #[test]
+    fn boot_payload_urls_stay_on_the_plain_http_vhost() {
+        let mut settings = Settings::default();
+        settings.http.tls_enabled = true;
+
+        assert_eq!(settings.http.boot_base_url(), "http://192.168.1.250");
+
+        settings.http.port = 8081;
+        assert_eq!(settings.http.boot_base_url(), "http://192.168.1.250:8081");
+    }
+
     #[test]
     fn default_http_settings_do_not_require_tls_certificates() {
         let settings = Settings::default();

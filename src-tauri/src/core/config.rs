@@ -247,6 +247,22 @@ pub struct HttpConfig {
     pub tls_key_path: String,
 }
 
+impl HttpConfig {
+    /// Base URL of the boot-file web server that PXE payloads are fetched from.
+    ///
+    /// The generated Apache vhost is always plain HTTP (`services::http`), so a
+    /// configured TLS certificate must not turn these URLs into `https://`:
+    /// iPXE would then attempt a TLS handshake against the plaintext listener
+    /// and fail with a broken-pipe error before the WinPE kernel is fetched.
+    pub fn boot_base_url(&self) -> String {
+        if self.port == 80 {
+            format!("http://{}", self.server_ip)
+        } else {
+            format!("http://{}:{}", self.server_ip, self.port)
+        }
+    }
+}
+
 impl Default for HttpConfig {
     fn default() -> Self {
         Self {

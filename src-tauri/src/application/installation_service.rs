@@ -185,6 +185,21 @@ impl InstallationService {
             .map(|parent| parent.join("installer-bundles"))
             .unwrap_or_else(|| std::env::temp_dir().join("diskless-manager-installer-bundles"))
     }
+    /// Booted clients reach the scoped installer API on the enrollment
+    /// listener, not on the Apache vhost that serves kernel and initrd files.
+    fn installer_api_base(settings: &crate::core::config::Settings) -> String {
+        format!(
+            "http://{}:{}",
+            settings.http.server_ip,
+            crate::infrastructure::pxe::ENROLL_PORT
+        )
+    }
+    /// Cleanup failure bookkeeping must never replace the error it describes.
+    async fn record_cleanup_failure(&self, id: &str, message: &str) {
+        if let Err(error) = self.repository.record_cleanup_failure(id, message).await {
+            tracing::warn!(session_id = %id, %error, "failed to record installation cleanup failure");
+        }
+    }
     /// Driver bundles are disposable; failure to remove one must not block cleanup.
     async fn remove_adaptation_bundle(&self, id: &str) {
         let root = self.state.settings.read().await.http.root_dir.clone();
@@ -1124,25 +1139,25 @@ impl InstallationService {
                 let target = target.to_owned();
                 let storage = service.state.application.storage.clone();
                 if let Err(error) = tokio::task::spawn_blocking(move || storage.remove_owned_session_target(&target)).await? {
-                    service.repository.transition(&s, "recovery_required", s.progress, "Verification target cleanup failed; resources remain reserved").await?;
+                    service.record_cleanup_failure(&s.id, "Verification target cleanup failed; resources remain reserved").await;
                     return Err(error).context("verification target cleanup failed");
                 }
             }
             let target = s.target_iqn.clone();
             let storage = service.state.application.storage.clone();
             if let Err(error) = tokio::task::spawn_blocking(move || storage.remove_owned_session_target(&target)).await? {
-                service.repository.transition(&s, "recovery_required", s.progress, "Session target cleanup failed; resources remain reserved").await?;
+                service.record_cleanup_failure(&s.id, "Session target cleanup failed; resources remain reserved").await;
                 return Err(error).context("session target cleanup failed");
             }
             if let Some(candidate) = s.verification_image_id.as_deref() {
                 if let Err(error) = service.state.application.images.delete_session_image(candidate, "verifying").await {
-                    service.repository.transition(&s, "recovery_required", s.progress, "Verification image cleanup failed; resources remain reserved").await?;
+                    service.record_cleanup_failure(&s.id, "Verification image cleanup failed; resources remain reserved").await;
                     return Err(error).context("verification image cleanup failed");
                 }
             }
             if let (Some(draft), Some(snapshot)) = (s.draft_image_id.as_deref(), s.verification_snapshot.as_deref()) {
                 if let Err(error) = service.state.application.images.delete_session_snapshot(draft, snapshot).await {
-                    service.repository.transition(&s, "recovery_required", s.progress, "Draft snapshot cleanup failed; resources remain reserved").await?;
+                    service.record_cleanup_failure(&s.id, "Draft snapshot cleanup failed; resources remain reserved").await;
                     return Err(error).context("draft snapshot cleanup failed");
                 }
             }
@@ -1150,7 +1165,7 @@ impl InstallationService {
                 let image = service.state.application.images.get(draft).await?;
                 if image.status == "draft" {
                     if let Err(error) = service.state.application.images.delete_session_image(draft, "draft").await {
-                        service.repository.transition(&s, "recovery_required", s.progress, "Draft cleanup failed; resources remain reserved").await?;
+                        service.record_cleanup_failure(&s.id, "Draft cleanup failed; resources remain reserved").await;
                         return Err(error).context("draft image cleanup failed");
                     }
                 }
@@ -1167,21 +1182,14 @@ impl InstallationService {
             .parse::<IpAddr>()
             .context("boot server address must be an IP address")?
             .to_string();
-        let base = format!(
-            "{}://{}:{}",
-            if settings.http.tls_enabled {
-                "https"
-            } else {
-                "http"
-            },
-            settings.http.server_ip,
-            settings.http.port
-        );
+        let base = settings.http.boot_base_url();
+        let api = Self::installer_api_base(&settings);
         let config: serde_json::Value = serde_json::from_str(&s.config_json)?;
         let context = RenderContext {
             session: s,
             client: c,
             base: &base,
+            api: &api,
             server: &server,
             username: config["username"].as_str().unwrap_or(""),
             password_hash: config["password_hash"].as_str().unwrap_or(""),
@@ -1267,16 +1275,7 @@ impl InstallationService {
                 .await?;
         }
         let settings = self.state.settings.read().await.clone();
-        let base = format!(
-            "{}://{}:{}",
-            if settings.http.tls_enabled {
-                "https"
-            } else {
-                "http"
-            },
-            settings.http.server_ip,
-            settings.http.port
-        );
+        let base = Self::installer_api_base(&settings);
         Ok(json!({
             "driver_bundle_url": bundle.as_ref().map(|_| format!("{base}/api/installer/{id}/{token}/adaptation/drivers.zip")),
             "driver_bundle_sha256": bundle.as_ref().map(|bundle| bundle.sha256.clone()),
