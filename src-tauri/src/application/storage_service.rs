@@ -120,6 +120,18 @@ fn sanitize_client_id(client_id: &str) -> String {
 /// `"diskless/games/client-01-steam-games"`. A master basename that
 /// already ends in `-games` (the on-disk naming for created masters)
 /// is stripped first so the suffix is never doubled.
+/// Backstore names an installation session creates for its target
+/// (`iqn…:install.<short>`): the writable draft LUN and the read-only media
+/// LUN. Used to remove backstores whose target was already deleted.
+fn session_owned_backstores(target_iqn: &str) -> Vec<String> {
+    match target_iqn.rsplit_once(":install.") {
+        Some((_, short)) if !short.is_empty() => {
+            vec![format!("install_{short}"), format!("install_media_{short}")]
+        }
+        _ => Vec::new(),
+    }
+}
+
 pub fn game_clone_dataset(client_id: &str, master: &str) -> String {
     let parent = master.rfind('/').map(|index| &master[..index]);
     let mut base = master.rsplit('/').next().unwrap_or(master);
@@ -245,6 +257,21 @@ impl StorageService {
 
     pub fn clone_origin(&self, dataset: &str) -> Result<Option<String>> {
         self.image_backend.clone_origin(dataset)
+    }
+
+    /// Presence check for a dataset. Query failures stay errors so callers
+    /// never read unknown storage state as "absent".
+    pub fn volume_exists(&self, dataset: &str) -> Result<bool> {
+        self.image_backend
+            .exists(dataset)
+            .with_context(|| format!("failed to inspect storage volume '{dataset}'"))
+    }
+
+    /// Batched presence check; unknown state fails the whole query.
+    pub fn check_volume_presence(&self, datasets: &[String]) -> Result<Vec<bool>> {
+        self.image_backend
+            .check_presence(datasets)
+            .context("failed to inspect storage volumes")
     }
 
     /// Validate a Super-mode master before removing any existing client storage.
@@ -536,12 +563,29 @@ impl StorageService {
         self.iscsi.target_exists(target_iqn)
     }
 
+    /// Remove a session-owned target together with the LUN backstores created
+    /// for it. A leftover backstore holds the session's zvol open, so its draft
+    /// image could never be destroyed afterwards (ZFS reports "dataset is
+    /// busy"). Backstore names are derived from the session IQN because a
+    /// previous partial cleanup can leave them without their target.
     pub fn remove_owned_session_target(&self, target_iqn: &str) -> Result<()> {
         anyhow::ensure!(
             !crate::infrastructure::iscsi::target_has_active_sessions(target_iqn)?,
             "session target still has active initiators"
         );
-        if self.iscsi.target_exists(target_iqn)? {
+        let exists = self.iscsi.target_exists(target_iqn)?;
+        let mut backstores = self.iscsi.list_target_backstores(target_iqn)?;
+        if !exists {
+            backstores.extend(session_owned_backstores(target_iqn));
+            backstores.sort_unstable();
+            backstores.dedup();
+        }
+        if !backstores.is_empty() {
+            self.iscsi
+                .remove_target_with_backstores(target_iqn, &backstores)
+                .context("failed to remove session-owned LUN backstores")?;
+        }
+        if exists {
             self.iscsi
                 .remove_target(target_iqn)
                 .context("failed to remove session-owned target")?;
@@ -1884,6 +1928,18 @@ mod game_storage_tests {
         let target = StorageService::build_super_session_iscsi_spec(&spec, None).unwrap();
         assert_eq!(target.luns.len(), 1);
         assert_eq!(target.luns[0].lun, 0);
+    }
+
+    #[test]
+    fn session_backstore_names_are_derived_from_the_installation_target() {
+        assert_eq!(
+            super::session_owned_backstores("iqn.2024-01.com.diskless:install.8064def9acfd"),
+            vec!["install_8064def9acfd", "install_media_8064def9acfd"]
+        );
+        assert!(
+            super::session_owned_backstores("iqn.2024-01.com.diskless:client.pc001").is_empty()
+        );
+        assert!(super::session_owned_backstores("iqn.test:install.").is_empty());
     }
 
     #[test]

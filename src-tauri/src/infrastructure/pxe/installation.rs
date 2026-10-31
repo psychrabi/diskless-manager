@@ -146,7 +146,10 @@ pub async fn member_body(iso: &Path, member: &str) -> Result<Body> {
 
 pub struct RenderContext<'a> {
     pub session: &'a InstallationSession,
+    /// Origin of the Apache vhost that serves WinPE kernel and initrd files.
     pub base: &'a str,
+    /// Origin of the scoped installer API served by the enrollment listener.
+    pub api: &'a str,
     pub server: &'a str,
     pub client: &'a crate::domain::Client,
     pub username: &'a str,
@@ -156,7 +159,7 @@ impl RenderContext<'_> {
     pub fn url(&self) -> String {
         format!(
             "{}/api/installer/{}/{}",
-            self.base, self.session.id, self.session.token
+            self.api, self.session.id, self.session.token
         )
     }
     pub fn boot(&self) -> String {
@@ -207,7 +210,7 @@ impl RenderContext<'_> {
         } else {
             ""
         };
-        let verify_url = format!("{}/api/pxe/installation-verifications", self.base);
+        let verify_url = format!("{}/api/pxe/installation-verifications", self.api);
         for (key, value) in [
             ("@@VERIFY_URL@@", verify_url.as_str()),
             ("@@IQN@@", self.session.target_iqn.as_str()),

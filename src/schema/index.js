@@ -9,6 +9,16 @@ export const clientFeaturesSchema = z.object({
   enable_experimental_nvme_target: z.boolean().default(false),
 });
 
+// Mirrors the server-side SparePrewarmConfig validation bounds.
+export const storagePrewarmSchema = z.object({
+  spare_prewarm: z.object({
+    enabled: z.boolean().default(false),
+    max_ready_spares: z.coerce.number().int().min(0).max(64).default(2),
+    ttl_hours: z.coerce.number().int().min(1).max(168).default(24),
+    min_free_bytes: z.number().int().min(0).default(50 * 1024 ** 3),
+  }),
+});
+
 export const windowsServicingSchema = z.object({
   worker_host: z.string().default(""),
   worker_username: z.string().default(""),

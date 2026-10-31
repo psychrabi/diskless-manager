@@ -58,6 +58,7 @@ use crate::api::handlers::{
     },
     setup::{complete_setup, get_setup_status},
     ssh::{execute_ssh_command, get_windows_system_info, test_ssh_connection},
+    storage_spares::list_storage_spares,
     super_client::{
         delete_media, discard_super, enter_super, list_media, record_verification, save_super,
         set_media_default, super_status, upload_media,
@@ -481,6 +482,7 @@ fn system_routes() -> Router<AppState> {
         )
         .route("/api/system/ram-usage", get(get_ram_usage))
         .route("/api/system/zfs-arcstat", get(get_zfs_arcstat))
+        .route("/api/system/storage/spares", get(list_storage_spares))
         .route("/api/alarms", get(list_alarms))
         .route("/api/alarms/{id}/acknowledge", post(acknowledge_alarm))
         .route(

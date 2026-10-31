@@ -78,7 +78,7 @@ impl InstallationRepository {
         Self { pool }
     }
     pub async fn get(&self, id: &str) -> Result<Option<InstallationSession>> {
-        Ok(sqlx::query_as(SESSION_SELECT)
+        Ok(sqlx::query_as(&format!("{SESSION_SELECT} WHERE id=?"))
             .bind(id)
             .fetch_optional(&self.pool)
             .await?)
@@ -171,6 +171,29 @@ impl InstallationRepository {
             .bind(&now).bind(id).execute(&self.pool).await?;
         sqlx::query("INSERT INTO installation_events(session_id,state,progress,message,actor,created_at) SELECT id,state,progress,'Published cleanup step failed; session ownership remains reserved','server',? FROM installation_sessions WHERE id=? AND state='published' AND closed_at IS NULL")
             .bind(now).bind(id).execute(&self.pool).await?;
+        Ok(())
+    }
+    /// Record a cleanup failure on a stopped session without changing its
+    /// state. A transition to `recovery_required` is rejected when the session
+    /// is already in that state, and that rejection would otherwise replace
+    /// the real cleanup error with an unrelated transition error.
+    pub async fn record_cleanup_failure(&self, id: &str, message: &str) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        let message = message.chars().take(1024).collect::<String>();
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("UPDATE installation_sessions SET error=?,cleanup_state='failed',updated_at=? WHERE id=? AND closed_at IS NULL")
+            .bind(&message)
+            .bind(&now)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("INSERT INTO installation_events(session_id,state,progress,message,actor,created_at) SELECT id,state,progress,?,'server',? FROM installation_sessions WHERE id=? AND closed_at IS NULL")
+            .bind(&message)
+            .bind(&now)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
         Ok(())
     }
     pub async fn events(&self, id: &str) -> Result<Vec<InstallationEvent>> {
@@ -535,6 +558,29 @@ mod tests {
             ..Default::default()
         }
     }
+    /// Session lookups are scoped by id: a stale client operation must never
+    /// resolve to another client's session, and an unknown id is missing.
+    #[tokio::test]
+    async fn getting_a_session_returns_only_the_requested_row() {
+        let r = database().await;
+        let first = session();
+        r.insert(&first).await.unwrap();
+        let mut second = session();
+        second.id = "session-b".into();
+        second.client_id = "client-b".into();
+        second.token = "other-token".into();
+        r.insert(&second).await.unwrap();
+
+        let loaded = r.get("session-b").await.unwrap().expect("session-b exists");
+        assert_eq!(loaded.id, "session-b");
+        assert_eq!(loaded.client_id, "client-b");
+        assert_eq!(loaded.token, "other-token");
+        assert!(
+            r.get("session-missing").await.unwrap().is_none(),
+            "an unknown id must not resolve to another session"
+        );
+    }
+
     #[tokio::test]
     async fn cancellation_retains_ownership_and_stale_reports_cannot_revive_session() {
         let r = database().await;

@@ -60,6 +60,11 @@ pub async fn run() -> anyhow::Result<()> {
     let (api_shutdown_tx, api_shutdown_rx) = tokio::sync::oneshot::channel();
     let api_task = tokio::spawn(api_server.serve_with_shutdown(api_shutdown_rx));
     let lifecycle_task = tokio::spawn(crate::application::client_lifecycle::run(state.clone()));
+    // Prewarms replacement writebacks while clients are offline; disabled by
+    // default in settings, and it only ever creates job-owned spare clones.
+    let spare_task = tokio::spawn(crate::application::writeback_spare_service::run(
+        state.clone(),
+    ));
 
     // Dedicated PXE client enrollment listener. Bound to the LAN on its own
     // port (default 4237) so iPXE clients can register an unprovisioned
@@ -77,6 +82,7 @@ pub async fn run() -> anyhow::Result<()> {
     info!("Shutdown signal received");
     let _ = api_shutdown_tx.send(());
     lifecycle_task.abort();
+    spare_task.abort();
     enroll_task.abort();
     api_task
         .await

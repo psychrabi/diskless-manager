@@ -247,6 +247,22 @@ pub struct HttpConfig {
     pub tls_key_path: String,
 }
 
+impl HttpConfig {
+    /// Base URL of the boot-file web server that PXE payloads are fetched from.
+    ///
+    /// The generated Apache vhost is always plain HTTP (`services::http`), so a
+    /// configured TLS certificate must not turn these URLs into `https://`:
+    /// iPXE would then attempt a TLS handshake against the plaintext listener
+    /// and fail with a broken-pipe error before the WinPE kernel is fetched.
+    pub fn boot_base_url(&self) -> String {
+        if self.port == 80 {
+            format!("http://{}", self.server_ip)
+        } else {
+            format!("http://{}:{}", self.server_ip, self.port)
+        }
+    }
+}
+
 impl Default for HttpConfig {
     fn default() -> Self {
         Self {
@@ -358,6 +374,41 @@ impl Default for SambaConfig {
 pub struct StorageConfig {
     pub images_dir: PathBuf,
     pub snapshots_dir: PathBuf,
+    pub spare_prewarm: SparePrewarmConfig,
+}
+
+/// Prewarmed replacement writebacks, disabled until an administrator opts in.
+///
+/// Spares are job-owned clones that only become boot storage through the
+/// journaled adoption path; they never represent a client's active disk.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SparePrewarmConfig {
+    pub enabled: bool,
+    /// Maximum number of ready spares kept pool-wide.
+    pub max_ready_spares: u32,
+    /// Age at which an unused spare is discarded.
+    pub ttl_hours: u32,
+    /// Pool free-space floor that blocks new spare builds.
+    pub min_free_bytes: u64,
+}
+
+impl Default for SparePrewarmConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_ready_spares: 2,
+            ttl_hours: 24,
+            min_free_bytes: 50 * 1024 * 1024 * 1024,
+        }
+    }
+}
+
+impl SparePrewarmConfig {
+    /// Largest ready-spare count accepted by settings validation.
+    pub const MAX_READY_LIMIT: u32 = 64;
+    /// Longest accepted spare lifetime, in hours.
+    pub const MAX_TTL_HOURS: u32 = 168;
 }
 
 /// Upload limits for managed installer ISO media.
@@ -390,6 +441,7 @@ impl Default for StorageConfig {
         Self {
             images_dir: PathBuf::from("/var/lib/diskless/images"),
             snapshots_dir: PathBuf::from("/var/lib/diskless/snapshots"),
+            spare_prewarm: SparePrewarmConfig::default(),
         }
     }
 }
@@ -403,6 +455,16 @@ impl Settings {
         anyhow::ensure!(
             self.installer_media.request_body_limit() > self.installer_media.max_upload_bytes,
             "installer media upload maximum leaves no room for multipart overhead"
+        );
+        anyhow::ensure!(
+            self.storage.spare_prewarm.max_ready_spares <= SparePrewarmConfig::MAX_READY_LIMIT,
+            "spare prewarm limit must not exceed {} ready spares",
+            SparePrewarmConfig::MAX_READY_LIMIT
+        );
+        anyhow::ensure!(
+            (1..=SparePrewarmConfig::MAX_TTL_HOURS).contains(&self.storage.spare_prewarm.ttl_hours),
+            "spare prewarm TTL must be between 1 and {} hours",
+            SparePrewarmConfig::MAX_TTL_HOURS
         );
         crate::validation::validate_boot_root(&self.http.root_dir)?;
         crate::validation::validate_boot_root(&self.tftp.root_dir)?;
@@ -455,6 +517,42 @@ mod compatibility_tests {
             loaded.client_lifecycle.non_persistent_reset_delay_minutes,
             15
         );
+    }
+
+    #[test]
+    fn spare_prewarm_is_disabled_by_default_and_survives_legacy_settings() {
+        let settings: Settings = serde_json::from_str("{}").unwrap();
+        assert!(!settings.storage.spare_prewarm.enabled);
+        assert_eq!(settings.storage.spare_prewarm.max_ready_spares, 2);
+        assert_eq!(settings.storage.spare_prewarm.ttl_hours, 24);
+        assert!(settings.storage.spare_prewarm.min_free_bytes > 0);
+        assert!(settings.validate().is_ok());
+
+        let enabled: Settings = serde_json::from_value(serde_json::json!({
+            "storage": { "spare_prewarm": { "enabled": true, "max_ready_spares": 4 } }
+        }))
+        .unwrap();
+        assert!(enabled.storage.spare_prewarm.enabled);
+        assert_eq!(enabled.storage.spare_prewarm.max_ready_spares, 4);
+        // Untouched sibling paths keep their defaults.
+        assert_eq!(
+            enabled.storage.snapshots_dir,
+            Settings::default().storage.snapshots_dir
+        );
+    }
+
+    #[test]
+    fn spare_prewarm_rejects_unsafe_limits() {
+        for (limit, ttl) in [(65, 24), (1, 0), (1, 169)] {
+            let settings: Settings = serde_json::from_value(serde_json::json!({
+                "storage": { "spare_prewarm": { "max_ready_spares": limit, "ttl_hours": ttl } }
+            }))
+            .unwrap();
+            assert!(
+                settings.validate().is_err(),
+                "limit={limit} ttl={ttl} must be rejected"
+            );
+        }
     }
 
     #[test]
