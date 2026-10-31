@@ -14,6 +14,7 @@ pub mod provisioning_service;
 pub mod services;
 pub mod storage_service;
 pub mod super_client_service;
+pub mod writeback_spare_service;
 
 pub use boot_history_service::BootHistoryService;
 pub use client_service::ClientService;

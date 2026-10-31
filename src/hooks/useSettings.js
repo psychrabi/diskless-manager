@@ -202,6 +202,10 @@ export const useSettings = () => {
       section: "client_lifecycle", config, toastTitle: "Client Storage Lifecycle",
       successMessage: "Offline deletion delay saved",
     }),
+    updateStoragePrewarm: (config) => updateSettingsSection({
+      section: "storage", config, toastTitle: "Storage Prewarming",
+      successMessage: "Writeback prewarming settings saved",
+    }),
     updateWindowsServicing: (config) => updateSettingsSection({
       section: "windows_servicing", config, toastTitle: "Windows Servicing",
       successMessage: "Windows servicing worker settings saved",

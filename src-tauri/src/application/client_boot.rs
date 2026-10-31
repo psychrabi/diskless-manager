@@ -313,6 +313,13 @@ pub async fn ensure_client_boot_ready(
             )
         }
         _ => {
+            // A prewarmed spare may satisfy this boot; the normal additive
+            // readiness below still validates and exposes the result. A bad
+            // or missing spare is never allowed to block a safe boot.
+            let adopted = crate::application::writeback_spare_service::try_consume_for_boot(
+                state, &client, &spec,
+            )
+            .await?;
             let storage = state.application.storage.clone();
             let desired = spec.clone();
             let storage_started = std::time::Instant::now();
@@ -320,6 +327,7 @@ pub async fn ensure_client_boot_ready(
                 .await??;
             tracing::info!(
                 client_id = id.as_str(),
+                adopted_spare = adopted,
                 elapsed_ms = storage_started.elapsed().as_millis(),
                 "PXE storage readiness ensured"
             );

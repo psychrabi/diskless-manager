@@ -10,6 +10,7 @@ import { getServiceIcon } from "@/constants/serviceIcons";
 const UPDATE_MAP = {
   client_lifecycle: "updateClientLifecycle",
   client_features: "updateClientFeatures",
+  storage: "updateStoragePrewarm",
   windows_servicing: "updateWindowsServicing",
   dhcp: "updateDhcp",
   tftp: "updateTftp",
@@ -23,6 +24,14 @@ const DEFAULT_VALUES = {
   client_features: {
     enable_chap_authentication: false,
     enable_experimental_nvme_target: false,
+  },
+  storage: {
+    spare_prewarm: {
+      enabled: false,
+      max_ready_spares: 2,
+      ttl_hours: 24,
+      min_free_bytes: 50 * 1024 ** 3,
+    },
   },
   windows_servicing: {
     worker_host: "",
@@ -67,6 +76,7 @@ const ConfigForm = ({ schema, section, title, FormComponent }) => {
   const sectionKey = {
     client_lifecycle: "Client Reset",
     client_features: "Client Features",
+    storage: "Storage",
     windows_servicing: "Windows Servicing",
   }[section] || section.charAt(0).toUpperCase() + section.slice(1);
 

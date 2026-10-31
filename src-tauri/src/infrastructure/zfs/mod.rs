@@ -19,7 +19,7 @@ pub mod provider;
 pub use clone::ZfsCloneOperations;
 pub use command::ZfsCommand;
 pub use dataset::ZfsDatasetOperations;
-pub use pool::{list_pool_health, ZpoolHealth};
+pub use pool::{list_pool_health, pool_free_bytes, ZpoolHealth};
 pub use snapshot::ZfsSnapshotOperations;
 pub use volume::ZfsVolumeOperations;
 

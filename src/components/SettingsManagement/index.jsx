@@ -11,15 +11,17 @@ import ISCSIForm from "./Forms/ISCSIForm";
 import BootProcessOverview from "./BootProcessOverview";
 import EnrollmentControl from "./EnrollmentControl";
 import NetworkConfig from "./NetworkConfig";
-import { clientFeaturesSchema, clientLifecycleSchema, windowsServicingSchema } from "@/schema";
+import { clientFeaturesSchema, clientLifecycleSchema, storagePrewarmSchema, windowsServicingSchema } from "@/schema";
 import ClientLifecycleForm from "./Forms/ClientLifecycleForm";
 import ClientFeaturesForm from "./Forms/ClientFeaturesForm";
+import StoragePrewarmForm from "./Forms/StoragePrewarmForm";
 import WindowsServicingForm from "./Forms/WindowsServicingForm";
 import IscsiBackendSetting from "./IscsiBackendSetting";
 
 const SECTIONS = [
   { section: "client_lifecycle", title: "Client Reset", schema: clientLifecycleSchema, Form: ClientLifecycleForm },
   { section: "client_features", title: "Client Features", schema: clientFeaturesSchema, Form: ClientFeaturesForm },
+  { section: "storage", title: "Storage Prewarming", schema: storagePrewarmSchema, Form: StoragePrewarmForm },
   { section: "windows_servicing", title: "Windows Servicing", schema: windowsServicingSchema, Form: WindowsServicingForm },
   { section: "dhcp", title: "DHCP Server", schema: dhcpSchema, Form: DHCPForm },
   { section: "tftp", title: "TFTP", schema: tftpSchema, Form: TFTPForm },

@@ -259,6 +259,21 @@ impl StorageService {
         self.image_backend.clone_origin(dataset)
     }
 
+    /// Presence check for a dataset. Query failures stay errors so callers
+    /// never read unknown storage state as "absent".
+    pub fn volume_exists(&self, dataset: &str) -> Result<bool> {
+        self.image_backend
+            .exists(dataset)
+            .with_context(|| format!("failed to inspect storage volume '{dataset}'"))
+    }
+
+    /// Batched presence check; unknown state fails the whole query.
+    pub fn check_volume_presence(&self, datasets: &[String]) -> Result<Vec<bool>> {
+        self.image_backend
+            .check_presence(datasets)
+            .context("failed to inspect storage volumes")
+    }
+
     /// Validate a Super-mode master before removing any existing client storage.
     ///
     /// `dataset` must be an existing managed volume with no local mounts.

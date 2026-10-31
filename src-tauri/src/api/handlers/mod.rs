@@ -29,6 +29,7 @@ pub mod reconciliation;
 pub mod services;
 pub mod setup;
 pub mod ssh;
+pub mod storage_spares;
 pub mod super_client;
 pub mod system;
 pub mod system_reconciliation;
