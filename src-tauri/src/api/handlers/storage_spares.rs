@@ -22,6 +22,8 @@ pub struct SpareView {
     pub age_seconds: i64,
     pub ready: bool,
     pub last_error: Option<String>,
+    /// Consecutive failed build or cleanup attempts, reset by a successful build.
+    pub failures: i64,
 }
 
 /// Read-only prewarming status: which spares exist, their age, and the limits
@@ -81,6 +83,7 @@ pub async fn list_storage_spares(
                 age_seconds: now.saturating_sub(spare.created_at),
                 ready: spare.status == SpareStatus::Ready,
                 last_error: spare.last_error,
+                failures: spare.failures,
             })
             .collect(),
     }))
@@ -149,5 +152,6 @@ mod tests {
         assert_eq!(body["spares"][0]["client_name"], "PC001");
         assert_eq!(body["spares"][0]["status"], "ready");
         assert!(body["spares"][0]["age_seconds"].as_i64().unwrap() >= 30);
+        assert_eq!(body["spares"][0]["failures"], 0);
     }
 }

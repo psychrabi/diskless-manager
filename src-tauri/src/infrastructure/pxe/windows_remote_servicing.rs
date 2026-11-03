@@ -52,6 +52,9 @@ pub struct RemoteWindowsServicingCapabilities {
     pub nic_collection: bool,
     #[serde(default)]
     pub local_nic_installation: bool,
+    /// Worker can apply an offline personalization plan to a job-owned volume.
+    #[serde(default)]
+    pub personalization: bool,
 }
 
 #[derive(Debug, Clone)]

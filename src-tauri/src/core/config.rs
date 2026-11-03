@@ -82,12 +82,29 @@ pub struct ClientFeaturesConfig {
 pub struct ClientLifecycleConfig {
     #[serde(deserialize_with = "deserialize_reset_delay")]
     pub non_persistent_reset_delay_minutes: u32,
+    /// Window during which a boot that has not yet opened an OS session is not
+    /// an offline client. iPXE closes its iSCSI session before the kernel or
+    /// Windows opens its own, so without this the reset timer would start
+    /// mid-boot and could delete the volume being booted.
+    #[serde(deserialize_with = "deserialize_handoff_seconds")]
+    pub boot_handoff_seconds: u32,
+}
+
+impl ClientLifecycleConfig {
+    /// Shortest accepted boot handoff window.
+    pub const MIN_BOOT_HANDOFF_SECONDS: u32 = 30;
+    /// Longest accepted boot handoff window; a boot past this is a failure.
+    pub const MAX_BOOT_HANDOFF_SECONDS: u32 = 900;
+    /// Conservative default: long enough for the iPXE-to-Windows gap on slow
+    /// hardware and short enough that a halted boot is still reported promptly.
+    pub const DEFAULT_BOOT_HANDOFF_SECONDS: u32 = 300;
 }
 
 impl Default for ClientLifecycleConfig {
     fn default() -> Self {
         Self {
             non_persistent_reset_delay_minutes: 5,
+            boot_handoff_seconds: Self::DEFAULT_BOOT_HANDOFF_SECONDS,
         }
     }
 }
@@ -128,6 +145,23 @@ fn deserialize_reset_delay<'de, D: serde::Deserializer<'de>>(
         ));
     }
     Ok(minutes)
+}
+
+fn deserialize_handoff_seconds<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<u32, D::Error> {
+    let seconds = u32::deserialize(deserializer)?;
+    if !(ClientLifecycleConfig::MIN_BOOT_HANDOFF_SECONDS
+        ..=ClientLifecycleConfig::MAX_BOOT_HANDOFF_SECONDS)
+        .contains(&seconds)
+    {
+        return Err(serde::de::Error::custom(format!(
+            "boot handoff window must be between {} and {} seconds",
+            ClientLifecycleConfig::MIN_BOOT_HANDOFF_SECONDS,
+            ClientLifecycleConfig::MAX_BOOT_HANDOFF_SECONDS
+        )));
+    }
+    Ok(seconds)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -375,6 +409,8 @@ pub struct StorageConfig {
     pub images_dir: PathBuf,
     pub snapshots_dir: PathBuf,
     pub spare_prewarm: SparePrewarmConfig,
+    pub retention: RetentionConfig,
+    pub maintenance: MaintenanceConfig,
 }
 
 /// Prewarmed replacement writebacks, disabled until an administrator opts in.
@@ -411,6 +447,73 @@ impl SparePrewarmConfig {
     pub const MAX_TTL_HOURS: u32 = 168;
 }
 
+/// Image-snapshot retention, disabled until an administrator opts in.
+///
+/// Planning is always available; `dry_run` stays the default so enabling the
+/// feature cannot delete anything before a plan has been reviewed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RetentionConfig {
+    pub enabled: bool,
+    /// Record the plan without destroying snapshots.
+    pub dry_run: bool,
+    /// Newest snapshots per image that are always kept.
+    pub min_keep_snapshots: u32,
+    /// Minimum age before a snapshot can be proposed.
+    pub min_age_hours: u32,
+}
+
+impl Default for RetentionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            dry_run: true,
+            min_keep_snapshots: 3,
+            min_age_hours: 168,
+        }
+    }
+}
+
+impl RetentionConfig {
+    /// Largest snapshot count retention may be told to keep per image.
+    pub const MAX_KEEP_SNAPSHOTS: u32 = 100;
+    /// Longest accepted minimum age, in hours (one year).
+    pub const MAX_MIN_AGE_HOURS: u32 = 8760;
+}
+
+/// Scheduled ZFS scrub/TRIM, disabled until an administrator opts in.
+///
+/// Scheduling is opt-in; a manual run from the storage card is always allowed
+/// but never starts while another scan is active.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MaintenanceConfig {
+    pub enabled: bool,
+    pub scrub_interval_days: u32,
+    pub trim_interval_days: u32,
+    /// Inclusive start hour (0-23) of the off-hours window.
+    pub window_start_hour: u32,
+    /// Exclusive end hour (0-23); may wrap past midnight.
+    pub window_end_hour: u32,
+}
+
+impl Default for MaintenanceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            scrub_interval_days: 30,
+            trim_interval_days: 7,
+            window_start_hour: 2,
+            window_end_hour: 5,
+        }
+    }
+}
+
+impl MaintenanceConfig {
+    /// Largest accepted interval between automatic runs.
+    pub const MAX_INTERVAL_DAYS: u32 = 365;
+}
+
 /// Upload limits for managed installer ISO media.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -442,6 +545,8 @@ impl Default for StorageConfig {
             images_dir: PathBuf::from("/var/lib/diskless/images"),
             snapshots_dir: PathBuf::from("/var/lib/diskless/snapshots"),
             spare_prewarm: SparePrewarmConfig::default(),
+            retention: RetentionConfig::default(),
+            maintenance: MaintenanceConfig::default(),
         }
     }
 }
@@ -465,6 +570,44 @@ impl Settings {
             (1..=SparePrewarmConfig::MAX_TTL_HOURS).contains(&self.storage.spare_prewarm.ttl_hours),
             "spare prewarm TTL must be between 1 and {} hours",
             SparePrewarmConfig::MAX_TTL_HOURS
+        );
+        anyhow::ensure!(
+            self.storage.retention.min_keep_snapshots <= RetentionConfig::MAX_KEEP_SNAPSHOTS,
+            "retention must keep at most {} snapshots per image",
+            RetentionConfig::MAX_KEEP_SNAPSHOTS
+        );
+        anyhow::ensure!(
+            (1..=RetentionConfig::MAX_MIN_AGE_HOURS)
+                .contains(&self.storage.retention.min_age_hours),
+            "retention minimum age must be between 1 and {} hours",
+            RetentionConfig::MAX_MIN_AGE_HOURS
+        );
+        anyhow::ensure!(
+            (1..=MaintenanceConfig::MAX_INTERVAL_DAYS)
+                .contains(&self.storage.maintenance.scrub_interval_days),
+            "scrub interval must be between 1 and {} days",
+            MaintenanceConfig::MAX_INTERVAL_DAYS
+        );
+        anyhow::ensure!(
+            (1..=MaintenanceConfig::MAX_INTERVAL_DAYS)
+                .contains(&self.storage.maintenance.trim_interval_days),
+            "TRIM interval must be between 1 and {} days",
+            MaintenanceConfig::MAX_INTERVAL_DAYS
+        );
+        anyhow::ensure!(
+            self.storage.maintenance.window_start_hour < 24
+                && self.storage.maintenance.window_end_hour < 24
+                && self.storage.maintenance.window_start_hour
+                    != self.storage.maintenance.window_end_hour,
+            "maintenance window hours must be between 0 and 23 and must differ"
+        );
+        anyhow::ensure!(
+            (ClientLifecycleConfig::MIN_BOOT_HANDOFF_SECONDS
+                ..=ClientLifecycleConfig::MAX_BOOT_HANDOFF_SECONDS)
+                .contains(&self.client_lifecycle.boot_handoff_seconds),
+            "boot handoff window must be between {} and {} seconds",
+            ClientLifecycleConfig::MIN_BOOT_HANDOFF_SECONDS,
+            ClientLifecycleConfig::MAX_BOOT_HANDOFF_SECONDS
         );
         crate::validation::validate_boot_root(&self.http.root_dir)?;
         crate::validation::validate_boot_root(&self.tftp.root_dir)?;

@@ -53,6 +53,7 @@
     "lightningcss": "^1.33.0",
     "oxc-transform-react": "^0.155.0",
     "oxlint": "^1.89.0",
+    "typescript": "^7.0.2",
     "vite": "^8.3.5",
     "vitest": "^5.0.5"
   }

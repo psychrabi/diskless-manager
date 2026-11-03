@@ -8,6 +8,7 @@ use super::windows_inf::{
     associated_service_names_for_architecture, boot_service_profiles_for_architecture,
     inspect_inf_file, InfBootService,
 };
+use super::windows_personalization::{WindowsPersonalizationOutcome, WindowsPersonalizationPlan};
 use super::{WindowsBootArmConfig, WindowsBootArmResult, WindowsBootArmer, WindowsDriverInjector};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -63,6 +64,10 @@ pub struct WindowsImagePreparationRequest {
     pub reporter: Option<WindowsReporterInstallConfig>,
     #[serde(default)]
     pub driver_install_strategy: WindowsDriverInstallStrategy,
+    /// Opt-in identity, network and drive-letter cleanup for this clone. Only
+    /// offline volume servicing applies it; the source image is never edited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub personalization: Option<WindowsPersonalizationPlan>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,6 +80,9 @@ pub struct WindowsImagePreparationResult {
     pub drivers_added: usize,
     pub boot_arm: WindowsBootArmResult,
     pub committed: bool,
+    /// Diff and apply status when the request carried a personalization plan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub personalization: Option<WindowsPersonalizationOutcome>,
 }
 
 #[derive(Debug, Clone)]
@@ -186,6 +194,7 @@ impl WindowsImagePreparer {
             drivers_added,
             boot_arm,
             committed: request.commit,
+            personalization: None,
         })
     }
 
@@ -194,14 +203,23 @@ impl WindowsImagePreparer {
         request: WindowsImagePreparationRequest,
         allow_empty_drivers: bool,
     ) -> Result<WindowsImagePreparationResult> {
-        if request.iscsi.is_some() || !request.image_path.is_dir() || !request.driver_root.is_dir()
-        {
+        if request.iscsi.is_some() || !request.image_path.is_dir() {
+            bail!("an offline Windows volume is required");
+        }
+        // A personalization-only run carries no driver folder: the clone keeps
+        // its installed drivers and only its identity is edited.
+        let drivers_supplied = request.driver_root.is_dir();
+        let personalization_only = !drivers_supplied && request.personalization.is_some();
+        if !drivers_supplied && !personalization_only {
             bail!("offline Windows volume and driver directories are required");
         }
         let architecture = windows_image_architecture(&request.image_path)?;
-        let selected =
-            selected_driver_services(&request.driver_root, request.recursive, architecture)?;
-        ensure_driver_selection(&selected, allow_empty_drivers)?;
+        let selected = if drivers_supplied {
+            selected_driver_services(&request.driver_root, request.recursive, architecture)?
+        } else {
+            Vec::new()
+        };
+        ensure_driver_selection(&selected, allow_empty_drivers || personalization_only)?;
         let system_hive = find_system_hive(&request.image_path)?;
         let live_hive =
             PathBuf::from(std::env::var_os("SystemRoot").context("SystemRoot is not set")?)
@@ -240,6 +258,19 @@ impl WindowsImagePreparer {
             &selected,
             &profiles,
         )?;
+        // Identity and network personalization runs after boot arming so a
+        // failure leaves the boot contract in place, and before the reporter is
+        // installed so the reported identity matches the personalized one.
+        // A dry run returns the diff without writing.
+        let personalization = match request.personalization.as_ref() {
+            Some(plan) => Some(super::windows_personalization::apply(
+                &system_hive,
+                plan,
+                request.boot_arm.allow_dirty_hive,
+                request.commit,
+            )?),
+            None => None,
+        };
         if request.driver_install_strategy == WindowsDriverInstallStrategy::NexbootBootTime {
             super::windows_nexboot_adaptation::stage(
                 &request.image_path,
@@ -261,6 +292,7 @@ impl WindowsImagePreparer {
             drivers_added,
             boot_arm,
             committed: request.commit,
+            personalization,
         })
     }
 }
@@ -490,6 +522,9 @@ fn missing_service_profiles(
         allow_dirty_hive,
     } = request;
     let inventory = armer.inspect_with_policy(hive, selected, allow_dirty_hive)?;
+    if selected.is_empty() || !drivers.is_dir() {
+        return Ok(Vec::new());
+    }
     let missing: BTreeSet<_> = selected
         .iter()
         .filter(|s| {
@@ -626,6 +661,11 @@ pub fn servicing_available() -> bool {
 }
 
 fn validate_request(request: &WindowsImagePreparationRequest) -> Result<()> {
+    // A WIM is a master to be published, not a client volume: personalizing it
+    // would bake one client's identity into every clone of the image.
+    if request.personalization.is_some() {
+        bail!("personalization requires offline servicing of a job-owned Windows volume");
+    }
     if request.driver_install_strategy == WindowsDriverInstallStrategy::NexbootBootTime
         && !request.image_path.is_dir()
     {
@@ -731,6 +771,29 @@ fn find_case_insensitive_file(directory: &Path, name: &str) -> Result<Option<Pat
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn personalization_is_opt_in_and_refused_for_wim_masters() {
+        let mut request: WindowsImagePreparationRequest = serde_json::from_value(
+            serde_json::json!({"driver_root": "drivers", "image_path": "image.wim"}),
+        )
+        .unwrap();
+        assert!(request.personalization.is_none());
+        assert!(serde_json::to_value(&request)
+            .unwrap()
+            .get("personalization")
+            .is_none());
+
+        request.personalization = Some(WindowsPersonalizationPlan {
+            computer_name: Some("pc-01".into()),
+            ..Default::default()
+        });
+        let error = validate_request(&request).unwrap_err().to_string();
+        assert!(
+            error.contains("job-owned Windows volume"),
+            "a WIM master must never be personalized: {error}"
+        );
+    }
 
     #[test]
     fn dirty_hive_refused_before_service_inspection_can_load_it() {
@@ -897,6 +960,7 @@ mod tests {
             iscsi: None,
             reporter: None,
             driver_install_strategy: WindowsDriverInstallStrategy::OfflineDism,
+            personalization: None,
         };
 
         assert!(validate_request(&request)
@@ -923,6 +987,7 @@ mod tests {
             iscsi: None,
             reporter: None,
             driver_install_strategy: WindowsDriverInstallStrategy::NexbootBootTime,
+            personalization: None,
         };
 
         let error = validate_request(&request).unwrap_err();

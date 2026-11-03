@@ -89,9 +89,37 @@ replaces clone construction with a rename plus target reconciliation.
 
 ## Remaining work
 
+Opt-in lab procedure (not yet executed):
+`docs/superpowers/specs/2026-11-02-boot-handoff-prewarm-version-lab-validation.md`.
+
 1. Measure cold-boot stages with and without a ready spare on lab hardware
    (Windows 10/11, SATA/NVMe initiator), including a repeat boot.
 2. Apply offline Windows servicing to spares (handoff Phase 3) and include the
    serviced revision in the fingerprint.
-3. Surface spare status in the dashboard UI and add an alarm for repeated
-   build failures or a full ready-spare limit that never drains.
+3. Validate the dashboard and prewarm alarms during the lab boot sequence.
+
+## Phase 1 continuation: observability and retry reliability
+
+Continued from `0f22df416ba21d5c1c8ff99c6392cb2c3e3d22c5` on
+`feat/spare-prewarm-observability`, preserving the existing uncommitted
+dashboard, alarm, migration, and locking changes. No commits, push or
+deployment are part of this continuation.
+
+- The dashboard uses the existing admin-only spare endpoint to show readiness,
+  age, configured limits and failures, with refresh and error/retry controls.
+- Migration `0030_client_writeback_spare_failures.sql` adds a default-zero
+  consecutive failure counter. Repeated failed attempts must retain this
+  count across cleanup/retry; a successful build clears it.
+- Prewarm alarms report three or more consecutive failures and a full ready
+  limit whose newest spare is over six hours old. Disabling prewarming hides
+  these alarms; existing storage recovery alarms remain independent.
+- Background builds wait briefly for a client mutation lock, avoiding missed
+  opportunities when the lifecycle sweep holds it. The timeout covers the
+  entire acquisition, including the fleet gate and key registry; cancellation
+  releases any partially acquired guards.
+
+This remains a boot-writeback spare implementation: separate game-slot
+prewarming, a dedicated spare-byte budget, Windows personalization and real
+boot latency measurements are outstanding. Count limits and the pool free
+space floor are the currently implemented capacity controls. Do not interpret
+automated checks as completion of all Phase 1 hardware acceptance criteria.

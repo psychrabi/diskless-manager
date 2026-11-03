@@ -12,6 +12,7 @@ pub mod windows_image_preparation;
 pub mod windows_inf;
 pub mod windows_iscsi_servicing;
 pub mod windows_nexboot_adaptation;
+pub mod windows_personalization;
 pub mod windows_remote_servicing;
 
 pub use driver_injection::{
@@ -42,6 +43,7 @@ pub use windows_image_preparation::{
     WindowsImagePreparationRequest, WindowsImagePreparationResult, WindowsImagePreparer,
 };
 pub use windows_inf::{inspect_inf_file, parse_inf, WindowsInfMetadata};
+pub use windows_personalization::{WindowsPersonalizationDiff, WindowsPersonalizationPlan};
 
 pub use windows_remote_servicing::{
     RemoteWindowsCapabilitiesRequest, RemoteWindowsCatalogPreparationResult, RemoteWindowsServicer,

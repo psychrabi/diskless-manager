@@ -8,6 +8,8 @@ pub enum AlarmKind {
     StorageRecovery,
     Service,
     Pool,
+    SparePrewarm,
+    Maintenance,
 }
 
 impl std::fmt::Display for AlarmKind {
@@ -17,6 +19,8 @@ impl std::fmt::Display for AlarmKind {
             Self::StorageRecovery => write!(formatter, "storage_recovery"),
             Self::Service => write!(formatter, "service"),
             Self::Pool => write!(formatter, "pool"),
+            Self::SparePrewarm => write!(formatter, "spare_prewarm"),
+            Self::Maintenance => write!(formatter, "maintenance"),
         }
     }
 }

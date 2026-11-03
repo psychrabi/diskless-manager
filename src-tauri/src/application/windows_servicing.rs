@@ -47,6 +47,11 @@ pub struct ManagedWindowsPreparationRequest {
     pub boot_arm: WindowsBootArmConfig,
     #[serde(default)]
     pub driver_install_strategy: WindowsDriverInstallStrategy,
+    /// Opt-in identity, network and drive-letter cleanup applied offline to the
+    /// job-owned clone. `commit` decides whether it is written or only diffed.
+    #[serde(default)]
+    pub personalization:
+        Option<crate::infrastructure::pxe::windows_personalization::WindowsPersonalizationPlan>,
 }
 
 impl ManagedWindowsPreparationRequest {
@@ -86,6 +91,9 @@ impl ManagedWindowsPreparationRequest {
                     .as_deref()
                     .context("a report server URL is required for managed commits")?,
             )?;
+        }
+        if let Some(personalization) = &self.personalization {
+            personalization.validate()?;
         }
         Ok(())
     }
@@ -189,6 +197,11 @@ pub async fn prepare_managed(
         {
             bail!("the Windows worker does not advertise NexBoot boot-time support; install helper protocol version 3 or select Offline DISM");
         }
+        // Refuse before cloning: a worker that cannot personalize would leave
+        // the operator believing the published revision carries the identity.
+        if request.personalization.is_some() && !capabilities.personalization {
+            bail!("the Windows worker does not advertise offline personalization support; update the helper or remove the personalization plan");
+        }
         let created = images
             .clone_image(&source.id, &request.source_snapshot, &request.new_name)
             .await?;
@@ -238,6 +251,7 @@ pub async fn prepare_managed(
             }),
             reporter,
             driver_install_strategy: request.driver_install_strategy,
+            personalization: request.personalization.clone(),
         };
         let (preparation, count, bytes, cleaned) = if packages.is_empty() {
             let prepared = worker
@@ -786,6 +800,43 @@ mod tests {
         request.new_name = "new-image".into();
         request.portal = "0.0.0.0".into();
         assert!(request.validate().is_err());
+    }
+
+    #[test]
+    fn managed_requests_validate_the_personalization_plan_before_cloning() {
+        let mut request: ManagedWindowsPreparationRequest = serde_json::from_value(serde_json::json!({
+            "host":"worker", "username":"admin", "image_id":"image", "source_snapshot":"installed",
+            "new_name":"windows-serviced", "portal":"192.168.123.1", "driver_ids":["netkvm"]
+        })).unwrap();
+        assert!(request.personalization.is_none());
+        request.personalization = Some(Default::default());
+        assert!(
+            request
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("no change"),
+            "an empty plan must not be accepted as personalization"
+        );
+        request.personalization = Some(
+            serde_json::from_value(serde_json::json!({"computer_name": "pc with space"})).unwrap(),
+        );
+        assert!(request.validate().is_err());
+        request.personalization = Some(
+            serde_json::from_value(serde_json::json!({
+                "computer_name": "pc-lab-01",
+                "convert_static_ipv4_to_dhcp": true,
+                "clear_stale_drive_letters": true
+            }))
+            .unwrap(),
+        );
+        assert!(request.validate().is_ok());
+        // Without a computer name the plan is only network and drive-letter
+        // cleanup, which is still a change.
+        request.personalization = Some(
+            serde_json::from_value(serde_json::json!({"clear_stale_drive_letters": true})).unwrap(),
+        );
+        assert!(request.validate().is_ok());
     }
 
     #[test]

@@ -65,3 +65,4 @@ docs/superpowers/plans/*
 **/target/
 tools/windows-servicer/target/
 
+release/*

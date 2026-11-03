@@ -34,6 +34,36 @@ export async function saveSettings(settings) {
   });
 }
 
+/** Read-only image-retention plan; it never deletes anything. */
+export async function getRetentionPlan() {
+  return apiRequest("/api/system/storage/retention");
+}
+
+/** Pool health, active scan, SMART and maintenance history. */
+export async function getMaintenanceStatus(refresh = false) {
+  return apiRequest(`/api/system/storage/maintenance${refresh ? "?refresh=true" : ""}`);
+}
+
+/** Start a manual scrub or TRIM; refused while another scan is active. */
+export async function startMaintenance(operation) {
+  return apiRequest("/api/system/storage/maintenance/start", {
+    method: "POST",
+    body: JSON.stringify({ operation }),
+  });
+}
+
+export async function stopMaintenance() {
+  return apiRequest("/api/system/storage/maintenance/stop", { method: "POST" });
+}
+
+/** Run retention according to its configuration; `confirm` gates destruction. */
+export async function runRetention(confirm) {
+  return apiRequest("/api/system/storage/retention/run", {
+    method: "POST",
+    body: JSON.stringify({ confirm }),
+  });
+}
+
 export async function openEnrollment(minutes) {
   return apiRequest("/api/system/enrollment/open", {
     method: "POST",
@@ -64,4 +94,8 @@ export async function getRamUsage() {
 
 export async function getZfsArcstat() {
   return apiRequest("/api/system/zfs-arcstat");
+}
+
+export async function getStorageSpares() {
+  return apiRequest("/api/system/storage/spares");
 }

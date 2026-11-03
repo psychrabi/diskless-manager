@@ -15,6 +15,19 @@ const defaults = {
     ttl_hours: 24,
     min_free_bytes: 50 * GIB,
   },
+  retention: {
+    enabled: false,
+    dry_run: true,
+    min_keep_snapshots: 3,
+    min_age_hours: 168,
+  },
+  maintenance: {
+    enabled: false,
+    scrub_interval_days: 30,
+    trim_interval_days: 7,
+    window_start_hour: 2,
+    window_end_hour: 5,
+  },
 };
 
 function Harness({ onSave }) {
@@ -59,6 +72,19 @@ describe("StoragePrewarmForm", () => {
         ttl_hours: 24,
         min_free_bytes: 50 * GIB,
       },
+      retention: {
+        enabled: false,
+        dry_run: true,
+        min_keep_snapshots: 3,
+        min_age_hours: 168,
+      },
+      maintenance: {
+        enabled: false,
+        scrub_interval_days: 30,
+        trim_interval_days: 7,
+        window_start_hour: 2,
+        window_end_hour: 5,
+      },
     });
   });
 
@@ -88,6 +114,19 @@ describe("StoragePrewarmForm", () => {
         max_ready_spares: 4,
         ttl_hours: 24,
         min_free_bytes: 10 * GIB,
+      },
+      retention: {
+        enabled: false,
+        dry_run: true,
+        min_keep_snapshots: 3,
+        min_age_hours: 168,
+      },
+      maintenance: {
+        enabled: false,
+        scrub_interval_days: 30,
+        trim_interval_days: 7,
+        window_start_hour: 2,
+        window_end_hour: 5,
       },
     });
   });

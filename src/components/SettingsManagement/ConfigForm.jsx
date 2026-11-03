@@ -20,7 +20,7 @@ const UPDATE_MAP = {
 };
 
 const DEFAULT_VALUES = {
-  client_lifecycle: { non_persistent_reset_delay_minutes: 5 },
+  client_lifecycle: { non_persistent_reset_delay_minutes: 5, boot_handoff_seconds: 300 },
   client_features: {
     enable_chap_authentication: false,
     enable_experimental_nvme_target: false,
@@ -31,6 +31,19 @@ const DEFAULT_VALUES = {
       max_ready_spares: 2,
       ttl_hours: 24,
       min_free_bytes: 50 * 1024 ** 3,
+    },
+    retention: {
+      enabled: false,
+      dry_run: true,
+      min_keep_snapshots: 3,
+      min_age_hours: 168,
+    },
+    maintenance: {
+      enabled: false,
+      scrub_interval_days: 30,
+      trim_interval_days: 7,
+      window_start_hour: 2,
+      window_end_hour: 5,
     },
   },
   windows_servicing: {

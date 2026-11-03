@@ -3,7 +3,17 @@ import { beforeEach, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { useAuth } from "@/contexts/auth";
-import { addClient, deleteClientWriteback, getClientNvmeOfStatus, rotateChapSecret, updateClient } from "@/api/modules/clients";
+import {
+  addClient,
+  clearClientPersonalization,
+  deleteClientWriteback,
+  getClientNvmeOfStatus,
+  getClientBootDiagnostics,
+  getClientPersonalization,
+  rotateChapSecret,
+  saveClientPersonalization,
+  updateClient,
+} from "@/api/modules/clients";
 import { prepareWindowsAssignment } from "@/api/modules/windowsServicing";
 import { useAppStore } from "@/store/useAppStore";
 import { listGameDisks } from "@/api/modules/zfs";
@@ -26,6 +36,10 @@ vi.mock("@/api/modules/clients", async (original) => ({
   getClientNvmeOfStatus: vi.fn(),
   rotateChapSecret: vi.fn(),
   deleteClientWriteback: vi.fn(),
+  getClientBootDiagnostics: vi.fn(),
+  getClientPersonalization: vi.fn(),
+  saveClientPersonalization: vi.fn(),
+  clearClientPersonalization: vi.fn(),
 }));
 
 vi.mock("@/api/modules/windowsServicing", () => ({
@@ -49,7 +63,10 @@ beforeEach(() => {
   confirm.mockReset();
   deleteClientWriteback.mockReset();
   addClient.mockReset();
-  updateClient.mockReset();
+  updateClient.mockReset();  getClientBootDiagnostics.mockResolvedValue(null);
+  getClientPersonalization.mockResolvedValue({});
+  saveClientPersonalization.mockResolvedValue({});
+  clearClientPersonalization.mockResolvedValue({});
   prepareWindowsAssignment.mockReset();
   useAppStore.setState({ appConfig: { settings: {} } });
   toast.error.mockReset();
@@ -79,6 +96,106 @@ it("saves an unchecked keep-writeback setting as false", async () => {
   await user.click(screen.getByRole("button", { name: "Save" }));
 
   expect(updateClient).toHaveBeenCalledWith("six", { keep_writeback: false });
+});
+
+it("saves a per-client Windows identity plan only when it changed", async () => {
+  const user = userEvent.setup();
+  getClientNvmeOfStatus.mockResolvedValue(null);
+  updateClient.mockResolvedValue({});
+  const client = {
+    id: "win", name: "PCWIN", mac: "00:11:22:33:44:70", ip: "192.168.1.107",
+    master: "windows", snapshot: "windows@ready", keep_writeback: false,
+  };
+  const masters = [{ name: "windows", os_type: "windows", snapshots: [] }];
+
+  render(
+    <MemoryRouter>
+      <ClientFormModal client={client} masters={masters} isOpen onClose={() => {}} refresh={() => {}} />
+    </MemoryRouter>,
+  );
+  expect(await screen.findByTestId("windows-personalization")).toBeInTheDocument();
+
+  // Any unrelated edit saves the client, but an unchanged plan is never
+  // resubmitted.
+  await user.click(screen.getByRole("checkbox", { name: /keep writeback/i }));
+  await user.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(updateClient).toHaveBeenCalled());
+  expect(saveClientPersonalization).not.toHaveBeenCalled();
+});
+
+it("submits the edited Windows identity and rejects an invalid name", async () => {
+  const user = userEvent.setup();
+  getClientNvmeOfStatus.mockResolvedValue(null);
+  updateClient.mockResolvedValue({});
+  getClientPersonalization.mockResolvedValue({
+    client_id: "win",
+    supported: true,
+    computer_name: "PC-OLD",
+    convert_static_ipv4_to_dhcp: false,
+    clear_stale_drive_letters: false,
+    last_applied_at: null,
+    last_error: "worker unreachable",
+  });
+  const client = {
+    id: "win", name: "PCWIN", mac: "00:11:22:33:44:70", ip: "192.168.1.107",
+    master: "windows", snapshot: "windows@ready", keep_writeback: false,
+  };
+  const masters = [{ name: "windows", os_type: "windows", snapshots: [] }];
+  render(
+    <MemoryRouter>
+      <ClientFormModal client={client} masters={masters} isOpen onClose={() => {}} refresh={() => {}} />
+    </MemoryRouter>,
+  );
+  expect(await screen.findByTestId("windows-personalization")).toBeInTheDocument();
+  const nameInput = await screen.findByLabelText("Computer name", { exact: false });
+  expect(nameInput).toHaveValue("PC-OLD");
+  expect(screen.getByRole("alert")).toHaveTextContent(/worker unreachable/);
+
+  await user.clear(nameInput);
+  await user.type(nameInput, "pc_lab");
+  expect(screen.getByText(/letters, digits and hyphens/)).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(updateClient).toHaveBeenCalled());
+  expect(saveClientPersonalization).not.toHaveBeenCalled();
+
+  await user.clear(nameInput);
+  await user.type(nameInput, "pc-lab-09");
+  await user.click(screen.getByRole("checkbox", { name: /Switch static IPv4 interfaces to DHCP/ }));
+  await user.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(updateClient).toHaveBeenCalled());
+  expect(saveClientPersonalization).toHaveBeenCalledWith("win", {
+    computer_name: "pc-lab-09",
+    convert_static_ipv4_to_dhcp: true,
+    clear_stale_drive_letters: false,
+  });
+  expect(updateClient).toHaveBeenCalledTimes(2);
+});
+
+it("clears the plan when every option is removed", async () => {
+  const user = userEvent.setup();
+  getClientNvmeOfStatus.mockResolvedValue(null);
+  updateClient.mockResolvedValue({});
+  getClientPersonalization.mockResolvedValue({
+    client_id: "win", supported: true, computer_name: "PC-OLD",
+    convert_static_ipv4_to_dhcp: true, clear_stale_drive_letters: true,
+  });
+  const client = {
+    id: "win", name: "PCWIN", mac: "00:11:22:33:44:70", ip: "192.168.1.107",
+    master: "windows", snapshot: "windows@ready", keep_writeback: false,
+  };
+  const masters = [{ name: "windows", os_type: "windows", snapshots: [] }];
+  render(
+    <MemoryRouter>
+      <ClientFormModal client={client} masters={masters} isOpen onClose={() => {}} refresh={() => {}} />
+    </MemoryRouter>,
+  );
+  const nameInput = await screen.findByLabelText("Computer name", { exact: false });
+  await user.clear(nameInput);
+  await user.click(screen.getByRole("checkbox", { name: /Switch static IPv4 interfaces to DHCP/ }));
+  await user.click(screen.getByRole("checkbox", { name: /Clear inherited drive letters/ }));
+  await user.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(clearClientPersonalization).toHaveBeenCalledWith("win"));
+  expect(saveClientPersonalization).not.toHaveBeenCalled();
 });
 
 it("does not offer the legacy in-place installation mode", async () => {

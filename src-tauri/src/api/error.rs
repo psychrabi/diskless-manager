@@ -28,6 +28,23 @@ fn error_code(status: StatusCode) -> &'static str {
     }
 }
 
+/// Build a handler failure using the common HTTP error contract.
+pub fn api_error(
+    status: StatusCode,
+    message: impl Into<String>,
+    details: Value,
+) -> (StatusCode, axum::Json<Value>) {
+    (
+        status,
+        axum::Json(serde_json::json!({
+            "code": error_code(status),
+            "message": message.into(),
+            "operation_id": Uuid::new_v4().to_string(),
+            "details": details,
+        })),
+    )
+}
+
 /// Serialize typed handler errors using the common HTTP error contract.
 pub fn serialize_api_error<S>(
     status: u16,

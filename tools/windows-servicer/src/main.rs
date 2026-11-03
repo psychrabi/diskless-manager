@@ -25,6 +25,8 @@ mod windows_inf;
 mod windows_iscsi_servicing;
 #[path = "../../../src-tauri/src/infrastructure/pxe/windows_nexboot_adaptation.rs"]
 mod windows_nexboot_adaptation;
+#[path = "../../../src-tauri/src/infrastructure/pxe/windows_personalization.rs"]
+mod windows_personalization;
 #[path = "../../../src-tauri/src/infrastructure/pxe/windows_volume_safety.rs"]
 mod windows_volume_safety;
 
@@ -55,6 +57,7 @@ struct WindowsServicerCapabilities {
     nexboot_boot_time: bool,
     nic_collection: bool,
     local_nic_installation: bool,
+    personalization: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -79,6 +82,7 @@ fn main() {
             nexboot_boot_time: cfg!(windows),
             nic_collection: cfg!(windows),
             local_nic_installation: cfg!(windows),
+            personalization: cfg!(windows),
         })
         .map(|_| 0)
         .unwrap_or_else(report_output_error),

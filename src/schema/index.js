@@ -2,6 +2,9 @@ import { z } from "zod";
 
 export const clientLifecycleSchema = z.object({
   non_persistent_reset_delay_minutes: z.coerce.number().int().min(1).max(1440).default(5),
+  // Mirrors the server-side ClientLifecycleConfig bounds for the iPXE-to-OS
+  // handoff window in which a boot is not treated as an offline client.
+  boot_handoff_seconds: z.coerce.number().int().min(30).max(900).default(300),
 });
 
 export const clientFeaturesSchema = z.object({
@@ -17,6 +20,25 @@ export const storagePrewarmSchema = z.object({
     ttl_hours: z.coerce.number().int().min(1).max(168).default(24),
     min_free_bytes: z.number().int().min(0).default(50 * 1024 ** 3),
   }),
+  // Mirrors the server-side RetentionConfig bounds.
+  retention: z
+    .object({
+      enabled: z.boolean().default(false),
+      dry_run: z.boolean().default(true),
+      min_keep_snapshots: z.coerce.number().int().min(0).max(100).default(3),
+      min_age_hours: z.coerce.number().int().min(1).max(8760).default(168),
+    })
+    .default({}),
+  // Mirrors the server-side MaintenanceConfig bounds.
+  maintenance: z
+    .object({
+      enabled: z.boolean().default(false),
+      scrub_interval_days: z.coerce.number().int().min(1).max(365).default(30),
+      trim_interval_days: z.coerce.number().int().min(1).max(365).default(7),
+      window_start_hour: z.coerce.number().int().min(0).max(23).default(2),
+      window_end_hour: z.coerce.number().int().min(0).max(23).default(5),
+    })
+    .default({}),
 });
 
 export const windowsServicingSchema = z.object({

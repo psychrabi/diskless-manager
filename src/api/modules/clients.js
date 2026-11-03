@@ -54,6 +54,33 @@ export async function deleteClientWriteback(id) {
   return apiRequest(`/api/clients/${id}/writeback/delete`, { method: "POST" });
 }
 
+export async function getClientPersonalization(id) {
+  return apiRequest(`/api/clients/${id}/windows-personalization`);
+}
+
+/**
+ * Store the per-client Windows personalization plan. An empty plan clears it.
+ */
+export async function saveClientPersonalization(id, plan) {
+  return apiRequest(`/api/clients/${id}/windows-personalization`, {
+    method: "PUT",
+    body: JSON.stringify(plan),
+  });
+}
+
+export async function clearClientPersonalization(id) {
+  return apiRequest(`/api/clients/${id}/windows-personalization`, {
+    method: "DELETE",
+  });
+}
+
+/**
+ * Read-only boot/iBFT inputs the server will use on this client's next PXE boot.
+ */
+export async function getClientBootDiagnostics(id) {
+  return apiRequest(`/api/clients/${encodeURIComponent(id)}/boot-diagnostics`);
+}
+
 export async function rotateChapSecret(id) {
   return apiRequest(`/api/clients/${id}/chap/rotate`, {
     method: "POST",

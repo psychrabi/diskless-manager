@@ -65,6 +65,9 @@ pub async fn run() -> anyhow::Result<()> {
     let spare_task = tokio::spawn(crate::application::writeback_spare_service::run(
         state.clone(),
     ));
+    // Scheduled scrub/TRIM, disabled by default. Manual runs are on demand.
+    let maintenance_task =
+        tokio::spawn(crate::application::maintenance_service::run(state.clone()));
 
     // Dedicated PXE client enrollment listener. Bound to the LAN on its own
     // port (default 4237) so iPXE clients can register an unprovisioned
@@ -83,6 +86,7 @@ pub async fn run() -> anyhow::Result<()> {
     let _ = api_shutdown_tx.send(());
     lifecycle_task.abort();
     spare_task.abort();
+    maintenance_task.abort();
     enroll_task.abort();
     api_task
         .await

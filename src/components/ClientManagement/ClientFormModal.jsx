@@ -1,17 +1,27 @@
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import {
   addClient,
+  clearClientPersonalization,
   deleteClientWriteback,
   getClientNvmeOfStatus,
+  getClientPersonalization,
   prepareClientNvmeOf,
   removeClientNvmeOf,
   rotateChapSecret,
+  saveClientPersonalization,
   updateClient,
 } from "@/api/modules/clients";
+import {
+  normalizePersonalizationPlan,
+  personalizationPlanIsEmpty,
+  personalizationPlansMatch,
+  validateComputerName,
+} from "@/lib/windowsPersonalization";
 import { prepareWindowsAssignment } from "@/api/modules/windowsServicing";
 import { listGameDisks } from "@/api/modules/zfs";
 import { readConfig } from "@/api/modules/config";
 import ClientGameDiskPicker from "./ClientGameDiskPicker";
+import BootDiagnosticsSection from "./BootDiagnosticsSection";
 import { clientSchema } from "@/schema";
 import { useAuth } from "@/contexts/auth";
 import { useAppStore } from "@/store/useAppStore";
@@ -92,6 +102,11 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
   const [gameDisks, setGameDisks] = useState(null);
   const [deletingWriteback, setDeletingWriteback] = useState(false);
   const [preparingWindowsDrivers, setPreparingWindowsDrivers] = useState(false);
+  // Per-client Windows identity. `saved` is the stored plan; `draft` is the
+  // dialog's copy, submitted only when it differs.
+  const [personalizationDraft, setPersonalizationDraft] = useState(null);
+  const [personalizationSaved, setPersonalizationSaved] = useState(null);
+  const [personalizationStatus, setPersonalizationStatus] = useState(null);
 
   const {
     register,
@@ -147,6 +162,30 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
     );
     return () => { cancelled = true; };
   }, [isOpen]);
+
+  // The dialog remounts per client and per open state, so every state starts
+  // empty; this effect only fills it in, and a failure leaves the section
+  // hidden instead of blocking the rest of the form.
+  useEffect(() => {
+    if (!isOpen || !client?.id) return undefined;
+    let cancelled = false;
+    getClientPersonalization(client.id).then(
+      (stored) => {
+        if (cancelled) return;
+        const plan = normalizePersonalizationPlan(stored);
+        setPersonalizationDraft(plan);
+        setPersonalizationSaved(plan);
+        setPersonalizationStatus({
+          last_applied_at: stored?.last_applied_at ?? null,
+          last_error: stored?.last_error ?? null,
+        });
+      },
+      () => {},
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [client?.id, isOpen]);
 
   const loadNvmeStatus = useCallback(async () => {
     if (!isOpen || !client?.id || !nvmeFeatureEnabled) {
@@ -336,6 +375,28 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
           update.snapshot = request.snapshot;
         }
         await updateClient(client.id, update);
+        // The plan lives in its own endpoint, so it is submitted only when the
+        // dialog changed it and only for a Windows-assigned client.
+        if (
+          personalizationDraft &&
+          selectedImage?.os_type === "windows" &&
+          !personalizationPlansMatch(personalizationDraft, personalizationSaved)
+        ) {
+          const nameError = validateComputerName(personalizationDraft.computer_name);
+          if (nameError) {
+            throw new Error(`Windows computer name: ${nameError}`);
+          }
+          if (personalizationPlanIsEmpty(personalizationDraft)) {
+            await clearClientPersonalization(client.id);
+          } else {
+            await saveClientPersonalization(client.id, {
+              computer_name: personalizationDraft.computer_name || null,
+              convert_static_ipv4_to_dhcp: personalizationDraft.convert_static_ipv4_to_dhcp,
+              clear_stale_drive_letters:
+                personalizationDraft.clear_stale_drive_letters,
+            });
+          }
+        }
         success(
           "Client Management",
           `Client ${data.name} updated successfully.${driverMessage}`
@@ -355,6 +416,21 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
   });
 
   const selectedMasterOs = masters?.find((master) => master.name === selectedMaster)?.os_type;
+
+  const updatePersonalization = (field, value) => {
+    setPersonalizationDraft((current) => ({
+      ...(current ?? normalizePersonalizationPlan()),
+      [field]: value,
+    }));
+  };
+  const personalizationNameError = validateComputerName(
+    personalizationDraft?.computer_name,
+  );
+  // The identity plan has its own endpoint, so editing it alone must still
+  // enable Save even though no react-hook-form field became dirty.
+  const personalizationChanged =
+    Boolean(personalizationDraft) &&
+    !personalizationPlansMatch(personalizationDraft, personalizationSaved);
 
   const keepWriteback = useWatch({
     control,
@@ -625,6 +701,98 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
             </FieldContent>
           </Field>
 
+          {client?.id && selectedMasterOs === "windows" && personalizationDraft && (
+            <div
+              className="space-y-3 rounded-md border border-border/60 p-3"
+              data-testid="windows-personalization"
+            >
+              <div>
+                <h4 className="text-sm font-medium">Windows identity</h4>
+                <p className="text-xs text-muted-foreground">
+                  This client's edit preview. The bootstrapping installer and
+                  image details are configured in Image Management.
+                </p>
+              </div>
+              <Field>
+                <FieldLabel htmlFor="personalization-computer-name">
+                  Computer name
+                </FieldLabel>
+                <FieldContent>
+                  <Input
+                    id="personalization-computer-name"
+                    value={personalizationDraft.computer_name}
+                    placeholder="Inherit the image's name"
+                    onChange={(event) =>
+                      updatePersonalization("computer_name", event.target.value)
+                    }
+                  />
+                  {personalizationNameError ? (
+                    <FieldError>{personalizationNameError}</FieldError>
+                  ) : (
+                    <FieldDescription>
+                      Up to 15 characters. The image identity is kept when empty.
+                    </FieldDescription>
+                  )}
+                </FieldContent>
+              </Field>
+              <Field orientation="horizontal">
+                <Checkbox
+                  id="personalization-dhcp"
+                  checked={personalizationDraft.convert_static_ipv4_to_dhcp}
+                  onCheckedChange={(checked) =>
+                    updatePersonalization("convert_static_ipv4_to_dhcp", Boolean(checked))
+                  }
+                />
+                <FieldContent>
+                  <FieldLabel htmlFor="personalization-dhcp" className="cursor-pointer">
+                    Switch static IPv4 interfaces to DHCP
+                  </FieldLabel>
+                  <FieldDescription>
+                    Only interfaces holding a static IPv4 address change;
+                    interfaces already using DHCP are left alone. This is an
+                    edit preview: commits live in Image Management.
+                  </FieldDescription>
+                </FieldContent>
+              </Field>
+              <Field orientation="horizontal">
+                <Checkbox
+                  id="personalization-drive-letters"
+                  checked={personalizationDraft.clear_stale_drive_letters}
+                  onCheckedChange={(checked) =>
+                    updatePersonalization("clear_stale_drive_letters", Boolean(checked))
+                  }
+                />
+                <FieldContent>
+                  <FieldLabel
+                    htmlFor="personalization-drive-letters"
+                    className="cursor-pointer"
+                  >
+                    Clear inherited drive letters
+                  </FieldLabel>
+                  <FieldDescription>
+                    Removes non-C: drive-letter reservations. C: and volume
+                    identities are kept. This is an edit preview: commits live
+                    in Image Management.
+                  </FieldDescription>
+                </FieldContent>
+              </Field>
+              {personalizationStatus?.last_error ? (
+                <p className="text-xs text-destructive" role="alert">
+                  Last attempt failed: {personalizationStatus.last_error}
+                </p>
+              ) : personalizationStatus?.last_applied_at ? (
+                <p className="text-xs text-muted-foreground">
+                  Preview. The live image and bootstrap service are configured
+                  in Image Management; commits run there.
+                </p>
+              ) : null}
+            </div>
+          )}
+
+          {client?.id && user?.role === "admin" && (
+            <BootDiagnosticsSection clientId={client.id} />
+          )}
+
           <Field orientation="horizontal">
             <Checkbox
               id="keep-writeback"
@@ -884,7 +1052,12 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
             </Button>
             <Button
               type="submit"
-              disabled={deletingWriteback || isSubmitting || !isDirty || !isValid}
+              disabled={
+                deletingWriteback ||
+                isSubmitting ||
+                !(isDirty || personalizationChanged) ||
+                !isValid
+              }
             >
               {isSubmitting ? (
                 <Spinner data-icon="inline-start" />

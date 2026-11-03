@@ -29,6 +29,7 @@ import CreateSnapshotModal from "./CreateSnapshotModal";
 import ImageHealthDialog from "./ImageHealthDialog";
 import RenameImageModal from "./RenameImageModal";
 import { SnapshotsList } from "./SnapshotsList";
+import ImageVersionModal from "./ImageVersionModal";
 
 export const ImagesList = ({ masters }) => {
   const { setDefaultMaster, handleDeleteImage } = useMasterManager();
@@ -37,6 +38,7 @@ export const ImagesList = ({ masters }) => {
   const [openRenameModal, setOpenRenameModal] = useState(false);
   const [recoveryImageName, setRecoveryImageName] = useState(null);
   const [healthImage, setHealthImage] = useState(null);
+  const [openVersionModal, setOpenVersionModal] = useState(false);
 
   const handleCreateSnapshot = useCallback((image) => {
     setSelectedImage(image);
@@ -111,6 +113,19 @@ export const ImagesList = ({ masters }) => {
                   >
                     Health
                   </Button>
+
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    icon={History}
+                    onClick={() => {
+                      setSelectedImage(master);
+                      setOpenVersionModal(true);
+                    }}
+                    title={`Versions for ${master.name}`}
+                  >
+                    Versions
+                  </Button>
                   <Button
                     variant="primary"
                     size="icon"
@@ -174,6 +189,13 @@ export const ImagesList = ({ masters }) => {
         <RenameImageModal
           openRenameModal={openRenameModal}
           setOpenRenameModal={setOpenRenameModal}
+          selectedImage={selectedImage}
+        />
+      )}
+      {openVersionModal && (
+        <ImageVersionModal
+          openVersionModal={openVersionModal}
+          setOpenVersionModal={setOpenVersionModal}
           selectedImage={selectedImage}
         />
       )}

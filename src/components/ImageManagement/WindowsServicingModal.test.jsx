@@ -2,7 +2,7 @@ import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import WindowsServicingModal from "./WindowsServicingModal";
 const mocks = vi.hoisted(() => ({ capabilities: vi.fn(), prepare: vi.fn(), success: vi.fn(), error: vi.fn(), confirm: vi.fn() }));
-vi.mock("@/api/modules/images", () => ({ listMasters: async () => [{id:"win",name:"diskless/image-disk/windows11",os_type:"windows",status:"ready",snapshots:[{name:"installed"}]}], getDriverReadiness: async () => ({image_id:"win",latest_ready_revision:{id:"rev-ready-1"},candidate_count:1,failed_count:0}) }));
+vi.mock("@/api/modules/images", () => ({ listMasters: async () => [{id:"win",name:"diskless/image-disk/windows11",os_type:"windows",status:"ready",snapshots:[{name:"installed"}]}], getDriverReadiness: async () => ({image_id:"win",latest_ready_revision:{id:"rev-ready-1"},candidate_count:1,failed_count:0}), publishImageVersion: vi.fn(), validateWindowsComputerName: vi.fn() }));
 vi.mock("@/api/modules/networkDrivers", () => ({listNetworkDrivers: async () => [{id:"netkvm",name:"VirtIO Ethernet"}], listDriverRevisions: async () => [{id:"rev-candidate-1",status:"awaiting-test"}], listBootTests: async () => [{id:"test-1",status:"candidate"}]}));
 vi.mock("@/api/modules/windowsServicing", () => ({getRemoteWindowsServicingCapabilities: mocks.capabilities, prepareWindowsImageManaged: mocks.prepare, prepareWindowsImageRemote: vi.fn(), prepareWindowsImageRemoteCatalog: vi.fn()}));
 vi.mock("@/store/useToastStore", () => ({useToastStore: () => ({success:mocks.success,error:mocks.error})}));
@@ -60,15 +60,52 @@ it("keeps the reporter URL out of managed dry-run requests",async () => {
   fireEvent.click(screen.getByRole("button",{name:"Dry Run"}));
   await waitFor(() => expect(mocks.prepare).toHaveBeenCalledWith(expect.objectContaining({commit:false})));
   expect(mocks.prepare.mock.calls[0][0]).not.toHaveProperty("report_server_url");
-});
-it("requires a helper that supports managed volumes",async () => {
+});it("requires a helper that supports managed volumes",async () => {
   mocks.capabilities.mockResolvedValue({available:true,elevated:true,platform:"windows",protocol_version:2});
   render(<WindowsServicingModal isOpen/>);
   await fillForm();
   expect(screen.getByRole("button",{name:"Prepare and Commit"})).toBeDisabled();
   expect(screen.getByRole("alert")).toHaveTextContent("Update the Windows helper");
   expect(mocks.prepare).not.toHaveBeenCalled();
-});it("shows driver revision readiness for the selected image", async () => {
+});
+
+it("sends an opt-in identity and network plan for a managed clone",async () => {
+  mocks.capabilities.mockResolvedValue({available:true,elevated:true,platform:"windows",protocol_version:3,iscsi_volume_servicing:true,personalization:true});
+  render(<WindowsServicingModal isOpen/>);
+  await fillForm();
+  fireEvent.change(screen.getByLabelText("Computer name"),{target:{value:"pc-lab-07"}});
+  fireEvent.click(screen.getByRole("checkbox",{name:/Switch static IPv4 interfaces to DHCP/}));
+  fireEvent.click(screen.getByRole("checkbox",{name:/Clear inherited drive letters/}));
+  fireEvent.click(screen.getByRole("button",{name:"Dry Run"}));
+  await waitFor(() => expect(mocks.prepare).toHaveBeenCalledWith(expect.objectContaining({
+    personalization:{
+      computer_name:"pc-lab-07",
+      convert_static_ipv4_to_dhcp:true,
+      clear_stale_drive_letters:true,
+    },
+    commit:false,
+  })));
+});
+it("omits personalization when no plan is selected and blocks invalid names",async () => {
+  render(<WindowsServicingModal isOpen/>);
+  await fillForm();
+  fireEvent.click(screen.getByRole("button",{name:"Dry Run"}));
+  await waitFor(() => expect(mocks.prepare).toHaveBeenCalled());
+  expect(mocks.prepare.mock.calls[0][0]).not.toHaveProperty("personalization");
+
+  fireEvent.change(screen.getByLabelText("Computer name"),{target:{value:"pc_lab"}});
+  expect(screen.getByRole("alert")).toHaveTextContent("letters, digits and hyphens");
+  expect(screen.getByRole("button",{name:"Prepare and Commit"})).toBeDisabled();
+  expect(screen.getByRole("button",{name:"Dry Run"})).toBeDisabled();
+});
+it("requires a worker that advertises personalization when a plan is set",async () => {
+  render(<WindowsServicingModal isOpen/>);
+  await fillForm();
+  fireEvent.change(screen.getByLabelText("Computer name"),{target:{value:"pc-lab-07"}});
+  expect(screen.getByRole("alert")).toHaveTextContent("does not support personalization");
+  expect(screen.getByRole("button",{name:"Prepare and Commit"})).toBeDisabled();
+});
+it("shows driver revision readiness for the selected image", async () => {
   render(<WindowsServicingModal isOpen/>);
   await screen.findByText("diskless/image-disk/windows11");
   fireEvent.change(screen.getByLabelText("Source Windows image"),{target:{value:"win"}});

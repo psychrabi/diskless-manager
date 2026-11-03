@@ -431,26 +431,47 @@ impl AppState {
         .await?;
 
         // Image versions table
+        //
+        // A version is a named, assignable metadata record that points at one
+        // verified image asset. Source assets and snapshots are never renamed or
+        // promoted as a side effect of creating a version.
         sqlx::query(
             r#"
         CREATE TABLE IF NOT EXISTS image_versions (
             id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
             base_name TEXT NOT NULL,
             version TEXT NOT NULL,
-            image_id TEXT NOT NULL,
-            parent_version_id TEXT,
-            changelog TEXT,
-            is_latest INTEGER NOT NULL DEFAULT 0,
-            is_stable INTEGER NOT NULL DEFAULT 0,
-            created_by TEXT,
-            tags TEXT,
+            image_asset_id TEXT NOT NULL REFERENCES images(id),
+            parent_version_id TEXT REFERENCES image_versions(id),
+            os_type TEXT NOT NULL,
+            source_description TEXT,
+            comment TEXT,
+            is_pinned INTEGER NOT NULL DEFAULT 0,
+            is_locked INTEGER NOT NULL DEFAULT 0,
+            ordering INTEGER NOT NULL DEFAULT 0,
+            published_by TEXT,
+            published_at TEXT NOT NULL,
+            last_used_at TEXT,
+            last_used_by_client_id TEXT,
             created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
             UNIQUE(base_name, version)
         )
         "#,
         )
         .execute(pool)
         .await?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_image_versions_asset ON image_versions(image_asset_id)",
+        )
+        .execute(pool)
+        .await?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_image_versions_parent ON image_versions(parent_version_id)")
+            .execute(pool)
+            .await?;
 
         // Boot logs table
         sqlx::query(

@@ -18,12 +18,14 @@ use crate::api::handlers::{
         validate_auth_token,
     },
     backup::{create_backup, restore_backup},
+    client_boot_diagnostics::get_boot_diagnostics,
     client_chap::rotate_client_chap,
     client_delete::delete_client,
+    client_personalization::{delete_personalization, get_personalization, put_personalization},
     client_storage::delete_client_writeback,
     client_update::update_client,
     clients::{create_client, exit_legacy_super, request_inventory_boot},
-    clients_v2::{get_client, get_client_boot_history, list_clients},
+    clients_v2::{get_client, get_client_boot_handoff, get_client_boot_history, list_clients},
     config::get_config,
     control::{
         cancel_operation, get_audit_events, get_audit_logs, get_scheduled_operations,
@@ -32,6 +34,7 @@ use crate::api::handlers::{
     dashboard::{get_client_io_metrics, get_client_overview, get_default_image},
     dhcp_reconciliation::{inspect_dhcp_reconciliation, repair_dhcp_reconciliation},
     disks::{create_pool, list_disks, pool_exists, rename_disk},
+    image_versions::image_version_routes,
     images::{
         apply_snapshot, clone_image, create_image, create_snapshot, delete_image, delete_snapshot,
         get_driver_readiness, get_image, get_image_health, get_image_info, get_snapshots,
@@ -58,6 +61,8 @@ use crate::api::handlers::{
     },
     setup::{complete_setup, get_setup_status},
     ssh::{execute_ssh_command, get_windows_system_info, test_ssh_connection},
+    storage_maintenance::{get_maintenance_status, start_maintenance, stop_maintenance},
+    storage_retention::{get_retention_plan, run_retention},
     storage_spares::list_storage_spares,
     super_client::{
         delete_media, discard_super, enter_super, list_media, record_verification, save_super,
@@ -247,6 +252,7 @@ pub fn create_app(state: AppState) -> Router {
             post(crate::api::handlers::installation::retry),
         )
         .merge(client_routes())
+        .merge(image_version_routes())
         .merge(image_routes())
         .merge(installer_media_routes(media_body_limit))
         .merge(system_routes())
@@ -329,6 +335,20 @@ fn client_routes() -> Router<AppState> {
         .route(
             "/api/clients/{id}/boot-history",
             get(get_client_boot_history),
+        )
+        .route(
+            "/api/clients/{id}/boot-handoff",
+            get(get_client_boot_handoff),
+        )
+        .route(
+            "/api/clients/{id}/boot-diagnostics",
+            get(get_boot_diagnostics),
+        )
+        .route(
+            "/api/clients/{id}/windows-personalization",
+            get(get_personalization)
+                .put(put_personalization)
+                .delete(delete_personalization),
         )
         .route("/api/clients/{id}/super/status", get(super_status))
         .route("/api/clients/{id}/super/enter", post(enter_super))
@@ -483,6 +503,20 @@ fn system_routes() -> Router<AppState> {
         .route("/api/system/ram-usage", get(get_ram_usage))
         .route("/api/system/zfs-arcstat", get(get_zfs_arcstat))
         .route("/api/system/storage/spares", get(list_storage_spares))
+        .route("/api/system/storage/retention", get(get_retention_plan))
+        .route("/api/system/storage/retention/run", post(run_retention))
+        .route(
+            "/api/system/storage/maintenance",
+            get(get_maintenance_status),
+        )
+        .route(
+            "/api/system/storage/maintenance/start",
+            post(start_maintenance),
+        )
+        .route(
+            "/api/system/storage/maintenance/stop",
+            post(stop_maintenance),
+        )
         .route("/api/alarms", get(list_alarms))
         .route("/api/alarms/{id}/acknowledge", post(acknowledge_alarm))
         .route(

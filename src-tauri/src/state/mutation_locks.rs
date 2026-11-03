@@ -56,11 +56,32 @@ impl ClientMutationLocks {
     pub async fn try_lock_client(&self, client_id: &str) -> Option<ClientMutationGuard> {
         let gate = self.gate.clone().try_read_owned().ok()?;
         let key = format!("client:{client_id}");
-        let client = self.key_locks(&[key]).await.pop()?.try_lock_owned().ok()?;
+        let client = self
+            .key_locks(std::slice::from_ref(&key))
+            .await
+            .pop()?
+            .try_lock_owned()
+            .ok()?;
         Some(ClientMutationGuard {
             _gate: gate,
             _keys: vec![client],
         })
+    }
+
+    /// Acquire one client key, giving up after `wait`.
+    ///
+    /// Background maintenance cannot use [`Self::try_lock_client`]: a periodic
+    /// holder that runs on the same phase (the 10 s lifecycle sweep does) would
+    /// then starve it forever. It also must not queue indefinitely behind a
+    /// long fleet operation, so the wait is bounded instead.
+    pub async fn lock_client_timeout(
+        &self,
+        client_id: &str,
+        wait: std::time::Duration,
+    ) -> Option<ClientMutationGuard> {
+        tokio::time::timeout(wait, self.lock_client(client_id))
+            .await
+            .ok()
     }
 
     async fn lock_keys(&self, mut keys: Vec<String>) -> ClientMutationGuard {
@@ -101,6 +122,23 @@ mod tests {
     use super::ClientMutationLocks;
 
     #[tokio::test]
+    async fn bounded_wait_includes_key_registry_contention() {
+        let locks = ClientMutationLocks::default();
+        let _registry = locks.keys.lock().await;
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            locks.lock_client_timeout("client-a", std::time::Duration::from_millis(10)),
+        )
+        .await
+        .expect("the client lock deadline must also bound the key registry wait");
+        assert!(result.is_none());
+        assert!(
+            locks.try_lock().is_ok(),
+            "timeout must release the fleet gate"
+        );
+    }
+
+    #[tokio::test]
     async fn client_work_serializes_per_client_but_runs_across_clients() {
         let locks = ClientMutationLocks::default();
         let first = locks.lock_client("client-a").await;
@@ -115,6 +153,41 @@ mod tests {
         assert!(locks.try_lock_client("client-a").await.is_none());
         drop(fleet);
         assert!(locks.try_lock_client("client-a").await.is_some());
+    }
+
+    #[tokio::test]
+    async fn bounded_wait_outlasts_a_periodic_holder_but_never_waits_forever() {
+        let locks = ClientMutationLocks::default();
+        let holder = locks.lock_client("client-a").await;
+
+        // A holder that keeps the key past the deadline is skipped.
+        assert!(locks
+            .lock_client_timeout("client-a", std::time::Duration::from_millis(20))
+            .await
+            .is_none());
+
+        // One released within the deadline is honored instead of starved.
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+            drop(holder);
+        });
+        let guard = locks
+            .lock_client_timeout("client-a", std::time::Duration::from_secs(2))
+            .await;
+        assert!(guard.is_some());
+        drop(guard);
+
+        // A fleet-wide write barrier is never waited for indefinitely either.
+        let fleet = locks.lock().await;
+        assert!(locks
+            .lock_client_timeout("client-b", std::time::Duration::from_millis(20))
+            .await
+            .is_none());
+        drop(fleet);
+        assert!(locks
+            .lock_client_timeout("client-b", std::time::Duration::from_millis(20))
+            .await
+            .is_some());
     }
 
     #[tokio::test]

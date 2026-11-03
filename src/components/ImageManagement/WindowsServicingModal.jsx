@@ -1,4 +1,9 @@
-import { getDriverReadiness, listMasters } from "@/api/modules/images";
+import {
+  getDriverReadiness,
+  listMasters,
+  publishImageVersion,
+  validateWindowsComputerName,
+} from "@/api/modules/images";
 import { listBootTests, listDriverRevisions, listNetworkDrivers } from "@/api/modules/networkDrivers";
 import {
   getRemoteWindowsServicingCapabilities,
@@ -39,9 +44,28 @@ const DEFAULTS = {
   disableTaskOffload: false,
   disableCrashDump: false,
   clearPagingFiles: false,
+  computerName: "",
+  convertStaticIpv4ToDhcp: false,
+  clearStaleDriveLetters: false,
 };
 
 const REMEMBER_KEY = "diskless.windows-servicing";
+
+// Mirrors the server's NetBIOS rule so an invalid name is caught before a
+// clone is created, without replacing the server-side validation.
+function validateComputerName(value) {
+  const name = value.trim();
+  if (!name) return "";
+  if (name.length > 15) return "Use at most 15 characters.";
+  if (!/^[A-Za-z0-9-]+$/.test(name)) {
+    return "Use letters, digits and hyphens only.";
+  }
+  if (name.startsWith("-") || name.endsWith("-")) {
+    return "Do not start or end with a hyphen.";
+  }
+  if (/^[0-9]+$/.test(name)) return "Do not use digits only.";
+  return "";
+}
 
 function rememberedSettings(defaultDriverInstallStrategy) {
   try {
@@ -227,6 +251,34 @@ export default function WindowsServicingModal({ isOpen, onClose, onPrepared }) {
     };
   }, [isOpen, imageMode, form.imageId]);
 
+  const computerNameError = useMemo(
+    () => validateComputerName(form.computerName),
+    [form.computerName],
+  );
+
+  const personalizationPlan = useMemo(() => {
+    if (imageMode !== "managed" || computerNameError) return null;
+    const computerName = form.computerName.trim();
+    if (!computerName && !form.convertStaticIpv4ToDhcp && !form.clearStaleDriveLetters) {
+      return null;
+    }
+    return {
+      ...(computerName ? { computer_name: computerName } : {}),
+      convert_static_ipv4_to_dhcp: form.convertStaticIpv4ToDhcp,
+      clear_stale_drive_letters: form.clearStaleDriveLetters,
+    };
+  }, [
+    imageMode,
+    computerNameError,
+    form.computerName,
+    form.convertStaticIpv4ToDhcp,
+    form.clearStaleDriveLetters,
+  ]);
+
+  const versionCanPublish = useMemo(() => {
+    return imageMode === "managed" && form.newName.trim() && !computerNameError && !preparing;
+  }, [imageMode, form.newName, computerNameError, preparing]);
+
   const canRun = useMemo(() => {
     const driverReady =
       driverSource === "catalog"
@@ -239,11 +291,25 @@ export default function WindowsServicingModal({ isOpen, onClose, onPrepared }) {
         form.host.trim() &&
         form.username.trim() &&
         (imageMode === "managed"
-          ? worker.iscsi_volume_servicing && form.imageId && form.snapshot && form.newName.trim() && form.portal.trim()
+          ? worker.iscsi_volume_servicing &&
+            (worker.personalization || !personalizationPlan) &&
+            form.imageId &&
+            form.snapshot &&
+            form.newName.trim() &&
+            form.portal.trim()
           : form.imagePath.trim() && Number(form.imageIndex) > 0) &&
+        !computerNameError &&
         driverReady
     );
-  }, [worker, form, driverSource, selectedDriverIds, imageMode]);
+  }, [
+    worker,
+    form,
+    driverSource,
+    selectedDriverIds,
+    imageMode,
+    personalizationPlan,
+    computerNameError,
+  ]);
 
   const update = (field, value) => {
     setForm((current) => ({ ...current, [field]: value }));
@@ -284,6 +350,36 @@ export default function WindowsServicingModal({ isOpen, onClose, onPrepared }) {
         ? current.filter((existing) => existing !== id)
         : [...current, id]
     );
+  };
+
+  const [publishSubmitting, setPublishSubmitting] = useState(false);
+
+  const handlePublishVersion = async () => {
+    if (!versionCanPublish || publishSubmitting) return;
+    setPublishSubmitting(true);
+    try {
+      const validation = await validateWindowsComputerName(form.computerName);
+      if (!validation.valid) {
+        throw new Error(validation.error || "Computer name validation failed.");
+      }
+
+      const published = await publishImageVersion({
+        image_id: form.imageId,
+        version_name: form.newName.trim(),
+        source_description: "Committed Windows servicing result",
+        comment: null,
+        parent_version_id: null,
+      });
+      setResult((previous) => (previous ? { ...previous, publishedVersion: published } : null));
+      success(
+        "Windows Servicing",
+        "Published image version " + published.name + " @ " + published.version
+      );
+    } catch (err) {
+      error("Windows Servicing", err?.message || String(err));
+    } finally {
+      setPublishSubmitting(false);
+    }
   };
 
   const checkWorker = async () => {
@@ -354,6 +450,7 @@ export default function WindowsServicingModal({ isOpen, onClose, onPrepared }) {
           ...remoteIdentity(), image_id: form.imageId, source_snapshot: form.snapshot,
           new_name: form.newName.trim(), portal: form.portal.trim(), commit, boot_arm: bootArm(),
           driver_install_strategy: driverInstallStrategy,
+          ...(personalizationPlan ? { personalization: personalizationPlan } : {}),
           ...(commit ? { report_server_url: window.location.origin } : {}),
           ...(driverSource === "catalog" ? { driver_ids: selectedDriverIds } : { driver_root: form.driverRoot.trim() }),
         });
@@ -419,6 +516,8 @@ export default function WindowsServicingModal({ isOpen, onClose, onPrepared }) {
 
   const preparationResult = result?.preparation;
   const plan = preparationResult?.boot_arm?.plan;
+  const personalization = preparationResult?.personalization;
+  const published = result?.publishedVersion;
 
   return (
     <Modal
@@ -796,6 +895,60 @@ export default function WindowsServicingModal({ isOpen, onClose, onPrepared }) {
           </div>
         </section>
 
+        {imageMode === "managed" && (
+          <section className="space-y-3">
+            <div>
+              <h3 className="text-sm font-semibold">Identity and network</h3>
+              <p className="text-xs text-muted-foreground">
+                Optional cleanup of the serviced clone only; the source image is
+                never edited. Dry Run reports the planned changes without writing.
+              </p>
+            </div>
+            <div className="grid gap-2 md:grid-cols-2">
+              <div className="space-y-1.5 md:col-span-2">
+                <Label htmlFor="servicing-computer-name">Computer name</Label>
+                <Input
+                  id="servicing-computer-name"
+                  value={form.computerName}
+                  disabled={preparing}
+                  onChange={(event) => update("computerName", event.target.value)}
+                  placeholder="Leave empty to keep the image's name"
+                />
+                {computerNameError && (
+                  <p role="alert" className="text-xs text-destructive">
+                    {computerNameError}
+                  </p>
+                )}
+              </div>
+              <Toggle
+                id="personalize-dhcp"
+                checked={form.convertStaticIpv4ToDhcp}
+                onChange={(value) => update("convertStaticIpv4ToDhcp", value)}
+                label="Switch static IPv4 interfaces to DHCP"
+                description="Only interfaces holding a static IPv4 address change. Interfaces already using DHCP are left alone."
+              />
+              <Toggle
+                id="personalize-drive-letters"
+                checked={form.clearStaleDriveLetters}
+                onChange={(value) => update("clearStaleDriveLetters", value)}
+                label="Clear inherited drive letters"
+                description="Removes non-C: drive-letter reservations inherited from the image. C: and volume identities are kept."
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              A committed run publishes these changes as a new image version. Use
+              it to prepare an identity-neutral image (DHCP plus cleared drive
+              letters) or a single-purpose master.
+            </p>
+            {worker && !worker.personalization && personalizationPlan && (
+              <p role="alert" className="text-sm text-destructive">
+                This worker helper does not support personalization. Update the
+                helper or clear the plan.
+              </p>
+            )}
+          </section>
+        )}
+
         </fieldset>
         <div className="flex flex-wrap items-center gap-2 border-t pt-4">
           <Button
@@ -816,6 +969,14 @@ export default function WindowsServicingModal({ isOpen, onClose, onPrepared }) {
           >
             Prepare and Commit
           </Button>
+          <Button
+            variant="secondary"
+            loading={publishSubmitting}
+            disabled={!versionCanPublish || publishSubmitting}
+            onClick={() => handlePublishVersion()}
+          >
+            Publish Version
+          </Button>
           <Button variant="ghost" disabled={preparing} onClick={resetAndClose}>
             Close
           </Button>
@@ -835,7 +996,7 @@ export default function WindowsServicingModal({ isOpen, onClose, onPrepared }) {
                   index {preparationResult.image_index}
                 </p>
                 {result.image && (
-                  <p className="mt-1 text-sm">Saved {result.image.name}@{result.snapshot?.name}. Select this image and snapshot for the client’s boot test.</p>
+                  <p className="mt-1 text-sm">                  Saved {result.image.name}@{result.snapshot?.name}. Select this image and snapshot for the client’s boot test. {published ? `(published version ${published.name}@${published.version})` : ''}</p>
                 )}
                 {result.staging && (
                   <p className="mt-1 text-xs text-muted-foreground">
@@ -844,6 +1005,49 @@ export default function WindowsServicingModal({ isOpen, onClose, onPrepared }) {
                     cleanup{" "}
                     {result.staging.cleanupSucceeded ? "completed" : "needs attention"}
                   </p>
+                )}
+                {personalization && (
+                  <div className="mt-2 space-y-1 text-xs" data-testid="personalization-diff">
+                    <p className="font-medium">
+                      Personalization{" "}
+                      <span className="font-normal text-muted-foreground">
+                        {personalization.applied
+                          ? "· applied"
+                          : "· dry run, nothing written"}
+                      </span>
+                    </p>
+                    {personalization.diff?.computer_name && (
+                      <p className="text-muted-foreground">
+                        Computer name:{" "}
+                        {personalization.diff.computer_name.current ?? "(none)"} →{" "}
+                        {personalization.diff.computer_name.desired}
+                      </p>
+                    )}
+                    <p className="text-muted-foreground">
+                      Interfaces switched to DHCP:{" "}
+                      {(personalization.diff?.interfaces ?? [])
+                        .filter((change) => change.action === "convert")
+                        .map((change) =>
+                          change.id +
+                          (change.static_ipv4?.length
+                            ? " (" + change.static_ipv4.join(", ") + ")"
+                            : "")
+                        )
+                        .join(", ") || "none"}
+                    </p>
+                    <p className="text-muted-foreground">
+                      Drive letters removed:{" "}
+                      {(personalization.diff?.mounted_devices?.removed ?? []).join(", ") ||
+                        "none"}
+                    </p>
+                    {personalization.warnings?.length > 0 && (
+                      <ul className="space-y-1 text-amber-700 dark:text-amber-500">
+                        {personalization.warnings.map((warning) => (
+                          <li key={warning}>• {warning}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
                 )}
               </div>
               <span

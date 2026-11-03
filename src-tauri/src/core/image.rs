@@ -62,6 +62,15 @@ impl std::str::FromStr for OsType {
     }
 }
 
+impl OsType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Linux => "linux",
+            Self::Windows => "windows",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ImageFormat {

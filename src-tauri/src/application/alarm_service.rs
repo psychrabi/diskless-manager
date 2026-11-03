@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use crate::{
     core::{
         alarm::{Alarm, AlarmKind, AlarmSeverity, AlarmSummary},
-        config::Settings,
+        config::{Settings, SparePrewarmConfig},
         service::ServiceInfo,
     },
     infrastructure::zfs::ZpoolHealth,
@@ -39,6 +39,37 @@ struct StorageRecoveryRow {
     last_error: Option<String>,
 }
 
+/// Consecutive build failures that mean prewarming is broken for a client,
+/// not that one attempt failed while the pool was busy.
+const SPARE_FAILURE_THRESHOLD: i64 = 3;
+
+/// How long a full ready-spare limit may sit untouched before it is worth an
+/// alarm. Spares expire at `ttl_hours`, so a limit that stays full for this
+/// long means no eligible client has rebooted into one.
+const SPARE_DRAIN_STALL_SECONDS: i64 = 6 * 3600;
+
+#[derive(Debug, FromRow)]
+struct SpareFailureRow {
+    client_id: String,
+    client_name: String,
+    failures: i64,
+    last_error: Option<String>,
+}
+
+#[derive(Debug, FromRow)]
+struct ReadySpareRow {
+    ready: i64,
+    newest: Option<i64>,
+}
+
+#[derive(Debug, FromRow)]
+struct MaintenanceFailureRow {
+    pool: String,
+    operation: String,
+    detail: Option<String>,
+    finished_at: String,
+}
+
 #[derive(Debug, FromRow)]
 struct AcknowledgementRow {
     alarm_id: String,
@@ -55,6 +86,9 @@ impl AlarmService {
         let mut alarms = self.database_alarms().await?;
         alarms.extend(service_alarms(&probe_services(&settings, &self.pool).await));
         alarms.extend(pool_alarms(&probe_pools().await));
+        if settings.storage.spare_prewarm.enabled {
+            alarms.extend(self.spare_alarms(&settings.storage.spare_prewarm).await?);
+        }
 
         self.attach_acknowledgements(alarms).await
     }
@@ -98,6 +132,19 @@ impl AlarmService {
         .await
         .context("failed to load storage recoveries for alarms")?;
 
+        // Only the newest run per pool/operation counts, so a later successful
+        // run clears the alarm without deleting history.
+        let maintenance_failures = sqlx::query_as::<_, MaintenanceFailureRow>(
+            "SELECT r.pool, r.operation, r.detail, r.finished_at
+             FROM storage_maintenance_runs r
+             WHERE r.state = 'failed' AND r.finished_at = (
+                 SELECT MAX(latest.finished_at) FROM storage_maintenance_runs latest
+                 WHERE latest.pool = r.pool AND latest.operation = r.operation)",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("failed to load maintenance failures for alarms")?;
+
         let mut alarms = Vec::with_capacity(boot_failures.len() + storage_recoveries.len());
 
         alarms.extend(boot_failures.into_iter().map(|row| Alarm {
@@ -140,6 +187,103 @@ impl AlarmService {
             acknowledged_by: None,
         }));
 
+        alarms.extend(maintenance_failures.into_iter().map(|row| {
+            Alarm {
+                id: format!(
+                    "maintenance:{}:{}:{}",
+                    row.pool, row.operation, row.finished_at
+                ),
+                kind: AlarmKind::Maintenance,
+                severity: AlarmSeverity::Warning,
+                title: format!("Storage {} failed on {}", row.operation, row.pool),
+                detail: row
+                    .detail
+                    .unwrap_or_else(|| "no diagnostic was recorded".to_string()),
+                source: row.pool,
+                client_id: None,
+                observed_at: DateTime::parse_from_rfc3339(&row.finished_at)
+                    .ok()
+                    .map(|time| time.with_timezone(&Utc)),
+                acknowledged_at: None,
+                acknowledged_by: None,
+            }
+        }));
+
+        Ok(alarms)
+    }
+
+    /// Prewarm health: builds that keep failing, and a ready limit that no
+    /// client ever drains. Both are derived from stored spare rows, so the
+    /// alarm clears by itself once a build succeeds or a spare is adopted.
+    async fn spare_alarms(&self, config: &SparePrewarmConfig) -> Result<Vec<Alarm>> {
+        let failures = sqlx::query_as::<_, SpareFailureRow>(
+            "SELECT s.client_id, c.name AS client_name, s.failures, s.last_error
+             FROM client_writeback_spares s
+             JOIN clients c ON c.id = s.client_id
+             WHERE s.status IN ('failed', 'invalid') AND s.failures >= ?",
+        )
+        .bind(SPARE_FAILURE_THRESHOLD)
+        .fetch_all(&self.pool)
+        .await
+        .context("failed to load spare build failures for alarms")?;
+
+        let mut alarms: Vec<Alarm> = failures
+            .into_iter()
+            .map(|row| Alarm {
+                id: format!("spare:{}:{}", row.client_id, row.failures),
+                kind: AlarmKind::SparePrewarm,
+                severity: AlarmSeverity::Critical,
+                title: format!("Writeback prewarm keeps failing for {}", row.client_name),
+                detail: format!(
+                    "{} consecutive replacement clone build or cleanup attempt(s) failed. Last error: {}",
+                    row.failures,
+                    row.last_error
+                        .unwrap_or_else(|| "no error recorded".to_string())
+                ),
+                source: row.client_name,
+                client_id: Some(row.client_id),
+                observed_at: None,
+                acknowledged_at: None,
+                acknowledged_by: None,
+            })
+            .collect();
+
+        if config.max_ready_spares == 0 {
+            return Ok(alarms);
+        }
+        let ready = sqlx::query_as::<_, ReadySpareRow>(
+            "SELECT COUNT(*) AS ready, MAX(created_at) AS newest
+             FROM client_writeback_spares WHERE status = 'ready'",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .context("failed to count ready spares for alarms")?;
+        let now = Utc::now().timestamp();
+        if ready.ready >= i64::from(config.max_ready_spares)
+            && ready
+                .newest
+                .is_some_and(|newest| now.saturating_sub(newest) > SPARE_DRAIN_STALL_SECONDS)
+        {
+            alarms.push(Alarm {
+                id: format!("spare:stalled:{}:{}", ready.ready, ready.newest.unwrap_or(0)),
+                kind: AlarmKind::SparePrewarm,
+                severity: AlarmSeverity::Warning,
+                title: "Prewarmed replacements are not being used".to_string(),
+                detail: format!(
+                    "{} of {} permitted replacement clone(s) are ready and the newest is over {} hours old. \
+                     No eligible client has booted into one; check that non-persistent clients still reboot \
+                     and that their assigned image has not changed.",
+                    ready.ready,
+                    config.max_ready_spares,
+                    SPARE_DRAIN_STALL_SECONDS / 3600
+                ),
+                source: "prewarm".to_string(),
+                client_id: None,
+                observed_at: ready.newest.and_then(|newest| DateTime::from_timestamp(newest, 0)),
+                acknowledged_at: None,
+                acknowledged_by: None,
+            });
+        }
         Ok(alarms)
     }
 
@@ -343,6 +487,135 @@ mod tests {
         assert_eq!(storage.severity, AlarmSeverity::Critical);
         assert_eq!(storage.id, "storage:client:2");
         assert!(storage.detail.contains("cleanup interrupted"));
+    }
+
+    fn prewarm(enabled: bool, max_ready_spares: u32) -> SparePrewarmConfig {
+        SparePrewarmConfig {
+            enabled,
+            max_ready_spares,
+            ..SparePrewarmConfig::default()
+        }
+    }
+
+    /// Two clients: the spare table allows exactly one spare per client.
+    async fn spare_clients(pool: &SqlitePool) {
+        for (id, name, mac, ip) in [
+            ("client", "PC-01", "02:00:00:00:00:01", "192.0.2.1"),
+            ("client2", "PC-02", "02:00:00:00:00:02", "192.0.2.2"),
+        ] {
+            sqlx::query("INSERT INTO clients (id, name, mac, ip, master, created_at, updated_at) VALUES (?, ?, ?, ?, 'pool/master', 'now', 'now')")
+                .bind(id)
+                .bind(name)
+                .bind(mac)
+                .bind(ip)
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+    }
+
+    async fn spare_row(
+        pool: &SqlitePool,
+        dataset: &str,
+        status: &str,
+        failures: i64,
+        created_at: i64,
+    ) {
+        let client = if dataset.ends_with("b") {
+            "client2"
+        } else {
+            "client"
+        };
+        sqlx::query(
+            "INSERT INTO client_writeback_spares(client_id, dataset, source_snapshot, fingerprint, status, created_at, retry_after, last_error, failures)
+             VALUES (?, ?, 'pool/master@ready', 'fp', ?, ?, 0, 'zfs clone failed', ?)",
+        )
+        .bind(client)
+        .bind(dataset)
+        .bind(status)
+        .bind(created_at)
+        .bind(failures)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn alarms_only_after_repeated_spare_build_failures() {
+        let pool = database().await;
+        spare_clients(&pool).await;
+        spare_row(&pool, "pool/clients/pc-spare-a", "failed", 2, 100).await;
+        let service = AlarmService::new(pool.clone());
+
+        assert!(service
+            .spare_alarms(&prewarm(true, 4))
+            .await
+            .unwrap()
+            .is_empty());
+
+        spare_row(&pool, "pool/clients/pc-spare-b", "failed", 3, 200).await;
+        let alarms = service.spare_alarms(&prewarm(true, 4)).await.unwrap();
+        assert_eq!(alarms.len(), 1);
+        assert_eq!(alarms[0].kind, AlarmKind::SparePrewarm);
+        assert_eq!(alarms[0].severity, AlarmSeverity::Critical);
+        assert_eq!(alarms[0].id, "spare:client2:3");
+        assert!(alarms[0].detail.contains("zfs clone failed"));
+
+        sqlx::query(
+            "UPDATE client_writeback_spares SET status = 'invalid' WHERE client_id = 'client2'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            service.spare_alarms(&prewarm(true, 4)).await.unwrap().len(),
+            1
+        );
+
+        // Recovery clears the alarm without deleting history.
+        sqlx::query("UPDATE client_writeback_spares SET status = 'ready', failures = 0 WHERE dataset = 'pool/clients/pc-spare-b'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(service
+            .spare_alarms(&prewarm(true, 4))
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn alarms_when_a_full_ready_limit_stops_draining() {
+        let pool = database().await;
+        spare_clients(&pool).await;
+        let now = Utc::now().timestamp();
+        spare_row(&pool, "pool/clients/pc-spare-a", "ready", 0, now - 7 * 3600).await;
+        spare_row(&pool, "pool/clients/pc-spare-b", "ready", 0, now - 7 * 3600).await;
+        let service = AlarmService::new(pool.clone());
+
+        let alarms = service.spare_alarms(&prewarm(true, 2)).await.unwrap();
+        assert_eq!(alarms.len(), 1);
+        assert_eq!(alarms[0].severity, AlarmSeverity::Warning);
+        assert!(alarms[0].title.contains("not being used"));
+
+        // Below the limit, or freshly built, is normal operation.
+        assert!(service
+            .spare_alarms(&prewarm(true, 3))
+            .await
+            .unwrap()
+            .is_empty());
+        sqlx::query(
+            "DELETE FROM client_writeback_spares WHERE dataset = 'pool/clients/pc-spare-b'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        spare_row(&pool, "pool/clients/pc-spare-b", "ready", 0, now).await;
+        assert!(service
+            .spare_alarms(&prewarm(true, 2))
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

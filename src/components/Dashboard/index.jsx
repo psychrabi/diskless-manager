@@ -7,7 +7,9 @@ import AlarmInbox from "./AlarmInbox";
 import MetricsCard from "./MetricsCard";
 import ServerInfoCard from "./ServerInfoCard";
 import ServicesStatus from "./ServicesStatus";
+import SparePrewarmCard from "./SparePrewarmCard";
 import StorageCard from "./StorageCard";
+import StorageMaintenanceCard from "./StorageMaintenanceCard";
 
 export default function Dashboard() {
   const { loading } = useAppStore(
@@ -49,8 +51,10 @@ export default function Dashboard() {
 
       <div className="grid grid-cols-1 items-stretch gap-4 md:grid-cols-2 xl:grid-cols-6">
         <StorageCard />
+        <StorageMaintenanceCard />
         <ArcCacheCard />
         <ServerInfoCard />
+        <SparePrewarmCard />
         <ServicesStatus />
       </div>
     </div>

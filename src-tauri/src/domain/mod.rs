@@ -1,6 +1,7 @@
 pub mod boot_log;
 pub mod client;
 pub mod errors;
+pub mod image;
 pub mod provisioning;
 pub mod storage;
 

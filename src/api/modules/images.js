@@ -8,6 +8,35 @@ export async function listMasters() {
   return apiRequest("/api/masters");
 }
 
+/** Published image versions (ADR 0009), newest first per base name. */
+export async function listImageVersions(baseName, all = false) {
+  const params = new URLSearchParams();
+  if (baseName) params.set("base_name", baseName);
+  if (all) params.set("all", "true");
+  const query = params.toString();
+  return apiRequest(`/api/image-versions${query ? `?${query}` : ""}`);
+}
+
+export async function deleteImageVersion(id) {
+  return apiRequest(`/api/image-versions/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+/** Publish a committed Windows servicing clone as a new image version. */
+export async function publishImageVersion(request) {
+  return apiRequest("/api/image-versions/post-commit", {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+}
+
+export async function validateWindowsComputerName(computerName) {
+  return apiRequest(
+    `/api/image-versions/validate-computer-name?computer_name=${encodeURIComponent(computerName ?? "")}`
+  );
+}
+
 export async function renameImage(id, newName) {
   return apiRequest(`/api/images/${id}/rename`, {
     method: "PUT",

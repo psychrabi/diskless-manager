@@ -95,6 +95,25 @@ fn decide(
     }
 }
 
+/// A live boot handoff suspends the offline deadline.
+///
+/// The confirmed-absent session belongs to a boot that has not reached the OS
+/// yet, so the timer must not arm, and an already-armed timer must be cleared
+/// rather than advanced toward deletion.
+fn decide_with_handoff(
+    handoff_live: bool,
+    state: &ResetState,
+    connected: Option<bool>,
+    eligible: bool,
+    now: i64,
+    delay: i64,
+) -> Decision {
+    if handoff_live {
+        return Decision::Cancel;
+    }
+    decide(state, connected, eligible, now, delay)
+}
+
 fn retry_delay(failures: i64) -> i64 {
     30 * (1_i64 << failures.clamp(0, 5))
 }
@@ -373,6 +392,20 @@ pub async fn run(state: AppState) {
 }
 
 async fn tick(state: &AppState) -> Result<()> {
+    // Close expired boot handoffs first: an expired window is what allows the
+    // offline timer to run again for the client in this same sweep.
+    let probe: Arc<dyn super::boot_handoff_service::SessionProbe> = Arc::new(
+        super::boot_handoff_service::SystemSessionProbe::new(state.application.storage.clone()),
+    );
+    if let Err(error) = super::boot_handoff_service::expire_due(
+        &state.db_pool,
+        probe,
+        chrono::Utc::now().timestamp(),
+    )
+    .await
+    {
+        tracing::warn!(%error, "boot handoff expiry check failed");
+    }
     let repository = ClientRepository::new(state.db_pool.clone());
     let clients = repository.find_all().await?;
     let pending: std::collections::HashSet<String> = sqlx::query_scalar(
@@ -454,6 +487,18 @@ async fn process(state: &AppState, client: &Client) -> Result<()> {
         tokio::task::spawn_blocking(move || storage.target_connected_if_present(&target_copy))
             .await?
             .ok();
+    // A connected client has finished its iPXE-to-OS handoff.
+    if connected == Some(true) {
+        super::boot_handoff_service::clear(&state.db_pool, client.id.as_str()).await?;
+    }
+    // Only a confirmed-absent session can be explained by a boot in progress;
+    // unknown state and an already-completed reset keep their existing paths.
+    let handoff_live = match connected {
+        Some(false) if !saved.completed => {
+            super::boot_handoff_service::active(&state.db_pool, client.id.as_str(), now).await?
+        }
+        _ => false,
+    };
 
     // Finish a journal before clearing a deadline or accepting new settings.
     if let Some(journal) = saved.operation.as_deref() {
@@ -519,7 +564,8 @@ async fn process(state: &AppState, client: &Client) -> Result<()> {
             .execute(&state.db_pool)
             .await?;
     }
-    match decide(
+    match decide_with_handoff(
+        handoff_live,
         &saved,
         connected,
         eligible,
@@ -913,6 +959,29 @@ mod tests {
         assert_eq!(
             decide(&state, Some(false), false, 400, 300),
             Decision::Cancel
+        );
+    }
+
+    #[test]
+    fn live_boot_handoff_suspends_the_offline_deadline() {
+        let state = ResetState {
+            offline_since: Some(100),
+            ..Default::default()
+        };
+        // Without a handoff the deadline has long passed and the storage is
+        // deleted; during a boot handoff the same state must not advance.
+        assert_eq!(
+            decide(&state, Some(false), true, 1000, 300),
+            Decision::Delete
+        );
+        assert_eq!(
+            decide_with_handoff(true, &state, Some(false), true, 1000, 300),
+            Decision::Cancel
+        );
+        // An unarmed client still starts its timer once the window closes.
+        assert_eq!(
+            decide_with_handoff(false, &ResetState::default(), Some(false), true, 1000, 300),
+            Decision::Start
         );
     }
 

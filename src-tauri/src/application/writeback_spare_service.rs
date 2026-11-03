@@ -8,7 +8,10 @@
 //! only after ownership, origin, session and export checks pass.
 
 use crate::{
-    application::storage_service::{OfflineReplacement, StorageService},
+    application::{
+        client_personalization::{self, apply_to_clone},
+        storage_service::{OfflineReplacement, StorageService},
+    },
     core::config::SparePrewarmConfig,
     domain::storage::ClientStorageSpec,
     domain::Client,
@@ -26,6 +29,13 @@ use std::time::Duration;
 const INTERRUPTED_GRACE_SECONDS: i64 = 3600;
 /// Delay before retrying a failed spare build.
 const FAILED_BUILD_RETRY_SECONDS: i64 = 3600;
+/// How long a build waits for the client's mutation lock.
+///
+/// The lock must never be taken with `try` here: the 10 s lifecycle sweep runs
+/// on the same phase as this 60 s sweep and holds the key for tens of
+/// milliseconds, which starves a non-blocking attempt on every tick. Waiting is
+/// still bounded so a build never queues behind a long boot or fleet operation.
+const CLIENT_LOCK_WAIT: Duration = Duration::from_secs(5);
 /// Period of the background sweep.
 const SWEEP_INTERVAL: Duration = Duration::from_secs(60);
 
@@ -74,6 +84,9 @@ pub struct WritebackSpare {
     pub validated_at: Option<i64>,
     pub retry_after: i64,
     pub last_error: Option<String>,
+    /// Consecutive failed builds or cleanups. Reset by a successful build; the
+    /// alarm read model uses it to report a prewarm that never works.
+    pub failures: i64,
 }
 
 #[derive(sqlx::FromRow)]
@@ -87,6 +100,7 @@ struct SpareRow {
     validated_at: Option<i64>,
     retry_after: i64,
     last_error: Option<String>,
+    failures: i64,
 }
 
 impl TryFrom<SpareRow> for WritebackSpare {
@@ -104,12 +118,12 @@ impl TryFrom<SpareRow> for WritebackSpare {
             validated_at: row.validated_at,
             retry_after: row.retry_after,
             last_error: row.last_error,
+            failures: row.failures,
         })
     }
 }
 
-const SPARE_COLUMNS: &str =
-    "client_id, dataset, source_snapshot, fingerprint, status, created_at, validated_at, retry_after, last_error";
+const SPARE_COLUMNS: &str = "client_id, dataset, source_snapshot, fingerprint, status, created_at, validated_at, retry_after, last_error, failures";
 
 pub async fn load_spare(
     pool: &sqlx::SqlitePool,
@@ -150,6 +164,9 @@ async fn insert_building_spare(pool: &sqlx::SqlitePool, spare: &WritebackSpare) 
     Ok(())
 }
 
+/// Update a spare's state. A successful build resets the consecutive-failure
+/// counter; a failed one or a failed cleanup increments it, so the alarm read
+/// model can distinguish one bad attempt from a prewarm that never works.
 async fn set_spare_status(
     pool: &sqlx::SqlitePool,
     client_id: &str,
@@ -158,13 +175,18 @@ async fn set_spare_status(
     last_error: Option<&str>,
 ) -> Result<()> {
     sqlx::query(
-        "UPDATE client_writeback_spares SET status = ?, retry_after = ?, last_error = ?, validated_at = CASE WHEN ? THEN ? ELSE validated_at END WHERE client_id = ?",
+        "UPDATE client_writeback_spares SET status = ?, retry_after = ?, last_error = ?, \
+         validated_at = CASE WHEN ? THEN ? ELSE validated_at END, \
+         failures = CASE WHEN ? THEN 0 WHEN ? THEN failures + 1 ELSE failures END \
+         WHERE client_id = ?",
     )
     .bind(status.as_str())
     .bind(retry_after)
     .bind(last_error)
     .bind(status == SpareStatus::Ready)
     .bind(chrono::Utc::now().timestamp())
+    .bind(status == SpareStatus::Ready)
+    .bind(matches!(status, SpareStatus::Failed | SpareStatus::Invalid))
     .bind(client_id)
     .execute(pool)
     .await?;
@@ -195,6 +217,10 @@ pub async fn spare_fingerprint(pool: &sqlx::SqlitePool, client: &Client) -> Resu
     let effective_source =
         crate::application::hardware_identity_service::cached_source_for_client(pool, client)
             .await?;
+    // A stored personalization plan changes what the spare contains, so it
+    // belongs in the identity the boot path re-checks before adoption.
+    let personalization =
+        client_personalization::fingerprint_component(pool, client.id.as_str()).await?;
     Ok(serde_json::to_string(&(
         client.id.to_string(),
         &client.name,
@@ -208,6 +234,7 @@ pub async fn spare_fingerprint(pool: &sqlx::SqlitePool, client: &Client) -> Resu
         client.keep_writeback,
         client.use_game_disk,
         games,
+        personalization,
     ))?)
 }
 
@@ -399,7 +426,15 @@ pub async fn maintain(
         return Ok(());
     }
 
-    for (client, fingerprint) in plan_builds(state, &spares, slots).await? {
+    let planned = plan_builds(state, &spares, slots).await?;
+    tracing::debug!(
+        free_bytes,
+        occupied,
+        slots,
+        planned = planned.len(),
+        "writeback spare sweep"
+    );
+    for (client, fingerprint) in planned {
         if let Err(error) = build_spare(state, &client, &fingerprint, sessions.clone()).await {
             tracing::warn!(client_id = %client.id, %error, "spare build failed");
         }
@@ -416,11 +451,25 @@ async fn plan_builds(
     let clients = ClientRepository::new(state.db_pool.clone())
         .find_all()
         .await?;
+    let now = chrono::Utc::now().timestamp();
     let existing: HashSet<&str> = spares
         .iter()
+        .filter(|spare| {
+            !matches!(spare.status, SpareStatus::Failed | SpareStatus::Invalid)
+                || now < spare.retry_after
+        })
         .map(|spare| spare.client_id.as_str())
         .collect();
     let reserved = reserved_client_ids(&state.db_pool).await?;
+    // A personalized spare needs the Windows worker while it is built. Without
+    // one, building would only burn pool space on a clone the boot path must
+    // reject, so these clients wait for the normal path instead.
+    let worker_ready = state
+        .settings
+        .read()
+        .await
+        .windows_servicing
+        .is_configured();
 
     let mut planned: Vec<(Client, String)> = Vec::new();
     for client in clients {
@@ -431,6 +480,17 @@ async fn plan_builds(
             || reserved.contains(client.id.as_str())
             || existing.contains(client.id.as_str())
         {
+            continue;
+        }
+        if !worker_ready
+            && client_personalization::load(&state.db_pool, client.id.as_str())
+                .await?
+                .is_some()
+        {
+            tracing::debug!(
+                client_id = %client.id,
+                "skipping spare build: the client's personalization plan needs a Windows worker"
+            );
             continue;
         }
         let fingerprint = spare_fingerprint(&state.db_pool, &client).await?;
@@ -463,12 +523,16 @@ async fn build_spare(
     expected: &str,
     sessions: Arc<dyn SessionProbe>,
 ) -> Result<()> {
-    // Preprocessing never queues behind an active boot or mutation.
-    let Some(_guard) = state
+    // Bound the wait behind an active boot or mutation.
+    let Some(guard) = state
         .client_mutations
-        .try_lock_client(client.id.as_str())
+        .lock_client_timeout(client.id.as_str(), CLIENT_LOCK_WAIT)
         .await
     else {
+        tracing::debug!(
+            client_id = %client.id,
+            "skipping spare build: client is busy"
+        );
         return Ok(());
     };
     let Some(current) = ClientRepository::new(state.db_pool.clone())
@@ -530,6 +594,16 @@ async fn build_spare(
         }
     }
 
+    if let Some(existing) = load_spare(&state.db_pool, current.id.as_str()).await? {
+        if !matches!(existing.status, SpareStatus::Failed | SpareStatus::Invalid)
+            || chrono::Utc::now().timestamp() < existing.retry_after
+        {
+            return Ok(());
+        }
+        // A sweep may have skipped cleanup while the client lock was busy.
+        discard_spare(state, &existing, true).await?;
+    }
+
     let spare_dataset = spare_dataset_name(&dataset);
     let spare = WritebackSpare {
         client_id: current.id.to_string(),
@@ -541,6 +615,7 @@ async fn build_spare(
         validated_at: None,
         retry_after: 0,
         last_error: None,
+        failures: 0,
     };
     insert_building_spare(&state.db_pool, &spare).await?;
 
@@ -550,12 +625,78 @@ async fn build_spare(
             .await?;
     match built {
         Ok(()) => {
-            set_spare_status(&state.db_pool, &client_id, SpareStatus::Ready, 0, None).await?;
-            tracing::info!(
-                client_id,
-                dataset = %spare.dataset,
-                "writeback spare is ready"
-            );
+            let plan = client_personalization::load(&state.db_pool, &client_id)
+                .await?
+                .filter(|stored| !stored.plan.is_empty());
+            let Some(stored) = plan else {
+                set_spare_status(&state.db_pool, &client_id, SpareStatus::Ready, 0, None).await?;
+                tracing::info!(
+                    client_id,
+                    dataset = %spare.dataset,
+                    "writeback spare is ready"
+                );
+                return Ok(());
+            };
+
+            // The worker round trip can take minutes. Release the client lock
+            // so it does not block this client's boot, then re-acquire to
+            // publish the outcome against the client's current state.
+            drop(guard);
+            let applied =
+                personalize_spare_clone(state, &current, &spare.dataset, &stored.plan).await;
+            let Some(_guard) = state
+                .client_mutations
+                .lock_client_timeout(&client_id, CLIENT_LOCK_WAIT)
+                .await
+            else {
+                // A boot or mutation owns the client; leave the spare
+                // `building` for the next sweep to re-evaluate.
+                return Ok(());
+            };
+            match applied {
+                Ok(()) => {
+                    if spare_fingerprint(&state.db_pool, &current).await? != expected {
+                        // The client's configuration changed while the clone was
+                        // being personalized: it is no longer a valid spare.
+                        let _ = discard_spare(state, &spare, false).await;
+                        return Ok(());
+                    }
+                    set_spare_status(&state.db_pool, &client_id, SpareStatus::Ready, 0, None)
+                        .await?;
+                    tracing::info!(
+                        client_id,
+                        dataset = %spare.dataset,
+                        "personalized writeback spare is ready"
+                    );
+                }
+                Err(error) => {
+                    let message = format!("{error:#}");
+                    if let Err(record_error) =
+                        client_personalization::record_failure(&state.db_pool, &client_id, &message)
+                            .await
+                    {
+                        tracing::warn!(client_id, %record_error, "failed to record personalization failure");
+                    }
+                    // Never leave an unpersonalized clone adoptable: destroy it
+                    // and keep the row so the failure is visible and retried.
+                    let cleanup = discard_spare(state, &spare, true).await;
+                    set_spare_status(
+                        &state.db_pool,
+                        &client_id,
+                        SpareStatus::Failed,
+                        chrono::Utc::now().timestamp() + FAILED_BUILD_RETRY_SECONDS,
+                        Some(&message),
+                    )
+                    .await?;
+                    return Err(match cleanup {
+                        Ok(()) => error,
+                        Err(cleanup_error) => error.context(format!(
+                            "additionally failed to discard the unpersonalized spare '{}': {cleanup_error:#}",
+                            spare.dataset
+                        )),
+                    });
+                }
+            }
         }
         Err(error) => {
             set_spare_status(
@@ -570,6 +711,39 @@ async fn build_spare(
         }
     }
     Ok(())
+}
+
+/// Personalize a freshly built spare through the configured Windows worker.
+///
+/// Runs without the client mutation lock: the clone is job-owned and has no
+/// target, session or mount. Any failure leaves the caller to destroy the clone
+/// and retry later; boot is never blocked by this step.
+async fn personalize_spare_clone(
+    state: &AppState,
+    client: &Client,
+    dataset: &str,
+    plan: &crate::infrastructure::pxe::windows_personalization::WindowsPersonalizationPlan,
+) -> Result<()> {
+    let worker = state.settings.read().await.windows_servicing.clone();
+    anyhow::ensure!(
+        worker.is_configured(),
+        "no Windows servicing worker is configured"
+    );
+    let image = state.application.images.get(&client.master).await?;
+    anyhow::ensure!(
+        image.os_type == crate::core::image::OsType::Windows,
+        "personalization is only supported for Windows clients"
+    );
+    let info = state.application.images.get_info(&image.id).await?;
+    apply_to_clone(
+        state.application.iscsi.clone(),
+        &worker,
+        dataset,
+        plan,
+        info.virtual_size,
+    )
+    .await
+    .with_context(|| format!("failed to personalize spare '{dataset}'"))
 }
 
 /// Drop spares that are expired, stale, superseded or owned by a client that
@@ -627,14 +801,17 @@ async fn expire_one(
     let now = chrono::Utc::now().timestamp();
     let ttl = i64::from(config.ttl_hours) * 3600;
     let Some(client) = clients.get(&spare.client_id) else {
-        return discard_spare(state, spare).await;
+        return discard_spare(state, spare, false).await;
     };
-    // Retry a failed build or cleanup once its backoff has elapsed; the row
-    // is removed so a later sweep can build a fresh spare.
-    if matches!(spare.status, SpareStatus::Failed | SpareStatus::Invalid)
-        && now >= spare.retry_after
-    {
-        return discard_spare(state, spare).await;
+    if matches!(spare.status, SpareStatus::Failed | SpareStatus::Invalid) {
+        if now < spare.retry_after {
+            return Ok(());
+        }
+        // Keep consecutive failures across cleanup and the next build attempt.
+        let retain_failures = config.enabled
+            && client_can_own_spare(client)
+            && spare_fingerprint(&state.db_pool, client).await? == spare.fingerprint;
+        return discard_spare(state, spare, retain_failures).await;
     }
     if matches!(spare.status, SpareStatus::Building | SpareStatus::Consuming) {
         if now.saturating_sub(spare.created_at) > INTERRUPTED_GRACE_SECONDS {
@@ -643,7 +820,7 @@ async fn expire_one(
                 dataset = %spare.dataset,
                 "discarding interrupted writeback spare"
             );
-            return discard_spare(state, spare).await;
+            return discard_spare(state, spare, false).await;
         }
         return Ok(());
     }
@@ -682,17 +859,22 @@ async fn expire_one(
             spare_present,
             "discarding writeback spare"
         );
-        discard_spare(state, spare).await?;
+        discard_spare(state, spare, false).await?;
     }
     Ok(())
 }
 
-async fn discard_spare(state: &AppState, spare: &WritebackSpare) -> Result<()> {
+async fn discard_spare(
+    state: &AppState,
+    spare: &WritebackSpare,
+    retain_failures: bool,
+) -> Result<()> {
     let storage = state.application.storage.clone();
     let dataset = spare.dataset.clone();
     let outcome =
         tokio::task::spawn_blocking(move || storage.discard_spare_clone(&dataset)).await?;
     match outcome {
+        Ok(()) if retain_failures => Ok(()),
         Ok(()) => delete_spare(&state.db_pool, &spare.client_id).await,
         Err(error) => {
             set_spare_status(
@@ -905,6 +1087,7 @@ mod tests {
             validated_at: Some(0),
             retry_after: 0,
             last_error: None,
+            failures: 0,
         }
     }
 
@@ -1098,6 +1281,7 @@ mod tests {
     #[derive(Default)]
     struct FakeDisks {
         volumes: Mutex<HashMap<String, String>>,
+        fail_destroy: Mutex<bool>,
     }
 
     impl FakeDisks {
@@ -1144,6 +1328,9 @@ mod tests {
             Ok(())
         }
         fn destroy(&self, name: &str) -> Result<()> {
+            if *self.fail_destroy.lock().unwrap() {
+                bail!("simulated cleanup failure");
+            }
             self.volumes.lock().unwrap().remove(name);
             Ok(())
         }
@@ -1382,6 +1569,156 @@ mod tests {
             disks.content("pool/clients/pc001").as_deref(),
             Some("pool/master@ready")
         );
+    }
+
+    #[tokio::test]
+    async fn sweep_outlasts_a_short_periodic_holder_instead_of_starving() {
+        let (state, disks, _) = spare_state(true).await;
+        let sessions: Arc<dyn SessionProbe> = Arc::new(FakeSessions::default());
+        let capacity = Arc::new(FakeCapacity { free: u64::MAX / 2 });
+
+        // The lifecycle sweep holds the same client key briefly on a fixed
+        // phase; a non-blocking build attempt would miss its window forever.
+        let held = state.client_mutations.lock_client("client").await;
+        let release = state.client_mutations.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            drop(held);
+            drop(release);
+        });
+
+        maintain(&state, capacity, sessions).await.unwrap();
+
+        let record = load_spare(&state.db_pool, "client")
+            .await
+            .unwrap()
+            .expect("a short-lived holder must not prevent the build");
+        assert_eq!(record.status, SpareStatus::Ready);
+        assert_eq!(
+            disks.content(&record.dataset).as_deref(),
+            Some("pool/master@ready")
+        );
+    }
+
+    #[tokio::test]
+    async fn build_rechecks_existing_row_and_retains_failed_cleanup() {
+        let (state, disks, _) = spare_state(true).await;
+        let record = ready_spare(&state, &disks).await;
+        let sessions: Arc<dyn SessionProbe> = Arc::new(FakeSessions::default());
+        build_spare(&state, &client(), &record.fingerprint, sessions.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            load_spare(&state.db_pool, "client")
+                .await
+                .unwrap()
+                .unwrap()
+                .dataset,
+            record.dataset
+        );
+        set_spare_status(
+            &state.db_pool,
+            "client",
+            SpareStatus::Failed,
+            0,
+            Some("failed"),
+        )
+        .await
+        .unwrap();
+        *disks.fail_destroy.lock().unwrap() = true;
+        assert!(
+            build_spare(&state, &client(), &record.fingerprint, sessions)
+                .await
+                .is_err()
+        );
+        let retained = load_spare(&state.db_pool, "client").await.unwrap().unwrap();
+        assert_eq!(retained.dataset, record.dataset);
+        assert_eq!(retained.status, SpareStatus::Invalid);
+        assert_eq!(retained.failures, 2);
+        assert!(disks.content(&record.dataset).is_some());
+    }
+
+    #[tokio::test]
+    async fn repeated_build_failures_survive_cleanup_and_reset_on_success() {
+        let (state, disks, _) = spare_state(true).await;
+        disks.destroy("pool/master@ready").unwrap();
+        let sessions: Arc<dyn SessionProbe> = Arc::new(FakeSessions::default());
+        let capacity = Arc::new(FakeCapacity { free: u64::MAX / 2 });
+        for expected in 1..=3 {
+            maintain(&state, capacity.clone(), sessions.clone())
+                .await
+                .unwrap();
+            let record = load_spare(&state.db_pool, "client").await.unwrap().unwrap();
+            assert_eq!(record.status, SpareStatus::Failed);
+            assert_eq!(record.failures, expected);
+            // A sweep during backoff must not count another attempt.
+            maintain(&state, capacity.clone(), sessions.clone())
+                .await
+                .unwrap();
+            assert_eq!(
+                load_spare(&state.db_pool, "client").await.unwrap().unwrap(),
+                record
+            );
+            sqlx::query(
+                "UPDATE client_writeback_spares SET retry_after = 0 WHERE client_id = 'client'",
+            )
+            .execute(&state.db_pool)
+            .await
+            .unwrap();
+        }
+        disks.add("pool/master@ready", "");
+        maintain(&state, capacity, sessions).await.unwrap();
+        let record = load_spare(&state.db_pool, "client").await.unwrap().unwrap();
+        assert_eq!(record.status, SpareStatus::Ready);
+        assert_eq!(record.failures, 0);
+    }
+
+    #[tokio::test]
+    async fn failed_retry_cleanup_retains_resource_and_backoff() {
+        let (state, disks, _) = spare_state(true).await;
+        disks.destroy("pool/master@ready").unwrap();
+        let sessions: Arc<dyn SessionProbe> = Arc::new(FakeSessions::default());
+        let capacity = Arc::new(FakeCapacity { free: u64::MAX / 2 });
+        maintain(&state, capacity.clone(), sessions.clone())
+            .await
+            .unwrap();
+        let failed = load_spare(&state.db_pool, "client").await.unwrap().unwrap();
+        disks.add(&failed.dataset, "pool/master@ready");
+        *disks.fail_destroy.lock().unwrap() = true;
+        sqlx::query(
+            "UPDATE client_writeback_spares SET retry_after = 0 WHERE client_id = 'client'",
+        )
+        .execute(&state.db_pool)
+        .await
+        .unwrap();
+        maintain(&state, capacity.clone(), sessions.clone())
+            .await
+            .unwrap();
+        let retained = load_spare(&state.db_pool, "client").await.unwrap().unwrap();
+        assert_eq!(retained.status, SpareStatus::Invalid);
+        assert_eq!(retained.failures, 2);
+        assert_eq!(retained.dataset, failed.dataset);
+        assert!(disks.content(&failed.dataset).is_some());
+        maintain(&state, capacity.clone(), sessions.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            load_spare(&state.db_pool, "client").await.unwrap().unwrap(),
+            retained
+        );
+        *disks.fail_destroy.lock().unwrap() = false;
+        disks.add("pool/master@ready", "");
+        sqlx::query(
+            "UPDATE client_writeback_spares SET retry_after = 0 WHERE client_id = 'client'",
+        )
+        .execute(&state.db_pool)
+        .await
+        .unwrap();
+        maintain(&state, capacity, sessions).await.unwrap();
+        let ready = load_spare(&state.db_pool, "client").await.unwrap().unwrap();
+        assert_eq!(ready.status, SpareStatus::Ready);
+        assert_eq!(ready.failures, 0);
+        assert!(disks.content(&failed.dataset).is_none());
     }
 
     #[tokio::test]

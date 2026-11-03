@@ -330,6 +330,9 @@ pub async fn prepare_image_remote_catalog(
         iscsi: None,
         reporter: None,
         driver_install_strategy: WindowsDriverInstallStrategy::OfflineDism,
+        // Catalog preparation builds a master image; per-client identity
+        // belongs to the clone that boots it, not to the master.
+        personalization: None,
     };
 
     RemoteWindowsServicer::new()
@@ -598,6 +601,7 @@ pub async fn prepare_windows_assignment(
                 report_server_url: Some(profile.report_server_url),
                 boot_arm: WindowsBootArmConfig::default(),
                 driver_install_strategy: strategy,
+                personalization: None,
             };
         preparation.validate()?;
         let prepared = crate::application::windows_servicing::prepare_managed(

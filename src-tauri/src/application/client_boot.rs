@@ -359,13 +359,34 @@ pub async fn ensure_client_boot_ready(
         crate::application::client_lifecycle::lifecycle_fingerprint(state, &client).await?;
     sqlx::query("INSERT INTO client_offline_resets(client_id, fingerprint, offline_since, completed, failures, retry_after, last_error) VALUES (?, ?, NULL, 0, 0, 0, NULL) ON CONFLICT(client_id) DO UPDATE SET fingerprint = excluded.fingerprint, offline_since = NULL, completed = 0, failures = 0, retry_after = 0, last_error = NULL")
         .bind(id.as_str())
-        .bind(fingerprint)
+        .bind(&fingerprint)
         .execute(&state.db_pool)
         .await?;
     sqlx::query("DELETE FROM client_boot_failures WHERE client_id = ?")
         .bind(id.as_str())
         .execute(&state.db_pool)
         .await?;
+    // iPXE closes its iSCSI session before the OS opens its own to the same
+    // LUN. Record the bounded handoff before the script leaves the server so
+    // the lifecycle sweep cannot start its reset timer mid-boot. The record is
+    // bookkeeping, not a safety gate: storage is already published and
+    // verified above, and deletion still requires a confirmed disconnection
+    // plus the full reset delay, so a write failure warns instead of denying.
+    if let Err(error) = crate::application::boot_handoff_service::arm(
+        &state.db_pool,
+        id.as_str(),
+        &fingerprint,
+        i64::from(settings.client_lifecycle.boot_handoff_seconds),
+        chrono::Utc::now().timestamp(),
+    )
+    .await
+    {
+        tracing::warn!(
+            client_id = id.as_str(),
+            %error,
+            "failed to record the boot handoff window"
+        );
+    }
     tracing::info!(
         client_id = id.as_str(),
         elapsed_ms = readiness_started.elapsed().as_millis(),
@@ -380,11 +401,23 @@ pub async fn record_boot_failure(state: &AppState, id: &str, error: &str) -> Res
         .await?
         .context("client disappeared while recording boot failure")?;
     let now = chrono::Utc::now().timestamp();
+    record_boot_failure_row(&state.db_pool, id, error, now).await
+}
+
+/// Persist a boot-provisioning diagnostic for a client the caller already
+/// validated. Background sweeps use this directly; anything reachable from a
+/// request goes through [`record_boot_failure`].
+pub(crate) async fn record_boot_failure_row(
+    pool: &sqlx::SqlitePool,
+    id: &str,
+    error: &str,
+    now: i64,
+) -> Result<()> {
     sqlx::query("INSERT INTO client_boot_failures(client_id, failures, last_failed_at, last_error) VALUES (?, 1, ?, ?) ON CONFLICT(client_id) DO UPDATE SET failures = client_boot_failures.failures + 1, last_failed_at = excluded.last_failed_at, last_error = excluded.last_error")
         .bind(id)
         .bind(now)
         .bind(error)
-        .execute(&state.db_pool)
+        .execute(pool)
         .await
         .context("failed to persist boot provisioning diagnostics")?;
     Ok(())

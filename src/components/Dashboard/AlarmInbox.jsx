@@ -23,6 +23,8 @@ const KIND_LABELS = {
   storage_recovery: "Storage recovery",
   service: "Service",
   pool: "Storage pool",
+  spare_prewarm: "Prewarmed writeback",
+  maintenance: "Storage maintenance",
 };
 
 const formatTime = (value) => {
@@ -142,7 +144,8 @@ const AlarmInbox = () => {
       <CardHeader>
         <CardTitle>Alarms</CardTitle>
         <CardDescription>
-          Boot failures, storage recovery, service outages, and pool health.
+          Boot failures, storage recovery, service outages, pool health, and prewarmed
+          writeback problems.
         </CardDescription>
         <CardAction>
           <Button

@@ -13,6 +13,15 @@ The administrator-only **Image factory** page builds a new image without writing
 
 Publishing leaves the client's existing assignment in place by default. If **Assign to this client after verification** was selected, the server waits for the client to power off, cleans up the verification resources, then assigns the published image through the normal storage reconciliation path and records the result in the session. If assignment fails, the image stays published and the failure is shown for administrator action; it is not rolled back.
 
+## Publishing image versions
+
+Committing a Windows servicing clone and publishing it are separate steps. After a run commits, **Publish version** posts the clone's asset id and a version name to `/api/image-versions/post-commit`. The clone becomes a `ready` master and a version record keeps the base name, version label, OS type, provenance and the authenticated administrator who published it. The source image, its snapshots and every client assignment are left untouched.
+
+- Version identity is `(base_name, version)`. Publishing the same pair twice is refused with `409 state_conflict` and the existing row is kept. Omitting `base_name` groups the version under the asset name.
+- Only a committed Windows servicing clone can be published: kind `clone`, status `preparing`, with a snapshot. Other assets, non-Windows images and unknown ids are refused with `409` or `404`.
+- A locked version refuses deletion with `409`; an unknown version returns `404`. Deleting a version never deletes its image asset or snapshots.
+- Listing returns the newest version per base name; `?all=true` returns every version.
+
 ## Manual ISO boot
 
 Choose **Interactive ISO boot** to access an installer or recovery tool. The server attaches a new scratch disk at LUN 0 and the selected ISO read-only at LUN 1. Manual sessions never publish an image. Close the session after powering off the client; the scratch disk is discarded.

@@ -21,7 +21,7 @@ import IscsiBackendSetting from "./IscsiBackendSetting";
 const SECTIONS = [
   { section: "client_lifecycle", title: "Client Reset", schema: clientLifecycleSchema, Form: ClientLifecycleForm },
   { section: "client_features", title: "Client Features", schema: clientFeaturesSchema, Form: ClientFeaturesForm },
-  { section: "storage", title: "Storage Prewarming", schema: storagePrewarmSchema, Form: StoragePrewarmForm },
+  { section: "storage", title: "Storage", schema: storagePrewarmSchema, Form: StoragePrewarmForm },
   { section: "windows_servicing", title: "Windows Servicing", schema: windowsServicingSchema, Form: WindowsServicingForm },
   { section: "dhcp", title: "DHCP Server", schema: dhcpSchema, Form: DHCPForm },
   { section: "tftp", title: "TFTP", schema: tftpSchema, Form: TFTPForm },
