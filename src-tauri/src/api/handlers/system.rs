@@ -8,6 +8,20 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::state::AppState;
 
+/// Count the images offered by the image library.
+///
+/// Temporary Windows-servicing clones and verification candidates share the
+/// `images` table but are hidden from the image list. They must not inflate
+/// the dashboard's "available images" total, so only public masters count.
+async fn count_available_images(pool: &sqlx::SqlitePool) -> Result<i64, sqlx::Error> {
+    let count: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM images WHERE kind = 'master' AND status NOT IN ('draft', 'verifying')",
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(count.0)
+}
+
 /// Snapshot of cumulative ARC counters used to derive per-interval hit rates.
 struct ArcCounterSample {
     hits: u64,
@@ -62,14 +76,10 @@ pub async fn get_server_status(
         Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
     };
 
-    let images_count: (i64,) =
-        match sqlx::query_as("SELECT COUNT(*) FROM images WHERE kind IN ('master', 'clone')")
-            .fetch_one(&state.db_pool)
-            .await
-        {
-            Ok(count) => count,
-            Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
-        };
+    let images_count = match count_available_images(&state.db_pool).await {
+        Ok(count) => count,
+        Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
+    };
 
     let status = crate::commands::system::ServerStatus {
         initialized: true,
@@ -77,7 +87,7 @@ pub async fn get_server_status(
         services_running,
         services_total: service_names.len() as u32,
         clients_count: clients_count.0 as u32,
-        images_count: images_count.0 as u32,
+        images_count: images_count as u32,
     };
 
     Ok(Json(status))
@@ -732,5 +742,84 @@ pub async fn get_zfs_arcstat(
             // Return default values if ARC stats not available
             Ok(Json(empty()))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::count_available_images;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    #[tokio::test]
+    async fn dashboard_http_count_matches_public_image_library() {
+        use axum::{body::Body, http::Request};
+        use tower::ServiceExt;
+
+        let (state, app, admin, _) = crate::api::security_tests::setup().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        for (id, kind, status, parent) in [
+            ("public-a", "master", "ready", None),
+            ("public-b", "master", "ready", None),
+            ("draft", "master", "draft", None),
+            ("verification", "master", "verifying", None),
+            ("servicing", "clone", "ready", Some("public-a")),
+            ("failed", "clone", "servicing-failed", Some("public-a")),
+            ("snapshot", "snapshot", "ready", Some("public-a")),
+        ] {
+            sqlx::query("INSERT INTO images (id, name, kind, os_type, size_gb, path, format, status, parent_id, created_at, updated_at) VALUES (?, ?, ?, 'windows', 50, ?, 'raw', ?, ?, ?, ?)")
+                .bind(id).bind(format!("tank/image/{id}")).bind(kind)
+                .bind(format!("/dev/zvol/tank/image/{id}")).bind(status).bind(parent)
+                .bind(&now).bind(&now).execute(&state.db_pool).await.unwrap();
+        }
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/system/status")
+                    .header("authorization", format!("Bearer {admin}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let status = serde_json::from_slice::<serde_json::Value>(&body).unwrap();
+        assert_eq!(status["images_count"], 2);
+    }
+
+    #[tokio::test]
+    async fn available_images_are_public_masters_only() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory database");
+        sqlx::query("CREATE TABLE images (kind TEXT NOT NULL, status TEXT NOT NULL)")
+            .execute(&pool)
+            .await
+            .expect("create images table");
+        for (kind, status) in [
+            ("master", "ready"),
+            ("master", "ready"),
+            ("master", "draft"),
+            ("master", "verifying"),
+            ("clone", "ready"),
+            ("clone", "servicing-failed"),
+            ("snapshot", "ready"),
+        ] {
+            sqlx::query("INSERT INTO images (kind, status) VALUES (?, ?)")
+                .bind(kind)
+                .bind(status)
+                .execute(&pool)
+                .await
+                .expect("insert image row");
+        }
+
+        assert_eq!(
+            count_available_images(&pool).await.expect("count images"),
+            2
+        );
     }
 }

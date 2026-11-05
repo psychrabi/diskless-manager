@@ -285,6 +285,33 @@ pub async fn adaptation_bundle(
         })
 }
 
+pub async fn servicer_binary(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Path((id, token)): Path<(String, String)>,
+) -> Result<Response<Body>, ApiError> {
+    let body = InstallationService::new(state)
+        .servicer_binary(&id, &token, peer.ip())
+        .await
+        .map_err(|_| {
+            error(
+                StatusCode::FORBIDDEN,
+                "Windows servicer denied; verify session state and assigned client address",
+            )
+        })?;
+    Response::builder()
+        .header(header::CONTENT_TYPE, "application/octet-stream")
+        .header(header::CACHE_CONTROL, "no-store")
+        .header("Referrer-Policy", "no-referrer")
+        .body(body)
+        .map_err(|_| {
+            error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Could not build Windows servicer response",
+            )
+        })
+}
+
 pub async fn payload(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,

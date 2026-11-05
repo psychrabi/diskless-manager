@@ -167,17 +167,29 @@ TFTPD_ARGS="--listen --user tftp --address {ip}:{port} -s {root} {options}"
         // Generate config first
         self.generate_config().await?;
 
-        // Then start the TFTP daemon
-        let service = crate::platform::detect().tftp_service();
-        run_sudo_command(["systemctl", "start", service]).await?;
+        // Start the unit that owns the listener. On Fedora/RHEL the daemon is
+        // socket-activated: starting `tftp.service` directly serves only until
+        // it idles out, while the socket keeps the port open and activates a
+        // fresh daemon on the next request.
+        let distro = crate::platform::detect();
+        let unit = distro
+            .tftp_socket()
+            .unwrap_or_else(|| distro.tftp_service());
+        run_sudo_command(["systemctl", "start", unit]).await?;
 
         info!("TFTP service started");
         Ok(())
     }
 
     pub async fn stop(&self) -> anyhow::Result<()> {
-        let service = crate::platform::detect().tftp_service();
-        run_sudo_command(["systemctl", "stop", service]).await?;
+        let distro = crate::platform::detect();
+        // Stop the socket as well as the daemon. Leaving the socket active
+        // keeps the TFTP port open and re-activates the daemon on the next
+        // request even after the operator asked to stop the service.
+        run_sudo_command(["systemctl", "stop", distro.tftp_service()]).await?;
+        if let Some(socket) = distro.tftp_socket() {
+            run_sudo_command(["systemctl", "stop", socket]).await?;
+        }
         info!("TFTP service stopped");
         Ok(())
     }
@@ -213,9 +225,16 @@ TFTP_OPTIONS="{}"
     }
 
     pub async fn status(&self) -> anyhow::Result<ServiceStatus> {
-        let service = crate::platform::detect().tftp_service();
-        let running = is_systemd_service_running(service).await?;
-        let pid = get_service_pid(service).await?;
+        let distro = crate::platform::detect();
+        // A socket-activated daemon exits after its last request, so an idle
+        // server is still available while only the socket is active. Report
+        // the listener state, not just the transient daemon process.
+        let running = is_systemd_service_running(distro.tftp_service()).await?
+            || match distro.tftp_socket() {
+                Some(socket) => is_systemd_service_running(socket).await?,
+                None => false,
+            };
+        let pid = get_service_pid(distro.tftp_service()).await?;
         Ok(ServiceStatus { running, pid })
     }
 }

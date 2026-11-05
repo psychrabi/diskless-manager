@@ -9,76 +9,6 @@ $exit = 0
 $rebootRequired = $false
 function Log($m) { $m | Out-File (Join-Path $work 'adapt.log') -Append -Encoding utf8 }
 
-function Get-CriticalDeviceId([string]$hardwareId) {
-  $id = $hardwareId.Trim().ToUpperInvariant()
-  if ($id -notmatch '^PCI\\VEN_[0-9A-F]{4}&DEV_[0-9A-F]{4}(?:&(?:SUBSYS_[0-9A-F]{8}|REV_[0-9A-F]{2}|CC_[0-9A-F]{4}(?:[0-9A-F]{2})?))*$') {
-    throw "unsupported PCI hardware ID '$hardwareId'"
-  }
-  return $id.Replace('\', '#')
-}
-
-function Get-InfBindings([string]$path) {
-  $sections = @{}
-  $current = ''
-  $architecture = $env:PROCESSOR_ARCHITEW6432
-  if (-not $architecture) { $architecture = $env:PROCESSOR_ARCHITECTURE }
-  $architectureSection = switch -Regex ($architecture) {
-    '^(?i:AMD64|x64|x86_64)$' { 'NTamd64'; break }
-    '^(?i:ARM64|aarch64)$' { 'NTarm64'; break }
-    '^(?i:x86|i386)$' { 'NTx86'; break }
-    default { throw "unsupported Windows architecture '$architecture'" }
-  }
-  foreach ($line in (Get-Content -LiteralPath $path)) {
-    if ($line -match '^\s*\[([^]]+)\]') {
-      $current = $Matches[1].Trim()
-      if (-not $sections.ContainsKey($current)) { $sections[$current] = @() }
-      continue
-    }
-    if ($current) { $sections[$current] += $line }
-  }
-  $bindings = @()
-  foreach ($sectionName in $sections.Keys) {
-    if ($sectionName -match '(?i)\.Services($|\.)') { continue }
-    if ($sectionName -match '(?i)\.NT(x86|amd64|arm64)(\.|$)' -and
-        $sectionName -notmatch "(?i)\.$([regex]::Escape($architectureSection))(\.|$)") { continue }
-    foreach ($line in $sections[$sectionName]) {
-      if ($line -notmatch '^\s*[^;].*=\s*([^,]+),\s*(PCI\\[^;]+)$') { continue }
-      $installSection = $Matches[1].Trim()
-      $ids = $Matches[2] -split ',' | ForEach-Object { $_.Trim() } |
-        Where-Object { $_ -match '^PCI\\VEN_[0-9A-Fa-f]{4}&DEV_[0-9A-Fa-f]{4}' }
-      $installPrefix = [regex]::Escape($installSection)
-      $serviceSectionPatterns = @(
-        "(?i)^$installPrefix\.$architectureSection(?:\.[^.]+)*\.Services(?:\..*)?$",
-        "(?i)^$installPrefix\.NT(?:\.[^.]+)*\.Services(?:\..*)?$",
-        "(?i)^$installPrefix(?:\.[^.]+)*\.Services(?:\..*)?$"
-      )
-      $serviceSections = @()
-      foreach ($servicePattern in $serviceSectionPatterns) {
-        $serviceSections = @($sections.Keys | Where-Object { $_ -match $servicePattern })
-        if ($serviceSections.Count -gt 0) { break }
-      }
-      $services = @($serviceSections | ForEach-Object { $sections[$_] } |
-        ForEach-Object {
-          if ($_ -match '^\s*AddService\s*=\s*([^,\s]+)\s*,\s*(0x[0-9A-Fa-f]+|\d+)\s*,') {
-            $flagText = $Matches[2]
-            if ($flagText.StartsWith('0x', [StringComparison]::OrdinalIgnoreCase)) {
-              $flags = [Convert]::ToInt32($flagText.Substring(2), 16)
-            } else {
-              $flags = [int]$flagText
-            }
-            if (($flags -band 2) -ne 0) { $Matches[1] }
-          }
-        } | Sort-Object -Unique)
-      if ($services.Count -eq 1) {
-        foreach ($id in $ids) {
-          $bindings += [pscustomobject]@{ Hwid = $id; Service = $services[0] }
-        }
-      }
-    }
-  }
-  return $bindings
-}
-
 New-Item -ItemType Directory -Force -Path $work | Out-Null
 Log ("start " + (Get-Date -Format o) + " as " + (whoami))
 
@@ -105,33 +35,13 @@ try {
     }
   }
 
-  foreach ($svc in @('msiscsi', 'iScsiPrt')) {
-    $key = "HKLM:\SYSTEM\CurrentControlSet\Services\$svc"
-    if (Test-Path $key) {
-      Set-ItemProperty -Path $key -Name Start -Value 0 -Type DWord
-    } elseif ($svc -eq 'msiscsi') {
-      throw 'msiscsi service missing'
-    }
+  $iscsiDriver = 'HKLM:\SYSTEM\CurrentControlSet\Services\iScsiPrt'
+  if (Test-Path $iscsiDriver) {
+    $driverType = (Get-ItemProperty -Path $iscsiDriver -Name Type).Type
+    if ($driverType -ne 1 -and $driverType -ne 2) { throw 'iScsiPrt is not a driver service' }
+    Set-ItemProperty -Path $iscsiDriver -Name Start -Value 0 -Type DWord
   }
 
-  foreach ($inf in $infs) {
-    $bindings = @(Get-InfBindings $inf.FullName)
-    $svcNames = @($bindings | ForEach-Object { $_.Service } | Sort-Object -Unique)
-
-    foreach ($svc in $svcNames) {
-      $key = "HKLM:\SYSTEM\CurrentControlSet\Services\$svc"
-      if (-not (Test-Path $key)) { throw "service $svc from $($inf.Name) is not registered after pnputil" }
-      Set-ItemProperty -Path $key -Name Start -Value 0 -Type DWord
-    }
-
-    foreach ($binding in $bindings) {
-      $cddbId = Get-CriticalDeviceId $binding.Hwid
-      $cddbKey = "HKLM:\SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\$cddbId"
-      if (-not (Test-Path $cddbKey)) { New-Item -Path $cddbKey -Force | Out-Null }
-      Set-ItemProperty -Path $cddbKey -Name Service -Value $binding.Service -Type String
-      Set-ItemProperty -Path $cddbKey -Name ClassGUID -Value '{4d36e972-e325-11ce-bfc1-08002be10318}' -Type String
-    }
-  }
 } catch {
   $exit = 1
   Log ("failure: " + $_.Exception.Message)
@@ -150,8 +60,23 @@ function Add-StartupItems($out, $items) {
   $items.Clear()
 }
 
+function Write-AtomicPolicyFile([string]$path, [string]$text, [Text.Encoding]$encoding) {
+  $temp = Join-Path (Split-Path -Parent $path) ('.diskless-' + [guid]::NewGuid().ToString('N') + '.tmp')
+  try {
+    $stream = [IO.File]::Open($temp, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+    try {
+      $writer = [IO.StreamWriter]::new($stream, $encoding)
+      try { $writer.Write($text); $writer.Flush(); $stream.Flush($true) } finally { $writer.Dispose() }
+    } finally { $stream.Dispose() }
+    [IO.File]::Replace($temp, $path, $null)
+  } finally {
+    if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Force }
+  }
+}
+
 function Remove-AdaptRegistration([string]$gp) {
   $ini = Join-Path $gp 'Machine\Scripts\scripts.ini'
+  $newText = $null
   if (Test-Path $ini) {
     $bytes = [IO.File]::ReadAllBytes($ini)
     $utf16 = $bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE
@@ -178,16 +103,21 @@ function Remove-AdaptRegistration([string]$gp) {
     }
     if ($inStartup) { Add-StartupItems $out $items }
     $newText = (($out -join "`r`n").TrimEnd() + "`r`n")
-    if ($utf16) { [IO.File]::WriteAllText($ini, $newText, $enc) } else { [IO.File]::WriteAllText($ini, $newText, $enc) }
+  }
+  $gpt = Join-Path $gp 'gpt.ini'
+  if (Test-Path $gpt) {
+    $gptBytes = [IO.File]::ReadAllBytes($gpt)
+    $gptUtf16 = $gptBytes.Length -ge 2 -and $gptBytes[0] -eq 0xFF -and $gptBytes[1] -eq 0xFE
+    $gptEncoding = if ($gptUtf16) { [Text.UnicodeEncoding]::new($false, $true) } else { [Text.Encoding]::Default }
+    $g = [IO.File]::ReadAllText($gpt)
+    $g = [regex]::Replace($g, '(?m)^Version=(\d+)', { param($m) 'Version=' + ([int64]$m.Groups[1].Value + 1) })
+    Write-AtomicPolicyFile $gpt $g $gptEncoding
+  }
+  if ($null -ne $newText) {
+    Write-AtomicPolicyFile $ini $newText $enc
   }
   $startup = Join-Path $gp 'Machine\Scripts\Startup'
   Remove-Item -Force (Join-Path $startup 'adapt.ps1'), (Join-Path $startup 'ndadapt.cmd') -ErrorAction SilentlyContinue
-  $gpt = Join-Path $gp 'gpt.ini'
-  if (Test-Path $gpt) {
-    $g = [IO.File]::ReadAllText($gpt)
-    $g = [regex]::Replace($g, '(?m)^Version=(\d+)', { param($m) 'Version=' + ([int64]$m.Groups[1].Value + 1) })
-    [IO.File]::WriteAllText($gpt, $g, [Text.Encoding]::Default)
-  }
 }
 
 # Never remove the registration after a failed install. The next boot can retry.

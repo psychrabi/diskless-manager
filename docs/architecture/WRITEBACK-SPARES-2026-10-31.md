@@ -123,3 +123,29 @@ prewarming, a dedicated spare-byte budget, Windows personalization and real
 boot latency measurements are outstanding. Count limits and the pool free
 space floor are the currently implemented capacity controls. Do not interpret
 automated checks as completion of all Phase 1 hardware acceptance criteria.
+
+## Verification on 2026-11-03
+
+- `cargo fmt --manifest-path src-tauri/Cargo.toml --check`: passed.
+- `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings`: passed.
+- Focused spare service tests: 17 passed; spare alarm regression: 1 passed.
+- Dashboard image-count route regression: passed after removing its call to
+  `/api/masters`, which performs real ZFS presence checks in this test harness.
+  The public-master count query remains covered by its isolated database test.
+- `bun run lint`: passed with 22 existing warnings; `bun run test --run`:
+  204 tests in 49 files passed; `bun run build`: passed.
+- Full `cargo test` ran 756 unit tests: 749 passed, 4 failed, 3 ignored. The
+  dashboard regression was fixed and passed in isolation. Three remaining
+  WebSocket tests fail because sandbox policy denies loopback socket binding.
+  The outside-sandbox rerun was unavailable when approval review hit its usage
+  limit. Integration and doc-test suites were therefore not reached.
+- Rerun with `cargo test --manifest-path src-tauri/Cargo.toml --
+  --skip stalled_metrics_reader_cannot_keep_a_revoked_socket_alive --skip
+  an_open_websocket_closes_after_account_revocation --skip
+  an_open_websocket_closes_after_token_expiration`: 750 unit tests passed,
+  3 ignored, and the 3 socket tests skipped; all 14 integration tests and 9
+  doc tests passed.
+
+No live ZFS/iSCSI, PXE firmware, Windows SAN boot or performance measurements
+were exercised. The working tree also contains separate uncommitted Windows
+driver and installer changes; they were left intact.

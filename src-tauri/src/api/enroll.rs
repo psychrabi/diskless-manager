@@ -70,6 +70,10 @@ pub fn enroll_router(state: AppState) -> Router {
             get(crate::api::handlers::installation::adaptation_bundle),
         )
         .route(
+            "/api/installer/{id}/{token}/servicer.exe",
+            get(crate::api::handlers::installation::servicer_binary),
+        )
+        .route(
             "/api/installer/{id}/{token}/{*asset}",
             get(crate::api::handlers::installation::payload),
         )

@@ -333,6 +333,20 @@ Failures retain the clone and any remaining servicing target with an explicit er
 
 Offline reflection supports explicit kernel service declarations, repeated service-relative AddReg entries, BootFlags, and the default System event source. EventMessageFile remains REG_EXPAND_SZ and must point inside Windows System32. It refuses a dirty SYSTEM hive before registry loading unless the override is enabled. Filters, unsupported directives/flags and ambiguous variants require installing the NIC in the image first. Every new hardware family still needs a real SAN boot test; successful servicing is not proof of universal hardware compatibility.
 
+The optional startup adaptation stages drivers with `pnputil`; it does not
+create CriticalDeviceDatabase entries, change MSiSCSI startup, or require a
+service for hardware that is not present. Boot-critical NICs must be prepared
+offline and verified separately.
+
+The startup-registration cleanup and client workspace ACL have isolated
+Windows PowerShell regression tests. Run these on an elevated Windows test
+machine; they use temporary directories and do not attach storage:
+
+```powershell
+cargo test --manifest-path tools/windows-servicer/Cargo.toml startup_cleanup_preserves_other_policy_entries_and_retries_on_failure
+cargo test --manifest-path tools/windows-servicer/Cargo.toml client_workspace_removes_existing_explicit_grants -- --ignored
+```
+
 ### Windows 11 VM validation (2026-10-10)
 
 The serviced clone preserved the source GPT metadata byte-for-byte and booted
@@ -352,3 +366,130 @@ snapshot is a diagnostic baseline for those tested adapter instances. A
 target-specific Windows/WinPE adapter preparation stage remains necessary to
 investigate first-boot automation; offline package/service preparation alone
 has not met the universal-boot goal.
+
+### Windows 11 iSCSI boot validation (2026-11-04)
+
+A disposable clone of `windows11-netkvm` was booted locally once on a SATA
+virtio VM so Windows created the PCI NIC instance, then serviced from its own
+SYSTEM shell:
+
+- installed the complete NetKVM package (`netkvm.inf`, `.cat`, `.sys` and
+  `netkvmp.exe`) with `pnputil /add-driver ... /install`; the resulting class
+  instance was `{4d36e972-e325-11ce-bfc1-08002be10318}\0014` with service
+  `netkvm`;
+- set `netkvm` and `iScsiPrt` to `Start=0` with `BootFlags=1`;
+- snapshotted the clone, imported it, assigned it to the client, and recreated
+  its writeback and iSCSI target.
+
+The clone then booted Windows through iPXE `sanboot` to the sign-in screen and
+desktop; the target showed a `LOGGED_IN` session and the guest answered on
+`192.168.123.10`. The local boot plus `pnputil` mattered because an earlier
+hand-copied DriverStore package omitted `netkvmp.exe`; a driver package is only
+complete when every file referenced by its INF is present.
+
+That local-boot sequence is a recovery/diagnostic path, not the supported
+automation. The supported path performs the same install and arm operations
+through the Windows servicer:
+
+1. Import the complete network driver package and record the client's Boot NIC
+   inventory.
+2. Open Verified Image Factory, choose **Adapt existing Windows image**, and
+   select a ready Windows master, snapshot and dedicated WinPE media.
+3. The server creates a private clone; WinPE mounts it, selects the catalog
+   driver bundle, and runs `diskless-windows-servicer.exe adapt-volume`.
+4. The servicer runs DISM `Add-Driver` and arms the selected NIC services and
+   `iScsiPrt`; the server saves, verifies a normal SAN boot, then publishes and
+   optionally assigns the image.
+5. The installer downloads the current servicer from
+   `tools/windows-servicer/diskless-windows-servicer.exe` and verifies its
+   size and SHA-256, so a WinPE image with a stale baked helper is not used.
+
+No manual `pnputil`, registry edit or local boot is part of the supported
+path. A real SAN boot test remains the acceptance gate.
+
+## NexBoot-aligned normal-image coverage
+
+The normal-image path avoids repeated driver-package installation when the
+selected snapshot already carries a published driver for the client's Boot
+NIC. This is a bounded step toward NexBoot's process, not an implementation of
+its Linux-side registry identity preparation. `windows_driver_coverage` clones
+the selected snapshot into a temporary
+dataset, mounts its NTFS volume read-only, and accepts coverage only when a
+network-class INF matches the recorded hardware IDs, the same INF is published
+under `Windows/INF` (or is an inbox INF), and its service binary exists. The
+temporary clone is destroyed after the probe only after mount inspection
+confirms it is unmounted. Cleanup failures name the retained dataset in the
+server diagnostic and do not count as successful coverage.
+
+An inspection failure falls back to the existing servicing path only after
+cleanup succeeds. A cleanup failure stops the assignment and identifies the
+temporary clone for recovery. Images without a matching driver still require the
+Windows worker, WinPE, or the image factory to install and arm one. The probe
+does not write registry identity, so it does not replace WinPE model adaptation
+for a genuinely missing Boot NIC driver. Published INF and binary presence do
+not prove boot-critical registry arming or portability between NIC instances.
+The Windows 11 VM results above still apply, and a real SAN boot test remains
+necessary.
+
+With `nexboot_boot_time` selected, the client assignment dialog runs this check
+even without a configured SSH worker. Existing image coverage and reusable
+driver revisions return before worker capability checks. Only a new servicing
+operation requires the worker profile. There is not yet an assignment-driven
+WinPE adaptation session for missing drivers, so that case must be prepared in
+WinPE/image factory and published as a new snapshot, or use the existing worker.
+
+### Acceptance evidence and remaining scope (2026-11-03)
+
+The requested outcome is replacement of mandatory Windows-worker preparation
+with NexBoot's process, not merely a better SSH error. The implementation chose
+the narrower existing-driver fast path as an incremental interpretation. That
+choice does **not** complete the full request: assignment-driven WinPE/model
+adaptation and hardware validation remain missing. The inspection clone is not
+yet recorded in a restart recovery journal; a server crash can leave it behind.
+INF and binary presence alone must not be treated as proof of a verified boot.
+
+### Linux SYSTEM hive adapter (excluded)
+
+`windows_linux_registry.rs` is a blocking adapter over the external
+`hivexregedit` tool. It exports a hive into a typed snapshot, stages requested
+values into a private copy, verifies every value after the merge, and only then
+atomically replaces the hive while preserving permission bits. It refuses a
+non-REGF, dirty, symlinked or oversized hive, and a failed merge or verification
+leaves the original bytes untouched.
+
+The handoff prohibits Linux `hivexregedit` registry changes. The unused adapter
+is excluded from the build and must not be wired into servicing. Boot arming
+continues through the trusted Windows worker or WinPE workflow.
+
+| Requirement or changed public output | Check and observed result | Limit |
+| --- | --- | --- |
+| Dashboard counts only public masters | `dashboard_http_count_matches_public_image_library` calls the authenticated `/api/system/status` route with public, private and servicing records; the count is two. | Real migrated SQLite with isolated test records. `/api/masters` needs ZFS and is not exercised by this test. |
+| Existing-driver assignments must not be gated on worker settings | `checks existing image drivers in NexBoot mode without a Windows worker` edits a MAC and submits the real React form with only the NexBoot strategy configured. It observes preparation requested, original assignment preserved, no fallback confirmation and the successful update. It failed before the UI gate change and passed after. | API responses are mocked at the frontend boundary. End-to-end worker avoidance on the actual Windows image is not established. |
+| Reusable revisions avoid a new worker capability check | Existing SQLite revision tests prove package-set coverage and frontend tests prove prepared revision reuse preserves the returned image. The worker-profile gate was moved after these reuse returns. | A complete assignment request traversing this backend reuse path has not been run. The gate ordering is inspection evidence only. |
+| Missing-driver error offers WinPE or worker configuration | The handler now explains that no confirmed coverage or reusable revision exists and offers a new WinPE-prepared snapshot or worker configuration. | Reaching this output requires the native probe/catalog path, which was not exercised end to end. Message delivery is unverified, and missing drivers do not yet get automatic worker-free adaptation. |
+| Coverage is not a boot-success claim | The same form test checks the success toast explicitly requires a real SAN boot test. `explains coverage-first preparation when NexBoot mode has no worker` checks the rendered guidance and missing-driver requirement. | No Windows boot was performed. |
+| Unpublished sources cannot bypass preparation checks | `assignment_rejects_unpublished_sources_before_driver_inspection` calls the real authenticated assignment route. Ready clones, draft/verifying masters and a draft snapshot all return HTTP 400 with the expected shared error message before storage inspection. | Does not exercise a successful privileged probe. |
+| Probe must fail conservatively | Filesystem regressions accept published matching packages/inbox drivers and reject missing publication, missing binaries, wrong IDs, wrong or empty architecture. | Isolated synthetic files, not a Windows DriverStore captured from a running client. |
+| Temporary storage cleanup must preserve safety | Fake-backend regressions observe cleanup after settle/probe failure, preservation of both primary and cleanup errors, and no destruction when mount inspection refuses release. Failed unmount code retains its mount directory rather than recursively deleting it. | No real mounts or ZFS mutations in tests. Failed-unmount retention still needs privileged integration validation. |
+| No boot-critical install deferred until ordinary startup | This fast path performs no installation. Missing-driver fallback still uses existing offline servicing. | Full worker-free WinPE preparation is not implemented. |
+| Clean-room boundary | Changes use independent Rust filesystem/storage code and existing project helpers. No upstream source was copied into these edits. The pinned upstream behavioral review remains the reference. | This records implementation provenance, not a legal compatibility determination. |
+| Leave changes uncommitted and undeployed | HEAD remains `c620a4d`. Installed `/usr/bin/diskless-manager` still has its November 3, 2026 15:30:11 +05:45 timestamp. | Built `dist/` is not evidence of deployment. |
+
+The real-runtime acceptance attempt was read-only: the live
+`GET /api/system/status` returned HTTP 401 with the shared unauthorized JSON
+contract, and no authenticated Diskless Manager browser tab was available.
+The process is UID 1000 without effective `CAP_SYS_ADMIN`, the live database
+is not readable, and `virsh --connect qemu:///system domstate windows-worker`
+reported `shut off`. Starting that VM, modifying live storage or deploying a
+new binary was not attempted. Thus actual Windows assignment, native NTFS
+inspection and SAN boot acceptance remain blocked/unverified, rather than
+being inferred from the passing software tests.
+
+After adding the HTTP comparison and UI-output assertions, final checks passed:
+Rust formatting, all-target/all-feature clippy with warnings denied, 740 unit
+tests, 14 integration tests and 9 doctests; frontend lint, 203 tests and the
+production build. Three Rust tests remain environment-gated: real LIO,
+Windows PowerShell and ISC dhcpd validation. React test `act` warnings remain.
+The Windows helper was not changed or separately rebuilt. These results
+support the specific rows above, not completion of the missing native/WinPE
+workflow or a claim that the user's Windows client now boots successfully.

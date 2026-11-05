@@ -4,6 +4,8 @@
 //! images on the host. Dry-run preparation still invokes DISM and therefore
 //! remains privileged.
 
+use crate::application::installation_service::{CreateInstallation, InstallationService};
+use crate::persistence::{InstallerMediaRepository, InstallerMediaType, StructuralValidationState};
 use crate::{
     infrastructure::pxe::{
         select_managed_image_driver_ids, windows_servicing_available, NetworkDriverInjectionPlugin,
@@ -42,6 +44,11 @@ pub struct WindowsAssignmentPreparation {
     pub prepared: bool,
     pub reused: bool,
     pub already_covered: bool,
+    /// Set when an uncovered Windows assignment started a client-bound WinPE
+    /// adaptation session. The client is assigned the adapted image only after
+    /// the session's normal-boot verification.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adaptation_session: Option<String>,
 }
 
 fn normalize_mac(value: &str) -> String {
@@ -457,9 +464,6 @@ pub async fn prepare_windows_assignment(
         } else {
             WindowsDriverInstallStrategy::OfflineDism
         };
-        if !profile.is_configured() {
-            anyhow::bail!("Windows servicing worker is not configured in System Settings");
-        }
 
         let images = crate::application::image_service::ImageService::new(
             crate::persistence::repositories::image::ImageRepository::new(
@@ -476,8 +480,13 @@ pub async fn prepare_windows_assignment(
                 prepared: false,
                 reused: false,
                 already_covered: false,
+                adaptation_session: None,
             });
         }
+        anyhow::ensure!(
+            source.kind == crate::core::image::ImageKind::Master && source.status == "ready",
+            "choose a ready public Windows master image before preparing an assignment"
+        );
         let snapshot = request
             .snapshot
             .as_deref()
@@ -490,6 +499,12 @@ pub async fn prepare_windows_assignment(
             "selected snapshot does not belong to Windows image '{}'",
             source.name
         );
+        anyhow::ensure!(
+            images.snapshots(&source.id).await?.iter().any(|candidate| {
+                candidate.name == snapshot_name && candidate.status == "ready"
+            }),
+            "selected Windows snapshot is not a ready snapshot of this image"
+        );
 
         let target_mac = request.mac.clone();
         let Some((boot_nic_ids, architecture)) =
@@ -497,12 +512,68 @@ pub async fn prepare_windows_assignment(
         else {
             anyhow::bail!("no Boot NIC inventory is recorded for client MAC '{target_mac}'");
         };
+
+        // NexBoot's normal image path needs no per-client servicing when the
+        // image already carries a published driver for the client's Boot NIC.
+        // Inspect a read-only snapshot clone before touching the worker, so an
+        // offline worker no longer blocks an assignment that does not need it.
+        let coverage_source = source.name.clone();
+        let coverage_snapshot = snapshot_name.to_string();
+        let coverage_ids = boot_nic_ids.clone();
+        let coverage_architecture = architecture.clone();
+        let coverage_config = state.config.clone();
+        let coverage = tokio::task::spawn_blocking(move || {
+            let backend =
+                crate::infrastructure::image::ZfsImageBackend::with_config(coverage_config);
+            crate::infrastructure::pxe::snapshot_covers_boot_nic(
+                &backend,
+                &coverage_source,
+                &coverage_snapshot,
+                &coverage_ids,
+                &coverage_architecture,
+            )
+        })
+        .await
+        .context("Windows image driver inspection worker failed")?;
+        match coverage {
+            Ok(true) => {
+                log::info!(
+                    "Windows image '{}' already publishes a Boot NIC driver for client '{}'; skipping driver servicing",
+                    source.name,
+                    target_mac
+                );
+                return Ok(WindowsAssignmentPreparation {
+                    master: source.name,
+                    snapshot: request.snapshot,
+                    prepared: false,
+                    reused: false,
+                    already_covered: true,
+                    adaptation_session: None,
+                });
+            }
+            Ok(false) => {}
+            Err(error)
+                if error
+                    .downcast_ref::<crate::infrastructure::pxe::windows_driver_coverage::DriverInspectionCleanupFailure>()
+                    .is_some() =>
+            {
+                return Err(error);
+            }
+            Err(error) => {
+                log::warn!(
+                    "could not inspect driver coverage for Windows image '{}'; falling back to servicing: {error:#}",
+                    source.name
+                );
+            }
+        }
+
         let inventory = vec![(target_mac.clone(), boot_nic_ids, architecture)];
+        let selection_mac = target_mac.clone();
         let root = settings.http.root_dir.clone();
         let (package_ids, packages) = tokio::task::spawn_blocking(move || {
             let plugin = NetworkDriverInjectionPlugin::new(PathBuf::from(root));
             let catalog = plugin.list()?;
-            let ids = select_assignment_driver_ids(&catalog, &inventory, &target_mac)
+            let ids = select_assignment_driver_ids(&catalog, &inventory, &selection_mac)
                 .map_err(anyhow::Error::msg)?;
             let packages = ids
                 .iter()
@@ -516,7 +587,14 @@ pub async fn prepare_windows_assignment(
             Ok::<_, anyhow::Error>((ids, packages))
         })
         .await
-        .context("driver catalog selection worker failed")??;
+        .context("driver catalog selection worker failed")?
+        .with_context(|| {
+            if strategy == WindowsDriverInstallStrategy::NexbootBootTime {
+                "Boot NIC coverage was not confirmed. Import a matching network driver pack, then open Verified Image Factory and choose Adapt existing Windows image; NexBoot mode does not use a remote Windows worker"
+            } else {
+                "could not select Boot NIC driver packages"
+            }
+        })?;
 
         // One prepared image serves every client whose Boot NIC its driver set
         // covers, so a matching client is assigned that image as-is instead of
@@ -528,6 +606,7 @@ pub async fn prepare_windows_assignment(
                 prepared: false,
                 reused: false,
                 already_covered: true,
+                adaptation_session: None,
             });
         }
         let planned = crate::application::windows_servicing::plan_driver_revision_with_strategy(
@@ -570,6 +649,7 @@ pub async fn prepare_windows_assignment(
                         prepared: true,
                         reused: true,
                         already_covered: false,
+                        adaptation_session: None,
                     });
                 }
                 crate::core::image::DriverRevisionStatus::Preparing => {
@@ -582,6 +662,79 @@ pub async fn prepare_windows_assignment(
             }
         }
 
+        // NexBoot-style preparation uses a client-bound WinPE adaptation job
+        // for uncovered NICs, never an implicit SSH-worker fallback. Start that
+        // job automatically so assigning an uncovered image does not require a
+        // separate Verified Image Factory trip. A startup script cannot install
+        // the driver needed to reach the boot disk.
+        if strategy == WindowsDriverInstallStrategy::NexbootBootTime {
+            let normalized = normalize_mac(&target_mac);
+            let client: Option<(String, Option<String>)> = sqlx::query_as(
+                "SELECT id, installer_media_id FROM clients WHERE replace(replace(lower(mac),':',''),'-','') = ?",
+            )
+            .bind(&normalized)
+            .fetch_optional(&state.db_pool)
+            .await
+            .context("failed to load the client for automatic Boot NIC adaptation")?;
+            let Some((client_id, client_media)) = client else {
+                anyhow::bail!(
+                    "this Windows snapshot requires Boot NIC adaptation before assignment; add the client first, then assign the image so the adaptation job can be bound to it"
+                );
+            };
+            let media_id = match client_media.filter(|id| !id.is_empty()) {
+                Some(id) => id,
+                None => InstallerMediaRepository::new(state.db_pool.clone())
+                    .list()
+                    .await?
+                    .into_iter()
+                    .filter(|media| {
+                        media.media_type == InstallerMediaType::WindowsIso
+                            && media.validation_state == StructuralValidationState::Valid
+                    })
+                    .min_by_key(|media| (!media.is_default, media.display_name.clone()))
+                    .map(|media| media.id)
+                    .context(
+                        "no valid Windows installer media is available for automatic Boot NIC adaptation",
+                    )?,
+            };
+            let session = InstallationService::new(state.clone())
+                .create(
+                    client_id,
+                    CreateInstallation {
+                        recipe: "windows".into(),
+                        media_id,
+                        image_name: Some(format!("adapt-{}", uuid::Uuid::new_v4().simple())),
+                        size_gb: None,
+                        source_image_id: Some(source.id.clone()),
+                        source_snapshot: Some(snapshot_name.to_string()),
+                        assign_on_ready: true,
+                        confirm_erase: true,
+                        username: None,
+                        password_hash: None,
+                    },
+                )
+                .await
+                .with_context(|| {
+                    format!(
+                        "could not start Boot NIC adaptation for client '{target_mac}'; power the client off and retry"
+                    )
+                })?;
+            return Ok(WindowsAssignmentPreparation {
+                master: source.name,
+                snapshot: request.snapshot,
+                prepared: false,
+                reused: false,
+                already_covered: false,
+                adaptation_session: Some(session.id),
+            });
+        }
+        // Reusing a published revision never needs a servicing worker. The
+        // legacy offline-DISM path may explicitly use a configured worker.
+        if !profile.is_configured() {
+            anyhow::bail!(
+                "the selected snapshot has no confirmed Boot NIC driver coverage or reusable driver revision; prepare this NIC in WinPE and publish a new snapshot, or configure a Windows servicing worker in System Settings"
+            );
+        }
         let helper = profile.helper_executable_path.trim().to_owned();
         let preparation =
             crate::application::windows_servicing::ManagedWindowsPreparationRequest {
@@ -625,6 +778,7 @@ pub async fn prepare_windows_assignment(
             prepared: true,
             reused: false,
             already_covered: false,
+            adaptation_session: None,
         })
     })
     .await
@@ -949,6 +1103,74 @@ mod automatic_assignment_tests {
     };
     use crate::infrastructure::pxe::NetworkDriverPackage;
     use sqlx::sqlite::SqlitePoolOptions;
+
+    #[tokio::test]
+    async fn assignment_rejects_unpublished_sources_before_driver_inspection() {
+        use axum::{body::Body, http::Request};
+        use tower::ServiceExt;
+
+        let (state, app, admin, _) = crate::api::security_tests::setup().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query("INSERT INTO images (id, name, kind, os_type, size_gb, path, format, status, created_at, updated_at) VALUES ('base', 'tank/image/windows', 'master', 'windows', 50, '/dev/zvol/tank/image/windows', 'raw', 'ready', ?, ?)")
+            .bind(&now).bind(&now).execute(&state.db_pool).await.unwrap();
+        sqlx::query("INSERT INTO images (id, name, kind, os_type, size_gb, path, format, status, parent_id, created_at, updated_at) VALUES ('snap', 'installed', 'snapshot', 'windows', 50, '/dev/zvol/tank/image/windows@installed', 'raw', 'ready', 'base', ?, ?)")
+            .bind(&now).bind(&now).execute(&state.db_pool).await.unwrap();
+
+        for (kind, status, snapshot_status, expected) in [
+            ("clone", "ready", "ready", "ready public Windows master"),
+            ("master", "draft", "ready", "ready public Windows master"),
+            (
+                "master",
+                "verifying",
+                "ready",
+                "ready public Windows master",
+            ),
+            ("master", "ready", "draft", "not a ready snapshot"),
+        ] {
+            sqlx::query("UPDATE images SET kind = ?, status = ? WHERE id = 'base'")
+                .bind(kind)
+                .bind(status)
+                .execute(&state.db_pool)
+                .await
+                .unwrap();
+            sqlx::query("UPDATE images SET status = ? WHERE id = 'snap'")
+                .bind(snapshot_status)
+                .execute(&state.db_pool)
+                .await
+                .unwrap();
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/pxe/windows/prepare-assignment")
+                        .header("authorization", format!("Bearer {admin}"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "image_name": "tank/image/windows",
+                                "snapshot": "tank/image/windows@installed",
+                                "mac": "02:00:00:00:00:01",
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+            let body: serde_json::Value = serde_json::from_slice(
+                &axum::body::to_bytes(response.into_body(), 4096)
+                    .await
+                    .unwrap(),
+            )
+            .unwrap();
+            assert!(
+                body["message"].as_str().unwrap().contains(expected),
+                "{body}"
+            );
+        }
+    }
 
     /// A prepared image is shared: a client whose Boot NIC packages are already
     /// injected boots it unchanged, so a mixed fleet does not need one cloned

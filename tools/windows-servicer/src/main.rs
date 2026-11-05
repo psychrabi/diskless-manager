@@ -9,7 +9,7 @@
 //! The prepare command reads WindowsImagePreparationRequest JSON from stdin and
 //! writes a versioned JSON response to stdout.
 
-#![cfg_attr(windows, windows_subsystem = "windows")]
+#![cfg_attr(all(windows, feature = "gui"), windows_subsystem = "windows")]
 
 #[cfg(all(windows, feature = "gui"))]
 mod gui;

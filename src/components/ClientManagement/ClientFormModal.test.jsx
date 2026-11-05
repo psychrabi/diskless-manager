@@ -381,6 +381,48 @@ const windowsMasters = [
   { name: "windows11", os_type: "windows", snapshots: [{ name: "windows11@installed" }] },
 ];
 
+it("explains coverage-first preparation when NexBoot mode has no worker", async () => {
+  useAppStore.setState({
+    appConfig: { settings: { windows_servicing: { driver_install_strategy: "nexboot_boot_time" } } },
+  });
+  render(<ClientFormModal client={null} masters={windowsMasters} isOpen onClose={() => {}} refresh={() => {}} />);
+  fireEvent.change(screen.getByLabelText("Select Image"), { target: { value: "windows11" } });
+  await waitFor(() => expect(screen.getByTestId("windows-driver-hint")).toHaveTextContent(
+    "Saving checks existing Boot NIC driver coverage first. Missing drivers require Windows servicing or WinPE adaptation.",
+  ));
+  expect(prepareWindowsAssignment).not.toHaveBeenCalled();
+});
+
+it("checks existing image drivers in NexBoot mode without a Windows worker", async () => {
+  getClientNvmeOfStatus.mockResolvedValue(null);
+  updateClient.mockResolvedValue({});
+  useAppStore.setState({
+    appConfig: { settings: { windows_servicing: { driver_install_strategy: "nexboot_boot_time" } } },
+  });
+  prepareWindowsAssignment.mockResolvedValue({
+    master: "windows11", snapshot: "windows11@installed",
+    prepared: false, reused: false, already_covered: true,
+  });
+  const client = {
+    id: "pc017", name: "PC017", mac: "02:00:00:00:00:17", ip: "192.0.2.17",
+    master: "windows11", snapshot: "windows11@installed", keep_writeback: false,
+  };
+  render(<ClientFormModal client={client} masters={windowsMasters} isOpen onClose={() => {}} refresh={() => {}} />);
+  fireEvent.change(screen.getByLabelText("MAC Address"), { target: { value: "02:00:00:00:00:99" } });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+  await waitFor(() => expect(prepareWindowsAssignment).toHaveBeenCalledWith({
+    image_name: "windows11", snapshot: "windows11@installed", mac: "02:00:00:00:00:99",
+  }));
+  await waitFor(() => expect(updateClient).toHaveBeenCalledWith("pc017", { mac: "02:00:00:00:00:99" }));
+  await waitFor(() => expect(toast.success).toHaveBeenCalledWith(
+    "Client Management",
+    expect.stringContaining("matching Boot NIC driver files. A real SAN boot test is still required."),
+  ));
+  expect(confirm).not.toHaveBeenCalled();
+});
+
 it("renames a Windows client without asking the servicing worker to prepare drivers", async () => {
   getClientNvmeOfStatus.mockResolvedValue(null);
   updateClient.mockResolvedValue({});

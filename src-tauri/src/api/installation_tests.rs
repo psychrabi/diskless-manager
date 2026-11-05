@@ -1387,7 +1387,11 @@ async fn winpe_adaptation_selects_a_checksummed_catalog_driver_bundle() {
     // Only cataloged packages are eligible; the fixture writes one signed,
     // network-class package matching the reported boot NIC hardware ID.
     let package_id = "8b5b0f6e-5d5a-4c1f-9a52-0f6f2b6e6f01";
-    let catalog = fixture_root(&fixture).await.join("pxe/network-drivers");
+    let root = fixture_root(&fixture).await;
+    let servicer = root.join("tools/windows-servicer/diskless-windows-servicer.exe");
+    std::fs::create_dir_all(servicer.parent().expect("servicer directory")).expect("servicer dir");
+    std::fs::write(&servicer, b"synthetic servicer").expect("servicer binary");
+    let catalog = root.join("pxe/network-drivers");
     let package = catalog.join("drivers").join(package_id);
     std::fs::create_dir_all(&package).expect("package directory");
     std::fs::write(
@@ -1440,6 +1444,14 @@ async fn winpe_adaptation_selects_a_checksummed_catalog_driver_bundle() {
     assert!(manifest["driver_bundle_url"]
         .as_str()
         .is_some_and(|url| url.ends_with(&format!("{base}/adaptation/drivers.zip"))));
+    assert_eq!(manifest["servicer_bytes"], json!(18));
+    assert_eq!(
+        manifest["servicer_sha256"],
+        json!(format!("{:x}", Sha256::digest(b"synthetic servicer")))
+    );
+    assert!(manifest["servicer_url"]
+        .as_str()
+        .is_some_and(|url| url.ends_with(&format!("{base}/servicer.exe"))));
 
     let (status, bundle) = fixture
         .scoped_get_bytes(&format!("{base}/adaptation/drivers.zip"), CLIENT_IP)
@@ -1462,10 +1474,23 @@ async fn winpe_adaptation_selects_a_checksummed_catalog_driver_bundle() {
         "{names:?}"
     );
 
+    let (status, executable) = fixture
+        .scoped_get_bytes(&format!("{base}/servicer.exe"), CLIENT_IP)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(executable, b"synthetic servicer");
+
     // The same scoped route rejects another client's address and a wrong token.
     assert_eq!(
         fixture
             .scoped_get_bytes(&format!("{base}/adaptation/drivers.zip"), "192.0.2.99")
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        fixture
+            .scoped_get_bytes(&format!("{base}/servicer.exe"), "192.0.2.99")
             .await
             .0,
         StatusCode::FORBIDDEN

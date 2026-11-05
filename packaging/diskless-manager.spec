@@ -6,7 +6,7 @@ License:        MIT
 URL:            https://github.com/psychrabi/diskless-manager
 BuildArch:      x86_64
 
-Requires:       dhcp-server, tftp-server, samba, httpd, wol, targetcli, zfs
+Requires:       dhcp-server, tftp-server, samba, httpd, wol, targetcli, zfs, ntfs-3g
 
 %description
 Headless management server (API + web UI) for diskless

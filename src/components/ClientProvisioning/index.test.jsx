@@ -33,6 +33,11 @@ vi.mock("@/api/modules/clientProvisioning", () => ({
   removeHardwareIdentity: api.remove,
   requestHardwareInventory: api.inventory,
 }));
+vi.mock("@/api/modules/images", () => ({ listMasters: vi.fn().mockResolvedValue([
+  { id: "source-other", name: "pool/other-windows", os_type: "windows", status: "ready", snapshots: [{ name: "gold" }] },
+  { id: "not-ready", name: "pool/draft", os_type: "windows", status: "draft", snapshots: [] },
+  { id: "linux", name: "pool/linux", os_type: "linux", status: "ready", snapshots: [] },
+]) }));
 vi.mock("@/api/modules/installerMedia", () => ({ listInstallerMedia: vi.fn().mockResolvedValue([{ id: "media-1", display_name: "Ubuntu ISO", media_type: "ubuntu_iso", validation_state: "valid" }]) }));
 // A stable fetchClients identity keeps the mount effect from re-running each render.
 vi.mock("@/store/useAppStore", () => {
@@ -101,6 +106,43 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("Client provisioning page", () => {
+  it("adapts an explicitly selected source snapshot without using the assignment or size", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await selectClient(user);
+    await user.selectOptions(screen.getByLabelText("Installer media"), "media-1");
+    await user.selectOptions(screen.getByLabelText("Installation method"), "windows");
+    await user.type(screen.getByLabelText("Size in GiB"), "80");
+    await user.selectOptions(screen.getByLabelText("Installation method"), "windows_adapt");
+    const prepare = screen.getByRole("button", { name: "Create verified image" });
+    expect(prepare).toBeDisabled();
+    expect(screen.getByLabelText("Size in GiB")).toBeDisabled();
+    expect(screen.getByLabelText("Size in GiB")).toHaveValue(null);
+    const source = screen.getByLabelText("Source Windows image");
+    expect(within(source).queryByText("pool/draft")).not.toBeInTheDocument();
+    expect(within(source).queryByText("pool/linux")).not.toBeInTheDocument();
+    await user.selectOptions(source, "source-other");
+    await user.selectOptions(screen.getByLabelText("Source snapshot"), "gold");
+    expect(prepare).toBeDisabled();
+    await user.type(screen.getByLabelText("Published image name"), "windows-adapted");
+    expect(prepare).toBeEnabled();
+    confirm.mockResolvedValueOnce(false);
+    await user.click(prepare);
+    expect(api.start).not.toHaveBeenCalled();
+    await user.click(prepare);
+    await waitFor(() => expect(api.start).toHaveBeenCalledWith("client-1", {
+      recipe: "windows", media_id: "media-1", source_image_id: "source-other", source_snapshot: "gold",
+      image_name: "windows-adapted", assign_on_ready: false, confirm_erase: true,
+    }));
+    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ description: expect.stringMatching(/only a private clone.*source image and current assignment remain untouched.*only after verification.*explicitly opt in/) }));
+    await user.click(screen.getByLabelText("Assign to this client after verification"));
+    await user.click(prepare);
+    await waitFor(() => expect(api.start).toHaveBeenLastCalledWith("client-1", expect.objectContaining({ assign_on_ready: true })));
+    await user.selectOptions(source, "");
+    expect(screen.getByLabelText("Source snapshot")).toHaveValue("");
+    expect(prepare).toBeDisabled();
+  });
+
   it("prepares an unattended installation only after confirmed credentials", async () => {
     const user = userEvent.setup();
     renderPage();

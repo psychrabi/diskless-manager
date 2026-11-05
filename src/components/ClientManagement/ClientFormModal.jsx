@@ -93,6 +93,8 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
     windowsServicingProfile?.iscsi_portal?.trim() &&
     windowsServicingProfile?.report_server_url?.trim(),
   );
+  const checkWindowsDrivers = windowsServicingConfigured ||
+    windowsServicingProfile?.driver_install_strategy === "nexboot_boot_time";
   const confirm = useConfirm();
   const [nvmeStatus, setNvmeStatus] = useState(null);
   const [nvmeLoading, setNvmeLoading] = useState(Boolean(isOpen && client?.id && nvmeFeatureEnabled));
@@ -312,7 +314,7 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
         Boolean(dirtyFields.mac);
       if (
         assignmentChanged &&
-        windowsServicingConfigured &&
+        checkWindowsDrivers &&
         selectedImage?.os_type === "windows"
       ) {
         setPreparingWindowsDrivers(true);
@@ -322,14 +324,16 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
             snapshot: request.snapshot,
             mac: data.mac,
           });
-          if (prepared.prepared) {
+          if (prepared.adaptation_session) {
+            driverMessage = " Boot NIC adaptation started for this client. Power it on to continue; the adapted image is assigned after a normal-boot verification.";
+          } else if (prepared.prepared) {
             request = { ...request, master: prepared.master, snapshot: prepared.snapshot };
             preparedAssignment = true;
             driverMessage = prepared.reused
               ? ` Reused prepared Windows image '${prepared.master}' with matching NIC drivers.`
               : ` Windows NIC drivers were prepared in '${prepared.master}'.`;
           } else if (prepared.already_covered) {
-            driverMessage = ` '${prepared.master}' already includes this client’s Boot NIC drivers.`;
+            driverMessage = ` '${prepared.master}' includes matching Boot NIC driver files. A real SAN boot test is still required.`;
           } else {
             throw new Error("The selected Windows image was not prepared with this client’s catalog drivers.");
           }
@@ -664,8 +668,8 @@ const ClientFormModalContent = ({ client, masters, isOpen, onClose, refresh }) =
               <FieldError>{errors.master?.message}</FieldError>
               {selectedMasterOs === "windows" && !client?.id && (
                 <p className="text-xs text-muted-foreground" data-testid="windows-driver-hint">
-                  Boot tests do not block assignment. {windowsServicingConfigured
-                    ? "Saving prepares the image with catalog drivers for inventoried clients."
+                  Boot tests do not block assignment. {checkWindowsDrivers
+                    ? "Saving checks existing Boot NIC driver coverage first. Missing drivers require Windows servicing or WinPE adaptation."
                     : "Configure the Windows servicing worker in System Settings to prepare catalog NIC drivers automatically."}
                 </p>
               )}

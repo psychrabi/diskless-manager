@@ -38,7 +38,35 @@ $destination = Join-Path $InstallDirectory "diskless-windows-servicer.exe"
 $driverDirectory = Join-Path $DataDirectory "Drivers"
 $configPath = Join-Path $DataDirectory "client-report.json"
 
+# Remove inherited and pre-existing grants before writing reporter configuration.
+function Protect-ClientWorkspace([string]$Path) {
+    $workspace = @(Get-Item -LiteralPath $Path) + @(Get-ChildItem -LiteralPath $Path -Force -Recurse)
+    if (@($workspace | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }).Count) {
+        throw "The client data directory must not contain symbolic links or junctions."
+    }
+    $identities = @(
+        [Security.Principal.SecurityIdentifier]::new([Security.Principal.WellKnownSidType]::LocalSystemSid, $null),
+        [Security.Principal.SecurityIdentifier]::new([Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null)
+    )
+    foreach ($item in $workspace) {
+        $acl = Get-Acl -LiteralPath $item.FullName
+        $acl.SetAccessRuleProtection($true, $false)
+        foreach ($rule in @($acl.GetAccessRules($true, $false, [Security.Principal.SecurityIdentifier]))) {
+            $acl.RemoveAccessRuleSpecific($rule)
+        }
+        $inheritance = if ($item.PSIsContainer) { 'ContainerInherit, ObjectInherit' } else { 'None' }
+        foreach ($identity in $identities) {
+            $rule = [Security.AccessControl.FileSystemAccessRule]::new(
+                $identity, 'FullControl', $inheritance, 'None', 'Allow')
+            $acl.AddAccessRule($rule)
+        }
+        $acl.SetOwner($identities[1])
+        Set-Acl -LiteralPath $item.FullName -AclObject $acl
+    }
+}
+
 New-Item -ItemType Directory -Force -Path $InstallDirectory, $DataDirectory, $driverDirectory | Out-Null
+Protect-ClientWorkspace $DataDirectory
 Copy-Item -LiteralPath $BinaryPath -Destination $destination -Force
 
 $config = [ordered]@{
@@ -47,10 +75,6 @@ $config = [ordered]@{
     export_package = $false
 }
 $config | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $configPath -Encoding UTF8
-
-# Restrict the client configuration and collected-driver workspace to SYSTEM and
-# local administrators. The report protocol does not store a shared secret here.
-& icacls.exe $DataDirectory /inheritance:r /grant:r "SYSTEM:(OI)(CI)(F)" "Administrators:(OI)(CI)(F)" | Out-Null
 
 if ($RegisterStartupReport) {
     $taskName = "Diskless Manager Client Report"

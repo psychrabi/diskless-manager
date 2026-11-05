@@ -155,6 +155,60 @@ impl ImageService {
         .await
     }
 
+    /// Validate a public Windows master and its immutable ready snapshot without
+    /// touching storage. Creation repeats this check before cloning.
+    pub async fn adaptation_source(&self, source_id: &str, snapshot_name: &str) -> Result<Image> {
+        let source = self.get(source_id).await?;
+        ensure_public_image(&source)?;
+        anyhow::ensure!(
+            source.kind == ImageKind::Master
+                && source.os_type == OsType::Windows
+                && source.status == "ready",
+            "adaptation requires a ready public Windows master"
+        );
+        anyhow::ensure!(
+            self.snapshots(&source.id)
+                .await?
+                .iter()
+                .any(|snapshot| { snapshot.name == snapshot_name && snapshot.status == "ready" }),
+            "adaptation requires a ready snapshot of the source master"
+        );
+        Ok(source)
+    }
+
+    /// Clone an immutable Windows source into a private factory-owned master.
+    /// No source promotion, rollback, or client disk mutation is performed.
+    pub async fn create_adaptation_draft(
+        &self,
+        source_id: &str,
+        snapshot_name: &str,
+        new_name: &str,
+    ) -> Result<Image> {
+        let (source_id, snapshot_name, new_name) = (
+            source_id.to_owned(),
+            snapshot_name.to_owned(),
+            new_name.to_owned(),
+        );
+        self.run_blocking(move |service| {
+            Box::pin(async move {
+                service
+                    .adaptation_source(&source_id, &snapshot_name)
+                    .await?;
+                service
+                    .create_image_from_snapshot(
+                        &source_id,
+                        &snapshot_name,
+                        &new_name,
+                        ImageKind::Master,
+                        "draft",
+                        false,
+                    )
+                    .await
+            })
+        })
+        .await
+    }
+
     pub async fn publish_draft(&self, id: &str, description: String) -> Result<Image> {
         let id = id.to_owned();
         self.run_blocking(move |service| {
@@ -2710,6 +2764,85 @@ mod storage_presence_tests {
             log.lock().unwrap().as_slice(),
             ["clone:pool/image@stable:pool/image-restored"]
         );
+    }
+
+    #[tokio::test]
+    async fn adaptation_clones_a_private_master_without_changing_source_lineage() {
+        let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let service = service_with_log(&["pool/image"], log.clone()).await;
+        let mut source = image("master", "pool/image", None);
+        source.os_type = OsType::Windows;
+        let snapshot = image("snap", "stable", Some("master"));
+        service.repository.insert(&source).await.unwrap();
+        service.repository.insert(&snapshot).await.unwrap();
+        let draft = service
+            .create_adaptation_draft("master", "stable", "adapted")
+            .await
+            .unwrap();
+        assert_eq!(draft.kind, ImageKind::Master);
+        assert_eq!(draft.status, "draft");
+        assert_eq!(draft.os_type, OsType::Windows);
+        assert_eq!(draft.size_gb, source.size_gb);
+        assert!(draft.parent_id.is_none());
+        assert!(service
+            .list()
+            .await
+            .unwrap()
+            .iter()
+            .all(|image| image.id != draft.id));
+        assert_eq!(service.get("master").await.unwrap().status, "ready");
+        assert_eq!(
+            service.snapshots("master").await.unwrap()[0].id,
+            snapshot.id
+        );
+        assert_eq!(
+            log.lock().unwrap().as_slice(),
+            ["clone:pool/image@stable:pool/adapted"]
+        );
+    }
+
+    #[tokio::test]
+    async fn adaptation_rejects_unsafe_sources_before_storage_mutation() {
+        for scenario in [
+            "linux",
+            "draft",
+            "clone",
+            "snapshot",
+            "unready_snapshot",
+            "wrong_parent",
+            "missing",
+        ] {
+            let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let service = service_with_log(&["pool/image"], log.clone()).await;
+            let mut source = image("master", "pool/image", None);
+            source.os_type = OsType::Windows;
+            let mut snapshot = image("snap", "stable", Some("master"));
+            match scenario {
+                "linux" => source.os_type = OsType::Linux,
+                "draft" => source.status = "draft".into(),
+                "clone" => source.kind = ImageKind::Clone,
+                "snapshot" => source.kind = ImageKind::Snapshot,
+                "unready_snapshot" => snapshot.status = "verifying".into(),
+                "wrong_parent" => snapshot.parent_id = Some("other".into()),
+                _ => {}
+            }
+            service.repository.insert(&source).await.unwrap();
+            service.repository.insert(&snapshot).await.unwrap();
+            let selected = if scenario == "missing" {
+                "missing"
+            } else {
+                "stable"
+            };
+            assert!(
+                service
+                    .create_adaptation_draft("master", selected, "adapted")
+                    .await
+                    .is_err(),
+                "{scenario}"
+            );
+            assert!(log.lock().unwrap().is_empty(), "{scenario}");
+            assert_eq!(service.repository.list().await.unwrap().len(), 2);
+        }
     }
 
     #[tokio::test]

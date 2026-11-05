@@ -304,7 +304,7 @@ pub fn pnp_id_matches(package_id: &str, observed_id: &str) -> bool {
             .is_some_and(|(hardware_id, _)| package_id == hardware_id)
 }
 
-fn normalize_architecture(value: &str) -> String {
+pub(crate) fn normalize_architecture(value: &str) -> String {
     match value.trim().to_ascii_lowercase().as_str() {
         "amd64" | "x86_64" | "x64" => "x64".to_string(),
         "i386" | "i686" | "x86" => "x86".to_string(),

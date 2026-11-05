@@ -9,11 +9,13 @@ import {
   getHardwareIdentity, captureHardwareIdentity, applyHardwareIdentity,
   removeHardwareIdentity, requestHardwareInventory,
 } from "@/api/modules/clientProvisioning";
+import { listMasters } from "@/api/modules/images";
 import { listInstallerMedia } from "@/api/modules/installerMedia";
 
 const selectClass = "h-9 rounded-lg border border-input bg-background px-3";
 const recipes = [
   ["interactive", "Interactive ISO boot"], ["windows", "Windows installation"],
+  ["windows_adapt", "Adapt existing Windows image"],
   ["ubuntu", "Ubuntu unattended installation"], ["rhel", "RHEL / compatible unattended installation"],
 ];
 const factoryPhases = ["Prepare", "Install", "Adapt", "Save", "Verify", "Publish"];
@@ -28,6 +30,9 @@ export default function ClientProvisioning() {
   const [recipe, setRecipe] = useState("interactive");
   const [username, setUsername] = useState("");
   const [passwordHash, setPasswordHash] = useState("");
+  const [images, setImages] = useState([]);
+  const [sourceImageId, setSourceImageId] = useState("");
+  const [sourceSnapshot, setSourceSnapshot] = useState("");
   const [media, setMedia] = useState([]);
   const [mediaId, setMediaId] = useState("");
   const [imageName, setImageName] = useState("");
@@ -39,12 +44,15 @@ export default function ClientProvisioning() {
   const [loading, setLoading] = useState(false);
   const selectedClient = useRef(clientId);
   const client = clients.find((item) => item.id === clientId);
+  const adapting = recipe === "windows_adapt";
+  const sourceImage = images.find((image) => image.id === sourceImageId);
   const linux = ["ubuntu", "rhel"].includes(recipe);
 
   useEffect(() => {
     void fetchClients();
+    void listMasters().then((items) => setImages(items.filter((item) => item.os_type === "windows" && item.status === "ready"))).catch(() => { setImages([]); toastError("Source images", "Could not load ready Windows images."); });
     void listInstallerMedia().then((items) => setMedia(items.filter((item) => item.validation_state === "valid"))).catch(() => setMedia([]));
-  }, [fetchClients]);
+  }, [fetchClients, toastError]);
   useEffect(() => { selectedClient.current = clientId; }, [clientId]);
   const load = useCallback(async (notify = true) => {
     if (!clientId) return;
@@ -77,11 +85,11 @@ export default function ClientProvisioning() {
     setClientId(id); setIdentity(null); setSessions([]); setPasswordHash(""); setImageName(""); setAssignOnReady(false); setLoading(!!id);
   };
   const start = () => run(async () => {
-    await startInstallation(clientId, { recipe, media_id: mediaId, ...(recipe !== "interactive" ? { image_name: imageName } : {}), ...(sizeGb ? { size_gb: Number(sizeGb) } : {}), assign_on_ready: recipe !== "interactive" && assignOnReady, confirm_erase: true, ...(linux ? { username, password_hash: passwordHash } : {}) });
+    await startInstallation(clientId, { recipe: adapting ? "windows" : recipe, media_id: mediaId, ...(adapting ? { source_image_id: sourceImageId, source_snapshot: sourceSnapshot } : {}), ...(recipe !== "interactive" ? { image_name: imageName } : {}), ...(!adapting && sizeGb ? { size_gb: Number(sizeGb) } : {}), assign_on_ready: recipe !== "interactive" && assignOnReady, confirm_erase: true, ...(linux ? { username, password_hash: passwordHash } : {}) });
     setPasswordHash("");
   }, "Installation prepared. Boot the selected client to continue.", {
     title: "Prepare client installation", destructive: true,
-    description: `${client?.name} will install to a new private draft image. Its current assignment and storage remain untouched. The draft is published only after a successful normal boot verification.`,
+    description: adapting ? `${client?.name} will adapt only a private clone of the selected Windows source snapshot. The source image and current assignment remain untouched. The new image is published only after verification, and assigned only if you explicitly opt in.` : `${client?.name} will install to a new private draft image. Its current assignment and storage remain untouched. The draft is published only after a successful normal boot verification.`,
   });
 
   return (
@@ -106,13 +114,17 @@ export default function ClientProvisioning() {
             <label className="grid gap-1 text-sm">Installation method<select className={selectClass} value={recipe} onChange={(event) => setRecipe(event.target.value)} disabled={busy}>
               {recipes.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select></label>
-            {(recipe !== "interactive" || !client.master || client.master === "pending") && <div className="grid gap-3 sm:grid-cols-2">{recipe !== "interactive" && <label className="grid gap-1 text-sm">Published image name<Input value={imageName} onChange={(event) => setImageName(event.target.value)} placeholder="ubuntu-workstations" /></label>}<label className="grid gap-1 text-sm">Size in GiB<Input type="number" min="8" value={sizeGb} onChange={(event) => setSizeGb(event.target.value)} placeholder={client.master && client.master !== "pending" ? "Use assigned image size" : "At least 8"} /></label></div>}
+            {adapting && <div className="grid gap-3 sm:grid-cols-2">
+              <label className="grid gap-1 text-sm">Source Windows image<select className={selectClass} value={sourceImageId} onChange={(event) => { setSourceImageId(event.target.value); setSourceSnapshot(""); }} disabled={busy}><option value="">Select ready Windows image</option>{images.map((image) => <option key={image.id} value={image.id}>{image.name}</option>)}</select></label>
+              <label className="grid gap-1 text-sm">Source snapshot<select className={selectClass} value={sourceSnapshot} onChange={(event) => setSourceSnapshot(event.target.value)} disabled={busy || !sourceImage}><option value="">Select source snapshot</option>{sourceImage?.snapshots?.map((snapshot) => <option key={snapshot.name} value={snapshot.name}>{snapshot.name}</option>)}</select></label>
+            </div>}
+            {(recipe !== "interactive" || !client.master || client.master === "pending") && <div className="grid gap-3 sm:grid-cols-2">{recipe !== "interactive" && <label className="grid gap-1 text-sm">Published image name<Input value={imageName} onChange={(event) => setImageName(event.target.value)} placeholder="ubuntu-workstations" /></label>}<label className="grid gap-1 text-sm">Size in GiB<Input type="number" min="8" disabled={adapting} value={adapting ? "" : sizeGb} onChange={(event) => setSizeGb(event.target.value)} placeholder={adapting ? "Inferred from source snapshot" : client.master && client.master !== "pending" ? "Use assigned image size" : "At least 8"} /></label></div>}
             {linux && <div className="grid gap-3 sm:grid-cols-2">
               <label className="grid gap-1 text-sm">Linux username<Input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="off" /></label>
               <label className="grid gap-1 text-sm">SHA-512 password hash<Input type="password" value={passwordHash} onChange={(event) => setPasswordHash(event.target.value)} autoComplete="new-password" placeholder="$6$…" /></label>
             </div>}
             {recipe !== "interactive" && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={assignOnReady} onChange={(event) => setAssignOnReady(event.target.checked)} />Assign to this client after verification</label>}
-            <div><Button disabled={busy || loading || !mediaId || (recipe !== "interactive" && !imageName) || ((!client.master || client.master === "pending") && !sizeGb) || (linux && (!username || !passwordHash))} onClick={start}>{recipe === "interactive" ? "Start manual boot" : "Create verified image"}</Button></div>
+            <div><Button disabled={busy || loading || !mediaId || (recipe !== "interactive" && !imageName) || (!adapting && (!client.master || client.master === "pending") && !sizeGb) || (adapting && (!sourceImage || !sourceSnapshot)) || (linux && (!username || !passwordHash))} onClick={start}>{recipe === "interactive" ? "Start manual boot" : "Create verified image"}</Button></div>
             {sessions.map(({ session, events, actions = [] }) => <article key={session.id} className="grid gap-2 rounded-lg border p-3">
               <p className="text-sm font-medium">{recipes.find(([value]) => value === session.recipe)?.[1] || session.recipe}: {session.state} · {session.progress}%</p>
               {session.kind === "factory" && factoryPhaseIndex[session.state] !== undefined && <ol aria-label="Image factory phase" className="flex flex-wrap gap-x-3 gap-y-1 text-xs">

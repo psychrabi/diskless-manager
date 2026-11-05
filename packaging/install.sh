@@ -21,9 +21,9 @@ echo "Detected distribution family: $DISTRO"
 
 install_deps() {
   case "$DISTRO" in
-    debian) apt-get update && apt-get install -y isc-dhcp-server tftpd-hpa samba apache2 wakeonlan targetcli-fb zfsutils-linux ;;
-    redhat) dnf install -y dhcp-server tftp-server samba httpd wol targetcli zfs ;;
-    arch) pacman -Sy --noconfirm dhcp tftp-hpa samba apache wakeonlan targetcli-fb zfs-dkms zfs-utils ;;
+    debian) apt-get update && apt-get install -y isc-dhcp-server tftpd-hpa samba apache2 wakeonlan targetcli-fb zfsutils-linux ntfs-3g ;;
+    redhat) dnf install -y dhcp-server tftp-server samba httpd wol targetcli zfs ntfs-3g ;;
+    arch) pacman -Sy --noconfirm dhcp tftp-hpa samba apache wakeonlan targetcli-fb zfs-dkms zfs-utils ntfs-3g ;;
     *) echo "Unknown distribution; install DHCP/TFTP/Samba/HTTPD/WOL/targetcli/ZFS equivalents manually." ;;
   esac
 }

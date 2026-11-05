@@ -73,6 +73,18 @@ impl Distro {
         }
     }
 
+    /// Socket unit that keeps the TFTP port open and starts the daemon on
+    /// demand, when the distribution ships a socket-activated TFTP service.
+    ///
+    /// The triggered service exits when idle, so it is the socket that
+    /// represents "TFTP is available" between requests.
+    pub fn tftp_socket(&self) -> Option<&'static str> {
+        match self {
+            Distro::RedHat => Some("tftp.socket"),
+            Distro::Debian | Distro::Arch => None,
+        }
+    }
+
     pub fn http_service(&self) -> &'static str {
         match self {
             Distro::Debian => "apache2",
@@ -664,6 +676,7 @@ mod tests {
         );
         assert_eq!(d.dhcp_service(), "isc-dhcp-server");
         assert_eq!(d.tftp_service(), "tftpd-hpa");
+        assert_eq!(d.tftp_socket(), None);
         assert_eq!(d.http_service(), "apache2");
         assert_eq!(d.nfs_service(), "nfs-kernel-server");
         assert_eq!(d.iscsi_service(), "rtslib-fb-targetctl");
@@ -687,6 +700,7 @@ mod tests {
         assert_eq!(d.pkg_install("samba"), ["dnf", "install", "-y", "samba"]);
         assert_eq!(d.dhcp_service(), "dhcpd");
         assert_eq!(d.tftp_service(), "tftp");
+        assert_eq!(d.tftp_socket(), Some("tftp.socket"));
         assert_eq!(d.http_service(), "httpd");
         assert_eq!(d.nfs_service(), "nfs-server");
         assert_eq!(d.iscsi_service(), "target");
@@ -712,6 +726,7 @@ mod tests {
         );
         assert_eq!(d.dhcp_service(), "dhcpd4");
         assert_eq!(d.tftp_service(), "tftpd");
+        assert_eq!(d.tftp_socket(), None);
         assert_eq!(d.http_service(), "httpd");
         assert_eq!(d.nfs_service(), "nfs-server");
         assert_eq!(d.iscsi_service(), "target");

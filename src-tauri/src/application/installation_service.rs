@@ -11,6 +11,7 @@ use anyhow::{ensure, Context, Result};
 use chrono::{Duration, Utc};
 use serde::Deserialize;
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::{net::IpAddr, path::PathBuf};
 use uuid::Uuid;
 
@@ -22,6 +23,8 @@ pub struct CreateInstallation {
     pub media_id: String,
     pub image_name: Option<String>,
     pub size_gb: Option<u64>,
+    pub source_image_id: Option<String>,
+    pub source_snapshot: Option<String>,
     #[serde(default)]
     pub assign_on_ready: bool,
     pub confirm_erase: bool,
@@ -42,6 +45,18 @@ pub struct AdaptationInventory {
     pub boot_nic_ids: Vec<String>,
     #[serde(default)]
     pub boot_nic_mac: Option<String>,
+}
+
+/// The WinPE image may bake an old servicer; the server is the source of truth.
+/// Return `(bytes, lowercase sha256)` for the current helper under the boot root.
+fn servicer_metadata(root: &std::path::Path) -> Option<(u64, String)> {
+    let path = root.join("tools/windows-servicer/diskless-windows-servicer.exe");
+    let metadata = std::fs::symlink_metadata(&path).ok()?;
+    if !metadata.file_type().is_file() {
+        return None;
+    }
+    let bytes = std::fs::read(&path).ok()?;
+    Some((bytes.len() as u64, format!("{:x}", Sha256::digest(&bytes))))
 }
 #[derive(Clone)]
 pub struct InstallationService {
@@ -282,7 +297,18 @@ impl InstallationService {
             .await
             .verify_integrity(media_id)
             .await?;
-        self.prerequisites(&request.recipe, &client, &media).await?;
+        let source = match (&request.source_image_id, &request.source_snapshot) {
+            (Some(image), Some(snapshot)) => Some(
+                self.state
+                    .application
+                    .images
+                    .adaptation_source(image, snapshot)
+                    .await?,
+            ),
+            _ => None,
+        };
+        self.prerequisites(&request.recipe, &client, &media, source.is_some())
+            .await?;
         let assigned = self
             .state
             .application
@@ -291,6 +317,7 @@ impl InstallationService {
             .await?;
         let size_gb = request
             .size_gb
+            .or_else(|| source.as_ref().map(|image| image.size_gb))
             .or_else(|| assigned.as_ref().map(|image| image.size_gb))
             .context("size_gb is required when the client has no assigned image")?;
         ensure!(size_gb >= 8, "draft image must be at least 8 GiB");
@@ -356,7 +383,9 @@ impl InstallationService {
             firmware: client.pxe_mode.as_str().to_owned(),
             assign_on_ready: request.assign_on_ready,
             token: format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple()),
-            config_json: json!({"username":request.username,"password_hash":request.password_hash})
+            config_json: json!({"username":request.username,"password_hash":request.password_hash,
+                "adapt_existing":source.is_some(), "source_image_id":source.as_ref().map(|image| &image.id),
+                "source_image_name":source.as_ref().map(|image| &image.name), "source_snapshot":request.source_snapshot})
                 .to_string(),
             state: "preparing".to_owned(),
             progress: 0,
@@ -381,19 +410,33 @@ impl InstallationService {
             ..Default::default()
         };
         self.repository.insert(&session).await?;
-        let draft = match self
-            .state
-            .application
-            .images
-            .create_draft(CreateImageRequest {
-                name: image_name,
-                os_type,
-                size_gb,
-                format: None,
-                description: Some(format!("Installation session {}", id_value)),
-            })
-            .await
-        {
+        let draft_result = if let Some(source) = source.as_ref() {
+            self.state
+                .application
+                .images
+                .create_adaptation_draft(
+                    &source.id,
+                    request
+                        .source_snapshot
+                        .as_deref()
+                        .context("adaptation snapshot is missing")?,
+                    &image_name,
+                )
+                .await
+        } else {
+            self.state
+                .application
+                .images
+                .create_draft(CreateImageRequest {
+                    name: image_name,
+                    os_type,
+                    size_gb,
+                    format: None,
+                    description: Some(format!("Installation session {}", id_value)),
+                })
+                .await
+        };
+        let draft = match draft_result {
             Ok(draft) => draft,
             Err(error) => {
                 self.repository
@@ -614,6 +657,7 @@ impl InstallationService {
         recipe: &str,
         c: &Client,
         media: &crate::persistence::InstallerMedia,
+        adapt_existing: bool,
     ) -> Result<()> {
         use crate::persistence::InstallerMediaType;
         if recipe == "interactive" {
@@ -647,7 +691,9 @@ impl InstallationService {
                     && manifest["storage_wmi"] == true,
                 "WinPE installer manifest must attest amd64, PowerShell and StorageWMI"
             );
-            installation::member_size(&media.managed_path, "sources/install.wim").await?;
+            if !adapt_existing {
+                installation::member_size(&media.managed_path, "sources/install.wim").await?;
+            }
         } else {
             ensure!(
                 media.media_type == InstallerMediaType::LinuxIso,
@@ -1276,11 +1322,20 @@ impl InstallationService {
         }
         let settings = self.state.settings.read().await.clone();
         let base = Self::installer_api_base(&settings);
+        let servicer_root = settings.http.root_dir.clone();
+        let servicer = tokio::task::spawn_blocking(move || {
+            servicer_metadata(std::path::Path::new(&servicer_root))
+        })
+        .await
+        .context("Windows servicer metadata task failed")?;
         Ok(json!({
             "driver_bundle_url": bundle.as_ref().map(|_| format!("{base}/api/installer/{id}/{token}/adaptation/drivers.zip")),
             "driver_bundle_sha256": bundle.as_ref().map(|bundle| bundle.sha256.clone()),
             "driver_bundle_bytes": bundle.as_ref().map(|bundle| bundle.bytes),
             "driver_packages": packages,
+            "servicer_url": servicer.as_ref().map(|_| format!("{base}/api/installer/{id}/{token}/servicer.exe")),
+            "servicer_sha256": servicer.as_ref().map(|(_, sha256)| sha256.clone()),
+            "servicer_bytes": servicer.as_ref().map(|(bytes, _)| *bytes),
             "boot_arm": crate::infrastructure::pxe::WindowsBootArmConfig::default(),
             "reporter": {
                 "server_url": base,
@@ -1317,6 +1372,41 @@ impl InstallationService {
         .await??
         .context("no driver bundle was selected for this installation")?;
         let file = tokio::fs::File::open(bundle.path).await?;
+        let stream = futures::stream::try_unfold(file, |mut file| async move {
+            use tokio::io::AsyncReadExt;
+            let mut bytes = vec![0u8; 64 * 1024];
+            let read = file.read(&mut bytes).await?;
+            if read == 0 {
+                return Ok::<_, std::io::Error>(None);
+            }
+            bytes.truncate(read);
+            Ok(Some((bytes, file)))
+        });
+        Ok(axum::body::Body::from_stream(stream))
+    }
+    /// Serve the exact servicer the manifest advertised. A WinPE image with an
+    /// older baked helper must not silently service a clone with stale code.
+    pub async fn servicer_binary(
+        &self,
+        id: &str,
+        token: &str,
+        ip: IpAddr,
+    ) -> Result<axum::body::Body> {
+        let session = self.authorize(id, token, ip).await?;
+        ensure!(
+            session.kind == "factory" && session.recipe == "windows",
+            "Windows servicer is only available for Windows factory sessions"
+        );
+        ensure!(
+            matches!(session.state.as_str(), "installing" | "adapting"),
+            "installation is not ready for the Windows servicer"
+        );
+        let root = self.state.settings.read().await.http.root_dir.clone();
+        let path = std::path::Path::new(&root)
+            .join("tools/windows-servicer/diskless-windows-servicer.exe");
+        let file = tokio::fs::File::open(&path)
+            .await
+            .with_context(|| format!("Windows servicer is not available at {}", path.display()))?;
         let stream = futures::stream::try_unfold(file, |mut file| async move {
             use tokio::io::AsyncReadExt;
             let mut bytes = vec![0u8; 64 * 1024];
@@ -1388,6 +1478,24 @@ fn constant_token_eq(a: &str, b: &str) -> bool {
         == 0
 }
 fn validate_request(r: &CreateInstallation) -> Result<()> {
+    match (&r.source_image_id, &r.source_snapshot) {
+        (None, None) => {}
+        (Some(image), Some(snapshot)) => {
+            ensure!(
+                !image.trim().is_empty() && !snapshot.trim().is_empty(),
+                "adaptation source and snapshot must be nonempty"
+            );
+            ensure!(
+                r.recipe == "windows",
+                "adaptation supports only the windows recipe"
+            );
+            ensure!(
+                r.size_gb.is_none(),
+                "adaptation does not accept a size override"
+            );
+        }
+        _ => anyhow::bail!("adaptation requires both source_image_id and source_snapshot"),
+    }
     ensure!(
         r.confirm_erase,
         "explicit disk erase confirmation is required"
@@ -1545,6 +1653,8 @@ mod tests {
             media_id: "media-a".into(),
             image_name: Some("factory-image".into()),
             size_gb: Some(20),
+            source_image_id: None,
+            source_snapshot: None,
             assign_on_ready: false,
             confirm_erase: true,
             username: Some("operator".into()),
@@ -1569,5 +1679,85 @@ mod tests {
         assert!(!constant_token_eq(&token, &"a".repeat(63)));
         assert!(!constant_token_eq(&token, &format!("{}b", "a".repeat(63))));
         assert!(!constant_token_eq("", ""));
+    }
+
+    #[test]
+    fn adaptation_requests_need_both_sources_windows_and_no_size_override() {
+        let base = json!({"recipe":"windows", "image_name":"adapted", "confirm_erase":true,
+            "source_image_id":"master", "source_snapshot":"stable"});
+        let request: CreateInstallation = serde_json::from_value(base.clone()).unwrap();
+        assert!(validate_request(&request).is_ok());
+        for (field, value) in [
+            ("source_image_id", serde_json::Value::Null),
+            ("source_snapshot", serde_json::Value::Null),
+            ("source_image_id", json!(" ")),
+            ("source_snapshot", json!("")),
+            ("recipe", json!("interactive")),
+            ("recipe", json!("ubuntu")),
+            ("size_gb", json!(50)),
+        ] {
+            let mut invalid = base.clone();
+            invalid[field] = value;
+            let request = serde_json::from_value(invalid).unwrap();
+            assert!(validate_request(&request).is_err(), "{field}");
+        }
+    }
+
+    #[tokio::test]
+    async fn adaptation_needs_dedicated_winpe_and_windows_iso_but_not_install_wim() {
+        let state = test_state().await;
+        let root = tempfile::tempdir().unwrap();
+        state.settings.write().await.http.root_dir = root.path().to_string_lossy().into_owned();
+        sqlx::query("UPDATE clients SET created_at = ?, updated_at = ?")
+            .bind(Utc::now().to_rfc3339())
+            .bind(Utc::now().to_rfc3339())
+            .execute(&state.db_pool)
+            .await
+            .unwrap();
+        let service = InstallationService::new(state);
+        let mut client = service.client("client-a").await.unwrap();
+        client.pxe_mode = crate::domain::PxeMode::Uefi;
+        let mut media = crate::persistence::InstallerMedia {
+            id: "media-a".into(),
+            display_name: "Windows".into(),
+            media_type: crate::persistence::InstallerMediaType::WindowsIso,
+            managed_path: root.path().join("missing.iso"),
+            byte_size: 1,
+            checksum: "synthetic".into(),
+            validation_state: crate::persistence::StructuralValidationState::Valid,
+            is_default: false,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        assert!(service
+            .prerequisites("windows", &client, &media, true)
+            .await
+            .is_err());
+        let winpe = root.path().join("boot/winpe");
+        tokio::fs::create_dir_all(&winpe).await.unwrap();
+        for asset in ["wimboot", "BCD", "boot.sdi", "boot-installer.wim"] {
+            tokio::fs::write(winpe.join(asset), b"synthetic")
+                .await
+                .unwrap();
+        }
+        tokio::fs::write(
+            winpe.join("installer-v1.json"),
+            br#"{"architecture":"amd64","powershell":true,"storage_wmi":true}"#,
+        )
+        .await
+        .unwrap();
+        service
+            .prerequisites("windows", &client, &media, true)
+            .await
+            .unwrap();
+        assert!(service
+            .prerequisites("windows", &client, &media, false)
+            .await
+            .is_err());
+        media.media_type = crate::persistence::InstallerMediaType::WinPe;
+        assert!(service
+            .prerequisites("windows", &client, &media, true)
+            .await
+            .is_err());
     }
 }

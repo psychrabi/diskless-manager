@@ -25,6 +25,12 @@ Dism /Add-Package /Image:C:\WinPE_amd64\mount /PackagePath:"C:\Program Files (x8
 Dism /Add-Package /Image:C:\WinPE_amd64\mount /PackagePath:"C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Windows Preinstallation Environment\amd64\WinPE_OCs\WinPE-PowerShell.cab"
 Dism /Add-Package /Image:C:\WinPE_amd64\mount /PackagePath:"C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Windows Preinstallation Environment\amd64\WinPE_OCs\WinPE-SecureBootCmdlets.cab"
 
+# 3b. Add the client NIC driver. WinPE's inbox drivers do not cover virtio
+#     (QEMU/KVM) NICs, so without this the image boots with no network and
+#     the inventory POST can never reach the server. Use the same driver
+#     package the catalog serves to clients.
+Dism /Add-Driver /Image:C:\WinPE_amd64\mount /Driver:C:\drivers\NetKVM\w10\amd64 /Recurse
+
 # 4. Stage the inventory payload (this directory).
 Copy-Item D:\winpe-inventory.ps1 C:\WinPE_amd64\mount\Windows\System32\
 Copy-Item D:\winpe-startnet.cmd C:\WinPE_amd64\mount\Windows\System32\startnet.cmd
@@ -51,3 +57,7 @@ Notes:
 - Verify on the designated disposable test client only: request an inventory
   boot for its record, confirm the `windows_nic_inventory` row appears, and
   confirm the next boot returns to the normal menu.
+- Rebuild and redeploy this image whenever `winpe-inventory.ps1` changes. The
+  deployed copy can drift from the repository and silently omit newer payload
+  fields (for example `subvendor_id`/`subdevice_id`); compare the extracted
+  `Windows/System32/winpe-inventory.ps1` with the repository file after build.

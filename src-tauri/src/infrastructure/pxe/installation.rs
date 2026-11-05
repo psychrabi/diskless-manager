@@ -232,7 +232,20 @@ impl RenderContext<'_> {
         script
     }
     pub fn windows_script(&self) -> String {
+        let adapt_existing = self.session.recipe == "windows"
+            && serde_json::from_str::<serde_json::Value>(&self.session.config_json)
+                .ok()
+                .and_then(|config| {
+                    config
+                        .get("adapt_existing")
+                        .and_then(|value| value.as_bool())
+                })
+                == Some(true);
         include_str!("installer/install.ps1")
+            .replace(
+                "@@ADAPT_EXISTING@@",
+                if adapt_existing { "$true" } else { "$false" },
+            )
             .replace("@@IQN@@", &self.session.target_iqn)
             .replace(
                 "@@BYTES@@",
@@ -261,6 +274,100 @@ impl RenderContext<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn windows_render_uses_only_persisted_literal_boolean() {
+        let client = crate::domain::Client::create(serde_json::from_value(serde_json::json!({
+            "name": "PC001", "mac": "02:00:00:00:00:01", "ip": "192.0.2.10", "master": "pool/source"
+        })).unwrap()).unwrap();
+        for (recipe, config, expected) in [
+            ("windows", r#"{"adapt_existing":true}"#, "$true"),
+            ("windows", r#"{"adapt_existing":false}"#, "$false"),
+            (
+                "windows",
+                r#"{"adapt_existing":"$true; Clear-Disk"}"#,
+                "$false",
+            ),
+            ("windows", "invalid", "$false"),
+            ("windows", "{}", "$false"),
+            ("ubuntu", r#"{"adapt_existing":true}"#, "$false"),
+        ] {
+            let session = InstallationSession {
+                recipe: recipe.into(),
+                config_json: config.into(),
+                expected_bytes: Some(123),
+                target_iqn: "iqn.test:clone".into(),
+                ..Default::default()
+            };
+            let script = RenderContext {
+                session: &session,
+                base: "http://boot",
+                api: "http://installer",
+                server: "192.0.2.1",
+                client: &client,
+                username: "",
+                password_hash: "",
+            }
+            .windows_script();
+            assert!(script.contains(&format!("$AdaptExisting = {expected}\n")));
+            assert!(!script.contains("@@"));
+            assert!(script.contains("$ExpectedIqn = 'iqn.test:clone'"));
+            assert!(script.contains("$ExpectedBytes = [UInt64]'123'"));
+        }
+    }
+
+    #[test]
+    fn existing_windows_branch_cannot_repartition_or_install() {
+        let script = include_str!("installer/install.ps1");
+        let (_, branch) = script.split_once("    if ($AdaptExisting) {").unwrap();
+        let (adapt, fresh) = branch
+            .split_once("    } else {\n    Invoke-WebRequest")
+            .unwrap();
+        for forbidden in [
+            "Clear-Disk",
+            "Initialize-Disk",
+            "New-Partition",
+            "Format-Volume",
+            "/Apply-Image",
+            "bcdboot",
+            "install.wim",
+        ] {
+            assert!(
+                !adapt.contains(forbidden),
+                "adaptation contains {forbidden}"
+            );
+        }
+        assert!(adapt.contains("Get-Partition -DiskNumber $Disk.Number"));
+        assert!(adapt.contains("$Candidates.Count -ne 1"));
+        assert!(adapt.contains("Add-PartitionAccessPath @Mount"));
+        assert!(fresh.contains("Clear-Disk"));
+        assert!(fresh.contains("/Apply-Image"));
+        assert!(fresh.contains("bcdboot.exe"));
+        let gate = script
+            .find("$Disks[0].IsBoot -or $Disks[0].IsSystem")
+            .unwrap();
+        assert!(gate < script.find("if ($AdaptExisting)").unwrap());
+        let committed = script.find("$AdaptResult.ok -ne $true").unwrap();
+        let cleanup = script
+            .find("foreach ($Mount in $TemporaryMounts) { Remove-PartitionAccessPath @Mount }")
+            .unwrap();
+        assert!(committed < cleanup);
+        assert!(cleanup < script.find("Report 'installed'").unwrap());
+        let failure = script.split_once("\n} catch {\n").unwrap().1;
+        assert!(failure.contains("Remove-PartitionAccessPath @Mount"));
+        assert!(failure.contains("Set-Disk -IsOffline $true"));
+        assert!(!failure.contains("Write-Error -ErrorRecord"));
+    }
+
+    #[test]
+    fn winpe_prefers_the_server_servicer_and_verifies_it() {
+        let script = include_str!("installer/install.ps1");
+        assert!(script.contains("$Manifest.servicer_url"));
+        assert!(script.contains("$Manifest.servicer_bytes"));
+        assert!(script.contains("$Manifest.servicer_sha256"));
+        assert!(script.contains("-OutFile $Servicer"));
+        assert!(!script.contains("throw 'WinPE shared Windows servicer is missing'"));
+    }
+
     #[test]
     fn iso_members_are_recipe_scoped_and_cannot_traverse_or_glob() {
         assert_eq!(

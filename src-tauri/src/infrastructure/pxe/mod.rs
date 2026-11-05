@@ -7,6 +7,7 @@ mod ipxe;
 pub mod nic_inventory;
 pub mod nvmeof;
 pub mod windows_boot_arming;
+pub mod windows_driver_coverage;
 pub mod windows_driver_injection;
 pub mod windows_image_preparation;
 pub mod windows_inf;
@@ -35,6 +36,7 @@ pub use windows_boot_arming::{
     WindowsBootArmConfig, WindowsBootArmPlan, WindowsBootArmResult, WindowsBootArmer,
     WindowsBootInventory,
 };
+pub use windows_driver_coverage::{driver_store_covers_boot_nic, snapshot_covers_boot_nic};
 pub use windows_driver_injection::{
     WindowsDriverInjectionRequest, WindowsDriverInjectionResult, WindowsDriverInjector,
 };

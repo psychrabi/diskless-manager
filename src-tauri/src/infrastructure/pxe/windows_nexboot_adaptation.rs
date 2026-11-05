@@ -2,8 +2,8 @@
 //!
 //! This intentionally preserves NexBoot's inventory-first, install-on-next-boot
 //! behavior rather than using DISM. The target image receives the driver bundle
-//! and a one-shot machine startup script; Windows executes pnputil and CDDB
-//! setup as SYSTEM on the next boot.
+//! and a one-shot machine startup script; Windows executes pnputil as SYSTEM
+//! on the next boot. Boot-critical drivers still require offline preparation.
 
 use anyhow::{bail, Context, Result};
 use std::fs;
@@ -332,6 +332,80 @@ fn merge_startup_ini(text: &str) -> String {
 mod tests {
     use super::*;
     #[test]
+    fn startup_adaptation_does_not_rewrite_unverified_device_bindings() {
+        assert!(!ADAPT_SCRIPT.contains("CriticalDeviceDatabase"));
+        assert!(!ADAPT_SCRIPT.contains("Get-InfBindings"));
+        assert!(!ADAPT_SCRIPT.contains("'msiscsi'"));
+    }
+
+    #[test]
+    fn installer_does_not_set_win32_iscsi_service_to_boot_start() {
+        let installer = include_str!("installer/install.ps1");
+        assert!(!installer.contains("'MSiSCSI'"));
+    }
+
+    #[test]
+    fn startup_cleanup_replaces_policy_files_atomically_before_unregistration() {
+        assert!(ADAPT_SCRIPT.contains("[IO.File]::Replace("));
+        assert!(!ADAPT_SCRIPT.contains("[IO.File]::WriteAllText($ini"));
+    }
+
+    #[test]
+    fn client_installer_replaces_acl_with_well_known_sids() {
+        let installer = include_str!("../../../../tools/windows-servicer/install-client.ps1");
+        assert!(installer.contains("SetAccessRuleProtection($true, $false)"));
+        assert!(installer.contains("WellKnownSidType"));
+    }
+
+    #[test]
+    #[ignore = "requires elevated Windows PowerShell to inspect protected ACLs"]
+    fn client_workspace_removes_existing_explicit_grants() {
+        let dir = tempfile::tempdir().unwrap();
+        let installer = dir.path().join("install-client.ps1");
+        fs::write(
+            &installer,
+            include_str!("../../../../tools/windows-servicer/install-client.ps1"),
+        )
+        .unwrap();
+        let output = std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", r#"
+$ErrorActionPreference = 'Stop'
+$tokens = $null; $errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($env:DISKLESS_INSTALLER, [ref]$tokens, [ref]$errors)
+if ($errors.Count) { throw 'Invalid installer script' }
+$helper = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Protect-ClientWorkspace' }, $false)
+if ($null -eq $helper) { throw 'Missing workspace helper' }
+. ([scriptblock]::Create($helper.Extent.Text))
+$path = Join-Path $env:DISKLESS_TEST_DIR 'workspace'
+New-Item -ItemType Directory -Path $path | Out-Null
+$file = Join-Path $path 'client-report.json'
+[IO.File]::WriteAllText($file, '{}')
+$everyone = [Security.Principal.SecurityIdentifier]::new([Security.Principal.WellKnownSidType]::WorldSid, $null)
+foreach ($item in @($path, $file)) {
+    $acl = Get-Acl -LiteralPath $item
+    $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($everyone, 'FullControl', 'Allow'))
+    Set-Acl -LiteralPath $item -AclObject $acl
+}
+Protect-ClientWorkspace $path
+foreach ($item in @($path, $file)) {
+    $acl = Get-Acl -LiteralPath $item
+    if (-not $acl.AreAccessRulesProtected) { throw 'Inheritance was not disabled' }
+    if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne 'S-1-5-32-544') { throw 'Unexpected workspace owner' }
+    $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
+    if ($rules.Count -ne 2 -or @($rules | Where-Object { $_.IdentityReference.Value -notin @('S-1-5-18','S-1-5-32-544') }).Count) { throw 'Unexpected workspace grant' }
+}
+"#])
+            .env("DISKLESS_INSTALLER", &installer)
+            .env("DISKLESS_TEST_DIR", dir.path())
+            .output()
+            .expect("Windows PowerShell is required");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    #[test]
     fn stages_bundle_and_one_shot_startup_files() {
         let root = tempfile::tempdir().unwrap();
         let drivers = tempfile::tempdir().unwrap();
@@ -382,52 +456,49 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(
-        not(windows),
-        ignore = "requires Windows PowerShell; tests only the pure ID helper"
-    )]
-    fn cddb_identity_preserves_subsystem_and_rejects_registry_paths() {
+    #[cfg_attr(not(windows), ignore = "requires Windows PowerShell")]
+    fn startup_cleanup_preserves_other_policy_entries_and_retries_on_failure() {
         let dir = tempfile::tempdir().unwrap();
         let script = dir.path().join("adapt.ps1");
         fs::write(&script, ADAPT_SCRIPT).unwrap();
-        // Extract the pure function through the AST so the startup script's
-        // installation and registry operations are never executed by this test.
         let output = std::process::Command::new("powershell.exe")
             .args(["-NoProfile", "-NonInteractive", "-Command", r#"
+$ErrorActionPreference = 'Stop'
 $tokens = $null; $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($env:DISKLESS_ADAPT_TEST_SCRIPT, [ref]$tokens, [ref]$errors)
-if ($errors.Count -ne 0) { throw 'Invalid adaptation script' }
-$helper = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-CriticalDeviceId' }, $false)
-if ($null -eq $helper) { throw 'ID helper missing' }
-. ([scriptblock]::Create($helper.Extent.Text))
-foreach ($id in @('pci\ven_8086&dev_15f3', 'PCI\VEN_8086&DEV_15F3&SUBSYS_00018086&REV_03', 'PCI\VEN_8086&DEV_15F3&SUBSYS_00028086&REV_03', 'PCI\VEN_8086&DEV_15F3&CC_020000')) {
-    Get-CriticalDeviceId $id
+if ($errors.Count) { throw 'Invalid adaptation script' }
+foreach ($name in @('Add-StartupItems', 'Write-AtomicPolicyFile', 'Remove-AdaptRegistration')) {
+    $helper = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $false)
+    if ($null -eq $helper) { throw "Missing helper: $name" }
+    . ([scriptblock]::Create($helper.Extent.Text))
 }
-foreach ($id in @('PCI\VEN_8086&DEV_15F3\..\Other', 'PCI\VEN_8086&DEV_15F3&SUBSYS_BAD')) {
-    $rejected = $false
-    try { Get-CriticalDeviceId $id | Out-Null } catch { $rejected = $true }
-    if (-not $rejected) { throw 'Malformed ID was accepted' }
+$gp = Join-Path $env:DISKLESS_ADAPT_TEST_DIR 'GroupPolicy'
+$startup = Join-Path $gp 'Machine\Scripts\Startup'
+New-Item -ItemType Directory -Force -Path $startup | Out-Null
+$ini = Join-Path $gp 'Machine\Scripts\scripts.ini'
+$initial = "[Startup]`r`n0CmdLine=ndadapt.cmd`r`n0Parameters=`r`n1CmdLine=other.cmd`r`n1Parameters=-x`r`n[Shutdown]`r`n0CmdLine=cleanup.cmd`r`n"
+[IO.File]::WriteAllText($ini, $initial)
+[IO.File]::WriteAllText((Join-Path $gp 'gpt.ini'), "[General]`r`nVersion=5`r`n")
+$write = ${function:Write-AtomicPolicyFile}
+function Write-AtomicPolicyFile([string]$path, [string]$text, [Text.Encoding]$encoding) {
+    if ($path -eq $ini) { throw 'injected replacement failure' }
+    & $write $path $text $encoding
 }
+try { Remove-AdaptRegistration $gp; throw 'Expected failure' } catch { if ($_.Exception.Message -ne 'injected replacement failure') { throw } }
+if ([IO.File]::ReadAllText($ini) -ne $initial) { throw 'Registration changed on failure' }
+${function:Write-AtomicPolicyFile} = $write
+Remove-AdaptRegistration $gp
+$result = [IO.File]::ReadAllText($ini)
+if ($result -match 'ndadapt.cmd' -or $result -notmatch 'other.cmd' -or $result -notmatch 'cleanup.cmd') { throw 'Other policy entries were not preserved' }
 "#])
             .env("DISKLESS_ADAPT_TEST_SCRIPT", &script)
+            .env("DISKLESS_ADAPT_TEST_DIR", dir.path())
             .output()
             .expect("Windows PowerShell is required");
         assert!(
             output.status.success(),
             "{}",
             String::from_utf8_lossy(&output.stderr)
-        );
-        assert_eq!(
-            String::from_utf8(output.stdout)
-                .unwrap()
-                .lines()
-                .collect::<Vec<_>>(),
-            vec![
-                "PCI#VEN_8086&DEV_15F3",
-                "PCI#VEN_8086&DEV_15F3&SUBSYS_00018086&REV_03",
-                "PCI#VEN_8086&DEV_15F3&SUBSYS_00028086&REV_03",
-                "PCI#VEN_8086&DEV_15F3&CC_020000",
-            ]
         );
     }
 

@@ -188,7 +188,15 @@ pub async fn prepare_managed(
     let mut clone: Option<Image> = None;
     let operation = async {
         let worker = RemoteWindowsServicer::new();
-        let capabilities = worker.capabilities(request.worker.clone()).await?;
+        let capabilities = worker
+            .capabilities(request.worker.clone())
+            .await
+            .with_context(|| {
+                format!(
+                    "Windows servicing worker '{}' failed its capability check",
+                    request.worker.host
+                )
+            })?;
         if !capabilities.available || !capabilities.elevated || !capabilities.iscsi_volume_servicing {
             bail!("install the updated helper on an elevated Windows worker with iSCSI volume servicing support");
         }
@@ -343,10 +351,9 @@ pub async fn prepare_managed(
                     "servicing failed; retained clone '{}' and any remaining target '{}' for inspection",
                     clone.name, target
                 )),
-                None => error.context(format!(
-                    "servicing failed before the image clone was created; no servicing target '{}' was created",
-                    target
-                )),
+                None => error.context(
+                    "Windows driver preparation failed before any image clone or servicing target was created",
+                ),
             })
         }
     }
