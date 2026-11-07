@@ -42,6 +42,7 @@ use crate::api::handlers::{
         resize_image, rollback_snapshot, set_default_image, update_image, verify_image,
     },
     license::{activate_license_handler, get_license_info_handler},
+    linux_image_builder::{build as build_linux_image, preflight as preflight_linux_image},
     logs::{clear_logs, get_logs},
     network_drivers::{
         import as import_network_driver, list as list_network_drivers,
@@ -105,6 +106,9 @@ fn is_api_or_ws_path(path: &str) -> bool {
 
 fn request_timeout_for(path: &str) -> Duration {
     match path {
+        "/api/images/linux-builder/preflight" | "/api/images/linux-builder/build" => {
+            Duration::from_secs(3900)
+        }
         "/api/pxe/windows/prepare-image"
         | "/api/pxe/windows/prepare-image/remote"
         | "/api/pxe/windows/prepare-image/remote/catalog"
@@ -393,6 +397,11 @@ fn client_routes() -> Router<AppState> {
 fn image_routes() -> Router<AppState> {
     Router::new()
         .route("/api/images", get(list_images).post(create_image))
+        .route(
+            "/api/images/linux-builder/preflight",
+            post(preflight_linux_image),
+        )
+        .route("/api/images/linux-builder/build", post(build_linux_image))
         .route("/api/masters", get(list_masters))
         .route(
             "/api/images/{id}",
@@ -663,6 +672,14 @@ mod tests {
         assert_eq!(
             request_timeout_for("/api/clients/client-1/legacy-super/exit"),
             Duration::from_secs(900)
+        );
+        assert_eq!(
+            request_timeout_for("/api/images/linux-builder/preflight"),
+            Duration::from_secs(3900)
+        );
+        assert_eq!(
+            request_timeout_for("/api/images/linux-builder/build"),
+            Duration::from_secs(3900)
         );
     }
     #[tokio::test]

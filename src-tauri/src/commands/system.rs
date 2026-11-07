@@ -321,14 +321,25 @@ pub fn authorize_from_terminal() -> Result<(), String> {
 /// passwordless-command paths only succeeds when the diskless-manager rule
 /// exists. `-n` prevents prompts; `-k` excludes cached password credentials.
 pub fn is_privileged_access_configured() -> bool {
-    let Ok(output) = std::process::Command::new("sudo")
-        .args(["-n", "-k", "/usr/bin/systemctl", "--version"])
-        .output()
-    else {
-        return false;
-    };
-    let stderr = String::from_utf8_lossy(&output.stderr).to_lowercase();
-    output.status.success() && !stderr.contains("password is required")
+    [
+        ["-n", "-k", "/usr/bin/systemctl", "--version"].as_slice(),
+        [
+            "-n",
+            "-k",
+            "/usr/bin/diskless-manager",
+            "internal-linux-image",
+            "--authorization-check",
+        ]
+        .as_slice(),
+    ]
+    .into_iter()
+    .all(|arguments| {
+        let Ok(output) = std::process::Command::new("sudo").args(arguments).output() else {
+            return false;
+        };
+        let stderr = String::from_utf8_lossy(&output.stderr).to_lowercase();
+        output.status.success() && !stderr.contains("password is required")
+    })
 }
 
 pub async fn get_network_interfaces() -> Result<Vec<String>, String> {

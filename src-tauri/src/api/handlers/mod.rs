@@ -24,6 +24,7 @@ pub mod image_versions;
 pub mod images;
 pub mod installation;
 pub mod license;
+pub mod linux_image_builder;
 pub mod logs;
 pub mod network_drivers;
 pub mod nvmeof;

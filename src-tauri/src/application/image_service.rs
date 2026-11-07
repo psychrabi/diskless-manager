@@ -228,6 +228,22 @@ impl ImageService {
         .await
     }
 
+    /// Keep a failed image build visible and removable instead of hiding its
+    /// partially written ZVOL as an unreachable draft.
+    pub async fn fail_draft(&self, id: &str) -> Result<Image> {
+        let mut image = self.get(id).await?;
+        anyhow::ensure!(
+            image.status == "draft",
+            "only a draft image can be marked failed"
+        );
+        image.status = "failed".into();
+        image.description =
+            Some("Linux image build failed; delete and recreate it to retry.".into());
+        image.updated_at = Utc::now();
+        self.repository.update(&image).await?;
+        Ok(image)
+    }
+
     pub async fn publish_verified_draft(
         &self,
         session_id: &str,

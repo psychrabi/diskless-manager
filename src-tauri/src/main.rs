@@ -44,6 +44,26 @@ async fn main() {
             }
             return;
         }
+        Some("internal-linux-image") => {
+            let arguments = std::env::args().skip(2).collect::<Vec<_>>();
+            if let Err(error) =
+                app_lib::infrastructure::linux_image_builder::run_internal_command(&arguments)
+            {
+                eprintln!("{error:#}");
+                std::process::exit(1);
+            }
+            return;
+        }
+        Some("internal-linux-image-worker") => {
+            let arguments = std::env::args().skip(2).collect::<Vec<_>>();
+            if let Err(error) =
+                app_lib::infrastructure::linux_image_builder::run_worker_command(&arguments)
+            {
+                eprintln!("{error:#}");
+                std::process::exit(1);
+            }
+            return;
+        }
         Some(other) => {
             eprintln!("unknown command: {other}");
             std::process::exit(2);
