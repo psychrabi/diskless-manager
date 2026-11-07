@@ -55,7 +55,13 @@ fn active_session_peer_ips_at(tpg: &Path, initiator_iqn: &str) -> Result<Vec<IpA
             .and_then(|line| line.split_once(" Connection State: "))
         {
             anyhow::ensure!(!expecting_address, "missing iSCSI connection address");
-            let _: u16 = state.0.parse().context("malformed iSCSI connection ID")?;
+            // LIO pads the connection ID column; tolerate any run of spaces
+            // before "Connection State" instead of requiring exactly one.
+            let _: u16 = state
+                .0
+                .trim()
+                .parse()
+                .context("malformed iSCSI connection ID")?;
             anyhow::ensure!(
                 matches!(
                     state.1,
@@ -160,7 +166,7 @@ mod tests {
         std::fs::create_dir_all(&acl).unwrap();
         std::fs::write(
             acl.join("info"),
-            "InitiatorName: iqn.2026-01.client:client.pc_001\nSession State: TARG_SESS_STATE_LOGGED_IN\nCID: 0 Connection State: TARG_CONN_STATE_LOGGED_IN\n Address 192.0.2.10 TCP StatSN: 0x01\nCID: 1 Connection State: TARG_CONN_STATE_LOGGED_IN\n Address ::ffff:192.0.2.11 TCP StatSN: 0x02\nCID: 2 Connection State: TARG_CONN_STATE_IN_LOGOUT\n Address 192.0.2.12 TCP StatSN: 0x03\n",
+            "InitiatorName: iqn.2026-01.client:client.pc_001\nSession State: TARG_SESS_STATE_LOGGED_IN\nCID: 0  Connection State: TARG_CONN_STATE_LOGGED_IN\n Address 192.0.2.10 TCP StatSN: 0x01\nCID: 1  Connection State: TARG_CONN_STATE_LOGGED_IN\n Address ::ffff:192.0.2.11 TCP StatSN: 0x02\nCID: 2 Connection State: TARG_CONN_STATE_IN_LOGOUT\n Address 192.0.2.12 TCP StatSN: 0x03\n",
         ).unwrap();
         assert_eq!(
             super::active_session_peer_ips_at(root.path(), "iqn.2026-01.client:client.pc_001")

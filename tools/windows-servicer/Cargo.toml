@@ -6,9 +6,10 @@ rust-version = "1.77.2"
 publish = false
 
 [features]
-default = ["gui"]
+default = ["gui", "windows-servicer"]
 gui = ["dep:eframe"]
-winpe = []
+windows-servicer = []
+winpe = ["windows-servicer"]
 
 [dependencies]
 anyhow = "1.0.100"

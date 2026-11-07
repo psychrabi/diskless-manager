@@ -369,6 +369,18 @@ mod tests {
     }
 
     #[test]
+    fn winpe_adaptation_reports_the_iscsi_adapter_hardware_ids() {
+        let script = include_str!("installer/install.ps1");
+        assert!(script.contains("Get-IscsiConnection"));
+        assert!(script.contains("Get-IscsiConnection -IscsiSession $Sessions[0]"));
+        assert!(script.contains("InitiatorAddress"));
+        assert!(script.contains("$BootDevices[0].HardwareID"));
+        assert!(script.contains("$BootDevices[0].CompatibleID"));
+        assert!(script.contains("$BootAdapters[0].MACAddress"));
+        assert!(!script.contains("Select-Object -ExpandProperty PNPDeviceID -Unique"));
+    }
+
+    #[test]
     fn iso_members_are_recipe_scoped_and_cannot_traverse_or_glob() {
         assert_eq!(
             media_member("ubuntu", "vmlinuz").as_deref(),

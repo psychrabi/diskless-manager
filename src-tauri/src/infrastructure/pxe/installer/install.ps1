@@ -16,18 +16,29 @@ function Run([string]$File, [string[]]$Arguments) {
 }
 try {
     if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') { throw 'Windows unattended installation requires amd64 WinPE' }
-    foreach ($Command in @('Get-IscsiSession', 'Get-Disk', 'Initialize-Disk', 'New-Partition', 'Format-Volume')) {
+    foreach ($Command in @('Get-IscsiSession', 'Get-IscsiConnection', 'Get-Disk', 'Initialize-Disk', 'New-Partition', 'Format-Volume')) {
         if (-not (Get-Command $Command -ErrorAction SilentlyContinue)) { throw "Dedicated WinPE requires WinPE-StorageWMI and PowerShell: $Command unavailable" }
     }
     $Servicer = 'X:\Windows\System32\diskless-windows-servicer.exe'
     New-Item -ItemType Directory -Path 'X:\drivers' -Force | Out-Null
-    # The firmware-provided boot adapter is the only NIC that needs drivers.
-    $NicIds = @(Get-CimInstance Win32_NetworkAdapter -Filter 'PhysicalAdapter=True' | Where-Object { $_.PNPDeviceID } | Select-Object -ExpandProperty PNPDeviceID -Unique)
-    $NicMac = @(Get-CimInstance Win32_NetworkAdapterConfiguration | Where-Object { $_.IPEnabled -eq $true -and $_.MACAddress } | Select-Object -First 1 -ExpandProperty MACAddress)
-    $NicMac = if ($NicMac.Count -eq 1) { $NicMac[0] } else { $null }
     # The iBFT session attached by iPXE must identify the disk; local SATA/NVMe disks never qualify.
     $Sessions = @(Get-IscsiSession | Where-Object TargetNodeAddress -EQ $ExpectedIqn)
     if ($Sessions.Count -ne 1) { throw 'Expected exactly one assigned iSCSI target session' }
+    # Use the iSCSI initiator address to identify the firmware boot adapter.
+    # PNPDeviceID is an instance path; DISM boot arming needs HardwareID and
+    # CompatibleID values to build a valid CriticalDeviceDatabase key.
+    $BootConnections = @(Get-IscsiConnection -IscsiSession $Sessions[0] | Where-Object { $_.InitiatorAddress })
+    $InitiatorAddresses = @($BootConnections | Select-Object -ExpandProperty InitiatorAddress -Unique)
+    if ($InitiatorAddresses.Count -ne 1) { throw 'Expected one iSCSI boot NIC address' }
+    $BootConfigs = @(Get-CimInstance Win32_NetworkAdapterConfiguration | Where-Object { $_.IPEnabled -and $_.IPAddress -contains $InitiatorAddresses[0] })
+    if ($BootConfigs.Count -ne 1) { throw 'The iSCSI boot address does not identify one network adapter' }
+    $BootAdapters = @(Get-CimInstance Win32_NetworkAdapter | Where-Object { $_.Index -eq $BootConfigs[0].Index -and $_.PhysicalAdapter -and $_.PNPDeviceID })
+    if ($BootAdapters.Count -ne 1) { throw 'The iSCSI boot address does not identify one physical PnP adapter' }
+    $BootDevices = @(Get-CimInstance Win32_PnPEntity -Filter "ClassGuid='{4d36e972-e325-11ce-bfc1-08002be10318}'" | Where-Object { $_.PNPDeviceID -eq $BootAdapters[0].PNPDeviceID })
+    if ($BootDevices.Count -ne 1) { throw 'The iSCSI boot adapter has no unique network PnP device' }
+    $NicIds = @(@($BootDevices[0].HardwareID) + @($BootDevices[0].CompatibleID) | Where-Object { $_ } | Select-Object -Unique)
+    if (-not $NicIds) { throw 'The iSCSI boot adapter has no PnP hardware or compatible IDs' }
+    $NicMac = $BootAdapters[0].MACAddress
     $Disks = @($Sessions[0] | Get-Disk | Where-Object { $_.BusType -eq 'iSCSI' -and $_.Size -eq $ExpectedBytes })
     if ($Disks.Count -ne 1) { throw 'Expected exactly one iSCSI disk with the recorded size' }
     if ($Disks[0].IsBoot -or $Disks[0].IsSystem) { throw 'Refusing a boot or system disk' }

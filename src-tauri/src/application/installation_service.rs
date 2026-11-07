@@ -30,6 +30,12 @@ pub struct CreateInstallation {
     pub confirm_erase: bool,
     pub username: Option<String>,
     pub password_hash: Option<String>,
+    #[serde(skip)]
+    pub shared_boot_nic_groups: Option<Vec<Vec<String>>>,
+    #[serde(skip)]
+    pub shared_boot_driver_ids: Option<Vec<String>>,
+    #[serde(skip)]
+    pub shared_driver_revision_id: Option<String>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -45,6 +51,65 @@ pub struct AdaptationInventory {
     pub boot_nic_ids: Vec<String>,
     #[serde(default)]
     pub boot_nic_mac: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+struct AdaptationBootScope {
+    #[serde(default)]
+    shared_boot_nic_groups: Option<Vec<Vec<String>>>,
+    #[serde(default)]
+    shared_boot_driver_ids: Option<Vec<String>>,
+    #[serde(default)]
+    shared_driver_revision_id: Option<String>,
+}
+
+struct ResolvedAdaptationBootScope {
+    boot_nic_groups: Vec<Vec<String>>,
+    shared_driver_ids: Option<Vec<String>>,
+}
+
+fn adaptation_boot_scope(
+    session_config: &str,
+    current_boot_nic_ids: &[String],
+) -> Result<ResolvedAdaptationBootScope> {
+    let scope: AdaptationBootScope =
+        serde_json::from_str(session_config).context("installation adaptation scope is invalid")?;
+    match (scope.shared_boot_nic_groups, scope.shared_boot_driver_ids) {
+        (Some(groups), Some(driver_ids)) => {
+            ensure!(!groups.is_empty(), "shared Windows Boot NIC scope is empty");
+            ensure!(
+                !driver_ids.is_empty(),
+                "shared Windows driver scope is empty"
+            );
+            let mut groups = groups
+                .iter()
+                .map(|group| {
+                    crate::infrastructure::pxe::normalize_hardware_ids(group)
+                        .map_err(anyhow::Error::msg)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            ensure!(
+                groups.iter().all(|group| !group.is_empty()),
+                "shared Windows Boot NIC scope contains an empty group"
+            );
+            groups.push(current_boot_nic_ids.to_vec());
+            Ok(ResolvedAdaptationBootScope {
+                boot_nic_groups: groups,
+                shared_driver_ids: Some(driver_ids),
+            })
+        }
+        (None, None) => Ok(ResolvedAdaptationBootScope {
+            boot_nic_groups: vec![current_boot_nic_ids.to_vec()],
+            shared_driver_ids: None,
+        }),
+        _ => anyhow::bail!("shared Windows adaptation scope is incomplete"),
+    }
+}
+
+fn shared_driver_revision_id(session_config: &str) -> Result<Option<String>> {
+    let scope: AdaptationBootScope =
+        serde_json::from_str(session_config).context("installation adaptation scope is invalid")?;
+    Ok(scope.shared_driver_revision_id)
 }
 
 /// The WinPE image may bake an old servicer; the server is the source of truth.
@@ -153,6 +218,35 @@ impl InstallationService {
                 "client has not powered off after verification; cleanup remains pending"
             );
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        }
+        if let Some(revision_id) = shared_driver_revision_id(&session.config_json)? {
+            let image_id = session
+                .published_image_id
+                .as_deref()
+                .context("published shared Windows revision has no image")?;
+            let compact_id = revision_id.replace('-', "");
+            ensure!(
+                compact_id.len() >= 12,
+                "shared Windows revision ID is invalid"
+            );
+            let snapshot_name = format!("serviced-{compact_id}");
+            let snapshots = self.state.application.images.snapshots(image_id).await?;
+            if !snapshots
+                .iter()
+                .any(|snapshot| snapshot.name == snapshot_name && snapshot.status == "ready")
+            {
+                self.state
+                    .application
+                    .images
+                    .create_snapshot(image_id, &snapshot_name)
+                    .await?;
+            }
+            crate::application::windows_servicing::publish_managed_revision(
+                &self.state.db_pool,
+                &revision_id,
+                image_id,
+            )
+            .await?;
         }
         let storage = self.state.application.storage.clone();
         let target_to_remove = target.clone();
@@ -385,7 +479,10 @@ impl InstallationService {
             token: format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple()),
             config_json: json!({"username":request.username,"password_hash":request.password_hash,
                 "adapt_existing":source.is_some(), "source_image_id":source.as_ref().map(|image| &image.id),
-                "source_image_name":source.as_ref().map(|image| &image.name), "source_snapshot":request.source_snapshot})
+                "source_image_name":source.as_ref().map(|image| &image.name), "source_snapshot":request.source_snapshot,
+                "shared_boot_nic_groups":request.shared_boot_nic_groups,
+                "shared_boot_driver_ids":request.shared_boot_driver_ids,
+                "shared_driver_revision_id":request.shared_driver_revision_id})
                 .to_string(),
             state: "preparing".to_owned(),
             progress: 0,
@@ -1217,6 +1314,13 @@ impl InstallationService {
                 }
             }
             service.remove_adaptation_bundle(&s.id).await;
+            if let Some(revision_id) = shared_driver_revision_id(&s.config_json)? {
+                crate::application::windows_servicing::abandon_managed_revision(
+                    &service.state.db_pool,
+                    &revision_id,
+                )
+                .await?;
+            }
             service.repository.transition(&s,"completed",100,"Administrator verified client offline and closed session; disk and assignment retained").await
         }).await?
     }
@@ -1271,6 +1375,23 @@ impl InstallationService {
             matches!(session.state.as_str(), "installing" | "adapting"),
             "installation is not ready for adaptation"
         );
+        let reported_mac = request
+            .boot_nic_mac
+            .as_deref()
+            .context("WinPE did not report the iSCSI Boot NIC MAC")?;
+        let reported_mac = crate::domain::MacAddress::parse(reported_mac)
+            .map_err(|error| anyhow::anyhow!("invalid iSCSI Boot NIC MAC: {error}"))?;
+        let client = self
+            .state
+            .application
+            .clients
+            .get_by_string(&session.client_id)
+            .await?
+            .context("adaptation client no longer exists")?;
+        ensure!(
+            client.mac == reported_mac,
+            "WinPE iSCSI Boot NIC MAC does not match the client bound to this adaptation"
+        );
         ensure!(
             request.boot_nic_ids.len() <= 64,
             "too many boot NIC hardware IDs"
@@ -1286,29 +1407,64 @@ impl InstallationService {
         let boot_nic_ids =
             crate::infrastructure::pxe::normalize_hardware_ids(&request.boot_nic_ids)
                 .map_err(anyhow::Error::msg)?;
+        ensure!(
+            !boot_nic_ids.is_empty(),
+            "WinPE did not report hardware IDs for its iSCSI Boot NIC"
+        );
+        let ResolvedAdaptationBootScope {
+            boot_nic_groups,
+            shared_driver_ids,
+        } = adaptation_boot_scope(&session.config_json, &boot_nic_ids)?;
         let root = self.state.settings.read().await.http.root_dir.clone();
         let bundle_root = self.driver_bundle_root();
         let session_id = session.id.clone();
-        let (packages, bundle) = tokio::task::spawn_blocking(move || {
+        let (packages, bundle, boot_arm) = tokio::task::spawn_blocking(move || {
             let plugin = crate::infrastructure::pxe::NetworkDriverInjectionPlugin::new(root)
                 .with_bundle_directory(bundle_root);
             let catalog = plugin.list()?;
-            let target = crate::infrastructure::pxe::ImageDriverTarget {
-                architecture: Some("amd64".to_owned()),
-                boot_nic_ids,
-                ..Default::default()
-            };
-            let packages =
+            let package_ids = if let Some(package_ids) = shared_driver_ids {
+                for group in &boot_nic_groups {
+                    let required = crate::infrastructure::pxe::select_managed_image_driver_ids(
+                        &catalog,
+                        group,
+                        &["amd64".to_owned()],
+                        &[],
+                    )
+                    .map_err(anyhow::Error::msg)?;
+                    ensure!(
+                        required.iter().all(|id| package_ids.contains(id)),
+                        "the prepared driver set no longer covers every Boot NIC"
+                    );
+                }
+                for id in &package_ids {
+                    ensure!(
+                        catalog.iter().any(|package| &package.id == id),
+                        "prepared driver package {id} is no longer available"
+                    );
+                }
+                package_ids
+            } else {
+                let target = crate::infrastructure::pxe::ImageDriverTarget {
+                    architecture: Some("amd64".to_owned()),
+                    boot_nic_ids: boot_nic_groups.last().cloned().unwrap_or_default(),
+                    ..Default::default()
+                };
                 crate::infrastructure::pxe::select_compatible_for_image(&catalog, &target)
                     .into_iter()
                     .map(|selected| selected.driver_id)
-                    .collect::<Vec<_>>();
-            let bundle = if packages.is_empty() {
+                    .collect::<Vec<_>>()
+            };
+            let bundle = if package_ids.is_empty() {
                 None
             } else {
-                Some(plugin.build_session_bundle(&session_id, &packages)?)
+                Some(plugin.build_session_bundle(&session_id, &package_ids)?)
             };
-            Ok::<_, anyhow::Error>((packages, bundle))
+            let boot_arm = crate::infrastructure::pxe::boot_arm_config_for_nics(
+                &catalog,
+                &package_ids,
+                &boot_nic_groups,
+            )?;
+            Ok::<_, anyhow::Error>((package_ids, bundle, boot_arm))
         })
         .await??;
         if packages.is_empty() {
@@ -1336,7 +1492,7 @@ impl InstallationService {
             "servicer_url": servicer.as_ref().map(|_| format!("{base}/api/installer/{id}/{token}/servicer.exe")),
             "servicer_sha256": servicer.as_ref().map(|(_, sha256)| sha256.clone()),
             "servicer_bytes": servicer.as_ref().map(|(bytes, _)| *bytes),
-            "boot_arm": crate::infrastructure::pxe::WindowsBootArmConfig::default(),
+            "boot_arm": boot_arm,
             "reporter": {
                 "server_url": base,
                 "export_package": false,
@@ -1568,6 +1724,29 @@ fn validate_request(r: &CreateInstallation) -> Result<()> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn nexboot_adaptation_keeps_the_shared_nic_and_driver_scope() {
+        let current = vec!["PCI\\VEN_1234&DEV_0001".to_string()];
+        let config = serde_json::json!({
+            "shared_boot_nic_groups": [
+                ["PCI\\VEN_1234&DEV_0001"],
+                ["PCI\\VEN_5678&DEV_0002"]
+            ],
+            "shared_boot_driver_ids": ["driver-a", "driver-b"]
+        });
+        let scope = adaptation_boot_scope(&config.to_string(), &current).unwrap();
+        assert_eq!(scope.boot_nic_groups.len(), 3);
+        assert_eq!(scope.boot_nic_groups[1], ["PCI\\VEN_5678&DEV_0002"]);
+        assert_eq!(scope.boot_nic_groups[2], current);
+        assert_eq!(scope.shared_driver_ids.unwrap(), ["driver-a", "driver-b"]);
+
+        assert!(adaptation_boot_scope(
+            r#"{"shared_boot_nic_groups":[["PCI\\VEN_1234&DEV_0001"]]}"#,
+            &current
+        )
+        .is_err());
+    }
+
     async fn test_state() -> AppState {
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
@@ -1659,6 +1838,9 @@ mod tests {
             confirm_erase: true,
             username: Some("operator".into()),
             password_hash: Some(format!("$6$salt${}", "a".repeat(86))),
+            shared_boot_nic_groups: None,
+            shared_boot_driver_ids: None,
+            shared_driver_revision_id: None,
         };
         assert!(validate_request(&r).is_ok());
         r.confirm_erase = false;

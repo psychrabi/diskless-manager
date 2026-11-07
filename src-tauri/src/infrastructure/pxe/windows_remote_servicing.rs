@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use uuid::Uuid;
 
-const PROTOCOL_VERSION: u32 = 3;
+const PROTOCOL_VERSION: u32 = 5;
 const DEFAULT_HELPER: &str = r"C:\Program Files\Diskless Manager\diskless-windows-servicer.exe";
 
 #[derive(Debug, Clone, Deserialize)]
@@ -429,7 +429,7 @@ mod tests {
     fn old_worker_does_not_implicitly_advertise_volume_safety() {
         let capabilities: RemoteWindowsServicingCapabilities =
             serde_json::from_value(serde_json::json!({
-                "protocol_version": 3, "platform": "windows", "available": true,
+                "protocol_version": PROTOCOL_VERSION, "platform": "windows", "available": true,
                 "elevated": true, "iscsi_volume_servicing": true,
             }))
             .unwrap();

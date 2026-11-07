@@ -340,6 +340,7 @@ mod tests {
             hardware_ids: pnp.into_iter().map(str::to_string).collect(),
             compatible_ids: Vec::new(),
             service_names: service.into_iter().map(str::to_string).collect(),
+            associated_service_names: Vec::new(),
             catalog_files: Vec::new(),
             imported_at: Utc::now(),
         }

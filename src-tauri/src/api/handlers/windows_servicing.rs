@@ -8,11 +8,12 @@ use crate::application::installation_service::{CreateInstallation, InstallationS
 use crate::persistence::{InstallerMediaRepository, InstallerMediaType, StructuralValidationState};
 use crate::{
     infrastructure::pxe::{
-        select_managed_image_driver_ids, windows_servicing_available, NetworkDriverInjectionPlugin,
-        RemoteWindowsCapabilitiesRequest, RemoteWindowsCatalogPreparationResult,
-        RemoteWindowsServicer, RemoteWindowsServicingCapabilities, RemoteWindowsServicingRequest,
-        StagedDriverPackage, WindowsBootArmConfig, WindowsDriverInstallStrategy,
-        WindowsImagePreparationRequest, WindowsImagePreparationResult, WindowsImagePreparer,
+        boot_arm_config_for_nics, select_managed_image_driver_ids, windows_servicing_available,
+        NetworkDriverInjectionPlugin, RemoteWindowsCapabilitiesRequest,
+        RemoteWindowsCatalogPreparationResult, RemoteWindowsServicer,
+        RemoteWindowsServicingCapabilities, RemoteWindowsServicingRequest, StagedDriverPackage,
+        WindowsBootArmConfig, WindowsDriverInstallStrategy, WindowsImagePreparationRequest,
+        WindowsImagePreparationResult, WindowsImagePreparer,
     },
     state::AppState,
     types::Claims,
@@ -96,7 +97,7 @@ async fn load_managed_driver_inventory(
     pool: &sqlx::SqlitePool,
 ) -> anyhow::Result<Vec<(String, Vec<String>, String)>> {
     let records: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT client.mac, inventory.boot_nic_ids, inventory.architecture FROM windows_nic_inventory AS inventory JOIN clients AS client ON lower(replace(replace(client.mac, ':', ''), '-', '')) = lower(replace(replace(inventory.mac, ':', ''), '-', '')) WHERE NOT EXISTS (SELECT 1 FROM windows_driver_reports AS report WHERE report.client_id = client.id) UNION ALL SELECT client.mac, report.boot_nic_ids, report.architecture FROM windows_driver_reports AS report JOIN clients AS client ON client.id = report.client_id ORDER BY 1",
+        "SELECT inventory.mac, inventory.boot_nic_ids, inventory.architecture FROM windows_nic_inventory AS inventory WHERE NOT EXISTS (SELECT 1 FROM windows_driver_reports AS report JOIN clients AS client ON client.id = report.client_id WHERE lower(replace(replace(client.mac, ':', ''), '-', '')) = lower(replace(replace(inventory.mac, ':', ''), '-', ''))) UNION ALL SELECT client.mac, report.boot_nic_ids, report.architecture FROM windows_driver_reports AS report JOIN clients AS client ON client.id = report.client_id ORDER BY 1",
     )
     .fetch_all(pool)
     .await
@@ -115,53 +116,25 @@ async fn load_managed_driver_inventory(
         .collect()
 }
 
-fn select_assignment_driver_ids(
+fn select_shared_assignment_driver_ids(
     packages: &[crate::infrastructure::pxe::NetworkDriverPackage],
     inventory: &[(String, Vec<String>, String)],
-    target_mac: &str,
 ) -> Result<Vec<String>, String> {
-    let Some((_, boot_nic_ids, architecture)) = inventory.iter().find(|(mac, boot_nic_ids, _)| {
-        normalize_mac(mac) == normalize_mac(target_mac) && !boot_nic_ids.is_empty()
-    }) else {
-        return Err(format!(
-            "no Boot NIC inventory is recorded for client MAC '{target_mac}'"
-        ));
-    };
-    select_managed_image_driver_ids(
-        packages,
-        boot_nic_ids,
-        std::slice::from_ref(architecture),
-        &[],
-    )
-}
-
-/// True when the selected image is a prepared revision whose recorded driver set
-/// already covers every package chosen for the target client.
-///
-/// Coverage, not hash equality, decides reuse: one prepared image serves every
-/// machine whose Boot NIC it covers, and only an uncovered NIC triggers another
-/// revision build. Unprepared images have no revision row and are never reused.
-async fn existing_revision_covers_driver_set(
-    pool: &sqlx::SqlitePool,
-    image_id: &str,
-    required_package_ids: &[String],
-) -> anyhow::Result<bool> {
-    let rows: Vec<String> = sqlx::query_scalar(
-        "SELECT driver_package_ids FROM windows_image_driver_revisions WHERE revision_image_id = ? AND status IN ('awaiting-test', 'ready')",
-    )
-    .bind(image_id)
-    .fetch_all(pool)
-    .await
-    .context("failed to inspect existing Windows image revisions")?;
-    for json_ids in rows {
-        let existing: BTreeSet<String> = serde_json::from_str(&json_ids).with_context(|| {
-            format!("driver package list recorded for image '{image_id}' is invalid JSON")
-        })?;
-        if required_package_ids.iter().all(|id| existing.contains(id)) {
-            return Ok(true);
-        }
+    let mut selected = BTreeSet::new();
+    for (mac, boot_nic_ids, architecture) in inventory {
+        let ids = select_managed_image_driver_ids(
+            packages,
+            boot_nic_ids,
+            std::slice::from_ref(architecture),
+            &[],
+        )
+        .map_err(|error| format!("client inventory {mac}: {error}"))?;
+        selected.extend(ids);
     }
-    Ok(false)
+    if selected.is_empty() {
+        return Err("no Windows Boot NIC inventory is available".to_string());
+    }
+    Ok(selected.into_iter().collect())
 }
 
 #[derive(Debug, Serialize)]
@@ -513,68 +486,38 @@ pub async fn prepare_windows_assignment(
             anyhow::bail!("no Boot NIC inventory is recorded for client MAC '{target_mac}'");
         };
 
-        // NexBoot's normal image path needs no per-client servicing when the
-        // image already carries a published driver for the client's Boot NIC.
-        // Inspect a read-only snapshot clone before touching the worker, so an
-        // offline worker no longer blocks an assignment that does not need it.
-        let coverage_source = source.name.clone();
-        let coverage_snapshot = snapshot_name.to_string();
-        let coverage_ids = boot_nic_ids.clone();
-        let coverage_architecture = architecture.clone();
-        let coverage_config = state.config.clone();
-        let coverage = tokio::task::spawn_blocking(move || {
-            let backend =
-                crate::infrastructure::image::ZfsImageBackend::with_config(coverage_config);
-            crate::infrastructure::pxe::snapshot_covers_boot_nic(
-                &backend,
-                &coverage_source,
-                &coverage_snapshot,
-                &coverage_ids,
-                &coverage_architecture,
-            )
-        })
-        .await
-        .context("Windows image driver inspection worker failed")?;
-        match coverage {
-            Ok(true) => {
-                log::info!(
-                    "Windows image '{}' already publishes a Boot NIC driver for client '{}'; skipping driver servicing",
-                    source.name,
-                    target_mac
-                );
-                return Ok(WindowsAssignmentPreparation {
-                    master: source.name,
-                    snapshot: request.snapshot,
-                    prepared: false,
-                    reused: false,
-                    already_covered: true,
-                    adaptation_session: None,
-                });
-            }
-            Ok(false) => {}
-            Err(error)
-                if error
-                    .downcast_ref::<crate::infrastructure::pxe::windows_driver_coverage::DriverInspectionCleanupFailure>()
-                    .is_some() =>
-            {
-                return Err(error);
-            }
-            Err(error) => {
-                log::warn!(
-                    "could not inspect driver coverage for Windows image '{}'; falling back to servicing: {error:#}",
-                    source.name
-                );
-            }
-        }
-
-        let inventory = vec![(target_mac.clone(), boot_nic_ids, architecture)];
-        let selection_mac = target_mac.clone();
+        // Build one common revision from every known Windows Boot NIC, including
+        // clients that have inventoried in WinPE but are not enrolled yet. The
+        // target's verified report wins over its older preboot record.
+        let mut inventory = load_managed_driver_inventory(&state.db_pool).await?;
+        inventory.retain(|(mac, _, _)| normalize_mac(mac) != normalize_mac(&target_mac));
+        inventory.push((
+            target_mac.clone(),
+            boot_nic_ids,
+            architecture,
+        ));
+        inventory.sort_by_key(|(mac, _, _)| normalize_mac(mac));
+        let boot_nic_ids = inventory
+            .iter()
+            .flat_map(|(_, ids, _)| ids.iter().cloned())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let shared_boot_nic_groups = inventory
+            .iter()
+            .map(|(_, ids, _)| ids.clone())
+            .collect::<Vec<_>>();
         let root = settings.http.root_dir.clone();
-        let (package_ids, packages) = tokio::task::spawn_blocking(move || {
+        let (package_ids, packages, boot_arm) = tokio::task::spawn_blocking(move || {
             let plugin = NetworkDriverInjectionPlugin::new(PathBuf::from(root));
             let catalog = plugin.list()?;
-            let ids = select_assignment_driver_ids(&catalog, &inventory, &selection_mac)
+            let ids = select_shared_assignment_driver_ids(&catalog, &inventory)
                 .map_err(anyhow::Error::msg)?;
+            let groups = inventory
+                .iter()
+                .map(|(_, ids, _)| ids.clone())
+                .collect::<Vec<_>>();
+            let boot_arm = boot_arm_config_for_nics(&catalog, &ids, &groups)?;
             let packages = ids
                 .iter()
                 .map(|id| {
@@ -584,7 +527,7 @@ pub async fn prepare_windows_assignment(
                     })
                 })
                 .collect::<anyhow::Result<Vec<_>>>()?;
-            Ok::<_, anyhow::Error>((ids, packages))
+            Ok::<_, anyhow::Error>((ids, packages, boot_arm))
         })
         .await
         .context("driver catalog selection worker failed")?
@@ -596,24 +539,13 @@ pub async fn prepare_windows_assignment(
             }
         })?;
 
-        // One prepared image serves every client whose Boot NIC its driver set
-        // covers, so a matching client is assigned that image as-is instead of
-        // cloning and servicing another near-identical revision per machine.
-        if existing_revision_covers_driver_set(&state.db_pool, &source.id, &package_ids).await? {
-            return Ok(WindowsAssignmentPreparation {
-                master: source.name,
-                snapshot: request.snapshot,
-                prepared: false,
-                reused: false,
-                already_covered: true,
-                adaptation_session: None,
-            });
-        }
-        let planned = crate::application::windows_servicing::plan_driver_revision_with_strategy(
+        let planned = crate::application::windows_servicing::plan_driver_revision_with_scope(
             &source.id,
             snapshot_name,
             &package_ids,
             strategy,
+            &boot_nic_ids,
+            &crate::infrastructure::pxe::boot_arm_policy_digest(&boot_arm),
         );
 
         let repository = crate::persistence::repositories::image::ImageRepository::new(
@@ -629,20 +561,8 @@ pub async fn prepare_windows_assignment(
                     let candidate_id = existing
                         .revision_image_id
                         .context("prepared Windows revision has no image")?;
-                    let rows: Vec<(String, String)> = sqlx::query_as(
-                        "SELECT image.name, snapshot.name FROM images AS image JOIN images AS snapshot ON snapshot.parent_id = image.id AND snapshot.kind = 'snapshot' AND snapshot.status = 'ready' AND snapshot.name LIKE 'serviced-%' WHERE image.id = ? AND image.status = 'ready' ORDER BY snapshot.created_at DESC",
-                    )
-                    .bind(candidate_id)
-                    .fetch_all(&state.db_pool)
-                    .await
-                    .context("failed to read prepared Windows revision snapshot")?;
-                    anyhow::ensure!(
-                        rows.len() == 1,
-                        "prepared Windows revision must have one ready servicing snapshot"
-                    );
-                    let (master, snapshot_name) = rows.into_iter().next().context(
-                        "prepared Windows revision snapshot query returned no row",
-                    )?;
+                    let (master, snapshot_name) =
+                        reusable_revision_snapshot(&state.db_pool, &candidate_id).await?;
                     return Ok(WindowsAssignmentPreparation {
                         snapshot: Some(format!("{master}@{snapshot_name}")),
                         master,
@@ -697,7 +617,21 @@ pub async fn prepare_windows_assignment(
                         "no valid Windows installer media is available for automatic Boot NIC adaptation",
                     )?,
             };
-            let session = InstallationService::new(state.clone())
+            let revision = crate::application::windows_servicing::ensure_managed_revision_with_scope(
+                &state.db_pool,
+                &source.id,
+                snapshot_name,
+                &package_ids,
+                strategy,
+                &boot_nic_ids,
+                &crate::infrastructure::pxe::boot_arm_policy_digest(&boot_arm),
+            )
+            .await?;
+            anyhow::ensure!(
+                revision.status == crate::core::image::DriverRevisionStatus::Preparing,
+                "matching Windows driver revision changed while adaptation was starting"
+            );
+            let session_result = InstallationService::new(state.clone())
                 .create(
                     client_id,
                     CreateInstallation {
@@ -711,14 +645,37 @@ pub async fn prepare_windows_assignment(
                         confirm_erase: true,
                         username: None,
                         password_hash: None,
+                        shared_driver_revision_id: Some(revision.id.clone()),
+                        shared_boot_nic_groups: Some(shared_boot_nic_groups),
+                        shared_boot_driver_ids: Some(package_ids.clone()),
                     },
                 )
-                .await
-                .with_context(|| {
+                .await;
+            let session = match session_result {
+                Ok(session) => session,
+                Err(error) => {
+                    match sqlx::query_scalar::<_, bool>(
+                        "SELECT EXISTS(SELECT 1 FROM installation_sessions WHERE instr(config_json, ?) > 0)",
+                    )
+                    .bind(&revision.id)
+                    .fetch_one(&state.db_pool)
+                    .await
+                    {
+                        Ok(false) => {
+                            if let Err(mark_error) = crate::application::windows_servicing::fail_managed_revision(&state.db_pool, &revision.id).await {
+                                tracing::warn!(revision_id = %revision.id, %mark_error, "failed to abandon Windows revision after adaptation session creation failed");
+                            }
+                        }
+                        Ok(true) => {}
+                        Err(check_error) => tracing::warn!(revision_id = %revision.id, %check_error, "could not determine whether failed adaptation session retained its Windows revision"),
+                    }
+                    return Err(error).with_context(|| {
                     format!(
                         "could not start Boot NIC adaptation for client '{target_mac}'; power the client off and retry"
                     )
-                })?;
+                    });
+                }
+            };
             return Ok(WindowsAssignmentPreparation {
                 master: source.name,
                 snapshot: request.snapshot,
@@ -749,10 +706,11 @@ pub async fn prepare_windows_assignment(
                 new_name: format!("auto-serviced-{}", uuid::Uuid::new_v4().simple()),
                 portal: profile.iscsi_portal,
                 driver_ids: package_ids,
+                boot_nic_ids,
                 driver_root: None,
                 commit: true,
                 report_server_url: Some(profile.report_server_url),
-                boot_arm: WindowsBootArmConfig::default(),
+                boot_arm,
                 driver_install_strategy: strategy,
                 personalization: None,
             };
@@ -797,6 +755,26 @@ pub struct StartBootTestRequest {
     pub revision_id: String,
     pub test_client_id: String,
     pub expected_nic_id: String,
+}
+
+async fn reusable_revision_snapshot(
+    pool: &sqlx::SqlitePool,
+    revision_image_id: &str,
+) -> anyhow::Result<(String, String)> {
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT image.name, snapshot.name FROM images AS image JOIN images AS snapshot ON snapshot.parent_id = image.id AND snapshot.kind = 'snapshot' AND snapshot.status = 'ready' AND snapshot.name LIKE 'serviced-%' WHERE image.id = ? AND image.status = 'ready' ORDER BY snapshot.created_at DESC LIMIT 2",
+    )
+    .bind(revision_image_id)
+    .fetch_all(pool)
+    .await
+    .context("failed to read prepared Windows revision snapshot")?;
+    anyhow::ensure!(
+        rows.len() == 1,
+        "prepared Windows revision must have one ready servicing snapshot"
+    );
+    rows.into_iter()
+        .next()
+        .context("prepared Windows revision snapshot query returned no row")
 }
 
 /// Admin-only designation of the disposable test client for one candidate
@@ -1098,10 +1076,12 @@ pub async fn list_revisions(
 #[cfg(test)]
 mod automatic_assignment_tests {
     use super::{
-        existing_revision_covers_driver_set, load_assignment_boot_inventory,
-        load_managed_driver_inventory, select_assignment_driver_ids,
+        load_assignment_boot_inventory, load_managed_driver_inventory, reusable_revision_snapshot,
+        select_shared_assignment_driver_ids,
     };
-    use crate::infrastructure::pxe::NetworkDriverPackage;
+    use crate::infrastructure::pxe::{
+        boot_arm_config_for_nics, critical_device_for_boot_nic, NetworkDriverPackage,
+    };
     use sqlx::sqlite::SqlitePoolOptions;
 
     #[tokio::test]
@@ -1172,59 +1152,191 @@ mod automatic_assignment_tests {
         }
     }
 
-    /// A prepared image is shared: a client whose Boot NIC packages are already
-    /// injected boots it unchanged, so a mixed fleet does not need one cloned
-    /// and serviced image per machine.
-    #[tokio::test]
-    async fn prepared_image_is_reused_by_every_covered_client() {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .unwrap();
-        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
-        let now = chrono::Utc::now().to_rfc3339();
-        sqlx::query("INSERT INTO images (id, name, kind, os_type, size_gb, path, format, status, created_at, updated_at) VALUES ('base', 'tank/image/windows', 'master', 'windows', 50, '/dev/zvol/tank/image/windows', 'raw', 'ready', ?, ?)")
-            .bind(&now)
-            .bind(&now)
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query("INSERT INTO windows_image_driver_revisions (id, source_image_id, source_snapshot, revision_image_id, driver_package_ids, driver_set_hash, status, created_at, updated_at) VALUES ('rev', 'base', 'installed', 'shared', '[\"nic-a\",\"nic-b\"]', 'hash', 'ready', ?, ?)")
-            .bind(&now)
-            .bind(&now)
-            .execute(&pool)
-            .await
-            .unwrap();
+    /// A common revision is stable when the same client inventory is loaded in
+    /// a different order, and expands when a new adapter is added.
+    #[test]
+    fn prepared_revision_is_scoped_to_the_shared_boot_nic_set() {
+        use crate::application::windows_servicing::plan_driver_revision_with_scope;
+        use crate::infrastructure::pxe::WindowsDriverInstallStrategy;
 
-        let covered = existing_revision_covers_driver_set(&pool, "shared", &["nic-a".to_string()])
-            .await
-            .unwrap();
-        assert!(covered, "a superset of the client's packages is enough");
-        let covered = existing_revision_covers_driver_set(
-            &pool,
-            "shared",
-            &["nic-a".to_string(), "nic-b".to_string()],
-        )
-        .await
-        .unwrap();
-        assert!(covered, "an identical package set is covered");
-        let uncovered = existing_revision_covers_driver_set(
-            &pool,
-            "shared",
-            &["nic-a".to_string(), "nic-c".to_string()],
-        )
-        .await
-        .unwrap();
-        assert!(!uncovered, "a missing package needs a new revision");
-        let unprepared = existing_revision_covers_driver_set(&pool, "base", &["nic-a".to_string()])
-            .await
-            .unwrap();
-        assert!(!unprepared, "the unprotected source image is never reused");
+        let packages = vec!["realtek".to_string()];
+        let first = plan_driver_revision_with_scope(
+            "img",
+            "snap",
+            &packages,
+            WindowsDriverInstallStrategy::OfflineDism,
+            &[
+                "PCI\\VEN_8086&DEV_15F3".into(),
+                "PCI\\VEN_10EC&DEV_8125&SUBSYS_7D991462&REV_05".into(),
+                "PCI\\VEN_10EC&DEV_8125".into(),
+            ],
+            "",
+        );
+        let same = plan_driver_revision_with_scope(
+            "img",
+            "snap",
+            &packages,
+            WindowsDriverInstallStrategy::OfflineDism,
+            &[
+                "pci\\ven_10ec&dev_8125".into(),
+                "PCI\\VEN_10EC&DEV_8125&SUBSYS_7D991462&REV_05".into(),
+                "PCI\\VEN_8086&DEV_15F3".into(),
+            ],
+            "",
+        );
+        let other = plan_driver_revision_with_scope(
+            "img",
+            "snap",
+            &packages,
+            WindowsDriverInstallStrategy::OfflineDism,
+            &["PCI\\VEN_10EC&DEV_8125&SUBSYS_B0021F4C&REV_05".into()],
+            "",
+        );
+        let other_policy = plan_driver_revision_with_scope(
+            "img",
+            "snap",
+            &packages,
+            WindowsDriverInstallStrategy::OfflineDism,
+            &[
+                "PCI\\VEN_10EC&DEV_8125&SUBSYS_7D991462&REV_05".into(),
+                "PCI\\VEN_10EC&DEV_8125".into(),
+            ],
+            "disk_timeout=1;task_offload=1;crash_dump=0;paging_files=0;wfp_lwf=1;cddb=",
+        );
+        assert_eq!(first.driver_set_hash, same.driver_set_hash);
+        assert_ne!(first.driver_set_hash, other.driver_set_hash);
+        assert_ne!(
+            first.driver_set_hash, other_policy.driver_set_hash,
+            "a different boot-arm policy must not reuse the same revision"
+        );
     }
 
     #[test]
-    fn automatic_assignment_ignores_other_clients_with_unmatched_nics() {
+    fn assignment_arms_multiple_client_boot_nics_in_one_image() {
+        let packages: Vec<NetworkDriverPackage> = serde_json::from_value(serde_json::json!([
+            {
+                "id": "realtek",
+                "name": "Realtek",
+                "service_name": "rt640x64",
+                "inf_files": ["rt640x64.inf"],
+                "architectures": ["x64"],
+                "hardware_ids": ["PCI\\VEN_10EC&DEV_8125"],
+                "compatible_ids": ["PCI\\VEN_10EC&DEV_8125"],
+                "catalog_files": ["rt640x64.cat"],
+                "imported_at": "2026-01-01T00:00:00Z"
+            },
+            {
+                "id": "intel",
+                "name": "Intel",
+                "service_name": "e2fexpress",
+                "inf_files": ["e2fexpress.inf"],
+                "architectures": ["x64"],
+                "hardware_ids": ["PCI\\VEN_8086&DEV_15F3"],
+                "catalog_files": ["e2fexpress.cat"],
+                "imported_at": "2026-01-01T00:00:00Z"
+            }
+        ]))
+        .unwrap();
+        let inventory = vec![
+            (
+                "02:00:00:00:00:01".to_string(),
+                vec![
+                    "PCI\\VEN_10EC&DEV_8125&SUBSYS_B0021F4C&REV_05".to_string(),
+                    "PCI\\VEN_10EC&DEV_8125&SUBSYS_B0021F4C".to_string(),
+                    "PCI\\VEN_10EC&DEV_8125".to_string(),
+                ],
+                "x64".to_string(),
+            ),
+            (
+                "02:00:00:00:00:02".to_string(),
+                vec!["PCI\\VEN_8086&DEV_15F3".to_string()],
+                "x64".to_string(),
+            ),
+        ];
+        let selected = select_shared_assignment_driver_ids(&packages, &inventory).unwrap();
+        assert_eq!(selected, vec!["intel", "realtek"]);
+        let groups = inventory
+            .iter()
+            .map(|(_, ids, _)| ids.clone())
+            .collect::<Vec<_>>();
+        let config = boot_arm_config_for_nics(&packages, &selected, &groups).unwrap();
+        assert_eq!(config.expected_boot_nic_groups.len(), 2);
+        assert!(config.require_boot_nic_binding);
+        assert!(
+            config.disable_task_offload,
+            "assignments must service with TCP task offload disabled"
+        );
+        assert!(
+            config.stabilize_nic_driver_defaults,
+            "assignments must service NIC stability defaults"
+        );
+        assert_eq!(config.critical_device_boot_nics.len(), 2);
+        assert!(config
+            .critical_device_boot_nics
+            .iter()
+            .any(|entry| entry.service == "rt640x64" && entry.hardware_ids.len() == 2));
+        assert!(config
+            .critical_device_boot_nics
+            .iter()
+            .any(|entry| entry.service == "e2fexpress"
+                && entry.hardware_ids == ["PCI\\VEN_8086&DEV_15F3"]));
+        let mut duplicate_groups = groups.clone();
+        duplicate_groups.push(groups[0].clone());
+        let deduplicated =
+            boot_arm_config_for_nics(&packages, &selected, &duplicate_groups).unwrap();
+        assert_eq!(
+            deduplicated.expected_boot_nic_groups,
+            config.expected_boot_nic_groups
+        );
+        assert_eq!(
+            crate::infrastructure::pxe::boot_arm_policy_digest(&deduplicated),
+            crate::infrastructure::pxe::boot_arm_policy_digest(&config)
+        );
+
+        let instance_id = "PCI\\VEN_10EC&DEV_8125&SUBSYS_B0021F4C&REV_05\\4&11583659&0&10";
+        let critical = critical_device_for_boot_nic(
+            &packages,
+            &["realtek".to_string()],
+            &[instance_id.to_string()],
+        )
+        .unwrap();
+        assert!(!critical.hardware_ids[0].contains("11583659"));
+        let adaptation = boot_arm_config_for_nics(
+            &packages,
+            &["realtek".to_string()],
+            &[vec![instance_id.to_string()]],
+        )
+        .unwrap();
+        assert_eq!(
+            adaptation.expected_boot_nic_ids,
+            vec!["PCI\\VEN_10EC&DEV_8125&SUBSYS_B0021F4C&REV_05"]
+        );
+    }
+
+    #[test]
+    fn ambiguous_driver_service_metadata_never_maps_a_boot_nic_to_the_first_service() {
+        let packages: Vec<NetworkDriverPackage> = serde_json::from_value(serde_json::json!([
+            {
+                "id":"combined", "name":"Combined NIC pack", "service_name":"net_a",
+                "service_names":["net_a", "net_b"],
+                "associated_service_names":["net_a", "net_b"],
+                "inf_files":["combined.inf"], "architectures":["x64"],
+                "hardware_ids":["PCI\\VEN_1234&DEV_0001", "PCI\\VEN_1234&DEV_0002"],
+                "catalog_files":["combined.cat"], "imported_at":"2026-01-01T00:00:00Z"
+            }
+        ]))
+        .unwrap();
+
+        assert!(critical_device_for_boot_nic(
+            &packages,
+            &["combined".into()],
+            &["PCI\\VEN_1234&DEV_0001".into()]
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn shared_assignment_requires_driver_coverage_for_every_client() {
         let packages: Vec<NetworkDriverPackage> = serde_json::from_value(serde_json::json!([
             {"id":"pkg-a","name":"A","inf_files":["a.inf"],"architectures":["x64"],"hardware_ids":["PCI\\VEN_1234&DEV_0001"],"catalog_files":["a.cat"],"imported_at":"2026-01-01T00:00:00Z"},
             {"id":"pkg-b","name":"B","inf_files":["b.inf"],"architectures":["x64"],"hardware_ids":["PCI\\VEN_1234&DEV_0002"],"catalog_files":["b.cat"],"imported_at":"2026-01-01T00:00:00Z"}
@@ -1243,8 +1355,12 @@ mod automatic_assignment_tests {
             ),
         ];
 
+        assert!(select_shared_assignment_driver_ids(&packages, &inventory)
+            .unwrap_err()
+            .contains("02:00:00:00:00:01"));
+        let covered = vec![inventory[1].clone()];
         assert_eq!(
-            select_assignment_driver_ids(&packages, &inventory, "02-00-00-00-00-02").unwrap(),
+            select_shared_assignment_driver_ids(&packages, &covered).unwrap(),
             vec!["pkg-b"]
         );
     }
@@ -1296,8 +1412,118 @@ mod automatic_assignment_tests {
         assert_eq!(inventory.1, "x64");
 
         let managed_inventory = load_managed_driver_inventory(&pool).await.unwrap();
-        assert_eq!(managed_inventory.len(), 1);
+        assert_eq!(managed_inventory.len(), 2);
         assert_eq!(managed_inventory[0].0, "02:00:00:00:00:01");
         assert_eq!(managed_inventory[0].1, vec!["PCI\\VEN_1234&DEV_0002"]);
+        assert_eq!(managed_inventory[1].0, "02:00:00:00:00:99");
+        assert_eq!(managed_inventory[1].1, vec!["PCI\\VEN_9999&DEV_9999"]);
+    }
+
+    #[tokio::test]
+    async fn second_client_reuses_first_clients_published_winpe_revision() {
+        use crate::application::windows_servicing::{
+            ensure_managed_revision_with_scope, publish_managed_revision,
+        };
+        use crate::core::image::{DriverRevisionStatus, Image, ImageFormat, ImageKind, OsType};
+        use crate::infrastructure::pxe::WindowsDriverInstallStrategy;
+        use crate::persistence::repositories::image::ImageRepository;
+
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let repository = ImageRepository::new(pool.clone());
+        let now = chrono::Utc::now();
+        for image in [
+            Image {
+                id: "source".into(),
+                name: "tank/image/windows".into(),
+                kind: ImageKind::Master,
+                os_type: OsType::Windows,
+                size_gb: 50,
+                path: "/dev/zvol/tank/image/windows".into(),
+                format: ImageFormat::Raw,
+                status: "ready".into(),
+                description: None,
+                parent_id: None,
+                source_snapshot: None,
+                checksum: None,
+                is_default: false,
+                created_at: now,
+                updated_at: now,
+            },
+            Image {
+                id: "published".into(),
+                name: "tank/image/published".into(),
+                kind: ImageKind::Master,
+                os_type: OsType::Windows,
+                size_gb: 50,
+                path: "/dev/zvol/tank/image/published".into(),
+                format: ImageFormat::Raw,
+                status: "ready".into(),
+                description: None,
+                parent_id: None,
+                source_snapshot: None,
+                checksum: None,
+                is_default: false,
+                created_at: now,
+                updated_at: now,
+            },
+            Image {
+                id: "published-snapshot".into(),
+                name: "serviced-adaptation".into(),
+                kind: ImageKind::Snapshot,
+                os_type: OsType::Windows,
+                size_gb: 50,
+                path: "/dev/zvol/tank/image/published".into(),
+                format: ImageFormat::Raw,
+                status: "ready".into(),
+                description: None,
+                parent_id: Some("published".into()),
+                source_snapshot: None,
+                checksum: None,
+                is_default: false,
+                created_at: now,
+                updated_at: now,
+            },
+        ] {
+            repository.insert(&image).await.unwrap();
+        }
+
+        let revision = ensure_managed_revision_with_scope(
+            &pool,
+            "source",
+            "source-snapshot",
+            &["pkg-a".into()],
+            WindowsDriverInstallStrategy::NexbootBootTime,
+            &["PCI\\VEN_1234&DEV_0001".into()],
+            "arm-policy",
+        )
+        .await
+        .unwrap();
+        assert_eq!(revision.status, DriverRevisionStatus::Preparing);
+        publish_managed_revision(&pool, &revision.id, "published")
+            .await
+            .unwrap();
+
+        // Client B gets the same hash, published image and reusable snapshot.
+        let client_b_revision = repository
+            .find_driver_revision_by_hash("source", "source-snapshot", &revision.driver_set_hash)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(client_b_revision.id, revision.id);
+        assert_eq!(client_b_revision.status, DriverRevisionStatus::AwaitingTest);
+        assert_eq!(
+            reusable_revision_snapshot(
+                &pool,
+                client_b_revision.revision_image_id.as_deref().unwrap()
+            )
+            .await
+            .unwrap(),
+            ("tank/image/published".into(), "serviced-adaptation".into())
+        );
     }
 }
