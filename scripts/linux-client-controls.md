@@ -13,7 +13,8 @@ sudo systemctl enable --now sshd
 ```
 
 Ubuntu/Kubuntu use `sudo systemctl enable --now ssh`. Install the distribution's
-OpenSSH server package if needed. New images made by `create-linux-iscsi-image.sh`
+OpenSSH server package if needed. New images made by the Linux Image Builder
+(or its CLI wrapper, `create-linux-iscsi-image.sh`)
 install and enable the appropriate service, but you still need a login account.
 Allow SSH through the client firewall on your management network.
 

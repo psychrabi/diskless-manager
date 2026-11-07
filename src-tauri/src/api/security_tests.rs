@@ -447,6 +447,18 @@ async fn audit_sensitive_mutations_require_admin() {
             "/api/ssh/execute-command",
             json!({"host":"192.0.2.1","username":"operator","command":"true"}),
         ),
+        (
+            "/api/images/linux-builder/build",
+            json!({
+                "media_id": "missing",
+                "name": "linux-test",
+                "size_gb": 20,
+                "username": "operator",
+                "password": "test-password",
+                "sudo_user": true,
+                "confirm_create": true
+            }),
+        ),
     ] {
         assert_eq!(
             request(&app, "POST", path, &user, body).await,

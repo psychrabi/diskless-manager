@@ -1,6 +1,6 @@
 import { buttonVariants } from "@/components/ui/button";
 import { Card as ShadcnCard, CardContent, CardDescription, CardTitle } from "@/components/ui/card";
-import { Download, File, PlusCircle, Wrench } from "lucide-react";
+import { Download, File, PlusCircle, Terminal, Wrench } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useAuth } from "@/contexts/auth";
 import { Link } from "react-router-dom";
@@ -11,6 +11,7 @@ import { useToastStore } from "@/store/useToastStore";
 import CreateImageModal from "./CreateImageModal";
 import { ImagesList } from "./ImagesList";
 import WindowsServicingModal from "./WindowsServicingModal";
+import LinuxImageBuilderModal from "./LinuxImageBuilderModal";
 import { DriverCatalog } from "./DriverCatalog";
 
 const ImageManagement = () => {
@@ -27,6 +28,7 @@ const ImageManagement = () => {
   const [openImageCreateModal, setOpenImageCreateModal] = useState(false);
   const [importing, setImporting] = useState(false);
   const [windowsServicingOpen, setWindowsServicingOpen] = useState(false);
+  const [linuxImageBuilderOpen, setLinuxImageBuilderOpen] = useState(false);
 
   // Check if there are any image disks (datasets with org.diskless:type=image)
   const hasImageDisk = datasets.some(
@@ -85,6 +87,18 @@ const ImageManagement = () => {
                 title="Prepare a Windows WIM for diskless network boot"
               >
                 Windows Servicing
+              </Button>
+            )}
+            {user?.role === "admin" && (
+              <Button
+                className="w-full sm:w-auto"
+                variant="outline"
+                onClick={() => setLinuxImageBuilderOpen(true)}
+                icon={Terminal}
+                disabled={!hasImageDisk}
+                title={!hasImageDisk ? "Create an image disk first" : "Create a bootable Linux iSCSI image from an uploaded Linux ISO"}
+              >
+                Linux Image Builder
               </Button>
             )}
             <Button
@@ -163,6 +177,13 @@ const ImageManagement = () => {
         onClose={() => setWindowsServicingOpen(false)}
         onPrepared={() => Promise.all([fetchMasters(), fetchImages()])}
       />
+      {user?.role === "admin" && (
+        <LinuxImageBuilderModal
+          isOpen={linuxImageBuilderOpen}
+          onClose={() => setLinuxImageBuilderOpen(false)}
+          onChanged={() => Promise.all([fetchMasters(), fetchImages()])}
+        />
+      )}
       {user?.role === "admin" && <DriverCatalog />}
     </div>
   );
