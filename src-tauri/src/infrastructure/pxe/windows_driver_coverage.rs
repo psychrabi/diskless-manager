@@ -1,19 +1,19 @@
-//! Read-only NexBoot-style Boot NIC coverage for an existing Windows image.
+//! Read-only diagnostic probe for Boot NIC driver files in a Windows image.
 //!
-//! This probe checks existing driver-package coverage before requesting an
-//! offline installation. It does not check or write boot-critical registry
-//! identity and cannot establish SAN boot readiness. It clones the selected
-//! snapshot, mounts its Windows volume read-only, and
-//! accepts a driver only when all of these hold:
+//! This probe is not part of assignment readiness. Client assignment always
+//! runs the full driver and registry servicing path because published driver
+//! files do not prove boot-critical registry identity. It clones the selected
+//! snapshot, mounts its Windows volume read-only, and accepts a driver only when
+//! all of these hold:
 //!
 //! - a network-class INF matches one of the observed Boot NIC hardware IDs;
 //! - the same INF is published under `Windows/INF` (or is an inbox INF that
 //!   lives there), so Windows can install it through PnP; and
 //! - the driver's service binary exists in the image.
 //!
-//! It never writes to the source image. Any probe failure is returned to the
-//! caller, which keeps the existing Windows servicing path; a missing driver is
-//! not silently treated as covered.
+//! It never writes to the source image. A missing driver is not silently
+//! treated as covered, and a positive result still does not establish SAN boot
+//! readiness or portability between NIC instances.
 
 use super::driver_selection::{normalize_architecture, pnp_id_matches};
 use super::windows_inf::{
@@ -42,8 +42,8 @@ pub struct DriverInspectionCleanupFailure;
 /// True when the selected snapshot has matching published Boot NIC driver files.
 ///
 /// The snapshot is cloned into a temporary dataset so the probe never touches
-/// the source image or a running client's clone. The caller owns the fallback
-/// decision when this cannot be inspected.
+/// the source image or a running client's clone. This is diagnostic evidence
+/// only; assignment does not use it to skip servicing.
 pub fn snapshot_covers_boot_nic(
     backend: &dyn ImageBackend,
     source: &str,

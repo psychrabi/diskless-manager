@@ -9,7 +9,8 @@ This branch separates Windows driver package handling from boot-time registry ar
 - Install drivers through DISM as complete packages.
 - Arm registered services and reflect missing selected kernel services from verified DISM-staged INF packages.
 - Keep invasive compatibility tweaks opt-in.
-- Never guess vendor services or use loose uploaded SYS files; never inject CriticalDeviceDatabase entries.
+- Never guess vendor services or use loose uploaded SYS files.
+- Write CriticalDeviceDatabase entries only for explicit, inventoried Boot NICs.
 
 ## Driver harvesting
 
@@ -28,7 +29,7 @@ This branch separates Windows driver package handling from boot-time registry ar
 
 It handles UTF-8, UTF-8 BOM, UTF-16LE and UTF-16BE INF files. Legacy non-UTF-8 files are decoded lossily so structural ASCII tokens remain usable.
 
-Imported network-driver packages persist the harvested metadata in both `index.json` and schema-version-2 `manifest.json`.
+Imported network-driver packages persist the harvested metadata in both `index.json` and schema-version-2 `manifest.json`. The catalog also keeps the INF-associated function-driver services separately from filter services.
 
 ## Driver selection
 
@@ -59,7 +60,8 @@ The armer:
 - adds the network-boot bit to existing `BootFlags` only when the service is a driver service
 - arms existing `iScsiPrt` when present
 - sets existing `Tcpip` and `ndis` to boot-start
-- leaves `MSiSCSI` unchanged
+- leaves `MSiSCSI` unchanged apart from normalizing a malformed `ImagePath`
+- writes opt-in CriticalDeviceDatabase entries for each configured Boot NIC
 - raises `disk\TimeOutValue` to 60 seconds by default
 
 The armer does not:
@@ -67,7 +69,7 @@ The armer does not:
 - fabricate Realtek or Intel services
 - choose a driver by vendor name
 - replace differing existing driver binaries
-- write CriticalDeviceDatabase entries
+- write CriticalDeviceDatabase entries unless explicit `critical_device_boot_nic(s)` entries are supplied
 - rewrite GroupOrderList
 - apply NIC-vendor PHY settings
 - delete SYSTEM.LOG1 / SYSTEM.LOG2
@@ -76,6 +78,10 @@ Selection uses complete packages and Windows/DISM still installs them. The INF p
 does not execute `Include/Needs`; network packages whose associated service cannot be
 resolved are rejected before mounting rather than reported ready. Missing services with unsupported service directives or differing architecture/OS profiles are rejected. Dirid 13 services load from the staged DriverStore package; dirid 12 services copy only the verified staged binary and refuse a differing destination file. A registered,
 armed service is not a substitute for a boot test on the new hardware.
+CDDB entries are planned only when the selected package resolves to one associated NIC
+service. If a catalog package flattens multiple associated services without a
+device-specific mapping, the armer does not guess; strict binding validation still
+requires an existing `Enum`/CDDB mapping or fails the image preparation.
 The result warns when a selected service has no native Net-class adapter binding
 in the offline inventory. An existing binding also does not prove that a new PCI
 location or MAC address can initialize before Windows needs the boot disk.
@@ -97,6 +103,35 @@ These changes are disabled by default and must be explicitly enabled:
 - clearing `PagingFiles` / `ExistingPageFiles`
 
 They are modeled as compatibility settings rather than universal diskless-boot requirements.
+
+Assignments enable `DisableTaskOffload`. The NIC stability profile is applied
+only to a Realtek 8125 service explicitly mapped from its PCI hardware ID. A
+CDDB-started NIC has no adapter instance, so Realtek 8125 parameters fall back to the NIC service's
+`Parameters` key during early boot; the stability profile mirrors a
+known-good locally-bound instance and disables the power-saving and
+offload defaults that drop iSCSI boot sessions mid-boot:
+
+- `*EEE`, `AdvancedEEE`, `EnableGreenEthernet`, `PowerSavingMode`
+- `*InterruptModeration`, `*SelectiveSuspend`
+- `*LsoV2IPv4`, `*LsoV2IPv6`, `*TCPChecksumOffloadIPv4`, `*TCPChecksumOffloadIPv6`
+
+Revision identity includes an arm-policy digest
+(`boot_arm_policy_digest`) in addition to the driver packages and Boot NIC
+scope. Assignment preparation includes all inventoried Windows clients in one
+shared revision, so clients with different adapters can reuse the same prepared
+snapshot.
+
+For NexBoot WinPE adaptation, the planned NIC groups and package IDs are stored
+with the installation session and reused by the adaptation manifest. WinPE
+reports the connection belonging to the assigned iSCSI session; the server
+checks that the actual adapter is covered before returning the full shared boot
+contract. The server records a `preparing` revision before starting WinPE.
+After the resulting image passes normal-boot verification, cleanup writes a
+durable `serviced-<revision>` snapshot and advances that revision to
+`awaiting-test`; later clients with the same source, package, NIC and arm-policy
+hash reuse that published snapshot instead of starting WinPE again. Interrupted
+sessions that can still resume retain their revision; closed failed sessions
+release it for retry.
 
 ## Servicing environment
 
@@ -127,10 +162,12 @@ diskless-windows-servicer.exe prepare
 ```
 
 `prepare` reads a `WindowsImagePreparationRequest` JSON document from stdin
-and writes a versioned JSON response to stdout. Protocol version 2 also reports
-whether the SSH-launched worker process has an elevated administrator token.
-The UI will not enable image preparation unless the worker tools are available
-and the remote session is elevated.
+and writes a versioned JSON response to stdout. The current protocol version is
+5; it also reports whether the SSH-launched worker process has an elevated
+administrator token. The server requires an exact protocol-version match, so a
+stale helper is rejected instead of silently ignoring new boot-arm fields such
+as multi-adapter Boot NIC bindings. The UI will not enable image preparation unless
+the worker tools are available and the remote session is elevated.
 
 The Linux server invokes the helper through the existing SSH transport. Request
 JSON is written to the SSH channel stdin rather than embedded in the command
@@ -333,10 +370,12 @@ Failures retain the clone and any remaining servicing target with an explicit er
 
 Offline reflection supports explicit kernel service declarations, repeated service-relative AddReg entries, BootFlags, and the default System event source. EventMessageFile remains REG_EXPAND_SZ and must point inside Windows System32. It refuses a dirty SYSTEM hive before registry loading unless the override is enabled. Filters, unsupported directives/flags and ambiguous variants require installing the NIC in the image first. Every new hardware family still needs a real SAN boot test; successful servicing is not proof of universal hardware compatibility.
 
-The optional startup adaptation stages drivers with `pnputil`; it does not
-create CriticalDeviceDatabase entries, change MSiSCSI startup, or require a
-service for hardware that is not present. Boot-critical NICs must be prepared
-offline and verified separately.
+The optional in-Windows startup adaptation stages drivers with `pnputil`; it
+does not create CriticalDeviceDatabase entries, change MSiSCSI startup, or
+require a service for hardware that is not present. This is separate from
+assignment servicing, which prepares and arms the image offline before the
+client boots it. Boot-critical NICs must be prepared offline and verified
+separately.
 
 The startup-registration cleanup and client workspace ACL have isolated
 Windows PowerShell regression tests. Run these on an elevated Windows test
@@ -407,46 +446,62 @@ through the Windows servicer:
 No manual `pnputil`, registry edit or local boot is part of the supported
 path. A real SAN boot test remains the acceptance gate.
 
-## NexBoot-aligned normal-image coverage
+## Assignment-driven Boot NIC servicing
 
-The normal-image path avoids repeated driver-package installation when the
-selected snapshot already carries a published driver for the client's Boot
-NIC. This is a bounded step toward NexBoot's process, not an implementation of
-its Linux-side registry identity preparation. `windows_driver_coverage` clones
-the selected snapshot into a temporary
-dataset, mounts its NTFS volume read-only, and accepts coverage only when a
-network-class INF matches the recorded hardware IDs, the same INF is published
-under `Windows/INF` (or is an inbox INF), and its service binary exists. The
-temporary clone is destroyed after the probe only after mount inspection
-confirms it is unmounted. Cleanup failures name the retained dataset in the
-server diagnostic and do not count as successful coverage.
+Assigning a Windows image to a client is a boot-preparation operation, not a
+driver-file coverage check. The server installs the selected driver packages
+and arms all known Boot NICs unless a revision built for the same source
+snapshot, package set, installation strategy, and Boot NIC inventory already
+exists.
 
-An inspection failure falls back to the existing servicing path only after
-cleanup succeeds. A cleanup failure stops the assignment and identifies the
-temporary clone for recovery. Images without a matching driver still require the
-Windows worker, WinPE, or the image factory to install and arm one. The probe
-does not write registry identity, so it does not replace WinPE model adaptation
-for a genuinely missing Boot NIC driver. Published INF and binary presence do
-not prove boot-critical registry arming or portability between NIC instances.
-The Windows 11 VM results above still apply, and a real SAN boot test remains
-necessary.
+The assignment flow:
 
-With `nexboot_boot_time` selected, the client assignment dialog runs this check
-even without a configured SSH worker. Existing image coverage and reusable
-driver revisions return before worker capability checks. Only a new servicing
-operation requires the worker profile. There is not yet an assignment-driven
-WinPE adaptation session for missing drivers, so that case must be prepared in
-WinPE/image factory and published as a new snapshot, or use the existing worker.
+1. Loads all known Windows Boot NICs, including pending WinPE inventory, with
+   verified Windows reports taking precedence over stale pre-boot rows.
+2. Selects complete catalog packages for every adapter by exact then compatible
+   PNP ID. Preparation fails when any inventoried adapter lacks a matching
+   package or declared boot-start service.
+3. Builds one CriticalDeviceDatabase mapping per adapter, preferring subsystem
+   IDs and using vendor/device IDs only when no subsystem was reported.
+   Conflicting mappings for the same hardware ID fail safely.
+4. Enables `require_boot_nic_binding` for every adapter group. Servicing fails
+   instead of publishing a candidate with one NIC mapped and another omitted.
+5. Hashes the sorted package IDs, installation strategy, normalized NIC set and
+   arm policy. Clients with the same inventory reuse one prepared revision; a
+   newly inventoried NIC expands the scope and creates a new revision.
+6. `offline_dism` installs the union of drivers and bindings into one candidate
+   image. `nexboot_boot_time` adapts a client-bound copy through WinPE; that
+   path now sends the iSCSI adapter's hardware IDs, installs its matching
+   package and applies the required boot binding before Windows starts.
+7. Existing CriticalDeviceDatabase coverage counts only when its Service value
+   names a registered kernel NIC driver and its ClassGUID is the network class.
 
-### Acceptance evidence and remaining scope (2026-11-03)
+Published driver files alone do not make a NIC boot-ready. The shared revision
+must bind every inventoried device ID to its installed boot-start service.
 
-The requested outcome is replacement of mandatory Windows-worker preparation
-with NexBoot's process, not merely a better SSH error. The implementation chose
-the narrower existing-driver fast path as an incremental interpretation. That
-choice does **not** complete the full request: assignment-driven WinPE/model
-adaptation and hardware validation remain missing. The inspection clone is not
-yet recorded in a restart recovery journal; a server crash can leave it behind.
-INF and binary presence alone must not be treated as proof of a verified boot.
+### Revision reuse
+
+Revisions are reusable per `(source image, source snapshot, package set,
+strategy, Boot NIC ID set)`. Normalization uppercases and sorts the union of
+known IDs, so inventory ordering does not create duplicate revisions. A newly
+inventoried NIC expands the shared scope; already assigned clients remain on an
+older revision until explicitly reassigned.
+
+### Remaining limits
+
+- The `offline_dism` path requires a configured Windows servicing worker.
+  Without one, assignment fails before touching the image.
+- CriticalDeviceDatabase mappings start the selected NIC service before
+  disk-based PnP. They do not clone NexBoot's full per-adapter `Enum`, network
+  class, GUID, MAC and TCP/IP registry identity; Windows still creates and
+  personalizes those records through PnP after the iSCSI root is available.
+- The read-only `windows_driver_coverage` probe remains available for
+  diagnostics but is not consulted during assignment and does not influence
+  revision reuse.
+- A successful assignment only proves that packages installed and planned
+  registry values were written. Every new hardware family still needs a real
+  SAN boot test on the target machine; the Windows 11 VM results above still
+  apply and a real SAN boot test remains the acceptance gate.
 
 ### Linux SYSTEM hive adapter (excluded)
 

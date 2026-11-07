@@ -37,6 +37,11 @@ pub struct ManagedWindowsPreparationRequest {
     pub portal: String,
     #[serde(default)]
     pub driver_ids: Vec<String>,
+    /// Exact Boot NIC hardware IDs the revision is armed for. Included in the
+    /// revision hash so a prepared image is never reused for a different NIC
+    /// that merely shares the same driver package.
+    #[serde(default)]
+    pub boot_nic_ids: Vec<String>,
     #[serde(default)]
     pub driver_root: Option<PathBuf>,
     #[serde(default)]
@@ -154,12 +159,14 @@ pub async fn prepare_managed(
         .collect::<Vec<_>>();
     let mut revision = if request.commit {
         Some(
-            ensure_managed_revision_with_strategy(
+            ensure_managed_revision_with_scope(
                 &pool,
                 &source.id,
                 &request.source_snapshot,
                 &package_ids,
                 request.driver_install_strategy,
+                &request.boot_nic_ids,
+                &crate::infrastructure::pxe::boot_arm_policy_digest(&request.boot_arm),
             )
             .await?,
         )
@@ -398,6 +405,26 @@ pub fn plan_driver_revision_with_strategy(
     package_ids: &[String],
     strategy: WindowsDriverInstallStrategy,
 ) -> ImageDriverRevision {
+    plan_driver_revision_with_scope(
+        source_image_id,
+        source_snapshot,
+        package_ids,
+        strategy,
+        &[],
+        "",
+    )
+}
+
+/// Build the deterministic candidate revision for one exact Boot NIC scope
+/// and boot-arm policy.
+pub fn plan_driver_revision_with_scope(
+    source_image_id: &str,
+    source_snapshot: &str,
+    package_ids: &[String],
+    strategy: WindowsDriverInstallStrategy,
+    boot_nic_ids: &[String],
+    arm_policy: &str,
+) -> ImageDriverRevision {
     let mut ordered: Vec<String> = package_ids.to_vec();
     ordered.sort();
     ordered.dedup();
@@ -407,12 +434,14 @@ pub fn plan_driver_revision_with_strategy(
         source_image_id: source_image_id.to_string(),
         source_snapshot: source_snapshot.to_string(),
         revision_image_id: None,
-        driver_set_hash: ImageDriverRevision::hash_driver_set_with_strategy(
+        driver_set_hash: ImageDriverRevision::hash_driver_set_with_scope(
             &ordered,
             match strategy {
                 WindowsDriverInstallStrategy::OfflineDism => "offline_dism",
                 WindowsDriverInstallStrategy::NexbootBootTime => "nexboot_boot_time",
             },
+            boot_nic_ids,
+            arm_policy,
         ),
         driver_package_ids: ordered,
         status: DriverRevisionStatus::Preparing,
@@ -451,9 +480,36 @@ pub async fn ensure_managed_revision_with_strategy(
     package_ids: &[String],
     strategy: WindowsDriverInstallStrategy,
 ) -> Result<ImageDriverRevision> {
+    ensure_managed_revision_with_scope(
+        pool,
+        source_image_id,
+        source_snapshot,
+        package_ids,
+        strategy,
+        &[],
+        "",
+    )
+    .await
+}
+
+pub async fn ensure_managed_revision_with_scope(
+    pool: &sqlx::SqlitePool,
+    source_image_id: &str,
+    source_snapshot: &str,
+    package_ids: &[String],
+    strategy: WindowsDriverInstallStrategy,
+    boot_nic_ids: &[String],
+    arm_policy: &str,
+) -> Result<ImageDriverRevision> {
     let repository = ImageRepository::new(pool.clone());
-    let planned =
-        plan_driver_revision_with_strategy(source_image_id, source_snapshot, package_ids, strategy);
+    let planned = plan_driver_revision_with_scope(
+        source_image_id,
+        source_snapshot,
+        package_ids,
+        strategy,
+        boot_nic_ids,
+        arm_policy,
+    );
     if let Some(existing) = repository
         .find_driver_revision_by_hash(source_image_id, source_snapshot, &planned.driver_set_hash)
         .await
@@ -490,16 +546,64 @@ pub async fn fail_managed_revision(
         .await
 }
 
-/// Abandon driver revisions a previous process left `preparing`.
-///
-/// A restart cannot resume a servicing worker and every build holds the
-/// workflow mutation lock, so no `preparing` record can be live at startup.
-/// Leaving one behind makes the idempotency lookup treat the build as in
-/// flight and reject every identical assignment until someone edits the
-/// database, so they are failed here instead.
+/// Mark a WinPE revision failed after its private session has been safely closed.
+/// Cleanup can retry, so an already-failed record is accepted idempotently.
+pub async fn abandon_managed_revision(pool: &sqlx::SqlitePool, revision_id: &str) -> Result<()> {
+    let status: Option<String> =
+        sqlx::query_scalar("SELECT status FROM windows_image_driver_revisions WHERE id = ?")
+            .bind(revision_id)
+            .fetch_optional(pool)
+            .await
+            .context("failed to inspect Windows driver revision before cleanup")?;
+    match status.as_deref() {
+        Some("preparing") => {
+            fail_managed_revision(pool, revision_id).await?;
+            Ok(())
+        }
+        Some("failed") => Ok(()),
+        Some(status) => bail!("cannot abandon Windows driver revision in '{status}' state"),
+        None => bail!("Windows driver revision '{revision_id}' not found"),
+    }
+}
+
+/// Complete the WinPE revision after its verified image snapshot is durable.
+/// Published cleanup may resume after a restart, so matching completed states
+/// are accepted while conflicting image identities still fail closed.
+pub async fn publish_managed_revision(
+    pool: &sqlx::SqlitePool,
+    revision_id: &str,
+    revision_image_id: &str,
+) -> Result<()> {
+    let row: Option<(String, Option<String>)> = sqlx::query_as(
+        "SELECT status, revision_image_id FROM windows_image_driver_revisions WHERE id = ?",
+    )
+    .bind(revision_id)
+    .fetch_optional(pool)
+    .await
+    .context("failed to inspect Windows driver revision before publication")?;
+    let Some((status, current_image_id)) = row else {
+        bail!("Windows driver revision '{revision_id}' not found");
+    };
+    match status.as_str() {
+        "preparing" => {
+            mark_revision_awaiting_test(pool, revision_id, revision_image_id).await?;
+        }
+        "awaiting-test" | "ready" => anyhow::ensure!(
+            current_image_id.as_deref() == Some(revision_image_id),
+            "published Windows revision points to a different image"
+        ),
+        "failed" => bail!("Windows driver revision failed before image publication"),
+        _ => bail!("invalid Windows driver revision state '{status}'"),
+    }
+    Ok(())
+}
+
+/// Abandon interrupted builds, except WinPE sessions that startup resumes or
+/// lets the administrator retry. A published adaptation must finish cleanup
+/// before its shared revision becomes reusable.
 pub async fn recover_interrupted_revisions(pool: &sqlx::SqlitePool) -> Result<u64> {
     let abandoned = sqlx::query(
-        "UPDATE windows_image_driver_revisions SET status = 'failed', updated_at = ? WHERE status = 'preparing'",
+        "UPDATE windows_image_driver_revisions SET status = 'failed', updated_at = ? WHERE status = 'preparing' AND NOT EXISTS (SELECT 1 FROM installation_sessions WHERE instr(config_json, windows_image_driver_revisions.id) > 0 AND state IN ('saving', 'verifying', 'verification_failed', 'published'))",
     )
     .bind(chrono::Utc::now().to_rfc3339())
     .execute(pool)

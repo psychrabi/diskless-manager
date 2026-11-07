@@ -14,6 +14,8 @@ dist-ssr
 
 # Editor directories and files
 .vscode/*
+.claude/*
+.impeccable/*
 !.vscode/extensions.json
 .idea
 .DS_Store
@@ -42,6 +44,7 @@ docs/*
 !docs/adr/**
 !docs/architecture/
 docs/architecture/*
+!docs/architecture/NEXBOOT-WINDOWS-NIC-BOOT.md
 !docs/architecture/NEXBOOT-UPSTREAM-REVIEW-2026-10-25.md
 !docs/architecture/NEXBOOT-INTEGRATION-2026-10-25.md
 !docs/architecture/WRITEBACK-SPARES-2026-10-31.md

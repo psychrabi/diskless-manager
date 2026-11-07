@@ -43,7 +43,7 @@ use windows_image_preparation::{
     WindowsImagePreparationResult, WindowsImagePreparer,
 };
 
-const PROTOCOL_VERSION: u32 = 3;
+const PROTOCOL_VERSION: u32 = 5;
 const MAX_REQUEST_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Serialize)]

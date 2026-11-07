@@ -294,17 +294,53 @@ impl ImageDriverRevision {
     /// Stable across processes (FNV-1a 64-bit over the sorted, deduplicated,
     /// comma-joined package IDs); the same set always yields the same hash.
     pub fn hash_driver_set(package_ids: &[String]) -> String {
-        Self::hash_driver_set_with_strategy(package_ids, "offline_dism")
+        Self::hash_driver_set_with_scope(package_ids, "offline_dism", &[], "")
     }
 
     /// Deterministic hash of a driver set and installation strategy.
     pub fn hash_driver_set_with_strategy(package_ids: &[String], strategy: &str) -> String {
+        Self::hash_driver_set_with_scope(package_ids, strategy, &[], "")
+    }
+
+    /// Deterministic hash of a driver set, installation strategy, the exact
+    /// Boot NIC hardware IDs the revision was armed for, and the boot-arm
+    /// policy digest that produced it.
+    ///
+    /// Package coverage alone cannot prove a bootable image: two machines can
+    /// share one Realtek INF (same compatible ID) while having different
+    /// subsystem IDs, and only the machine whose instance or
+    /// CriticalDeviceDatabase entry was armed can start its NIC before the
+    /// iSCSI root. Scoping the hash prevents such a revision from being reused
+    /// by a different NIC. The arm policy is part of the identity for the same
+    /// reason: a revision serviced without DisableTaskOffload is not the same
+    /// boot contract as one serviced with it. An empty policy preserves the
+    /// hashes of callers that do not carry a boot-arm plan.
+    pub fn hash_driver_set_with_scope(
+        package_ids: &[String],
+        strategy: &str,
+        boot_nic_ids: &[String],
+        arm_policy: &str,
+    ) -> String {
         use std::collections::BTreeSet;
         let ordered: BTreeSet<&str> = package_ids.iter().map(String::as_str).collect();
-        let joined = format!(
+        let mut joined = format!(
             "{strategy}:{}",
             ordered.into_iter().collect::<Vec<_>>().join(",")
         );
+        let nic_ids: BTreeSet<String> = boot_nic_ids
+            .iter()
+            .map(|id| id.trim().to_ascii_uppercase())
+            .filter(|id| !id.is_empty())
+            .collect();
+        if !nic_ids.is_empty() {
+            joined.push_str("|nic:");
+            joined.push_str(&nic_ids.into_iter().collect::<Vec<_>>().join(","));
+        }
+        let arm_policy = arm_policy.trim();
+        if !arm_policy.is_empty() {
+            joined.push_str("|arm:");
+            joined.push_str(arm_policy);
+        }
         let mut hash: u64 = 0xcbf29ce484222325;
         for byte in joined.bytes() {
             hash ^= u64::from(byte);

@@ -63,6 +63,8 @@ pub struct NetworkDriverPackage {
     #[serde(default)]
     pub service_names: Vec<String>,
     #[serde(default)]
+    pub associated_service_names: Vec<String>,
+    #[serde(default)]
     pub catalog_files: Vec<String>,
     pub imported_at: DateTime<Utc>,
 }
@@ -265,6 +267,10 @@ impl NetworkDriverInjectionPlugin {
                 .iter()
                 .flat_map(|inspection| inspection.service_names.iter().cloned())
                 .collect::<Vec<_>>();
+            let mut associated_service_names = network_infs
+                .iter()
+                .flat_map(|inspection| inspection.associated_service_names.iter().cloned())
+                .collect::<Vec<_>>();
             let mut catalog_files = network_infs
                 .iter()
                 .flat_map(|inspection| inspection.catalog_files.iter().cloned())
@@ -274,13 +280,18 @@ impl NetworkDriverInjectionPlugin {
                 &mut hardware_ids,
                 &mut compatible_ids,
                 &mut service_names,
+                &mut associated_service_names,
                 &mut catalog_files,
             ] {
                 values.sort_by_key(|value| value.to_ascii_lowercase());
                 values.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
             }
 
-            let inferred_service = service_names.first().cloned();
+            let inferred_service = match associated_service_names.as_slice() {
+                [service] => Some(service.clone()),
+                [] if service_names.len() == 1 => service_names.first().cloned(),
+                _ => None,
+            };
             let inferred_pnp = hardware_ids.first().cloned();
             let inferred_provider = network_infs.iter().find_map(|item| item.provider.clone());
             let inferred_version = network_infs.iter().find_map(|item| item.version.clone());
@@ -305,6 +316,7 @@ impl NetworkDriverInjectionPlugin {
                 hardware_ids,
                 compatible_ids,
                 service_names,
+                associated_service_names,
                 catalog_files,
                 imported_at: Utc::now(),
             };
@@ -1018,6 +1030,19 @@ mod tests {
 
     const NETWORK_INF: &[u8] = b"[Version]\nSignature=\"$Windows NT$\"\nClass=Net\nClassGuid={4d36e972-e325-11ce-bfc1-08002be10318}\nProvider=%Vendor%\nCatalogFile=nic.cat\n[Manufacturer]\n%Vendor%=Vendor,NTamd64\n[Vendor.NTamd64]\n%Device%=Install,PCI\\VEN_8086&DEV_15F3\n[Install.NT.Services]\nAddService=NetKVM,2,NicInstall\n[Strings]\nVendor=\"Vendor\"\nDevice=\"Test NIC\"\n";
     const STORAGE_INF: &[u8] = b"[Version]\nSignature=\"$Windows NT$\"\nClass=SCSIAdapter\nClassGuid={4d36e96b-e325-11ce-bfc1-08002be10318}\nProvider=%Vendor%\nCatalogFile=storage.cat\n[Manufacturer]\n%Vendor%=Vendor,NTamd64\n[Vendor.NTamd64]\n%Device%=Install,PCI\\VEN_1234&DEV_5678\n[Install.NT.Services]\nAddService=StorDrv,2,Install\n[Strings]\nVendor=\"Vendor\"\nDevice=\"Test HBA\"\n";
+
+    #[test]
+    fn imported_driver_retains_its_unambiguous_device_service() {
+        let root = tempfile::tempdir().unwrap();
+        let archive = root.path().join("nic.zip");
+        write_zip(&archive, &[("nic.inf", NETWORK_INF), ("nic.cat", b"cat")]);
+        let plugin = NetworkDriverInjectionPlugin::new(root.path().join("media"));
+
+        let package = plugin.import_zip(&archive).unwrap();
+
+        assert_eq!(package.associated_service_names, ["NetKVM"]);
+        assert_eq!(package.service_name.as_deref(), Some("NetKVM"));
+    }
 
     #[cfg(unix)]
     #[test]

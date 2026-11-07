@@ -6,8 +6,12 @@
 //!
 //! The mutation path uses Windows' own registry loader (reg.exe load/unload) instead
 //! of rewriting REGF cells directly. Missing services require validated INF profiles; it never copies
-//! driver binaries, never writes CriticalDeviceDatabase entries and never deletes
-//! registry transaction logs.
+//! driver binaries and never deletes registry transaction logs. CriticalDeviceDatabase
+//! entries are written only when the caller supplies an explicit
+//! `critical_device_boot_nic` entry for the machine's exact Boot NIC IDs.
+
+// This file is included by the helper crate, whose feature set differs from the server crate.
+#![allow(unexpected_cfgs)]
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -17,9 +21,220 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 const NET_CLASS_GUID: &str = "{4d36e972-e325-11ce-bfc1-08002be10318}";
+/// Device setup class GUID for network adapters, required by
+/// CriticalDeviceDatabase entries that start a boot NIC before PnP.
+#[cfg_attr(feature = "windows-servicer", allow(dead_code))]
+pub const NETWORK_ADAPTER_CLASS_GUID: &str = NET_CLASS_GUID;
 const SERVICE_KERNEL_DRIVER: u32 = 0x0000_0001;
 const SERVICE_FILE_SYSTEM_DRIVER: u32 = 0x0000_0002;
 const CM_SERVICE_NETWORK_BOOT_LOAD: u32 = 0x0000_0001;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BootNicCriticalDevice {
+    pub service: String,
+    #[serde(default)]
+    pub class_guid: Option<String>,
+    pub hardware_ids: Vec<String>,
+}
+
+/// Resolve one observed PCI adapter to the service supplied by its selected
+/// complete driver package. Subsystem IDs are preferred; vendor/device IDs are
+/// the fallback when firmware inventory did not expose a subsystem.
+#[cfg(not(feature = "windows-servicer"))]
+pub fn critical_device_for_boot_nic(
+    catalog: &[super::NetworkDriverPackage],
+    selected_ids: &[String],
+    boot_nic_ids: &[String],
+) -> Option<BootNicCriticalDevice> {
+    let pci_ids: Vec<String> = boot_nic_ids
+        .iter()
+        .map(|id| id.trim().to_string())
+        .map(|id| {
+            id.rsplit_once('\\')
+                .filter(|(hardware_id, _)| {
+                    hardware_id.to_ascii_uppercase().starts_with("PCI\\VEN_")
+                        && hardware_id.to_ascii_uppercase().contains("&DEV_")
+                })
+                .map(|(hardware_id, _)| hardware_id.to_string())
+                .unwrap_or(id)
+        })
+        .filter(|id| {
+            let id = id.to_ascii_uppercase();
+            id.starts_with("PCI\\") && id.contains("VEN_") && id.contains("DEV_")
+        })
+        .collect();
+    let subsystem_ids: Vec<String> = pci_ids
+        .iter()
+        .filter(|id| id.to_ascii_uppercase().contains("SUBSYS_"))
+        .cloned()
+        .collect();
+    let hardware_ids = if subsystem_ids.is_empty() {
+        pci_ids
+    } else {
+        subsystem_ids
+    };
+    if hardware_ids.is_empty() {
+        return None;
+    }
+    let selected = selected_ids
+        .iter()
+        .filter_map(|id| catalog.iter().find(|package| &package.id == id));
+    let package = selected
+        .clone()
+        .find(|package| {
+            package.hardware_ids.iter().any(|candidate| {
+                hardware_ids
+                    .iter()
+                    .any(|id| super::pnp_id_matches(candidate, id))
+            })
+        })
+        .or_else(|| {
+            selected.clone().find(|package| {
+                package.hardware_ids.iter().any(|candidate| {
+                    hardware_ids
+                        .iter()
+                        .any(|id| boot_package_id_matches(candidate, id))
+                })
+            })
+        })
+        .or_else(|| {
+            selected.into_iter().find(|package| {
+                package
+                    .hardware_ids
+                    .iter()
+                    .chain(package.compatible_ids.iter())
+                    .any(|candidate| {
+                        hardware_ids
+                            .iter()
+                            .any(|id| boot_package_id_matches(candidate, id))
+                    })
+            })
+        })?;
+    let mut associated_services = package
+        .associated_service_names
+        .iter()
+        .map(|service| service.trim())
+        .filter(|service| !service.is_empty())
+        .collect::<Vec<_>>();
+    associated_services.sort_by_key(|service| service.to_ascii_lowercase());
+    associated_services.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+    let mut services = package
+        .service_names
+        .iter()
+        .map(|service| service.trim())
+        .filter(|service| !service.is_empty())
+        .collect::<Vec<_>>();
+    services.sort_by_key(|service| service.to_ascii_lowercase());
+    services.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+    let service = match associated_services.as_slice() {
+        [service] => (*service).to_string(),
+        [] if services.len() == 1 => services[0].to_string(),
+        [] if services.is_empty() && package.inf_files.len() == 1 => package
+            .service_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|service| !service.is_empty())?
+            .to_string(),
+        _ => return None,
+    };
+    Some(BootNicCriticalDevice {
+        service,
+        class_guid: Some(NETWORK_ADAPTER_CLASS_GUID.to_string()),
+        hardware_ids,
+    })
+}
+
+#[cfg(not(feature = "windows-servicer"))]
+fn boot_package_id_matches(package_id: &str, hardware_id: &str) -> bool {
+    if super::pnp_id_matches(package_id, hardware_id) {
+        return true;
+    }
+    let package_id = package_id.trim().to_ascii_lowercase().replace('/', "\\");
+    let hardware_id = hardware_id.trim().to_ascii_lowercase().replace('/', "\\");
+    hardware_id
+        .strip_prefix(&package_id)
+        .is_some_and(|suffix| suffix.starts_with('&'))
+}
+
+/// Build the same strict boot contract for a single WinPE-adapted client or a
+/// shared image covering several inventoried clients.
+#[cfg(not(feature = "windows-servicer"))]
+pub fn boot_arm_config_for_nics(
+    catalog: &[super::NetworkDriverPackage],
+    selected_ids: &[String],
+    boot_nic_groups: &[Vec<String>],
+) -> Result<WindowsBootArmConfig> {
+    if boot_nic_groups.is_empty() || boot_nic_groups.iter().any(Vec::is_empty) {
+        bail!("at least one non-empty Boot NIC hardware-ID group is required");
+    }
+    let mut config = WindowsBootArmConfig {
+        require_boot_nic_binding: true,
+        disable_task_offload: true,
+        stabilize_nic_driver_defaults: true,
+        ..Default::default()
+    };
+    let mut groups = BTreeSet::new();
+    let mut devices = BTreeSet::new();
+    let mut services_by_id = BTreeMap::<String, String>::new();
+    for group in boot_nic_groups {
+        let ids = super::normalize_hardware_ids(group)
+            .map_err(|error| anyhow::anyhow!("invalid Boot NIC hardware ID: {error}"))?;
+        if ids.is_empty() {
+            bail!("Boot NIC hardware-ID group is empty");
+        }
+        let critical = critical_device_for_boot_nic(catalog, selected_ids, &ids);
+        let expected = critical
+            .as_ref()
+            .map(|entry| entry.hardware_ids.clone())
+            .unwrap_or(ids);
+        let mut group_key = expected
+            .iter()
+            .map(|id| id.to_ascii_lowercase())
+            .collect::<Vec<_>>();
+        group_key.sort();
+        if !groups.insert(group_key.join(",")) {
+            continue;
+        }
+        config
+            .expected_boot_nic_ids
+            .extend(expected.iter().cloned());
+        config.expected_boot_nic_groups.push(expected.clone());
+        if let Some(critical) = critical {
+            let mut mapping_ids = critical
+                .hardware_ids
+                .iter()
+                .map(|id| id.to_ascii_lowercase())
+                .collect::<Vec<_>>();
+            mapping_ids.sort();
+            let mapping_key = format!(
+                "{}:{}",
+                critical.service.to_ascii_lowercase(),
+                mapping_ids.join(",")
+            );
+            if !devices.insert(mapping_key) {
+                continue;
+            }
+            for id in &critical.hardware_ids {
+                let id_key = id.to_ascii_lowercase();
+                if let Some(service) =
+                    services_by_id.insert(id_key.clone(), critical.service.clone())
+                {
+                    if !service.eq_ignore_ascii_case(&critical.service) {
+                        bail!("conflicting boot NIC driver services for {id_key}");
+                    }
+                }
+            }
+            config.critical_device_boot_nics.push(critical);
+        }
+    }
+    config
+        .expected_boot_nic_ids
+        .sort_by_key(|id| id.to_ascii_lowercase());
+    config
+        .expected_boot_nic_ids
+        .dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+    Ok(config)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WindowsBootArmConfig {
@@ -33,6 +248,39 @@ pub struct WindowsBootArmConfig {
     pub disable_crash_dump: bool,
     #[serde(default)]
     pub clear_paging_files: bool,
+    /// Disable the Windows Filtering Platform lightweight filter, which is not
+    /// boot-start or paging-I/O compatible and breaks iSCSI boot when it is
+    /// bound to the boot NIC (KB976042).
+    #[serde(default = "default_true")]
+    pub disable_wfp_lwf: bool,
+    /// Expected boot NIC hardware IDs. When non-empty, the plan checks that
+    /// the image can start this NIC without disk-based PnP (existing Enum
+    /// device instance or CriticalDeviceDatabase entry) and warns otherwise.
+    #[serde(default)]
+    pub expected_boot_nic_ids: Vec<String>,
+    /// Alternative IDs for each known Boot NIC. A shared image must have a
+    /// boot binding for every client adapter, while any one ID can identify it.
+    #[serde(default)]
+    pub expected_boot_nic_groups: Vec<Vec<String>>,
+    /// Turn the boot-NIC binding check above into a hard error instead of a
+    /// warning.
+    #[serde(default)]
+    pub require_boot_nic_binding: bool,
+    /// Opt-in: create CriticalDeviceDatabase entries for the boot NIC so the
+    /// kernel can start it before the iSCSI boot volume is available.
+    #[serde(default)]
+    pub critical_device_boot_nic: Option<BootNicCriticalDevice>,
+    /// Additional adapter bindings for images shared by clients with different NICs.
+    #[serde(default)]
+    pub critical_device_boot_nics: Vec<BootNicCriticalDevice>,
+    /// Write conservative Realtek 8125 stability defaults into the selected
+    /// NIC service's `Parameters` key. A CDDB-started NIC has no adapter
+    /// instance, so the driver falls back to service-level parameters; the
+    /// values mirror a known-good locally-bound instance (EEE, Green
+    /// Ethernet, interrupt moderation, latest-generation offloads, and
+    /// selective suspend disabled) that does not drop iSCSI boot sessions.
+    #[serde(default)]
+    pub stabilize_nic_driver_defaults: bool,
 }
 
 impl Default for WindowsBootArmConfig {
@@ -43,8 +291,71 @@ impl Default for WindowsBootArmConfig {
             disable_task_offload: false,
             disable_crash_dump: false,
             clear_paging_files: false,
+            disable_wfp_lwf: true,
+            expected_boot_nic_ids: Vec::new(),
+            expected_boot_nic_groups: Vec::new(),
+            require_boot_nic_binding: false,
+            critical_device_boot_nic: None,
+            critical_device_boot_nics: Vec::new(),
+            stabilize_nic_driver_defaults: false,
         }
     }
+}
+
+/// Canonical summary of the arming decisions that change registry outcomes.
+///
+/// Driver revision identity must cover the arm policy: a revision serviced
+/// without DisableTaskOffload is not the same boot contract as one serviced
+/// with it, so the two must never be reused for each other. Only fields
+/// that alter the plan are summarized; NIC and package identity are already
+/// part of the revision hash separately.
+#[cfg_attr(feature = "windows-servicer", allow(dead_code))]
+pub fn boot_arm_policy_digest(config: &WindowsBootArmConfig) -> String {
+    let flag = |value: bool| if value { "1" } else { "0" };
+    let mut cddb_entries = config
+        .critical_device_boot_nic
+        .iter()
+        .chain(&config.critical_device_boot_nics)
+        .map(|entry| {
+            let mut ids = entry
+                .hardware_ids
+                .iter()
+                .map(|id| id.to_ascii_lowercase())
+                .collect::<Vec<_>>();
+            ids.sort();
+            format!(
+                "{}:{}:{}",
+                entry.service.to_ascii_lowercase(),
+                entry.class_guid.as_deref().unwrap_or_default(),
+                ids.join(",")
+            )
+        })
+        .collect::<Vec<_>>();
+    cddb_entries.sort();
+    let mut nic_groups = config
+        .expected_boot_nic_groups
+        .iter()
+        .map(|group| {
+            let mut ids = group
+                .iter()
+                .map(|id| id.to_ascii_lowercase())
+                .collect::<Vec<_>>();
+            ids.sort();
+            ids.join(",")
+        })
+        .collect::<Vec<_>>();
+    nic_groups.sort();
+    format!(
+        "disk_timeout={};task_offload={};crash_dump={};paging_files={};wfp_lwf={};cddb={};nic_groups={};nic_stability={}",
+        flag(config.increase_disk_timeout),
+        flag(config.disable_task_offload),
+        flag(config.disable_crash_dump),
+        flag(config.clear_paging_files),
+        flag(config.disable_wfp_lwf),
+        cddb_entries.join("|"),
+        nic_groups.join("|"),
+        flag(config.stabilize_nic_driver_defaults),
+    )
 }
 
 fn default_true() -> bool {
@@ -79,6 +390,23 @@ pub struct WindowsBootInventory {
     #[serde(default)]
     pub driver_boot_flags: BTreeMap<String, u32>,
     pub hive_dirty: bool,
+    #[serde(default)]
+    pub msiscsi_image_path: Option<String>,
+    #[serde(default)]
+    pub wfp_lwf_start: Option<u32>,
+    #[serde(default)]
+    pub enum_pci_devices: Vec<String>,
+    #[serde(default)]
+    pub critical_device_database: Vec<ExistingCriticalDevice>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExistingCriticalDevice {
+    pub key: String,
+    #[serde(default)]
+    pub service: Option<String>,
+    #[serde(default)]
+    pub class_guid: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -420,6 +748,100 @@ impl WindowsBootArmer {
             }
         }
 
+        let msiscsi_image_path = self
+            .query(&[
+                "query",
+                &format!("{mount}\\{control_set}\\Services\\MSiSCSI"),
+                "/v",
+                "ImagePath",
+            ])
+            .ok()
+            .and_then(|output| {
+                if !output.status.success() {
+                    return None;
+                }
+                String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .find_map(|line| {
+                        parse_reg_value(line, "REG_EXPAND_SZ")
+                            .or_else(|| parse_reg_value(line, "REG_SZ"))
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(str::to_string)
+                    })
+            });
+        let wfp_lwf_start = self
+            .query_dword(
+                &format!("{mount}\\{control_set}\\Services\\WFPLWFS"),
+                "Start",
+            )
+            .ok()
+            .flatten();
+        let enum_pci_key = format!("{mount}\\{control_set}\\Enum\\PCI");
+        let enum_pci_devices = self
+            .query(&["query", &enum_pci_key])
+            .ok()
+            .and_then(|output| {
+                if !output.status.success() {
+                    return None;
+                }
+                let mut names = Vec::new();
+                for line in String::from_utf8_lossy(&output.stdout).lines() {
+                    if let Some(device) = enum_pci_device_key(line) {
+                        names.push(device);
+                    }
+                }
+                Some(names)
+            })
+            .unwrap_or_default();
+        let cddb_key = format!("{mount}\\{control_set}\\Control\\CriticalDeviceDatabase");
+        let critical_device_keys = self
+            .query(&["query", &cddb_key])
+            .ok()
+            .and_then(|output| {
+                if !output.status.success() {
+                    return None;
+                }
+                let mut names = BTreeSet::new();
+                for line in String::from_utf8_lossy(&output.stdout).lines() {
+                    let line = line.trim();
+                    if let Some(pos) = line.rfind('\\') {
+                        let name = line[pos + 1..].trim();
+                        if !name.is_empty()
+                            && !name.starts_with("HKEY_LOCAL_MACHINE")
+                            && !name.contains('\\')
+                        {
+                            names.insert(name.to_ascii_lowercase());
+                        }
+                    }
+                }
+                Some(names)
+            })
+            .unwrap_or_default();
+        let mut critical_device_database = Vec::new();
+        for key in critical_device_keys {
+            let registry_key = format!("{cddb_key}\\{key}");
+            let Ok(output) = self.query(&["query", &registry_key]) else {
+                continue;
+            };
+            if !output.status.success() {
+                continue;
+            }
+            let mut mapping = ExistingCriticalDevice {
+                key,
+                service: None,
+                class_guid: None,
+            };
+            for line in String::from_utf8_lossy(&output.stdout).lines() {
+                if let Some(value) = parse_reg_sz_value(line, "Service") {
+                    mapping.service = Some(value);
+                } else if let Some(value) = parse_reg_sz_value(line, "ClassGUID") {
+                    mapping.class_guid = Some(value);
+                }
+            }
+            critical_device_database.push(mapping);
+        }
+
         Ok(WindowsBootInventory {
             active_control_set: control_set,
             native_nic_services: native_nic_services.into_iter().collect(),
@@ -428,6 +850,10 @@ impl WindowsBootArmer {
             driver_services: driver_services.into_iter().collect(),
             driver_boot_flags,
             hive_dirty: dirty,
+            msiscsi_image_path,
+            wfp_lwf_start,
+            enum_pci_devices,
+            critical_device_database,
         })
     }
 
@@ -594,6 +1020,103 @@ pub fn build_plan(
             warnings.push(format!("{service} has no native Windows adapter binding in the offline inventory. Package staging and boot-start arming do not prove target adapter initialization; validate SAN boot on the target hardware before deployment."));
         }
     }
+    // Boot-NIC binding gate: the image must be able to start the NIC before
+    // disk-based PnP runs, otherwise iSCSI boot hangs at the firmware handoff.
+    // A CriticalDeviceDatabase entry configured for this run also satisfies the
+    // gate because the same plan creates it before the image boots.
+    let mut planned_cddb = BTreeMap::<String, String>::new();
+    for entry in config
+        .critical_device_boot_nic
+        .iter()
+        .chain(&config.critical_device_boot_nics)
+    {
+        validate_service_name(&entry.service)?;
+        if entry
+            .class_guid
+            .as_deref()
+            .is_some_and(|guid| !guid.eq_ignore_ascii_case(NET_CLASS_GUID))
+        {
+            bail!("CriticalDeviceDatabase NIC class GUID must be {NET_CLASS_GUID}");
+        }
+        let ids = normalize_boot_nic_ids(&entry.hardware_ids)
+            .map_err(|error| anyhow::anyhow!("invalid CriticalDeviceDatabase NIC ID: {error}"))?;
+        if ids.is_empty() {
+            bail!("CriticalDeviceDatabase NIC entry has no hardware IDs");
+        }
+        if !inventory
+            .selected_nic_services
+            .iter()
+            .chain(&inventory.native_nic_services)
+            .any(|service| service.eq_ignore_ascii_case(&entry.service))
+        {
+            bail!(
+                "CriticalDeviceDatabase service {} is not a selected NIC driver",
+                entry.service
+            );
+        }
+        if !existing.contains(&entry.service.to_ascii_lowercase())
+            || !drivers.contains(&entry.service.to_ascii_lowercase())
+        {
+            bail!(
+                "CriticalDeviceDatabase service {} is not a registered kernel NIC driver",
+                entry.service
+            );
+        }
+        for id in ids {
+            let key = cddb_hardware_id_key(&id);
+            if let Some(existing) = planned_cddb.insert(key.clone(), entry.service.clone()) {
+                if !existing.eq_ignore_ascii_case(&entry.service) {
+                    bail!("conflicting CriticalDeviceDatabase services for {key}");
+                }
+            }
+        }
+    }
+    if !config.expected_boot_nic_ids.is_empty() || !config.expected_boot_nic_groups.is_empty() {
+        let legacy_group = std::slice::from_ref(&config.expected_boot_nic_ids);
+        let groups = if config.expected_boot_nic_groups.is_empty() {
+            legacy_group
+        } else {
+            &config.expected_boot_nic_groups
+        };
+        for group in groups {
+            let has_mapping = group.iter().any(|id| {
+                let enum_key = id
+                    .trim()
+                    .trim_start_matches("PCI\\")
+                    .trim_start_matches("pci\\");
+                let cddb_key = cddb_hardware_id_key(id);
+                inventory
+                    .enum_pci_devices
+                    .iter()
+                    .any(|value| value.eq_ignore_ascii_case(enum_key))
+                    || inventory.critical_device_database.iter().any(|mapping| {
+                        mapping.key.eq_ignore_ascii_case(&cddb_key)
+                            && mapping
+                                .class_guid
+                                .as_deref()
+                                .is_some_and(|guid| guid.eq_ignore_ascii_case(NET_CLASS_GUID))
+                            && mapping.service.as_deref().is_some_and(|service| {
+                                let service = service.to_ascii_lowercase();
+                                existing.contains(&service)
+                                    && drivers.contains(&service)
+                                    && nic_services_contains(inventory, &service)
+                            })
+                    })
+                    || planned_cddb.contains_key(&cddb_key)
+            });
+            if has_mapping {
+                continue;
+            }
+            let message = format!(
+                "no Enum/CriticalDeviceDatabase mapping exists for the expected boot NIC IDs ({:?}); the image may not start its boot NIC before the iSCSI root",
+                group
+            );
+            if config.require_boot_nic_binding {
+                bail!("{message}");
+            }
+            warnings.push(message);
+        }
+    }
     let nic_services = inventory
         .native_nic_services
         .iter()
@@ -630,6 +1153,52 @@ pub fn build_plan(
                 | CM_SERVICE_NETWORK_BOOT_LOAD,
             "mark existing network driver for network boot",
         );
+        let is_realtek_8125_boot_nic = config
+            .critical_device_boot_nic
+            .iter()
+            .chain(&config.critical_device_boot_nics)
+            .any(|entry| {
+                entry.service.eq_ignore_ascii_case(service)
+                    && entry.hardware_ids.iter().any(|id| {
+                        let id = id.to_ascii_uppercase();
+                        id.starts_with("PCI\\VEN_10EC&DEV_8125")
+                    })
+            });
+        if config.stabilize_nic_driver_defaults && is_realtek_8125_boot_nic {
+            // A CDDB-started NIC has no adapter instance, so tunable
+            // Realtek parameters fall back to the service Parameters key.
+            // Mirror the values from a known-good locally-bound instance:
+            // keep power saving, Ethernet, interrupt moderation, selective
+            // suspend, and the latest-generation offloads off so the boot
+            // NIC does not drop iSCSI sessions mid-boot. The link is pinned
+            // to 1 Gbps (`*SpeedDuplex=6`) because the 8125's receive path
+            // demonstrably wedges under sustained 2.5 Gbps read bursts in
+            // early boot (freezes TCP acknowledgements while TX continues).
+            for (name, value) in [
+                ("*EEE", "0"),
+                ("AdvancedEEE", "0"),
+                ("EnableGreenEthernet", "0"),
+                ("PowerSavingMode", "0"),
+                ("*InterruptModeration", "0"),
+                ("*SelectiveSuspend", "0"),
+                ("*LsoV2IPv4", "0"),
+                ("*LsoV2IPv6", "0"),
+                ("*TCPChecksumOffloadIPv4", "0"),
+                ("*TCPChecksumOffloadIPv6", "0"),
+                ("*SpeedDuplex", "6"),
+            ] {
+                push_string(
+                    &mut changes,
+                    format!(
+                        "{}\\Services\\{}\\Parameters",
+                        inventory.active_control_set, service,
+                    ),
+                    name,
+                    value.to_string(),
+                    "conservative Realtek 8125 stability default for CDDB-started NICs without an adapter instance",
+                );
+            }
+        }
     }
 
     if existing.contains("iscsiprt") {
@@ -674,10 +1243,80 @@ pub fn build_plan(
     }
 
     if existing.contains("msiscsi") {
+        // MSiSCSI's ImagePath is sometimes persisted in the malformed
+        // `\SystemRoot\C:\WINDOWS\...` form produced by cloning an image
+        // captured on a different machine. That value prevents the service from
+        // starting and breaks the client reporter and session management.
+        if let Some(path) = &inventory.msiscsi_image_path {
+            if let Some(fixed) = path.strip_prefix("\\SystemRoot\\").filter(|rest| {
+                rest.len() >= 3
+                    && rest.as_bytes()[1] == b':'
+                    && rest.as_bytes()[2] == b'\\'
+                    && rest.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+            }) {
+                push_expand_string(
+                    &mut changes,
+                    format!("{}\\Services\\MSiSCSI", inventory.active_control_set),
+                    "ImagePath",
+                    fixed.to_string(),
+                    "normalize malformed MSiSCSI ImagePath inherited from a cloned image",
+                );
+            }
+        }
         warnings.push(
-            "MSiSCSI service detected but left unchanged; boot-driver flags are only applied to driver services"
+            "MSiSCSI service detected but left unchanged otherwise; boot-driver flags are only applied to driver services"
                 .to_string(),
         );
+    }
+    if config.disable_wfp_lwf {
+        if let Some(start) = inventory.wfp_lwf_start {
+            if start != 4 {
+                push_dword(
+                    &mut changes,
+                    format!("{}\\Services\\WFPLWFS", inventory.active_control_set),
+                    "Start",
+                    4,
+                    "disable the WFP lightweight filter, which is not boot-start or paging-I/O compatible (KB976042)",
+                );
+                push_dword(
+                    &mut changes,
+                    format!("{}\\Services\\WFPLWFS", inventory.active_control_set),
+                    "StartOverride",
+                    4,
+                    "disable the WFP lightweight filter, which is not boot-start or paging-I/O compatible (KB976042)",
+                );
+            }
+        }
+    }
+
+    for cd in config
+        .critical_device_boot_nic
+        .iter()
+        .chain(&config.critical_device_boot_nics)
+    {
+        for id in &cd.hardware_ids {
+            let key = format!(
+                "{}\\Control\\CriticalDeviceDatabase\\{}",
+                inventory.active_control_set,
+                cddb_hardware_id_key(id)
+            );
+            push_string(
+                &mut changes,
+                key.clone(),
+                "Service",
+                cd.service.clone(),
+                "opt-in CriticalDeviceDatabase entry so the boot NIC can start before the iSCSI root",
+            );
+            if let Some(class_guid) = &cd.class_guid {
+                push_string(
+                    &mut changes,
+                    key,
+                    "ClassGUID",
+                    class_guid.clone(),
+                    "opt-in CriticalDeviceDatabase entry so the boot NIC can start before the iSCSI root",
+                );
+            }
+        }
     }
 
     if config.increase_disk_timeout && existing.contains("disk") {
@@ -749,6 +1388,36 @@ pub fn build_plan(
     })
 }
 
+fn cddb_hardware_id_key(id: &str) -> String {
+    id.trim().replace('\\', "#").to_ascii_lowercase()
+}
+
+fn normalize_boot_nic_ids(ids: &[String]) -> Result<Vec<String>, String> {
+    let mut normalized = Vec::new();
+    for id in ids {
+        let clean = id.trim().trim_matches('"').replace('/', "\\");
+        if clean.is_empty()
+            || clean.len() > 128
+            || !clean.chars().all(|c| {
+                c.is_ascii_alphanumeric()
+                    || matches!(
+                        c,
+                        '\\' | '&' | '_' | '-' | '.' | '+' | '(' | ')' | '{' | '}' | ','
+                    )
+            })
+        {
+            return Err(format!("invalid hardware ID: '{id}'"));
+        }
+        if !normalized
+            .iter()
+            .any(|existing: &String| existing.eq_ignore_ascii_case(&clean))
+        {
+            normalized.push(clean);
+        }
+    }
+    Ok(normalized)
+}
+
 fn validate_service_name(service: &str) -> Result<()> {
     if service.is_empty()
         || service.len() > 256
@@ -759,6 +1428,14 @@ fn validate_service_name(service: &str) -> Result<()> {
         bail!("invalid NIC driver service name: {service:?}");
     }
     Ok(())
+}
+
+fn enum_pci_device_key(line: &str) -> Option<String> {
+    let marker = "\\enum\\pci\\";
+    let lower = line.to_ascii_lowercase();
+    let start = lower.find(marker)? + marker.len();
+    let device = line[start..].split('\\').next()?.trim();
+    (!device.is_empty() && !device.starts_with("Value")).then(|| device.to_string())
 }
 
 fn push_dword(
@@ -776,9 +1453,57 @@ fn push_dword(
     });
 }
 
+fn push_string(
+    changes: &mut Vec<RegistryArmChange>,
+    key: String,
+    name: &str,
+    value: String,
+    reason: &str,
+) {
+    changes.push(RegistryArmChange {
+        key,
+        name: name.to_string(),
+        value: RegistryArmValue::String(value),
+        reason: reason.to_string(),
+    });
+}
+
+fn push_expand_string(
+    changes: &mut Vec<RegistryArmChange>,
+    key: String,
+    name: &str,
+    value: String,
+    reason: &str,
+) {
+    changes.push(RegistryArmChange {
+        key,
+        name: name.to_string(),
+        value: RegistryArmValue::ExpandString(value),
+        reason: reason.to_string(),
+    });
+}
+
 fn parse_reg_value<'a>(line: &'a str, reg_type: &str) -> Option<&'a str> {
     let marker = line.find(reg_type)?;
     Some(line[marker + reg_type.len()..].trim())
+}
+
+fn parse_reg_sz_value(line: &str, name: &str) -> Option<String> {
+    let mut fields = line.split_whitespace();
+    if !fields.next()?.eq_ignore_ascii_case(name) || !fields.next()?.eq_ignore_ascii_case("REG_SZ")
+    {
+        return None;
+    }
+    let value = fields.collect::<Vec<_>>().join(" ");
+    (!value.is_empty()).then_some(value)
+}
+
+fn nic_services_contains(inventory: &WindowsBootInventory, service: &str) -> bool {
+    inventory
+        .native_nic_services
+        .iter()
+        .chain(&inventory.selected_nic_services)
+        .any(|candidate| candidate.eq_ignore_ascii_case(service))
 }
 
 fn validate_system_hive(path: &Path) -> Result<()> {
@@ -851,6 +1576,10 @@ mod tests {
                 "ndis".to_string(),
             ],
             hive_dirty: false,
+            msiscsi_image_path: None,
+            wfp_lwf_start: None,
+            enum_pci_devices: Vec::new(),
+            critical_device_database: Vec::new(),
         }
     }
 
@@ -873,6 +1602,63 @@ mod tests {
             .changes
             .iter()
             .any(|change| { change.key.ends_with("Services\\MSiSCSI") && change.name == "Start" }));
+    }
+
+    #[test]
+    fn nic_stability_defaults_write_service_parameters() {
+        let base = build_plan(&inventory(), &WindowsBootArmConfig::default()).unwrap();
+        assert!(!base
+            .changes
+            .iter()
+            .any(|change| change.key.ends_with("Services\\e2fexpress\\Parameters")));
+
+        let config = WindowsBootArmConfig {
+            stabilize_nic_driver_defaults: true,
+            critical_device_boot_nic: Some(BootNicCriticalDevice {
+                service: "e2fexpress".into(),
+                class_guid: Some(NET_CLASS_GUID.into()),
+                hardware_ids: vec!["PCI\\VEN_10EC&DEV_8125".into()],
+            }),
+            ..Default::default()
+        };
+        let plan = build_plan(&inventory(), &config).unwrap();
+        let key = "ControlSet001\\Services\\e2fexpress\\Parameters";
+        for name in [
+            "*EEE",
+            "AdvancedEEE",
+            "EnableGreenEthernet",
+            "PowerSavingMode",
+            "*InterruptModeration",
+            "*SelectiveSuspend",
+            "*LsoV2IPv4",
+            "*LsoV2IPv6",
+            "*TCPChecksumOffloadIPv4",
+            "*TCPChecksumOffloadIPv6",
+            "*SpeedDuplex",
+        ] {
+            assert!(
+                plan.changes
+                    .iter()
+                    .any(|change| change.key == key && change.name == name),
+                "stability value {name} must be planned"
+            );
+        }
+        assert!(boot_arm_policy_digest(&config).contains("nic_stability=1"));
+
+        let intel = WindowsBootArmConfig {
+            stabilize_nic_driver_defaults: true,
+            critical_device_boot_nic: Some(BootNicCriticalDevice {
+                service: "e2fexpress".into(),
+                class_guid: Some(NET_CLASS_GUID.into()),
+                hardware_ids: vec!["PCI\\VEN_8086&DEV_15F3".into()],
+            }),
+            ..Default::default()
+        };
+        let plan = build_plan(&inventory(), &intel).unwrap();
+        assert!(!plan
+            .changes
+            .iter()
+            .any(|change| change.key.ends_with("Services\\e2fexpress\\Parameters")));
     }
 
     #[test]
@@ -942,6 +1728,276 @@ mod tests {
             .warnings
             .iter()
             .any(|warning| warning.contains("no native Windows adapter binding")));
+    }
+
+    #[test]
+    fn normalizes_malformed_msiscsi_image_path() {
+        let mut state = inventory();
+        state.msiscsi_image_path =
+            Some("\\SystemRoot\\C:\\Windows\\System32\\svchost.exe -k netsvcs -p".into());
+        let plan = build_plan(&state, &WindowsBootArmConfig::default()).unwrap();
+        assert!(plan.changes.iter().any(|change| {
+            change.key.ends_with("Services\\MSiSCSI")
+                && change.name == "ImagePath"
+                && matches!(&change.value, RegistryArmValue::ExpandString(v) if v == "C:\\Windows\\System32\\svchost.exe -k netsvcs -p")
+        }));
+    }
+
+    #[test]
+    fn leaves_correct_msiscsi_image_path_unchanged() {
+        let mut state = inventory();
+        state.msiscsi_image_path = Some("C:\\Windows\\System32\\svchost.exe -k netsvcs -p".into());
+        let plan = build_plan(&state, &WindowsBootArmConfig::default()).unwrap();
+        assert!(!plan
+            .changes
+            .iter()
+            .any(|change| change.key.ends_with("Services\\MSiSCSI") && change.name == "ImagePath"));
+    }
+
+    #[test]
+    fn disables_wfp_lightweight_filter_when_enabled() {
+        let mut state = inventory();
+        state.wfp_lwf_start = Some(0);
+        let plan = build_plan(&state, &WindowsBootArmConfig::default()).unwrap();
+        assert!(plan
+            .changes
+            .iter()
+            .any(|change| change.key.ends_with("Services\\WFPLWFS")
+                && change.name == "Start"
+                && matches!(change.value, RegistryArmValue::Dword(4))));
+    }
+
+    #[test]
+    fn leaves_already_disabled_wfp_filter_alone() {
+        let mut state = inventory();
+        state.wfp_lwf_start = Some(4);
+        let plan = build_plan(&state, &WindowsBootArmConfig::default()).unwrap();
+        assert!(!plan
+            .changes
+            .iter()
+            .any(|change| change.key.ends_with("Services\\WFPLWFS")));
+    }
+
+    #[test]
+    fn warns_when_boot_nic_has_no_offline_mapping() {
+        let mut state = inventory();
+        state.enum_pci_devices.clear();
+        state.critical_device_database.clear();
+        let config = WindowsBootArmConfig {
+            expected_boot_nic_ids: vec!["PCI\\VEN_10EC&DEV_8125&SUBSYS_B0021F4C&REV_05".into()],
+            ..Default::default()
+        };
+        let plan = build_plan(&state, &config).unwrap();
+        assert!(plan
+            .warnings
+            .iter()
+            .any(|w| w.contains("no Enum/CriticalDeviceDatabase mapping")));
+    }
+
+    #[test]
+    fn no_warning_when_boot_nic_is_mapped() {
+        let mut state = inventory();
+        state
+            .enum_pci_devices
+            .push("VEN_10EC&DEV_8125&SUBSYS_B0021F4C&REV_05".into());
+        let config = WindowsBootArmConfig {
+            expected_boot_nic_ids: vec!["PCI\\VEN_10EC&DEV_8125&SUBSYS_B0021F4C&REV_05".into()],
+            ..Default::default()
+        };
+        let plan = build_plan(&state, &config).unwrap();
+        assert!(!plan
+            .warnings
+            .iter()
+            .any(|w| w.contains("no Enum/CriticalDeviceDatabase mapping")));
+    }
+
+    #[test]
+    fn existing_cddb_binding_satisfies_boot_nic_gate() {
+        let mut state = inventory();
+        state.critical_device_database.push(ExistingCriticalDevice {
+            key: "pci#ven_10ec&dev_8125&subsys_b0021f4c&rev_05".into(),
+            service: Some("e2fexpress".into()),
+            class_guid: Some(NET_CLASS_GUID.into()),
+        });
+        let config = WindowsBootArmConfig {
+            expected_boot_nic_ids: vec!["PCI\\VEN_10EC&DEV_8125&SUBSYS_B0021F4C&REV_05".into()],
+            require_boot_nic_binding: true,
+            ..Default::default()
+        };
+        let plan = build_plan(&state, &config).unwrap();
+        assert!(!plan
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("no Enum/CriticalDeviceDatabase mapping")));
+    }
+
+    #[test]
+    fn stale_cddb_entry_without_valid_driver_and_network_class_does_not_satisfy_binding() {
+        let mut state = inventory();
+        state.enum_pci_devices.clear();
+        let key = "pci#ven_10ec&dev_8125&subsys_b0021f4c&rev_05";
+        let config = WindowsBootArmConfig {
+            expected_boot_nic_ids: vec!["PCI\\VEN_10EC&DEV_8125&SUBSYS_B0021F4C&REV_05".into()],
+            require_boot_nic_binding: true,
+            ..Default::default()
+        };
+        for (service, class_guid) in [
+            (None, Some(NET_CLASS_GUID)),
+            (Some("missingnic"), Some(NET_CLASS_GUID)),
+            (Some("e2fexpress"), Some("{invalid}")),
+        ] {
+            state.critical_device_database = vec![ExistingCriticalDevice {
+                key: key.into(),
+                service: service.map(str::to_owned),
+                class_guid: class_guid.map(str::to_owned),
+            }];
+            assert!(build_plan(&state, &config)
+                .unwrap_err()
+                .to_string()
+                .contains("no Enum/CriticalDeviceDatabase mapping"));
+        }
+    }
+
+    #[test]
+    fn reads_service_and_class_values_from_registry_output() {
+        assert_eq!(
+            parse_reg_sz_value("    Service    REG_SZ    e2fexpress", "Service").as_deref(),
+            Some("e2fexpress")
+        );
+        assert_eq!(
+            parse_reg_sz_value(
+                "    ClassGUID    REG_SZ    {4d36e972-e325-11ce-bfc1-08002be10318}",
+                "ClassGUID"
+            )
+            .as_deref(),
+            Some(NET_CLASS_GUID)
+        );
+        assert!(parse_reg_sz_value("    Service    REG_DWORD    1", "Service").is_none());
+    }
+
+    #[test]
+    fn enum_pci_inspection_keeps_the_device_id_without_the_instance_suffix() {
+        let line = r"HKEY_LOCAL_MACHINE\DISKLESS_MANAGER_OFFLINE\ControlSet001\Enum\PCI\VEN_8086&DEV_15F3&SUBSYS_00018086\3&11583659&0&10";
+        assert_eq!(
+            enum_pci_device_key(line).as_deref(),
+            Some("VEN_8086&DEV_15F3&SUBSYS_00018086")
+        );
+        assert!(enum_pci_device_key(
+            r"HKEY_LOCAL_MACHINE\DISKLESS_MANAGER_OFFLINE\ControlSet001\Enum\PCI"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn require_boot_nic_binding_turns_warning_into_error() {
+        let mut state = inventory();
+        state.enum_pci_devices.clear();
+        state.critical_device_database.clear();
+        let config = WindowsBootArmConfig {
+            expected_boot_nic_ids: vec!["PCI\\VEN_10EC&DEV_8125&SUBSYS_B0021F4C&REV_05".into()],
+            require_boot_nic_binding: true,
+            ..Default::default()
+        };
+        assert!(build_plan(&state, &config).is_err());
+    }
+
+    #[test]
+    fn planned_critical_device_database_satisfies_boot_nic_gate() {
+        let mut state = inventory();
+        state.selected_nic_services = vec!["rt640x64".into()];
+        state.existing_services.push("rt640x64".into());
+        state.driver_services.push("rt640x64".into());
+        state.enum_pci_devices.clear();
+        state.critical_device_database.clear();
+        let config = WindowsBootArmConfig {
+            expected_boot_nic_ids: vec!["PCI\\VEN_10EC&DEV_8125&SUBSYS_B0021F4C&REV_05".into()],
+            require_boot_nic_binding: true,
+            critical_device_boot_nic: Some(BootNicCriticalDevice {
+                service: "rt640x64".into(),
+                class_guid: Some(NET_CLASS_GUID.into()),
+                hardware_ids: vec!["PCI\\VEN_10EC&DEV_8125&SUBSYS_B0021F4C&REV_05".into()],
+            }),
+            ..Default::default()
+        };
+        let plan = build_plan(&state, &config).unwrap();
+        assert!(plan.changes.iter().any(|change| {
+            change
+                .key
+                .contains("CriticalDeviceDatabase\\pci#ven_10ec&dev_8125&subsys_b0021f4c&rev_05")
+        }));
+    }
+
+    #[test]
+    fn shared_image_requires_and_arms_each_client_boot_nic() {
+        let mut state = inventory();
+        state.selected_nic_services = vec!["e2fexpress".into(), "NetKVM".into()];
+        state.existing_services.push("NetKVM".into());
+        state.driver_services.push("NetKVM".into());
+        let first_id = "PCI\\VEN_10EC&DEV_8125&SUBSYS_B0021F4C&REV_05";
+        let second_id = "PCI\\VEN_1AF4&DEV_1000";
+        let config = WindowsBootArmConfig {
+            expected_boot_nic_groups: vec![vec![first_id.into()], vec![second_id.into()]],
+            require_boot_nic_binding: true,
+            critical_device_boot_nics: vec![
+                BootNicCriticalDevice {
+                    service: "e2fexpress".into(),
+                    class_guid: Some(NET_CLASS_GUID.into()),
+                    hardware_ids: vec![first_id.into()],
+                },
+                BootNicCriticalDevice {
+                    service: "NetKVM".into(),
+                    class_guid: Some(NET_CLASS_GUID.into()),
+                    hardware_ids: vec![second_id.into()],
+                },
+            ],
+            ..Default::default()
+        };
+
+        let plan = build_plan(&state, &config).unwrap();
+        for id in [first_id, second_id] {
+            let key = id.replace('\\', "#").to_ascii_lowercase();
+            assert!(plan.changes.iter().any(|change| {
+                change
+                    .key
+                    .ends_with(&format!("CriticalDeviceDatabase\\{key}"))
+                    && change.name == "Service"
+            }));
+        }
+
+        let mut incomplete = config.clone();
+        incomplete.critical_device_boot_nics.pop();
+        assert!(build_plan(&state, &incomplete)
+            .unwrap_err()
+            .to_string()
+            .contains("no Enum/CriticalDeviceDatabase mapping"));
+
+        state.selected_nic_services = vec!["e2fexpress".into()];
+        assert!(build_plan(&state, &config)
+            .unwrap_err()
+            .to_string()
+            .contains("not a selected NIC driver"));
+    }
+
+    #[test]
+    fn critical_device_database_entries_are_opt_in() {
+        let mut state = inventory();
+        state.selected_nic_services = vec!["rt640x64".into()];
+        state.existing_services.push("rt640x64".into());
+        state.driver_services.push("rt640x64".into());
+        let config = WindowsBootArmConfig {
+            critical_device_boot_nic: Some(BootNicCriticalDevice {
+                service: "rt640x64".into(),
+                class_guid: Some("{4d36e972-e325-11ce-bfc1-08002be10318}".into()),
+                hardware_ids: vec!["PCI\\VEN_10EC&DEV_8125&SUBSYS_B0021F4C&REV_05".into()],
+            }),
+            ..Default::default()
+        };
+        let plan = build_plan(&state, &config).unwrap();
+        assert!(plan.changes.iter().any(|change| {
+            change
+                .key
+                .contains("CriticalDeviceDatabase\\pci#ven_10ec&dev_8125&subsys_b0021f4c&rev_05")
+        }));
     }
 
     #[test]

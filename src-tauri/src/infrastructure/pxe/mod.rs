@@ -32,9 +32,10 @@ pub use nic_inventory::{
 };
 pub use nvmeof::*;
 pub use windows_boot_arming::{
-    build_plan as build_windows_boot_arm_plan, hive_is_dirty, RegistryArmChange, RegistryArmValue,
-    WindowsBootArmConfig, WindowsBootArmPlan, WindowsBootArmResult, WindowsBootArmer,
-    WindowsBootInventory,
+    boot_arm_config_for_nics, boot_arm_policy_digest, build_plan as build_windows_boot_arm_plan,
+    critical_device_for_boot_nic, hive_is_dirty, BootNicCriticalDevice, ExistingCriticalDevice,
+    RegistryArmChange, RegistryArmValue, WindowsBootArmConfig, WindowsBootArmPlan,
+    WindowsBootArmResult, WindowsBootArmer, WindowsBootInventory, NETWORK_ADAPTER_CLASS_GUID,
 };
 pub use windows_driver_coverage::{driver_store_covers_boot_nic, snapshot_covers_boot_nic};
 pub use windows_driver_injection::{
