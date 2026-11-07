@@ -80,10 +80,15 @@ export const ImagesList = ({ masters }) => {
                     delete this entry to remove the saved record.
                   </div>
                 )}
+                {master.status === "failed" && (
+                  <div className="mt-1 text-xs text-destructive" role="status">
+                    Linux image build failed. Delete this partial image before trying again.
+                  </div>
+                )}
               </TableCell>
               <TableCell>{master.size_gb} GB</TableCell>
               <TableCell>
-                {master.status === "missing" ? "Missing" : "Available"}
+                {master.status === "missing" ? "Missing" : master.status === "failed" ? "Build failed" : "Available"}
               </TableCell>
               <TableCell>
                 <div className="flex flex-wrap justify-end gap-1">
@@ -92,7 +97,7 @@ export const ImagesList = ({ masters }) => {
                     size="icon"
                     icon={master.is_default ? Star : StarIcon}
                     onClick={() => setDefaultMaster(master.name)}
-                    disabled={master.is_default || master.status === "missing"}
+                    disabled={master.is_default || master.status !== "ready"}
                     title={!master.is_default ? "Set as Default" : "Default image"}
                   />
                   <Button
@@ -132,7 +137,7 @@ export const ImagesList = ({ masters }) => {
                     icon={PlusCircle}
                     onClick={() => handleCreateSnapshot(master)}
                     title="Create Snapshot"
-                    disabled={master.status === "missing"}
+                    disabled={master.status !== "ready"}
                   />
                   <Button
                     variant="info"

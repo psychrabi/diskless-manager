@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use super::image_service::ImageService;
+use super::linux_image_builder_service::LinuxImageBuilderService;
 use super::BootHistoryService;
 use super::ClientService;
 use super::NvmeOfBootService;
@@ -30,6 +31,7 @@ pub struct ApplicationServices {
     pub clients: ClientService,
     pub client_repository: ClientRepository,
     pub images: ImageService,
+    pub linux_image_builder: LinuxImageBuilderService,
     pub installer_media: InstallerMediaRepository,
     pub super_sessions: SuperSessionRepository,
     pub boot_history: BootHistoryService,
@@ -84,6 +86,7 @@ impl ApplicationServices {
         let super_sessions = SuperSessionRepository::new(pool.clone());
         let images =
             ImageService::with_backend(ImageRepository::new(pool.clone()), image_backend.clone());
+        let linux_image_builder = LinuxImageBuilderService::new(images.clone());
         let clients = ClientRepository::new(pool);
         let client_service = ClientService::new(clients.clone());
         let provisioning =
@@ -97,6 +100,7 @@ impl ApplicationServices {
             clients: client_service,
             client_repository: clients,
             images,
+            linux_image_builder,
             installer_media,
             super_sessions,
             boot_history,

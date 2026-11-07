@@ -12,6 +12,7 @@ pub mod image_service;
 pub mod image_version_service;
 pub mod installation_service;
 pub mod installer_media_service;
+pub mod linux_image_builder_service;
 pub mod maintenance_service;
 pub mod nvmeof_boot_service;
 pub mod provisioning_service;
