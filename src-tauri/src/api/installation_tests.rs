@@ -1740,6 +1740,10 @@ async fn windows_boot_payload_uses_the_plain_http_boot_server() {
         "{script}"
     );
     assert!(
+        script.contains("initrd --name boot.wim http://192.0.2.1:8080/boot/winpe/boot-installer.wim boot.wim"),
+        "installer WIM must be presented to wimboot as boot.wim, matching the BCD ramdisk path: {script}"
+    );
+    assert!(
         script.contains("initrd http://192.0.2.1:4237/api/installer/windows-plain-http/"),
         "{script}"
     );

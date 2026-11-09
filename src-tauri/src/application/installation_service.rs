@@ -12,7 +12,11 @@ use chrono::{Duration, Utc};
 use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use std::{net::IpAddr, path::PathBuf};
+use std::{
+    net::IpAddr,
+    path::{Path, PathBuf},
+};
+use tokio::io::AsyncReadExt;
 use uuid::Uuid;
 
 #[derive(Deserialize)]
@@ -110,6 +114,78 @@ fn shared_driver_revision_id(session_config: &str) -> Result<Option<String>> {
     let scope: AdaptationBootScope =
         serde_json::from_str(session_config).context("installation adaptation scope is invalid")?;
     Ok(scope.shared_driver_revision_id)
+}
+
+/// Case-insensitive substring search over the raw bytes of a BCD store.
+///
+/// `bcdedit` paths (`\Boot\boot.wim`, `\Boot\boot.sdi`) are stored as
+/// UTF-16LE (`REG_SZ`) in the BCD hive, sometimes also as plain ASCII in
+/// extra data. Search both encodings, comparing ASCII letters
+/// case-insensitively, so a misconfigured store is rejected before the
+/// client PXEs into Windows Boot Manager's opaque `0xc000000f`.
+fn bcd_contains(haystack: &[u8], needle: &str) -> bool {
+    let needle = needle.to_ascii_lowercase();
+    let needle_utf16: Vec<u8> = needle.chars().flat_map(|c| [c as u8, 0u8]).collect();
+    let haystack_lower = haystack
+        .iter()
+        .map(|b| b.to_ascii_lowercase())
+        .collect::<Vec<u8>>();
+    haystack_lower
+        .windows(needle.len())
+        .any(|w| w == needle.as_bytes())
+        || haystack_lower
+            .windows(needle_utf16.len())
+            .any(|w| w == needle_utf16.as_slice())
+}
+
+fn check_bcd_bytes(bytes: &[u8]) -> Result<()> {
+    ensure!(
+        bytes.len() >= 64 && bytes.len() <= 8 * 1024 * 1024,
+        "WinPE BCD size is implausible; expected a BCD store from the ADK copype media"
+    );
+    ensure!(
+        !bcd_contains(bytes, "boot-installer.wim"),
+        "WinPE BCD references boot-installer.wim, but session scripts inject the installer as boot.wim (initrd --name boot.wim); set the osloader device and osdevice to ramdisk=[boot]\\Boot\\boot.wim,{{ramdiskoptions}} and verify with bcdedit /store <BCD> /enum all (see installer/BUILD-WINPE.md)"
+    );
+    ensure!(
+        bcd_contains(bytes, "boot.wim"),
+        "WinPE BCD does not reference boot.wim; the osloader device and osdevice must be ramdisk=[boot]\\Boot\\boot.wim,{{ramdiskoptions}} with winpe Yes (see installer/BUILD-WINPE.md)"
+    );
+    ensure!(
+        bcd_contains(bytes, "boot.sdi"),
+        "WinPE BCD does not reference boot.sdi; {{ramdiskoptions}} must have ramdisksdipath \\Boot\\boot.sdi (see installer/BUILD-WINPE.md)"
+    );
+    Ok(())
+}
+
+fn check_wim_header(header: &[u8]) -> Result<()> {
+    ensure!(
+        header.len() >= 6 && &header[..6] == b"MSWIM\0",
+        "boot-installer.wim does not look like a WIM (missing MSWIM header); deploy the WinPE boot.wim built with the Windows ADK (copype media/sources/boot.wim), not an ISO or the Windows install.wim"
+    );
+    Ok(())
+}
+
+/// Bounded validation of the WinPE boot assets. An existence check alone
+/// lets a wrong BCD or a non-WIM file through, and the client then dies in
+/// Windows Boot Manager with `0xc000000f` (`A required device isn't
+/// connected or can't be accessed`) with no server-side hint.
+async fn validate_winpe_boot_assets(root: &Path) -> Result<()> {
+    let bcd = tokio::fs::read(root.join("BCD")).await?;
+    check_bcd_bytes(&bcd).context("WinPE BCD validation failed")?;
+    let mut wim = tokio::fs::File::open(root.join("boot-installer.wim"))
+        .await
+        .context("WinPE installer WIM cannot be opened")?;
+    let wim_metadata = wim.metadata().await?;
+    ensure!(
+        wim_metadata.len() >= 1024 * 1024,
+        "boot-installer.wim is implausibly small; expected the ADK copype media/sources/boot.wim"
+    );
+    let mut header = vec![0u8; 64];
+    let read = wim.read(&mut header).await?;
+    header.truncate(read);
+    check_wim_header(&header).context("WinPE installer WIM validation failed")?;
+    Ok(())
 }
 
 /// The WinPE image may bake an old servicer; the server is the source of truth.
@@ -780,6 +856,7 @@ impl InstallationService {
             ] {
                 ensure!(tokio::fs::metadata(root.join(name)).await.is_ok_and(|m|m.is_file() && m.len()>0),"dedicated WinPE installer prerequisite missing: {name}; see installer/BUILD-WINPE.md");
             }
+            validate_winpe_boot_assets(&root).await?;
             let manifest: serde_json::Value =
                 serde_json::from_slice(&tokio::fs::read(root.join("installer-v1.json")).await?)?;
             ensure!(
@@ -1724,6 +1801,34 @@ fn validate_request(r: &CreateInstallation) -> Result<()> {
 mod tests {
     use super::*;
 
+    fn utf16le_store(s: &str) -> Vec<u8> {
+        let mut bytes = s.chars().flat_map(|c| [c as u8, 0u8]).collect::<Vec<_>>();
+        bytes.resize(128, 0);
+        bytes
+    }
+
+    #[test]
+    fn bcd_checks_reject_the_0xc000000f_shapes() {
+        assert!(check_bcd_bytes(&utf16le_store("\\Boot\\boot.wim\\Boot\\boot.sdi")).is_ok());
+        // Store names the on-disk file instead of the injected name.
+        assert!(
+            check_bcd_bytes(&utf16le_store("\\Boot\\boot-installer.wim\\Boot\\boot.sdi")).is_err()
+        );
+        // Store missing the WIM.
+        assert!(check_bcd_bytes(&utf16le_store("\\Boot\\boot.sdi")).is_err());
+        // Store missing the SDI.
+        assert!(check_bcd_bytes(&utf16le_store("\\Boot\\boot.wim")).is_err());
+        // Empty/garbage store.
+        assert!(check_bcd_bytes(b"synthetic").is_err());
+    }
+
+    #[test]
+    fn wim_header_must_be_a_wim() {
+        assert!(check_wim_header(b"MSWIM\0\x00\x00").is_ok());
+        assert!(check_wim_header(b"synthetic").is_err());
+        assert!(check_wim_header(&[]).is_err());
+    }
+
     #[test]
     fn nexboot_adaptation_keeps_the_shared_nic_and_driver_scope() {
         let current = vec!["PCI\\VEN_1234&DEV_0001".to_string()];
@@ -1917,11 +2022,22 @@ mod tests {
             .is_err());
         let winpe = root.path().join("boot/winpe");
         tokio::fs::create_dir_all(&winpe).await.unwrap();
-        for asset in ["wimboot", "BCD", "boot.sdi", "boot-installer.wim"] {
+        for asset in ["wimboot", "boot.sdi"] {
             tokio::fs::write(winpe.join(asset), b"synthetic")
                 .await
                 .unwrap();
         }
+        let mut bcd = Vec::new();
+        for c in "\\Boot\\boot.wim\\Boot\\boot.sdi".chars() {
+            bcd.extend_from_slice(&[c as u8, 0]);
+        }
+        bcd.resize(128, 0);
+        tokio::fs::write(winpe.join("BCD"), &bcd).await.unwrap();
+        let mut wim = b"MSWIM\0".to_vec();
+        wim.resize(1024 * 1024 + 64, 0);
+        tokio::fs::write(winpe.join("boot-installer.wim"), &wim)
+            .await
+            .unwrap();
         tokio::fs::write(
             winpe.join("installer-v1.json"),
             br#"{"architecture":"amd64","powershell":true,"storage_wmi":true}"#,
