@@ -13,7 +13,7 @@ import { Layers, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 const STATUS_VARIANTS = {
-  ready: "outline",
+  ready: "success",
   building: "secondary",
   consuming: "secondary",
   failed: "destructive",
@@ -79,22 +79,24 @@ const SparePrewarmCard = () => {
   const limit = data?.max_ready_spares ?? 0;
 
   return (
-    <Card className="md:col-span-2 xl:col-span-6">
+    <Card className="h-full">
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <Layers className="size-4 text-muted-foreground" />
+          <span className="flex size-8 items-center justify-center rounded-lg border border-border/70 bg-muted/50 text-muted-foreground">
+            <Layers className="size-4" />
+          </span>
           Prewarmed writebacks
         </CardTitle>
         <CardDescription>
-          Replacement clones built for non-persistent clients before their next boot.
+          Replacement clones built before the next boot.
         </CardDescription>
-        <CardAction className="flex items-center gap-2">
-          <Badge variant={data?.enabled ? "outline" : "secondary"}>
+        <CardAction className="flex items-center gap-1.5">
+          <Badge variant={data?.enabled ? "success" : "secondary"}>
             {data?.enabled ? "Enabled" : "Disabled"}
           </Badge>
           <Button
             variant="ghost"
-            size="icon"
+            size="icon-sm"
             onClick={load}
             disabled={loading}
             title="Refresh prewarmed writebacks"
@@ -108,7 +110,7 @@ const SparePrewarmCard = () => {
         {error && (
           <div
             role="alert"
-            className="flex items-center justify-between gap-3 rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm"
+            className="flex flex-col items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/5 p-3 text-sm"
           >
             <span>Failed to load prewarmed writebacks: {error}</span>
             <Button variant="outline" size="sm" onClick={load}>
@@ -118,20 +120,20 @@ const SparePrewarmCard = () => {
         )}
 
         {data && (
-          <p className="text-xs text-muted-foreground">
+          <p className="text-[11px] leading-5 text-muted-foreground">
             {readyCount} of {limit} permitted clone{limit === 1 ? "" : "s"} ready · expires after{" "}
             {data.ttl_hours}h · builds pause below {formatBytes(data.min_free_bytes)} free
           </p>
         )}
 
         {!error && data && !data.enabled && (
-          <p className="rounded-lg border border-border bg-muted/20 p-3 text-sm text-muted-foreground">
+          <p className="rounded-xl border border-dashed border-border/80 bg-muted/15 p-3 text-xs leading-5 text-muted-foreground">
             Prewarming is off. Enable it under Settings → Storage prewarming.
           </p>
         )}
 
         {!error && data?.enabled && spares.length === 0 && (
-          <p className="rounded-lg border border-border bg-muted/20 p-3 text-sm text-muted-foreground">
+          <p className="rounded-xl border border-dashed border-border/80 bg-muted/15 p-3 text-xs leading-5 text-muted-foreground">
             No replacement clone is ready yet. One is built for each offline non-persistent
             client once its writeback has been removed.
           </p>
@@ -142,30 +144,30 @@ const SparePrewarmCard = () => {
             {spares.map((spare) => (
               <li
                 key={spare.dataset}
-                className="flex min-w-0 flex-col gap-1 rounded-lg border border-border p-3"
+                className="flex min-w-0 flex-col gap-1 rounded-xl border border-border/70 bg-muted/15 p-3"
               >
                 <div className="flex flex-wrap items-center gap-2">
-                  <p className="font-medium">
+                  <p className="text-[13px] font-medium">
                     {spare.client_name || spare.client_id}
                   </p>
                   <Badge variant={STATUS_VARIANTS[spare.status] || "secondary"}>
                     {spare.status}
                   </Badge>
-                  <span className="text-xs text-muted-foreground">
+                  <span className="text-[10px] text-muted-foreground">
                     {formatAge(spare.age_seconds)} old
                   </span>
                   {spare.failures > 0 && (
-                    <span className="text-xs text-muted-foreground">
+                    <span className="text-[10px] text-muted-foreground">
                       {spare.failures} failed attempt{spare.failures === 1 ? "" : "s"}
                     </span>
                   )}
                 </div>
-                <p className="break-all text-xs text-muted-foreground">{spare.dataset}</p>
-                <p className="break-all text-xs text-muted-foreground">
+                <p className="break-all font-mono-data text-[10px] text-muted-foreground">{spare.dataset}</p>
+                <p className="break-all font-mono-data text-[10px] text-muted-foreground">
                   from {spare.source_snapshot}
                 </p>
                 {spare.last_error && (
-                  <p className="break-words text-xs text-destructive">{spare.last_error}</p>
+                  <p className="break-words text-[11px] text-destructive">{spare.last_error}</p>
                 )}
               </li>
             ))}

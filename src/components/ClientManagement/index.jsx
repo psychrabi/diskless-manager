@@ -5,10 +5,10 @@ import {
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { PageHeader } from "@/components/ui";
+import { PageHeader, StatCard } from "@/components/ui";
 import { LoadingSkeleton } from "@/components/ui/LoadingSkeleton";
 import { ContextMenu } from "../ui/ContextMenu";
-import { PlusCircle, Users, Wifi, WifiOff, History, Clock } from "lucide-react";
+import { HardDrive, PlusCircle, Users, Wifi, WifiOff, History, Clock } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "../../store/useAppStore";
@@ -139,17 +139,19 @@ const ClientManagement = () => {
   // Calculate statistics
   const onlineClients = useMemo(() => clients.filter((c) => isOnlineStatus(c.status)).length, [clients]);
   const offlineClients = clients.length - onlineClients;
+  const persistentClients = useMemo(() => clients.filter((c) => c.keep_writeback !== false).length, [clients]);
 
   if (loading && clients.length === 0) {
     return (
-      <div className="flex flex-col gap-4">
-        <div className="space-y-1">
-          <Skeleton className="h-7 w-48" />
+      <div className="flex flex-col gap-5">
+        <div className="space-y-2">
+          <Skeleton className="h-3 w-20" />
+          <Skeleton className="h-8 w-48" />
           <Skeleton className="h-4 w-96 max-w-full" />
         </div>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-          {Array.from({ length: 3 }, (_, i) => (
-            <Skeleton key={i} className="h-24 rounded-xl" />
+        <div className="grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-border/80 bg-border/70 xl:grid-cols-4">
+          {Array.from({ length: 4 }, (_, i) => (
+            <Skeleton key={i} className="h-32 rounded-2xl" />
           ))}
         </div>
         <Card>
@@ -162,12 +164,12 @@ const ClientManagement = () => {
   }
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-5">
       <PageHeader
-        title="Client Management"
-        description="Manage diskless boot clients and monitor their connection status"
+        title="Clients"
+        description="Every diskless machine, its current image, and the storage it is streaming."
         actions={
-          <div className="flex w-full flex-wrap gap-2 sm:w-auto [&>button]:flex-1 sm:[&>button]:flex-none">
+          <div className="grid w-full grid-cols-3 gap-2 sm:flex sm:w-auto sm:[&>button]:h-8 sm:[&>button]:flex-none [&>button]:h-11 [&>button]:min-w-0 [&>button]:flex-1 [&>button]:px-2 [&>button]:text-[11px] [&>button]:leading-tight [&>button]:whitespace-normal sm:[&>button]:px-3 sm:[&>button]:text-xs sm:[&>button]:whitespace-nowrap">
             <Button
               variant="outline"
               size="sm"
@@ -207,47 +209,41 @@ const ClientManagement = () => {
         </div>
       )}
       {clients.length > 0 && (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-          {/* Total Clients */}
-          <Card>
-            <CardContent className="flex items-center justify-between">
-              <div>
-                <div className="text-2xl font-semibold text-card-foreground">
-                  {clients.length}
-                </div>
-                <div className="text-sm text-muted-foreground">
-                  Total Clients
-                </div>
-              </div>
-              <Users className="size-8 text-primary/60" />
-            </CardContent>
-          </Card>
-
-          {/* Online Clients */}
-          <Card>
-            <CardContent className="flex items-center justify-between">
-              <div>
-                <div className="text-2xl font-semibold text-card-foreground">
-                  {onlineClients}
-                </div>
-                <div className="text-sm text-muted-foreground">Online</div>
-              </div>
-              <Wifi className="size-8 text-primary" />
-            </CardContent>
-          </Card>
-
-          {/* Offline Clients */}
-          <Card>
-            <CardContent className="flex items-center justify-between">
-              <div>
-                <div className="text-2xl font-semibold text-card-foreground">
-                  {offlineClients}
-                </div>
-                <div className="text-sm text-muted-foreground">Offline</div>
-              </div>
-              <WifiOff className="size-8 text-muted-foreground/60" />
-            </CardContent>
-          </Card>
+        <div className="grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-border/80 bg-border/70 xl:grid-cols-4">
+          <StatCard
+            icon={Users}
+            label="Total clients"
+            value={clients.length}
+            hint="registered"
+            tone="info"
+            className="p-3 sm:p-5"
+          />
+          <StatCard
+            icon={Wifi}
+            label="Online"
+            value={onlineClients}
+            hint="streaming now"
+            tone="success"
+            progress={clients.length ? (onlineClients / clients.length) * 100 : 0}
+            className="p-3 sm:p-5"
+          />
+          <StatCard
+            icon={WifiOff}
+            label="Offline"
+            value={offlineClients}
+            hint="powered down"
+            tone={offlineClients > 0 ? "warning" : "primary"}
+            className="p-3 sm:p-5"
+          />
+          <StatCard
+            icon={HardDrive}
+            label="Persistent"
+            value={persistentClients}
+            hint="writeback on"
+            tone="primary"
+            progress={clients.length ? (persistentClients / clients.length) * 100 : 0}
+            className="p-3 sm:p-5"
+          />
         </div>
       )}
 

@@ -146,7 +146,7 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
     <Card
       title="Server Network Configuration"
       icon={Network}
-      className="h-full md:col-span-2 xl:col-span-4"
+      className="h-full"
     >
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         <div data-testid="network-sections" className="grid grid-cols-1 gap-4 xl:grid-cols-2">
@@ -160,8 +160,8 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
           />
 
           {/* Right Column: Addressing */}
-          <div>
-            <Label className="text-sm font-semibold text-muted-foreground uppercase tracking-tight flex items-center gap-2">
+          <div className="space-y-3">
+            <Label className="flex items-center gap-2 text-sm font-semibold text-foreground">
               <Globe size={14} /> Identification
             </Label>
 
@@ -183,7 +183,7 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
 
           <div className="xl:col-span-2">
             <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <Label className="text-sm font-semibold text-muted-foreground uppercase tracking-tight flex items-center gap-2">
+              <Label className="flex items-center gap-2 text-sm font-semibold text-foreground">
                 <Shield size={14} /> Addressing (Static IP)
               </Label>
               <Button
@@ -199,7 +199,7 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
               </Button>
             </div>
 
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
               <Input
                 label="IP Address"
                 id="server-ip"
@@ -216,15 +216,15 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
               />
             </div>
 
-            <Input
-              label="Default Gateway"
-              id="server-gateway"
-              register={register("gateway")}
-              error={errors.gateway?.message}
-              placeholder="192.168.1.1"
-            />
+            <div className="mt-4 space-y-4">
+              <Input
+                label="Default Gateway"
+                id="server-gateway"
+                register={register("gateway")}
+                error={errors.gateway?.message}
+                placeholder="192.168.1.1"
+              />
 
-            <div className="space-y-2">
               <Input
                 label="DNS Servers (Comma Separated)"
                 id="server-dns"
@@ -235,7 +235,7 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
               />
             </div>
 
-            <Alert className="py-3 px-4 mt-3 rounded-xl border-none bg-amber-600/10 text-amber-600 text-xs leading-relaxed shadow-sm">
+            <Alert className="mt-3 rounded-xl border-none bg-warning/10 px-4 py-3 text-xs leading-relaxed text-warning shadow-sm">
               <div className="flex items-start gap-3">
                 <TriangleAlert size={18} className="shrink-0" />
                 <span>

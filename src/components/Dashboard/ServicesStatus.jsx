@@ -2,6 +2,7 @@ import { Activity, RefreshCw } from "lucide-react";
 import { useShallow } from "zustand/shallow";
 import { useAppStore } from "../../store/useAppStore";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { StatusDot } from "@/components/ui";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { restartAllServices } from "@/api/modules/services";
@@ -19,6 +20,7 @@ export default function ServicesStatus() {
       fetchServices: state.fetchServices,
     })),
   );
+  const running = services.filter((service) => service.running).length;
 
   async function restartService() {
     const confirmed = await confirm({
@@ -39,18 +41,26 @@ export default function ServicesStatus() {
   }
 
   return (
-    <Card className="h-full min-w-0 md:col-span-2 xl:col-span-6">
+    <Card className="h-full min-w-0">
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <Activity className="size-4 text-muted-foreground" />
-          Services Status
+          <span className="flex size-8 items-center justify-center rounded-lg border border-border/70 bg-muted/50 text-muted-foreground">
+            <Activity className="size-4" />
+          </span>
+          Services
+          {services.length > 0 && (
+            <Badge variant={running === services.length ? "success" : "warning"}>
+              {running}/{services.length}
+            </Badge>
+          )}
         </CardTitle>
         <CardAction>
           <Button
             variant="ghost"
-            size="icon"
+            size="icon-sm"
             onClick={() => restartService()}
             title="Restart all services"
+            aria-label="Restart all services"
           >
             <RefreshCw />
           </Button>
@@ -60,7 +70,7 @@ export default function ServicesStatus() {
         {servicesError && (
           <div
             role="alert"
-            className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm"
+            className="mb-3 flex flex-col items-start gap-3 rounded-xl border border-destructive/30 bg-destructive/5 p-3 text-sm"
           >
             <span>Failed to load services: {servicesError}</span>
             <Button
@@ -73,28 +83,33 @@ export default function ServicesStatus() {
           </div>
         )}
         {services.length > 0 ? (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
+          <div className="grid grid-cols-1 gap-x-5 2xl:grid-cols-2">
             {services.map((service) => {
               const Icon = getServiceIcon(service.name);
               return (
                 <div
                   key={service.name}
-                  className="flex min-w-0 items-center justify-between gap-3 rounded-xl bg-muted/50 p-3 transition-colors hover:bg-muted"
+                  className="flex min-w-0 items-center justify-between gap-3 border-b border-border/60 py-2.5 2xl:[&:nth-last-child(-n+2)]:border-b-0"
                 >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="size-9 shrink-0 rounded-lg bg-muted flex items-center justify-center">
-                      <Icon className="size-4 text-muted-foreground" />
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    <div className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-border/60 bg-muted/40">
+                      <Icon className="size-3.5 text-muted-foreground" />
                     </div>
                     <div className="min-w-0">
-                      <p className="font-medium text-sm truncate">
+                      <p className="truncate text-[13px] font-medium text-foreground">
                         {service.display_name}
                       </p>
-                      <p className="text-xs text-muted-foreground truncate">
+                      <p className="truncate font-mono-data text-[10px] text-muted-foreground">
                         {service.name}
                       </p>
                     </div>
                   </div>
-                  <StatusDot running={service.running} label={service.display_name} />
+                  <div className="flex shrink-0 items-center gap-2">
+                    <span className={service.running ? "text-[11px] text-success" : "text-[11px] text-destructive"}>
+                      {service.running ? "Running" : "Stopped"}
+                    </span>
+                    <StatusDot running={service.running} label={service.display_name} />
+                  </div>
                 </div>
               );
             })}

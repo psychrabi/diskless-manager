@@ -72,10 +72,10 @@ const ImageManagement = () => {
   }, [activePool, fetchDatasets]);
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-5">
       <PageHeader
-        title="Image Management"
-        description="Manage diskless boot images and their snapshots"
+        title="Images"
+        description="Boot images, recovery points, and the drivers that make them portable."
         actions={
           <div data-testid="image-page-actions" className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center">
             {user?.role === "admin" && (
@@ -129,7 +129,7 @@ const ImageManagement = () => {
             )}
           </div>
         }/>
-      <div className="space-y-6 min-h-[50vh]">
+      <div className="space-y-5 min-h-[50vh]">
         {mastersError && (
           <div role="alert" className="flex items-center justify-between gap-4 rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm">
             <span>{mastersError}</span>
@@ -137,16 +137,16 @@ const ImageManagement = () => {
           </div>
         )}
         {masters.length === 0 && !mastersError ? (
-          <ShadcnCard className="shadow-sm border border-border/50">
-            <CardContent className="flex flex-col gap-4 items-center text-center p-12">
-              <div className="w-20 h-20 bg-muted rounded-full flex items-center justify-center text-4xl mb-4">
-                <File />
+          <ShadcnCard className="border-dashed shadow-none">
+            <CardContent className="flex flex-col gap-4 items-center text-center px-6 py-14">
+              <div className="flex size-16 items-center justify-center rounded-2xl border border-primary/15 bg-primary/10">
+                <File className="size-6 text-primary" />
               </div>
-              <CardTitle className="text-2xl mb-2">No Images Available</CardTitle>
-              <CardDescription className="max-w-md mb-6">
+              <CardTitle className="text-xl mb-1">No images available</CardTitle>
+              <CardDescription className="max-w-md mb-2">
                 {!hasImageDisk
                   ? "No image disk found. Create an image disk first in the Disks Management section."
-                  : "Create your first Boot image for clients to boot from."}
+                  : "Create your first boot image for clients to stream."}
               </CardDescription>
               <Button
                 variant="primary"

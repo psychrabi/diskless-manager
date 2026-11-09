@@ -27,7 +27,7 @@ const IscsiBackendSetting = () => {
   };
 
   return (
-    <Card title="iSCSI Provisioning Backend" className="h-full xl:col-span-2">
+    <Card title="iSCSI Provisioning Backend" className="h-full">
       <Label htmlFor="iscsi-backend">Backend</Label>
       <NativeSelect
         id="iscsi-backend"

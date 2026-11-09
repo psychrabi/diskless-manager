@@ -48,7 +48,14 @@ export default function AppLogs() {
 
   return (
     <Card
-      title="Application Logs"
+      title="Application logs"
+      subtitle={
+        logs
+          ? `${logs.split("\n").filter(Boolean).length.toLocaleString()} lines · newest last`
+          : "No output captured yet"
+      }
+      className="overflow-hidden"
+      bodyClass="p-3 pt-1"
       actions={
         <>
           <Button

@@ -11,6 +11,7 @@ import { PageHeader } from "./PageHeader.jsx";
 import { Select } from "./Select.jsx";
 import { StatusBadge } from "./StatusBadge.jsx";
 import { StatusDot } from "./StatusDot.jsx";
+import { StatCard } from "./StatCard.jsx";
 import { ToastContainer } from "./ToastContainer.jsx";
 
 export * from "./Table";
@@ -28,6 +29,7 @@ export {
   Modal,
   PageHeader,
   Select,
+  StatCard,
   StatusBadge,
   StatusDot,
   TableSkeleton,

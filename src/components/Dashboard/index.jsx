@@ -20,43 +20,57 @@ export default function Dashboard() {
 
   if (loading) {
     return (
-      <div className="flex flex-col gap-4">
-        <div className="space-y-1">
-          <Skeleton className="h-7 w-48" />
+      <div className="flex flex-col gap-5">
+        <div className="space-y-2">
+          <Skeleton className="h-3 w-24" />
+          <Skeleton className="h-8 w-56" />
           <Skeleton className="h-4 w-96 max-w-full" />
         </div>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-          {Array.from({ length: 3 }, (_, i) => (
-            <Skeleton key={i} className="h-28 rounded-xl" />
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          {Array.from({ length: 4 }, (_, i) => (
+            <Skeleton key={i} className="h-32 rounded-2xl" />
           ))}
         </div>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-6">
-          <Skeleton className="h-48 rounded-xl xl:col-span-2" />
-          <Skeleton className="h-48 rounded-xl xl:col-span-2" />
-          <Skeleton className="h-48 rounded-xl xl:col-span-2" />
-          <Skeleton className="h-32 rounded-xl md:col-span-2 xl:col-span-6" />
+        <div className="grid grid-cols-1 gap-5 xl:grid-cols-12">
+          <Skeleton className="h-72 rounded-2xl xl:col-span-8" />
+          <Skeleton className="h-72 rounded-2xl xl:col-span-4" />
+          <Skeleton className="h-80 rounded-2xl xl:col-span-5" />
+          <Skeleton className="h-80 rounded-2xl xl:col-span-7" />
         </div>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-5">
       <PageHeader
         title="Server overview"
-        description="Monitor clients, storage, and the services behind your boot environment."
+        description="Clients, storage, and the services behind every boot."
       />
       <MetricsCard />
-      <AlarmInbox />
-
-      <div className="grid grid-cols-1 items-stretch gap-4 md:grid-cols-2 xl:grid-cols-6">
-        <StorageCard />
-        <StorageMaintenanceCard />
-        <ArcCacheCard />
-        <ServerInfoCard />
-        <SparePrewarmCard />
+      <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)]">
+        <AlarmInbox />
         <ServicesStatus />
       </div>
+
+      <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-12">
+        <div className="xl:col-span-5">
+          <StorageCard />
+        </div>
+        <div className="xl:col-span-7">
+          <StorageMaintenanceCard />
+        </div>
+        <div className="xl:col-span-4">
+          <ArcCacheCard />
+        </div>
+        <div className="xl:col-span-4">
+          <ServerInfoCard />
+        </div>
+        <div className="xl:col-span-4">
+          <SparePrewarmCard />
+        </div>
+      </div>
+
     </div>
   );
 }

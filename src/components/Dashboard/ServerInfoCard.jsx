@@ -4,9 +4,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 
 const InfoRow = ({ label, value }) => (
-  <div className="flex items-center justify-between gap-4 py-2">
-    <span className="text-sm text-muted-foreground">{label}</span>
-    <span className="text-sm font-medium text-right break-all">{value}</span>
+  <div className="flex items-baseline justify-between gap-4 border-b border-border/50 py-2 last:border-0">
+    <span className="shrink-0 text-[11px] text-muted-foreground">{label}</span>
+    <span className="min-w-0 break-all text-right font-mono-data text-[11px] font-medium text-foreground">{value}</span>
   </div>
 );
 
@@ -20,11 +20,13 @@ const ServerInfoCard = () => {
   }[serverStatus?.iscsi_backend];
 
   return (
-    <Card className="h-full xl:col-span-2">
+    <Card className="h-full">
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <Monitor className="size-4 text-muted-foreground" />
-          System Information
+          <span className="flex size-8 items-center justify-center rounded-lg border border-border/70 bg-muted/50 text-muted-foreground">
+            <Monitor className="size-4" />
+          </span>
+          System
         </CardTitle>
       </CardHeader>
       <CardContent>
@@ -36,7 +38,7 @@ const ServerInfoCard = () => {
             <Skeleton className="h-4 w-3/4" />
           </div>
         ) : (
-          <div className="divide-y divide-border">
+          <div>
             <InfoRow label="Hostname" value={serverInfo.hostname} />
             <InfoRow label="Operating System" value={serverInfo.os} />
             <InfoRow label="Kernel" value={serverInfo.kernel} />

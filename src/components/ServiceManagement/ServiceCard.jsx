@@ -9,6 +9,7 @@ import {
   ToggleRight,
 } from "lucide-react";
 import { useState } from "react";
+import { Badge } from "@/components/ui/badge";
 import { Button, Card, Input, Modal, StatusBadge } from "@/components/ui";
 import { getServiceIcon } from "@/constants/serviceIcons";
 
@@ -91,7 +92,17 @@ export default function ServiceCard({
   const Icon = getServiceIcon(service.name);
 
   return (
-    <Card icon={Icon} title={service.display_name} subtitle={service.name}>
+    <Card
+      icon={Icon}
+      title={service.display_name}
+      subtitle={service.name}
+      actions={
+        <Badge variant={service.running ? "success" : "destructive"} className="gap-1.5">
+          <span className="size-1.5 rounded-full bg-current" />
+          {service.running ? "Running" : "Stopped"}
+        </Badge>
+      }
+    >
       <p className="text-sm text-muted-foreground mb-4 leading-relaxed">
         {serviceDescriptions[service.name] || "System service"}
       </p>

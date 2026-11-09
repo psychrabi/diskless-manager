@@ -62,10 +62,10 @@ const ServiceManagement = () => {
   }, []);
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-5">
       <PageHeader
         title="Service Management"
-        description="Manage and monitor system services."
+        description="Every daemon behind boot, storage, and file sharing — with live control."
         actions={
           <>
             <Button

@@ -120,7 +120,7 @@ const ClientTableRow = ({ client, clientMetrics, onMoreActions }) => {
   return (
     <>
       <TableCell colSpan={9} className="p-3 xl:hidden">
-        <article data-testid="client-mobile-card" className="rounded-lg border bg-background p-3 text-left">
+        <article data-testid="client-mobile-card" className="rounded-xl border border-border/80 bg-card p-4 text-left shadow-xs">
           <div className="flex items-start justify-between gap-3">
             <div className="flex min-w-0 items-center gap-2">
               <ClientStatusIcon status={client.status} />
@@ -144,7 +144,7 @@ const ClientTableRow = ({ client, clientMetrics, onMoreActions }) => {
             </Detail>
           </dl>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t pt-2">
-            <Button variant="outline" size="sm" onClick={(event) => onMoreActions?.(event, client)}>
+            <Button variant="outline" size="sm" className="h-11" onClick={(event) => onMoreActions?.(event, client)}>
               <MoreHorizontal data-icon="inline-start" />More actions
             </Button>
             <ControlActionButtons client={client} onActionComplete={() => {}} />
@@ -152,15 +152,21 @@ const ClientTableRow = ({ client, clientMetrics, onMoreActions }) => {
         </article>
       </TableCell>
       <TableCell className="hidden min-w-0 max-w-56 xl:table-cell">
-        <div className="flex min-w-0 items-center gap-2">
-          <ClientStatusIcon status={client.status} />
-          <span className="truncate  font-bold mt-0.5">{client.name}</span>
+        <div className="flex min-w-0 items-center gap-2.5">
+          <div className="relative flex size-8 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-muted/40 text-[10px] font-semibold text-muted-foreground">
+            {client.name?.slice(0, 2).toUpperCase()}
+            <span className={`absolute -right-0.5 -bottom-0.5 size-2 rounded-full border-2 border-card ${isOnlineStatus(client.status) ? "bg-success" : "bg-destructive"}`} />
+          </div>
+          <div className="min-w-0">
+            <span className="block truncate text-[13px] font-semibold">{client.name}</span>
+            <span className="block text-[10px] text-muted-foreground">{client.status || "Offline"}</span>
+          </div>
         </div>
       </TableCell>
-      <TableCell className="hidden text-center text-sm xl:table-cell">
+      <TableCell className="hidden text-center font-mono-data text-[11px] text-muted-foreground xl:table-cell">
         {client.mac}
       </TableCell>
-      <TableCell className="hidden text-center text-sm xl:table-cell">
+      <TableCell className="hidden text-center font-mono-data text-[11px] text-muted-foreground xl:table-cell">
         {client.ip}</TableCell>
       <TableCell className="hidden text-center text-xs xl:table-cell">
         <div className="flex gap-1 justify-evenly">
@@ -178,7 +184,7 @@ const ClientTableRow = ({ client, clientMetrics, onMoreActions }) => {
           />
         </div>
       </TableCell>
-      <TableCell className="hidden text-center text-xs xl:table-cell">
+      <TableCell className="hidden text-center text-xs xl:table-cell max-2xl:hidden">
         <div className="flex gap-1 justify-evenly">
           <TotalLine icon={MoveUp}
           iconClassName="text-primary" byteValue={clientMetrics?.iscsi?.total_read_bytes} label="Total read" />
@@ -186,8 +192,8 @@ const ClientTableRow = ({ client, clientMetrics, onMoreActions }) => {
           iconClassName="text-primary" byteValue={clientMetrics?.iscsi?.total_write_bytes} label="Total written" />
         </div>
       </TableCell>
-      <TableCell className="hidden max-w-36 xl:table-cell">
-        <span className="block truncate text-center  text-xs">{client.master}</span>
+      <TableCell className="hidden max-w-40 xl:table-cell">
+        <span className="block truncate text-center text-[11px] text-muted-foreground">{client.master}</span>
       </TableCell>
       <TableCell className="hidden text-center xl:table-cell">
         <div className="flex flex-col items-center gap-1">
@@ -195,12 +201,12 @@ const ClientTableRow = ({ client, clientMetrics, onMoreActions }) => {
           <ClientGameBadge client={client} />
         </div>
       </TableCell>
-      <TableCell className="hidden text-center text-xs xl:table-cell">
+      <TableCell className="hidden text-center text-xs xl:table-cell max-2xl:hidden">
         <div className="flex justify-center">
           <UptimeCell uptimeSeconds={clientMetrics?.uptime_seconds} />
         </div>
       </TableCell>
-      <TableCell className="hidden xl:table-cell">
+      <TableCell className="sticky right-0 z-10 hidden w-32 bg-card shadow-[-10px_0_14px_-16px_rgb(0_0_0/0.45)] xl:table-cell">
         <ControlActionButtons client={client} onActionComplete={() => {}} />
       </TableCell>
     </>
