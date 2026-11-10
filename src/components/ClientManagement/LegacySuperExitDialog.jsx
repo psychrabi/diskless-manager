@@ -38,7 +38,7 @@ const LegacySuperExitDialog = ({ client, masters, isOpen, onClose, refresh }) =>
       description: `Confirm the client is offline before exiting. The direct-master legacy mapping for ${client.name} will be replaced with the selected snapshot.`,
       confirmText: "Exit Legacy Super",
       cancelText: "Cancel",
-      confirmVariant: "primary",
+      confirmVariant: "destructive",
     });
     if (!approved) return;
 

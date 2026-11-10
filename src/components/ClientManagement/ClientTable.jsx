@@ -63,11 +63,13 @@ const FILTERS = [
   { id: "offline", label: "Offline" },
 ];
 
-const ClientTable = ({ handleClientContextMenu }) => {
+const ClientTable = ({ handleClientContextMenu, focusClient }) => {
   const clients = useAppStore((state) => state.clients);
   const setClients = useAppStore((state) => state.setClients);
   const { metrics } = useMetrics();
-  const [query, setQuery] = useState("");
+  // The deep-linked client seeds the search box. The caller keys this
+  // component on the focused client so a new link restarts from a clean view.
+  const [query, setQuery] = useState(focusClient?.name ?? "");
   const [statusFilter, setStatusFilter] = useState("all");
   const scrollParent = document.getElementById("main-content");
 

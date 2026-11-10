@@ -15,6 +15,7 @@ import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { Spinner } from "@/components/ui/spinner";
 import { Modal } from "@/components/ui/Modal";
 import { cancelScheduledOperation, getScheduledOperations } from "@/api/modules/control";
+import { useConfirm } from "@/contexts/confirmDialog";
 import { useToastStore } from "@/store/useToastStore";
 
 const getOperationBadgeVariant = (operationType) => {
@@ -42,6 +43,7 @@ const getModeBadgeVariant = (mode) => {
 const ScheduledOperationsList = ({ isOpen, onClose }) => {
   const clients = useAppStore((state) => state.clients);
   const { error, success } = useToastStore();
+  const confirm = useConfirm();
 
   // State for scheduled operations
   const [operations, setOperations] = useState([]);
@@ -75,14 +77,19 @@ const ScheduledOperationsList = ({ isOpen, onClose }) => {
     };
   }, [isOpen, fetchScheduledOperations]);
 
-  const handleCancelOperation = async (operationId) => {
-    if (!window.confirm("Are you sure you want to cancel this scheduled operation?")) {
-      return;
-    }
+  const handleCancelOperation = async (operation) => {
+    const confirmed = await confirm({
+      title: "Cancel scheduled operation",
+      description: `Cancel the scheduled ${operation.operation_type} for ${getClientName(operation.client_id)}? It will not run at ${formatTimestamp(operation.scheduled_time)}.`,
+      confirmText: "Cancel operation",
+      cancelText: "Keep it scheduled",
+      confirmVariant: "destructive",
+    });
+    if (!confirmed) return;
 
     try {
-      setCancellingId(operationId);
-      await cancelScheduledOperation(operationId);
+      setCancellingId(operation.id);
+      await cancelScheduledOperation(operation.id);
       success("Scheduled operation cancelled successfully");
       await fetchScheduledOperations();
     } catch (err) {
@@ -164,7 +171,7 @@ const ScheduledOperationsList = ({ isOpen, onClose }) => {
                     <Badge variant={getModeBadgeVariant(operation.operation_mode)}>{operation.operation_mode}</Badge>
                   </div>
                   <div className="mt-3 flex justify-end border-t pt-3">
-                    <Button variant="outline" size="sm" onClick={() => handleCancelOperation(operation.id)} disabled={cancellingId === operation.id}>
+                    <Button variant="outline" size="sm" onClick={() => handleCancelOperation(operation)} disabled={cancellingId === operation.id}>
                       <Trash2 data-icon="inline-start" />{cancellingId === operation.id ? "Cancelling..." : "Cancel"}
                     </Button>
                   </div>
@@ -211,7 +218,7 @@ const ScheduledOperationsList = ({ isOpen, onClose }) => {
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => handleCancelOperation(operation.id)}
+                        onClick={() => handleCancelOperation(operation)}
                         disabled={cancellingId === operation.id}
                       >
                         <Trash2 data-icon="inline-start" />

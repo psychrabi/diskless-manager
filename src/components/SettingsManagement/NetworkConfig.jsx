@@ -6,6 +6,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { serverSchema } from "@/schema";
 import { useSettings } from "@/hooks/useSettings";
 import { useAppStore } from "@/store/useAppStore";
+import { useConfirm } from "@/contexts/confirmDialog";
 import { Card, Button, Input } from "@/components/ui";
 import { RefreshCcw, Shield, Globe, Network, TriangleAlert } from "lucide-react";
 import NetworkInterfaceSelector from "./NetworkInterfaceSelector";
@@ -49,6 +50,7 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
   const { fetchInterfaces, detectNetwork, applyNetworkSettings, updateServer } =
     useSettings();
   const { appConfig, fetchServerInfo } = useAppStore();
+  const confirm = useConfirm();
   const [interfaces, setInterfaces] = useState([]);
   const [loadingInterfaces, setLoadingInterfaces] = useState(true);
 
@@ -57,6 +59,7 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
     handleSubmit,
     setValue,
     watch,
+    getValues,
     formState: { errors, isSubmitting },
     reset,
   } = useForm({
@@ -116,18 +119,52 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
     }
   }, [detectNetwork, setValue]);
 
+  /**
+   * Applying rewrites the host network configuration and takes effect
+   * immediately, which can drop the admin's own connection. Every apply path
+   * goes through this gate so the target interface and resulting address are
+   * named before anything is committed.
+   */
+  const confirmApply = useCallback(
+    async (payload) =>
+      confirm({
+        title: "Apply network configuration",
+        description: `This rewrites the server network configuration and applies it immediately on ${
+          payload.interface?.length
+            ? payload.interface.join(", ")
+            : "the primary interface"
+        }, moving the server to ${
+          payload.ip_address
+            ? `${payload.ip_address} / ${payload.netmask}`
+            : "the detected address"
+        }. Running clients lose their boot session, and the management UI becomes unreachable if the address is wrong.`,
+        confirmText: "Apply now",
+        cancelText: "Keep it saved",
+        confirmVariant: "destructive",
+        size: "2xl",
+      }),
+    [confirm]
+  );
+
   const onSubmit = async (data) => {
     const payload = toServerPayload(data);
 
     const success = await updateServer(payload);
     if (success) {
-      // Apply the network settings and regenerate service configs immediately after saving
-      if (applyOnSave) await applyNetworkSettings();
+      // The configuration is written on save; applying it is a separate,
+      // confirmed step because it can sever connectivity.
+      if (applyOnSave) {
+        const approved = await confirmApply(payload);
+        if (approved) await applyNetworkSettings();
+      }
       await onSaved?.();
     }
   };
 
   const handleApplyStatic = async () => {
+    const payload = toServerPayload(getValues());
+    const approved = await confirmApply(payload);
+    if (!approved) return;
     await applyNetworkSettings();
   };
 
@@ -245,6 +282,8 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
                   Debian/Ubuntu, a NetworkManager profile on Fedora/RHEL and
                   Arch Linux) and apply changes immediately. Ensure the
                   settings are correct to avoid losing server connectivity.
+                  You will be asked to confirm the target interface and
+                  address before anything is applied.
                 </span>
               </div>
             </Alert>
@@ -263,7 +302,7 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
           </Button>
           <Button
             className="min-w-0 flex-1 shrink px-1 text-center text-xs leading-tight whitespace-normal sm:px-2 sm:text-sm sm:whitespace-nowrap"
-            variant="warning"
+            variant="destructive"
             type="button"
             onClick={handleApplyStatic}
             disabled={isSubmitting}
@@ -277,7 +316,11 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
             type="submit"
             loading={isSubmitting}
           >
-            {isSubmitting ? "Saving..." : "Save Configuration"}
+            {isSubmitting
+              ? "Saving..."
+              : applyOnSave
+                ? "Save & Apply"
+                : "Save Configuration"}
           </Button>
         </div>
       </form>

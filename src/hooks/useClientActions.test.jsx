@@ -134,3 +134,31 @@ it("blocks Super actions when the API reports lowercase online status", async ()
   expect(mocks.confirm).not.toHaveBeenCalled();
   expect(mocks.error).toHaveBeenCalledTimes(3);
 });
+
+it("requires the client name to be retyped before a client is deleted", async () => {
+  mocks.confirm.mockResolvedValue("PC001");
+  mocks.deleteClient.mockResolvedValue({});
+  const { result } = renderHook(() => useClientActions());
+
+  await act(() => result.current.delete({ id: "client-1", name: "PC001", status: "Offline" }));
+  await act(async () => {});
+
+  expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({
+    confirmVariant: "destructive",
+    requireTyping: true,
+    typingValue: "PC001",
+  }));
+  expect(mocks.deleteClient).toHaveBeenCalledWith("client-1");
+});
+
+it("does not delete a client when the confirmation is declined", async () => {
+  mocks.confirm.mockResolvedValue(false);
+  const closeContextMenu = vi.fn();
+  const { result } = renderHook(() => useClientActions(vi.fn(), closeContextMenu));
+
+  await act(() => result.current.delete({ id: "client-1", name: "PC001", status: "Offline" }));
+  await act(async () => {});
+
+  expect(mocks.deleteClient).not.toHaveBeenCalled();
+  expect(closeContextMenu).toHaveBeenCalled();
+});

@@ -149,7 +149,7 @@ const SshTester = () => {
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
-        title="SSH Connection Tester"
+        title="SSH Tester"
         description="Verify SSH access to Windows clients and run remote commands."
       />
 

@@ -44,7 +44,7 @@ export default function Dashboard() {
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
-        title="Server overview"
+        title="Dashboard"
         description="Clients, storage, and the services behind every boot."
       />
       <MetricsCard />

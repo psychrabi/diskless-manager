@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { Gauge, RefreshCw } from "lucide-react";
+import { Eraser, Gauge } from "lucide-react";
 import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
+import { useConfirm } from "@/contexts/confirmDialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
@@ -39,6 +40,7 @@ const ArcCacheCard = () => {
   const fetchArcStat = useAppStore((state) => state.fetchArcStat);
   const fetchArcStatRef = useRef(fetchArcStat);
   const { success, error: showError } = useToastStore();
+  const confirm = useConfirm();
   const [isClearing, setIsClearing] = useState(false);
 
   useEffect(() => {
@@ -54,6 +56,18 @@ const ArcCacheCard = () => {
   }, []);
 
   const handleClearCache = async () => {
+    // Dropping the page cache and calling drop_caches affects the whole host,
+    // so it is confirmed rather than fired from a single icon press.
+    const confirmed = await confirm({
+      title: "Clear system cache",
+      description:
+        "This flushes the host page cache and runs sync and drop_caches across every pool. Disk-backed reads will be slower until the cache warms again.",
+      confirmText: "Clear cache",
+      cancelText: "Cancel",
+      confirmVariant: "destructive",
+    });
+    if (!confirmed) return;
+
     setIsClearing(true);
     try {
       const response = await clearRamCache();
@@ -89,7 +103,7 @@ const ArcCacheCard = () => {
             title="Clear system cache (sync + drop_caches)"
             aria-label="Clear system cache"
           >
-            {isClearing ? <Spinner /> : <RefreshCw />}
+            {isClearing ? <Spinner /> : <Eraser />}
           </Button>
         </CardAction>
       </CardHeader>

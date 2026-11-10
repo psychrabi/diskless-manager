@@ -1,6 +1,6 @@
 import { acknowledgeAlarm, listAlarms } from "@/api/modules/alarms";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Card,
   CardAction,
@@ -13,10 +13,12 @@ import {
   AlertTriangle,
   Bell,
   CheckCircle2,
+  ExternalLink,
   RefreshCw,
   ShieldAlert,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 
 const KIND_LABELS = {
   boot_failure: "Boot failure",
@@ -52,10 +54,14 @@ const AlarmRow = ({ alarm, busy, onAcknowledge }) => {
   const observed = formatTime(alarm.observed_at);
   const acknowledged = Boolean(alarm.acknowledged_at);
   const critical = alarm.severity === "critical";
+  const hasActions =
+    !acknowledged ||
+    Boolean(alarm.client_id) ||
+    alarm.kind === "storage_recovery";
 
   return (
     <li
-      className={`flex flex-col gap-3 rounded-xl border p-4 sm:flex-row sm:items-start ${
+      className={`flex flex-col gap-3 rounded-xl border p-4 ${
         acknowledged
           ? "border-border/60 bg-muted/20"
           : critical
@@ -63,46 +69,74 @@ const AlarmRow = ({ alarm, busy, onAcknowledge }) => {
             : "border-warning/20 bg-warning/[0.035]"
       }`}
     >
-      <span
-        className={`flex size-8 shrink-0 items-center justify-center rounded-lg border ${
-          critical
-            ? "border-destructive/15 bg-destructive/10"
-            : "border-warning/20 bg-warning/10"
-        }`}
-      >
-        <SeverityIcon severity={alarm.severity} />
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <p className="font-medium text-foreground">{alarm.title}</p>
-          <Badge variant={critical ? "destructive" : "warning"}>{alarm.severity}</Badge>
-          <Badge variant="secondary">{KIND_LABELS[alarm.kind] || alarm.kind}</Badge>
-          {acknowledged && (
-            <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
-              <CheckCircle2 className="size-3" aria-hidden="true" />
-              Acknowledged
-              {alarm.acknowledged_by ? ` by ${alarm.acknowledged_by}` : ""}
-            </span>
+      <div className="flex items-start gap-3">
+        <span
+          className={`flex size-8 shrink-0 items-center justify-center rounded-lg border ${
+            critical
+              ? "border-destructive/15 bg-destructive/10"
+              : "border-warning/20 bg-warning/10"
+          }`}
+        >
+          <SeverityIcon severity={alarm.severity} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="font-medium text-foreground">{alarm.title}</p>
+            <Badge variant={critical ? "destructive" : "warning"}>{alarm.severity}</Badge>
+            <Badge variant="secondary">{KIND_LABELS[alarm.kind] || alarm.kind}</Badge>
+            {acknowledged && (
+              <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+                <CheckCircle2 className="size-3" aria-hidden="true" />
+                Dismissed
+                {alarm.acknowledged_by ? ` by ${alarm.acknowledged_by}` : ""}
+              </span>
+            )}
+          </div>
+          <p className="mt-1.5 break-words text-[13px] leading-5 text-muted-foreground">
+            {alarm.detail}
+          </p>
+          <p className="mt-1 font-mono-data text-[10px] tracking-[0.04em] text-muted-foreground/70">
+            {alarm.source}
+            {observed ? ` · ${observed}` : ""}
+          </p>
+        </div>
+      </div>
+      {/* Actions sit on their own line so the title and detail keep the full
+          card width however many links an alarm carries. */}
+      {hasActions && (
+        <div className="flex flex-wrap items-center gap-2 pl-11">
+          {alarm.client_id && (
+            <Link
+              to={`/clients?client=${encodeURIComponent(alarm.client_id)}`}
+              className={buttonVariants({ variant: "ghost", size: "sm" })}
+              title={`Open ${alarm.source}`}
+            >
+              <ExternalLink data-icon="inline-start" />
+              Open client
+            </Link>
+          )}
+          {alarm.kind === "storage_recovery" && (
+            <Link
+              to="/pending-recovery"
+              className={buttonVariants({ variant: "ghost", size: "sm" })}
+              title="Open pending recovery"
+            >
+              <ExternalLink data-icon="inline-start" />
+              View recovery
+            </Link>
+          )}
+          {!acknowledged && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={() => onAcknowledge(alarm.id)}
+              title="Hide this alarm. The underlying fault stays active until it is fixed."
+            >
+              {busy ? "Saving…" : "Dismiss"}
+            </Button>
           )}
         </div>
-        <p className="mt-1.5 break-words text-[13px] leading-5 text-muted-foreground">
-          {alarm.detail}
-        </p>
-        <p className="mt-1 font-mono-data text-[10px] tracking-[0.04em] text-muted-foreground/70">
-          {alarm.source}
-          {observed ? ` · ${observed}` : ""}
-        </p>
-      </div>
-      {!acknowledged && (
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={busy}
-          onClick={() => onAcknowledge(alarm.id)}
-          className="shrink-0 self-start"
-        >
-          {busy ? "Saving…" : "Acknowledge"}
-        </Button>
       )}
     </li>
   );
@@ -162,7 +196,8 @@ const AlarmInbox = () => {
           {activeCount > 0 && <Badge variant="destructive">{activeCount}</Badge>}
         </CardTitle>
         <CardDescription>
-          Boot failures, storage recovery, service outages, pool health, and prewarmed writebacks.
+          Boot failures, storage recovery, service outages, pool health, and prewarmed
+          writebacks. Dismissing an alarm hides it — it does not fix the fault.
         </CardDescription>
         <CardAction>
           <Button
@@ -212,7 +247,7 @@ const AlarmInbox = () => {
               <Badge variant="destructive">{summary?.critical || 0} critical</Badge>
               <Badge variant="warning">{summary?.warning || 0} warning</Badge>
               {summary?.acknowledged ? (
-                <Badge variant="outline">{summary.acknowledged} acknowledged</Badge>
+                <Badge variant="outline">{summary.acknowledged} dismissed</Badge>
               ) : null}
             </div>
             <ul aria-label="Operational alarms" className="flex flex-col gap-2">

@@ -18,19 +18,27 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
+  Boxes,
   Edit,
   History,
   Layers,
+  MoreHorizontal,
   PlusCircle,
   Search,
   SearchX,
   ShieldCheck,
   Star,
-  StarIcon,
   Terminal,
   Trash2,
   Monitor,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useCallback, useMemo, useState } from "react";
 import CreateSnapshotModal from "./CreateSnapshotModal";
 import ImageHealthDialog from "./ImageHealthDialog";
@@ -164,7 +172,7 @@ export const ImagesList = ({ masters }) => {
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="text-[13px] font-semibold text-foreground">{master.name}</span>
                             {master.is_default && (
-                              <Badge variant="warning" className="gap-1">
+                              <Badge variant="secondary" className="gap-1">
                                 <Star className="size-3" />
                                 Default
                               </Badge>
@@ -172,9 +180,6 @@ export const ImagesList = ({ masters }) => {
                           </div>
                           <p className="mt-0.5 break-all font-mono-data text-[10px] text-muted-foreground">{master.path}</p>
                           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                            <span className="text-[10px] text-muted-foreground">
-                              {master.snapshots?.length ?? 0} recovery point{(master.snapshots?.length ?? 0) === 1 ? "" : "s"}
-                            </span>
                             {master.status === "missing" && (
                               <span className="text-[10px] text-destructive" role="status">
                                 Missing from storage. Delete its snapshots first.
@@ -201,64 +206,71 @@ export const ImagesList = ({ masters }) => {
                     <TableCell className="px-3">
                       <div className="flex flex-wrap items-center justify-end gap-1">
                         <Button
-                          variant={master.is_default ? "warning" : "ghost"}
-                          size="icon-sm"
-                          icon={master.is_default ? Star : StarIcon}
-                          onClick={() => setDefaultMaster(master.name)}
-                          disabled={master.is_default || master.status !== "ready"}
-                          title={!master.is_default ? "Set as Default" : "Default image"}
-                        />
-                        <Button
                           variant="outline"
                           size="sm"
                           icon={History}
                           onClick={() => setRecoveryImageName(master.name)}
-                          title={`Recovery points for ${master.name}`}
+                          title={`Snapshots for ${master.name}`}
                         >
-                          Recovery ({master.snapshots?.length ?? 0})
+                          Snapshots ({master.snapshots?.length ?? 0})
                         </Button>
                         <Button
                           variant="outline"
                           size="sm"
-                          icon={History}
+                          icon={Boxes}
                           onClick={() => {
                             setSelectedImage(master);
                             setOpenVersionModal(true);
                           }}
-                          title={`Versions for ${master.name}`}
+                          title={`Published versions of ${master.name}`}
                         >
                           Versions
                         </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          icon={ShieldCheck}
-                          onClick={() => setHealthImage(master)}
-                          title={`Check health of ${master.name}`}
-                        />
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          icon={PlusCircle}
-                          onClick={() => handleCreateSnapshot(master)}
-                          title="Create Snapshot"
-                          disabled={master.status !== "ready"}
-                        />
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          icon={Edit}
-                          onClick={() => handleRenameImage(master)}
-                          title="Rename Image"
-                        />
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          icon={Trash2}
-                          onClick={() => handleDeleteImage(master)}
-                          title="Delete Image"
-                          className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                        />
+                        <DropdownMenu>
+                          <DropdownMenuTrigger
+                            render={
+                              <Button
+                                variant="ghost"
+                                size="icon-sm"
+                                aria-label={`More actions for ${master.name}`}
+                              />
+                            }
+                          >
+                            <MoreHorizontal />
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="min-w-44">
+                            <DropdownMenuItem
+                              onClick={() => setDefaultMaster(master.name)}
+                              disabled={master.is_default || master.status !== "ready"}
+                            >
+                              <Star />
+                              {master.is_default ? "Default image" : "Set as default"}
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => setHealthImage(master)}>
+                              <ShieldCheck />
+                              Check health
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={() => handleCreateSnapshot(master)}
+                              disabled={master.status !== "ready"}
+                            >
+                              <PlusCircle />
+                              New snapshot
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => handleRenameImage(master)}>
+                              <Edit />
+                              Rename image
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                              variant="destructive"
+                              onClick={() => handleDeleteImage(master)}
+                            >
+                              <Trash2 />
+                              Delete image
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -276,17 +288,17 @@ export const ImagesList = ({ masters }) => {
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle>
-              Recovery points{recoveryImage ? ` · ${recoveryImage.name}` : ""}
+              Snapshots{recoveryImage ? ` · ${recoveryImage.name}` : ""}
             </DialogTitle>
             <DialogDescription>
-              Review snapshots and restore this image to an earlier point.
+              Review the snapshot chain and restore this image to an earlier point.
             </DialogDescription>
           </DialogHeader>
           {recoveryImage?.snapshots?.length ? (
             <SnapshotsList master={recoveryImage} />
           ) : (
             <p className="py-6 text-center text-sm text-muted-foreground">
-              No recovery points are available for this image.
+              No snapshots are available for this image.
             </p>
           )}
         </DialogContent>

@@ -112,7 +112,7 @@ export default function ClientProvisioning() {
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
-        title="Verified Image Factory"
+        title="Image factory"
         description="Build a private image, adapt it for diskless boot, and publish it only after a successful verification boot."
       />
 

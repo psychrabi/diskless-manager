@@ -233,11 +233,15 @@ export const useClientActions = (
 
       const ok = await confirm({
         title: "Delete Client",
-        description: `Are you sure you want to delete client "${client.name}"? This will destroy their ZFS clone and remove configurations.`,
+        description: `This permanently deletes the client "${client.name}", destroys its ZFS clone, and removes its iSCSI configuration. Any writeback state stored only on that clone is lost. This cannot be undone.`,
         confirmText: "Delete Client",
         cancelText: "Cancel",
-        confirmVariant: "primary",
+        confirmVariant: "destructive",
         size: "2xl",
+        showInput: true,
+        inputLabel: "Client name",
+        requireTyping: true,
+        typingValue: client.name,
       });
 
       if (!ok) {

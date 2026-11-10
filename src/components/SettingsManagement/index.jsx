@@ -56,7 +56,7 @@ const SettingsManagement = () => {
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
-        title="System settings"
+        title="System Settings"
         description="Network, storage, and boot services. Changes apply to the server, not to individual clients."
       />
       <div className="grid gap-6 xl:grid-cols-[210px_minmax(0,1fr)]">

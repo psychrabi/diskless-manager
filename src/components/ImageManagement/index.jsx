@@ -75,7 +75,7 @@ const ImageManagement = () => {
     <div className="flex flex-col gap-5">
       <PageHeader
         title="Images"
-        description="Boot images, recovery points, and the drivers that make them portable."
+        description="Boot images, snapshots, and the drivers that make them portable."
         actions={
           <div data-testid="image-page-actions" className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center">
             {user?.role === "admin" && (

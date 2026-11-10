@@ -2,9 +2,21 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { storagePrewarmSchema } from "@/schema";
 import StoragePrewarmForm from "./StoragePrewarmForm";
+
+const mocks = vi.hoisted(() => ({
+  getRetentionPlan: vi.fn(),
+  runRetention: vi.fn(),
+  confirm: vi.fn(),
+}));
+
+vi.mock("@/api/modules/system", () => ({
+  getRetentionPlan: mocks.getRetentionPlan,
+  runRetention: mocks.runRetention,
+}));
+vi.mock("@/contexts/confirmDialog", () => ({ useConfirm: () => mocks.confirm }));
 
 const GIB = 1024 ** 3;
 
@@ -54,6 +66,10 @@ function Harness({ onSave }) {
 }
 
 describe("StoragePrewarmForm", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
   it("submits prewarming disabled by default", async () => {
     const onSave = vi.fn();
     render(<Harness onSave={onSave} />);
@@ -146,5 +162,45 @@ describe("StoragePrewarmForm", () => {
 
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("asks for confirmation before deleting snapshots and honours a refusal", async () => {
+    mocks.confirm.mockResolvedValue(false);
+    mocks.getRetentionPlan.mockResolvedValue({
+      dry_run: false,
+      candidates: [],
+      skipped: [],
+    });
+    render(<Harness onSave={vi.fn()} />);
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", { name: "Preview retention" }));
+    await user.click(await screen.findByRole("button", { name: "Run retention" }));
+
+    await waitFor(() => expect(mocks.confirm).toHaveBeenCalled());
+    expect(mocks.confirm.mock.calls[0][0].confirmVariant).toBe("destructive");
+    expect(mocks.runRetention).not.toHaveBeenCalled();
+  });
+
+  it("runs retention only after the destructive confirmation is accepted", async () => {
+    mocks.confirm.mockResolvedValue(true);
+    mocks.getRetentionPlan.mockResolvedValue({
+      dry_run: false,
+      candidates: [],
+      skipped: [],
+    });
+    mocks.runRetention.mockResolvedValue({
+      dry_run: false,
+      candidates: [],
+      skipped: [],
+      deleted: 2,
+    });
+    render(<Harness onSave={vi.fn()} />);
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", { name: "Preview retention" }));
+    await user.click(await screen.findByRole("button", { name: "Run retention" }));
+
+    await waitFor(() => expect(mocks.runRetention).toHaveBeenCalledWith(true));
   });
 });

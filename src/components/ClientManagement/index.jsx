@@ -10,6 +10,7 @@ import { LoadingSkeleton } from "@/components/ui/LoadingSkeleton";
 import { ContextMenu } from "../ui/ContextMenu";
 import { HardDrive, PlusCircle, Users, Wifi, WifiOff, History, Clock } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "../../store/useAppStore";
 import { isOnlineStatus } from "@/lib/clientStatus";
@@ -71,6 +72,17 @@ const ClientManagement = () => {
   });
   const contextMenuRequestId = useRef(0);
   const [superData, setSuperData] = useState(null);
+
+  // `?client=<id>` deep links from an alarm to the one client it names.
+  const [searchParams] = useSearchParams();
+  const focusClientId = searchParams.get("client");
+  const focusClient = useMemo(
+    () =>
+      focusClientId
+        ? clients.find((item) => item.id === focusClientId) || null
+        : null,
+    [clients, focusClientId],
+  );
 
   useEffect(() => {
     const target = contextMenu.client;
@@ -252,7 +264,9 @@ const ClientManagement = () => {
         clientsError ? null : <ClientHero handleClientFormModalOpen={handleClientFormModalOpen} />
       ) : (
         <MemoizedClientTable
+          key={focusClient?.id || "all-clients"}
           handleClientContextMenu={handleClientContextMenu}
+          focusClient={focusClient}
         />
       )}
       <MemoizedContextMenu
