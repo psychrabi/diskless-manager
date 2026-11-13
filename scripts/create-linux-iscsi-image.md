@@ -15,7 +15,9 @@ tools, and creates a generic iBFT-aware initramfs that includes Ethernet
 drivers. The boot entry uses the client's firmware iBFT data, so the master
 does not contain a client address, NIC identity, or iSCSI target. It enables
 NetworkManager and masks systemd-networkd to avoid competing configuration of
-the root-disk NIC. Secure Boot must be disabled on clients.
+the root-disk NIC. SSH host keys are generated before the SSH service starts, so
+clients do not inherit the same server identity. Secure Boot must be disabled on
+clients.
 
 Choose the first-boot username and password in the builder. The account gets
 sudo access by default, and that can be disabled before building. Account

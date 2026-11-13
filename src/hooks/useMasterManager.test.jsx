@@ -33,6 +33,30 @@ it("shows success after deleting snapshot even when API has no message", async (
   expect(mocks.success).toHaveBeenCalledWith("Image Management", "Snapshot deleted successfully");
 });
 
+it("confirms snapshot deletion as destructive", async () => {
+  const { result } = renderHook(() => useMasterManager());
+  await act(() => result.current.handleDeleteSnapshot("ready", "diskless/windows"));
+  await act(async () => {});
+
+  expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({
+    confirmVariant: "destructive",
+  }));
+});
+
+it("requires the image name to be retyped before an image is deleted", async () => {
+  const { result } = renderHook(() => useMasterManager());
+  await act(() => result.current.handleDeleteImage({ id: "img-1", name: "diskless/windows", snapshots: [{ name: "a" }, { name: "b" }] }));
+  await act(async () => {});
+
+  expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({
+    confirmVariant: "destructive",
+    requireTyping: true,
+    typingValue: "diskless/windows",
+  }));
+  expect(mocks.confirm.mock.calls[0][0].description).toContain("2 snapshots");
+  expect(mocks.deleteImage).toHaveBeenCalledWith("img-1");
+});
+
 it("shows an error when snapshot deletion fails", async () => {
   mocks.deleteSnapshot.mockRejectedValue(new Error("delete denied"));
   const { result } = renderHook(() => useMasterManager());
@@ -65,7 +89,7 @@ it("does not request pruning when the selected snapshot is already latest", asyn
   await act(() => result.current.handleRollbackSnapshot("stable", "pool/windows", []));
 
   expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({
-    description: expect.stringContaining("No newer recovery points will be deleted"),
+    description: expect.stringContaining("No newer snapshots will be deleted"),
     confirmVariant: "primary",
   }));
   expect(mocks.rollbackImageSnapshot).toHaveBeenCalledWith("pool/windows", "stable", []);
@@ -80,7 +104,7 @@ it("does not rollback when snapshot confirmation is canceled", async () => {
   expect(mocks.rollbackImageSnapshot).not.toHaveBeenCalled();
 });
 
-it("applies a restore point to a new image and refreshes the list", async () => {
+it("applies a snapshot to a new image and refreshes the list", async () => {
   mocks.confirm.mockResolvedValue("pool/windows-restored");
   const { result } = renderHook(() => useMasterManager());
 
@@ -99,11 +123,11 @@ it("applies a restore point to a new image and refreshes the list", async () => 
   expect(mocks.fetchMasters).toHaveBeenCalledOnce();
   expect(mocks.success).toHaveBeenCalledWith(
     "Image Management",
-    'Created pool/windows-restored from restore point "stable"'
+    'Created pool/windows-restored from snapshot "stable"'
   );
 });
 
-it("does not apply when restore-point confirmation is canceled", async () => {
+it("does not apply when snapshot confirmation is canceled", async () => {
   mocks.confirm.mockResolvedValue(false);
   const { result } = renderHook(() => useMasterManager());
 
@@ -126,7 +150,7 @@ it("rejects a blank new image name", async () => {
   );
 });
 
-it("shows an error when applying a restore point fails", async () => {
+it("shows an error when applying a snapshot fails", async () => {
   mocks.confirm.mockResolvedValue("pool/windows-restored");
   mocks.applySnapshot.mockRejectedValue({ error: "image already exists" });
   const { result } = renderHook(() => useMasterManager());

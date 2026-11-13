@@ -37,10 +37,11 @@ const ControlActionButtons = ({ client, onActionComplete }) => {
 
   return (
     <>
-      <div className="flex justify-center gap-1">
+      <div className="flex justify-center gap-0">
         <Button
           variant="ghost"
-          size="icon"
+          size="icon-sm"
+          className="size-11 xl:size-8"
           title="Reboot client"
           disabled={!isOnline}
           onClick={() => setPowerAction("reboot")}
@@ -50,7 +51,8 @@ const ControlActionButtons = ({ client, onActionComplete }) => {
 
         <Button
           variant="ghost"
-          size="icon"
+          size="icon-sm"
+          className="size-11 xl:size-8"
           title={isOnline ? "Shutdown client" : "Power on client"}
           disabled={waking}
           onClick={() => (isOnline ? setPowerAction("shutdown") : handleWake())}
@@ -60,7 +62,8 @@ const ControlActionButtons = ({ client, onActionComplete }) => {
 
         <Button
           variant="ghost"
-          size="icon"
+          size="icon-sm"
+          className="size-11 xl:size-8"
           title="Remote control"
           disabled={!isOnline}
           onClick={() => setRemoteModalOpen(true)}

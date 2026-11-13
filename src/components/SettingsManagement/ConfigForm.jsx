@@ -94,7 +94,7 @@ const ConfigForm = ({ schema, section, title, FormComponent }) => {
   }[section] || section.charAt(0).toUpperCase() + section.slice(1);
 
   return (
-    <Card title={`${title} Configuration`} icon={getServiceIcon(section)} className="h-full xl:col-span-2">
+    <Card title={`${title} Configuration`} icon={getServiceIcon(section)} className="h-full">
       <form onSubmit={handleSubmit(onSubmit)}>
         <FormComponent
           control={control}

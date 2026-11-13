@@ -19,6 +19,8 @@ export const ConfirmDialogProvider = ({ children }) => {
     inputPlaceholder: "",
     inputLabel: "",
     inputType: "text",
+    requireTyping: false,
+    typingValue: "",
   });
 
   const resolverRef = useRef(null);
@@ -39,6 +41,8 @@ export const ConfirmDialogProvider = ({ children }) => {
         inputPlaceholder: "",
         inputLabel: "",
         inputType: "text",
+        requireTyping: false,
+        typingValue: "",
         ...opts,
       }));
       setInputValue(opts.defaultValue || "");
@@ -56,7 +60,11 @@ export const ConfirmDialogProvider = ({ children }) => {
     close();
   }, [close]);
 
+  const typingMatched =
+    !options.requireTyping || inputValue.trim() === options.typingValue;
+
   const handleConfirm = useCallback(() => {
+    if (options.requireTyping && !typingMatched) return;
     if (resolverRef.current) {
       if (options.showInput) {
         resolverRef.current(inputValue);
@@ -65,7 +73,7 @@ export const ConfirmDialogProvider = ({ children }) => {
       }
     }
     close();
-  }, [close, options.showInput, inputValue]);
+  }, [close, options.showInput, options.requireTyping, typingMatched, inputValue]);
 
   return (
     <ConfirmDialogContext.Provider value={{ confirm }}>
@@ -102,6 +110,15 @@ export const ConfirmDialogProvider = ({ children }) => {
                   if (e.key === "Escape") handleCancel();
                 }}
               />
+              {options.requireTyping && (
+                <p className="text-xs text-muted-foreground">
+                  Type{" "}
+                  <span className="font-mono-data font-semibold text-foreground">
+                    {options.typingValue}
+                  </span>{" "}
+                  to confirm.
+                </p>
+              )}
             </div>
           )}
 
@@ -114,6 +131,8 @@ export const ConfirmDialogProvider = ({ children }) => {
             <Button
               variant={options.confirmVariant || "primary"}
               onClick={handleConfirm}
+              disabled={!typingMatched}
+              title={!typingMatched ? "Enter the confirmation value to continue" : undefined}
             >
               {options.confirmText || "Confirm"}
             </Button>

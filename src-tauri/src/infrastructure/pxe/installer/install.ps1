@@ -39,8 +39,17 @@ try {
     $NicIds = @(@($BootDevices[0].HardwareID) + @($BootDevices[0].CompatibleID) | Where-Object { $_ } | Select-Object -Unique)
     if (-not $NicIds) { throw 'The iSCSI boot adapter has no PnP hardware or compatible IDs' }
     $NicMac = $BootAdapters[0].MACAddress
-    $Disks = @($Sessions[0] | Get-Disk | Where-Object { $_.BusType -eq 'iSCSI' -and $_.Size -eq $ExpectedBytes })
-    if ($Disks.Count -ne 1) { throw 'Expected exactly one iSCSI disk with the recorded size' }
+    $SessionDisks = @($Sessions[0] | Get-Disk)
+    $Disks = @($SessionDisks | Where-Object { $_.BusType -eq 'iSCSI' -and $_.Size -eq $ExpectedBytes })
+    for ($Attempt = 0; $Disks.Count -ne 1 -and $Attempt -lt 30; $Attempt++) {
+        Start-Sleep -Seconds 1
+        $SessionDisks = @($Sessions[0] | Get-Disk)
+        $Disks = @($SessionDisks | Where-Object { $_.BusType -eq 'iSCSI' -and $_.Size -eq $ExpectedBytes })
+    }
+    if ($Disks.Count -ne 1) {
+        $Seen = ($SessionDisks | ForEach-Object { "Disk$($_.Number):BusType=$($_.BusType),Size=$($_.Size),IsBoot=$($_.IsBoot),IsSystem=$($_.IsSystem)" }) -join '; '
+        throw "Expected exactly one iSCSI disk with recorded size $ExpectedBytes, found $($Disks.Count) (session disks: $Seen)"
+    }
     if ($Disks[0].IsBoot -or $Disks[0].IsSystem) { throw 'Refusing a boot or system disk' }
     # Fail before fetching Setup payload or clearing a disk if firmware identity differs.
     $Firmware = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control').PEFirmwareType
@@ -156,8 +165,14 @@ try {
         try { $Disk | Set-Disk -IsOffline $true } catch { Write-Warning 'Could not offline the private target disk' }
     }
     # Diagnostics deliberately avoid command arguments, CHAP credentials and token URLs.
-    try { Report 'failed' 10 'Windows installation failed; inspect the WinPE console and retain the assigned disk for recovery' } catch { Write-Warning 'Could not record installer failure' }
-    Write-Error 'Windows installation failed; inspect the WinPE console and retain the assigned disk for recovery.' -ErrorAction Continue
+    $Detail = $_.Exception.Message
+    if ([string]::IsNullOrWhiteSpace($Detail)) { $Detail = 'unknown installer error' }
+    $Detail = ($Detail -split "`r?`n")[0]
+    $Detail = $Detail -replace 'https?://\S+', '<url>'
+    if ($Detail.Length -gt 400) { $Detail = $Detail.Substring(0, 400) }
+    $Failure = "Windows installation failed: $Detail. The private draft is retained for recovery; inspect the session event."
+    try { Report 'failed' 10 $Failure } catch { Write-Warning 'Could not record installer failure' }
+    Write-Error $Failure -ErrorAction Continue
     Write-Warning 'Windows installation stopped. Do not retry against a different disk; contact the administrator.'
     exit 1
 }

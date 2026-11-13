@@ -16,7 +16,7 @@ const NetworkInterfaceSelector = ({
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <Label className="text-sm font-semibold text-muted-foreground uppercase tracking-tight flex items-center gap-2">
+        <Label className="flex items-center gap-2 text-sm font-semibold text-foreground">
           <Network size={14} /> Network Interfaces
         </Label>
         <Button
@@ -24,10 +24,10 @@ const NetworkInterfaceSelector = ({
           onClick={onRefresh}
           variant="ghost"
           size="xs"
-          className="gap-1 opacity-70 hover:opacity-100"
+          icon={RefreshCcw}
+          className={`gap-1 opacity-70 hover:opacity-100 ${loading ? "[&_svg]:animate-spin" : ""}`}
           disabled={loading}
         >
-          <RefreshCcw size={12} className={loading ? "animate-spin" : ""} />
           Refresh
         </Button>
       </div>
@@ -39,7 +39,7 @@ const NetworkInterfaceSelector = ({
               <span className="text-xs">Detecting interfaces...</span>
             </div>
           ) : interfaces.length === 0 ? (
-            <div className="py-8 text-center text-sm text-destructive/70 italic">
+            <div className="py-8 text-center text-sm text-muted-foreground">
               No active network interfaces detected.
             </div>
           ) : (
@@ -62,7 +62,7 @@ const NetworkInterfaceSelector = ({
                     <span className=" text-sm font-bold">{iface}</span>
                   </div>
                   {isSelected && (
-                    <Badge variant="default" className="px-1.5 py-0.5 font-semibold uppercase tracking-widest text-[10px]">
+                    <Badge variant="default" className="px-1.5 py-0.5 text-[10px] font-semibold">
                       Active
                     </Badge>
                   )}

@@ -6,6 +6,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { serverSchema } from "@/schema";
 import { useSettings } from "@/hooks/useSettings";
 import { useAppStore } from "@/store/useAppStore";
+import { useConfirm } from "@/contexts/confirmDialog";
 import { Card, Button, Input } from "@/components/ui";
 import { RefreshCcw, Shield, Globe, Network, TriangleAlert } from "lucide-react";
 import NetworkInterfaceSelector from "./NetworkInterfaceSelector";
@@ -49,6 +50,7 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
   const { fetchInterfaces, detectNetwork, applyNetworkSettings, updateServer } =
     useSettings();
   const { appConfig, fetchServerInfo } = useAppStore();
+  const confirm = useConfirm();
   const [interfaces, setInterfaces] = useState([]);
   const [loadingInterfaces, setLoadingInterfaces] = useState(true);
 
@@ -57,6 +59,7 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
     handleSubmit,
     setValue,
     watch,
+    getValues,
     formState: { errors, isSubmitting },
     reset,
   } = useForm({
@@ -116,18 +119,52 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
     }
   }, [detectNetwork, setValue]);
 
+  /**
+   * Applying rewrites the host network configuration and takes effect
+   * immediately, which can drop the admin's own connection. Every apply path
+   * goes through this gate so the target interface and resulting address are
+   * named before anything is committed.
+   */
+  const confirmApply = useCallback(
+    async (payload) =>
+      confirm({
+        title: "Apply network configuration",
+        description: `This rewrites the server network configuration and applies it immediately on ${
+          payload.interface?.length
+            ? payload.interface.join(", ")
+            : "the primary interface"
+        }, moving the server to ${
+          payload.ip_address
+            ? `${payload.ip_address} / ${payload.netmask}`
+            : "the detected address"
+        }. Running clients lose their boot session, and the management UI becomes unreachable if the address is wrong.`,
+        confirmText: "Apply now",
+        cancelText: "Keep it saved",
+        confirmVariant: "destructive",
+        size: "2xl",
+      }),
+    [confirm]
+  );
+
   const onSubmit = async (data) => {
     const payload = toServerPayload(data);
 
     const success = await updateServer(payload);
     if (success) {
-      // Apply the network settings and regenerate service configs immediately after saving
-      if (applyOnSave) await applyNetworkSettings();
+      // The configuration is written on save; applying it is a separate,
+      // confirmed step because it can sever connectivity.
+      if (applyOnSave) {
+        const approved = await confirmApply(payload);
+        if (approved) await applyNetworkSettings();
+      }
       await onSaved?.();
     }
   };
 
   const handleApplyStatic = async () => {
+    const payload = toServerPayload(getValues());
+    const approved = await confirmApply(payload);
+    if (!approved) return;
     await applyNetworkSettings();
   };
 
@@ -146,7 +183,7 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
     <Card
       title="Server Network Configuration"
       icon={Network}
-      className="h-full md:col-span-2 xl:col-span-4"
+      className="h-full"
     >
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         <div data-testid="network-sections" className="grid grid-cols-1 gap-4 xl:grid-cols-2">
@@ -160,8 +197,8 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
           />
 
           {/* Right Column: Addressing */}
-          <div>
-            <Label className="text-sm font-semibold text-muted-foreground uppercase tracking-tight flex items-center gap-2">
+          <div className="space-y-3">
+            <Label className="flex items-center gap-2 text-sm font-semibold text-foreground">
               <Globe size={14} /> Identification
             </Label>
 
@@ -183,7 +220,7 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
 
           <div className="xl:col-span-2">
             <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <Label className="text-sm font-semibold text-muted-foreground uppercase tracking-tight flex items-center gap-2">
+              <Label className="flex items-center gap-2 text-sm font-semibold text-foreground">
                 <Shield size={14} /> Addressing (Static IP)
               </Label>
               <Button
@@ -199,7 +236,7 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
               </Button>
             </div>
 
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
               <Input
                 label="IP Address"
                 id="server-ip"
@@ -216,15 +253,15 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
               />
             </div>
 
-            <Input
-              label="Default Gateway"
-              id="server-gateway"
-              register={register("gateway")}
-              error={errors.gateway?.message}
-              placeholder="192.168.1.1"
-            />
+            <div className="mt-4 space-y-4">
+              <Input
+                label="Default Gateway"
+                id="server-gateway"
+                register={register("gateway")}
+                error={errors.gateway?.message}
+                placeholder="192.168.1.1"
+              />
 
-            <div className="space-y-2">
               <Input
                 label="DNS Servers (Comma Separated)"
                 id="server-dns"
@@ -235,7 +272,7 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
               />
             </div>
 
-            <Alert className="py-3 px-4 mt-3 rounded-xl border-none bg-amber-600/10 text-amber-600 text-xs leading-relaxed shadow-sm">
+            <Alert className="mt-3 rounded-xl border-none bg-warning/10 px-4 py-3 text-xs leading-relaxed text-warning shadow-sm">
               <div className="flex items-start gap-3">
                 <TriangleAlert size={18} className="shrink-0" />
                 <span>
@@ -245,6 +282,8 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
                   Debian/Ubuntu, a NetworkManager profile on Fedora/RHEL and
                   Arch Linux) and apply changes immediately. Ensure the
                   settings are correct to avoid losing server connectivity.
+                  You will be asked to confirm the target interface and
+                  address before anything is applied.
                 </span>
               </div>
             </Alert>
@@ -263,7 +302,7 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
           </Button>
           <Button
             className="min-w-0 flex-1 shrink px-1 text-center text-xs leading-tight whitespace-normal sm:px-2 sm:text-sm sm:whitespace-nowrap"
-            variant="warning"
+            variant="destructive"
             type="button"
             onClick={handleApplyStatic}
             disabled={isSubmitting}
@@ -277,7 +316,11 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
             type="submit"
             loading={isSubmitting}
           >
-            {isSubmitting ? "Saving..." : "Save Configuration"}
+            {isSubmitting
+              ? "Saving..."
+              : applyOnSave
+                ? "Save & Apply"
+                : "Save Configuration"}
           </Button>
         </div>
       </form>

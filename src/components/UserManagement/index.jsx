@@ -91,7 +91,7 @@ export default function UserManagement() {
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
-        title="User Management"
+        title="Users"
         description="Manage system users and their roles."
       />
       <Card

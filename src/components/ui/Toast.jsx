@@ -2,10 +2,10 @@ import { CheckCircle2, Info, TriangleAlert, XCircle, X } from "lucide-react";
 import { useToastStore } from "@/store/useToastStore";
 
 const typeMeta = {
-  success: { Icon: CheckCircle2, ring: "text-primary" },
+  success: { Icon: CheckCircle2, ring: "text-success" },
   error: { Icon: XCircle, ring: "text-destructive" },
-  warning: { Icon: TriangleAlert, ring: "text-muted-foreground" },
-  info: { Icon: Info, ring: "text-muted-foreground" },
+  warning: { Icon: TriangleAlert, ring: "text-warning" },
+  info: { Icon: Info, ring: "text-info" },
 };
 
 export default function Toast({ toast }) {

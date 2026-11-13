@@ -185,7 +185,7 @@ impl RenderContext<'_> {
         };
         let commands=match s.recipe.as_str() {
             "interactive"=>format!("sanhook --drive 0x81 iscsi:{}:::0:{} || goto failed\nsanboot --no-describe iscsi:{}:::1:{} || goto failed\n",self.server,s.target_iqn,self.server,s.target_iqn),
-            "windows"=>format!("sanhook --drive 0x80 iscsi:{}:::0:{} || goto failed\nkernel {}/boot/winpe/wimboot || goto failed\ninitrd {}/boot/winpe/BCD BCD || goto failed\ninitrd {}/boot/winpe/boot.sdi boot.sdi || goto failed\ninitrd {}/boot/winpe/boot-installer.wim boot.wim || goto failed\ninitrd {url}/startnet.cmd startnet.cmd || goto failed\ninitrd {url}/install.ps1 install.ps1 || goto failed\nboot || goto failed\n",self.server,s.target_iqn,self.base,self.base,self.base,self.base),
+            "windows"=>format!("sanhook --drive 0x80 iscsi:{}:::0:{} || goto failed\nkernel {}/boot/winpe/wimboot || goto failed\ninitrd {}/boot/winpe/BCD BCD || goto failed\ninitrd {}/boot/winpe/boot.sdi boot.sdi || goto failed\ninitrd --name boot.wim {}/boot/winpe/boot-installer.wim boot.wim || goto failed\ninitrd {url}/startnet.cmd startnet.cmd || goto failed\ninitrd {url}/install.ps1 install.ps1 || goto failed\nboot || goto failed\n",self.server,s.target_iqn,self.base,self.base,self.base,self.base),
             "ubuntu"=>format!("sanhook --drive 0x80 iscsi:{}:::0:{} || goto failed\nkernel {url}/vmlinuz ip=dhcp boot=casper url={url}/media.iso autoinstall ds=nocloud-net;s={url}/ --- || goto failed\ninitrd {url}/initrd || goto failed\nboot || goto failed\n",self.server,s.target_iqn),
             "rhel"=>format!("sanhook --drive 0x80 iscsi:{}:::0:{} || goto failed\nkernel {url}/vmlinuz ip=dhcp rd.iscsi.firmware=1 inst.ks={url}/ks.cfg inst.repo={url}/ inst.stage2={url}/ || goto failed\ninitrd {url}/initrd || goto failed\nboot || goto failed\n",self.server,s.target_iqn),
             _=>"goto failed\n".to_owned(),
@@ -316,6 +316,40 @@ mod tests {
     }
 
     #[test]
+    fn windows_installer_wim_is_presented_to_wimboot_as_boot_wim() {
+        let client = crate::domain::Client::create(serde_json::from_value(serde_json::json!({
+            "name": "PC001", "mac": "02:00:00:00:00:01", "ip": "192.0.2.10", "master": "pool/source"
+        })).unwrap()).unwrap();
+        let session = InstallationSession {
+            recipe: "windows".into(),
+            target_iqn: "iqn.test:clone".into(),
+            ..Default::default()
+        };
+        let script = RenderContext {
+            session: &session,
+            base: "http://boot",
+            api: "http://installer",
+            server: "192.0.2.1",
+            client: &client,
+            username: "",
+            password_hash: "",
+        }
+        .boot();
+        // BCD names ramdisk=[boot]\Boot\boot.wim. The on-disk file is
+        // boot-installer.wim, so `--name boot.wim` is what makes wimboot
+        // find it; without it Boot Manager stops with 0xc000000f.
+        assert!(
+            script.contains(
+                "initrd --name boot.wim http://boot/boot/winpe/boot-installer.wim boot.wim"
+            ),
+            "{script}"
+        );
+        assert!(script.contains("initrd http://boot/boot/winpe/BCD BCD"));
+        assert!(script.contains("initrd http://boot/boot/winpe/boot.sdi boot.sdi"));
+        assert!(script.contains("initrd http://installer/api/installer/"));
+    }
+
+    #[test]
     fn existing_windows_branch_cannot_repartition_or_install() {
         let script = include_str!("installer/install.ps1");
         let (_, branch) = script.split_once("    if ($AdaptExisting) {").unwrap();
@@ -356,6 +390,29 @@ mod tests {
         assert!(failure.contains("Remove-PartitionAccessPath @Mount"));
         assert!(failure.contains("Set-Disk -IsOffline $true"));
         assert!(!failure.contains("Write-Error -ErrorRecord"));
+    }
+
+    #[test]
+    fn winpe_disk_mismatch_reports_found_sizes() {
+        let script = include_str!("installer/install.ps1");
+        assert!(script.contains("$SessionDisks = @($Sessions[0] | Get-Disk)"));
+        assert!(script
+            .contains("for ($Attempt = 0; $Disks.Count -ne 1 -and $Attempt -lt 30; $Attempt++)"));
+        assert!(script.contains("Start-Sleep -Seconds 1"));
+        assert!(
+            script.contains("Expected exactly one iSCSI disk with recorded size $ExpectedBytes")
+        );
+        assert!(script.contains("found $($Disks.Count) (session disks: $Seen)"));
+    }
+
+    #[test]
+    fn winpe_failure_reports_the_installer_detail_not_just_a_generic_message() {
+        let script = include_str!("installer/install.ps1");
+        let failure = script.split_once("\n} catch {\n").unwrap().1;
+        assert!(failure.contains("$Detail = $_.Exception.Message"));
+        assert!(failure.contains("Report 'failed' 10 $Failure"));
+        assert!(failure.contains("-replace 'https?://\\S+', '<url>'"));
+        assert!(failure.contains("private draft is retained for recovery"));
     }
 
     #[test]

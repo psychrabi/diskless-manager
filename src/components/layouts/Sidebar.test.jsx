@@ -10,6 +10,9 @@ const { logout, setTheme, authState } = vi.hoisted(() => ({ logout: vi.fn(), set
 vi.mock("@/contexts/auth", () => ({ useAuth: () => ({ user: { username: "operator", role: authState.role }, logout }) }));
 vi.mock("@/contexts/theme", () => ({ useTheme: () => ({ theme: "light", setTheme }) }));
 vi.mock("@/contexts/confirmDialog", () => ({ useConfirm: () => vi.fn() }));
+// Header reads the telemetry connection from MetricsProvider, which
+// main.jsx supplies around the whole app.
+vi.mock("@/contexts/useMetrics", () => ({ useMetrics: () => ({ isConnected: true, error: null }) }));
 
 function Workspace({ path = "/clients" }) {
   return (

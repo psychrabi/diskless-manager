@@ -5,33 +5,28 @@ import {
   CardDescription,
   CardTitle,
 } from "@/components/ui/card";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 
 function ClientHero({ handleClientFormModalOpen }) {
   return (
-    <Card className="py-12 text-center">
-      <CardContent className="flex flex-col items-center gap-4">
-        <Avatar className="size-20">
-          <AvatarFallback className="bg-muted">
-            <Laptop className="size-10 text-muted-foreground/60" />
-          </AvatarFallback>
-        </Avatar>
-        <div className="flex flex-col gap-2">
+    <Card className="border-dashed shadow-none">
+      <CardContent className="flex flex-col items-center gap-4 px-6 py-14 text-center">
+        <div className="relative flex size-16 items-center justify-center rounded-2xl border border-primary/15 bg-primary/10">
+          <Laptop className="size-7 text-primary" />
+          <span className="absolute -right-1 -bottom-1 size-3 rounded-full border-2 border-card bg-success" />
+        </div>
+        <div className="flex flex-col gap-1.5">
           <CardTitle className="text-lg font-semibold">
-            No Clients Found
+            No clients yet
           </CardTitle>
           <CardDescription className="mx-auto max-w-md">
-            Get started by adding your first diskless boot client. You'll need
-            the client's MAC address and desired IP configuration.
+            Add your first diskless client with its MAC address. It will register the next time it network boots.
           </CardDescription>
         </div>
-        <div className="flex flex-col justify-center gap-3 sm:flex-row">
-          <Button variant="default" onClick={handleClientFormModalOpen}>
-            <PlusCircle data-icon="inline-start" />
-            Add Your First Client
-          </Button>
-        </div>
+        <Button variant="default" onClick={handleClientFormModalOpen}>
+          <PlusCircle data-icon="inline-start" />
+          Add your first client
+        </Button>
       </CardContent>
     </Card>
   );

@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { Gauge, RefreshCw } from "lucide-react";
+import { Eraser, Gauge } from "lucide-react";
 import { useAppStore } from "@/store/useAppStore";
 import { useToastStore } from "@/store/useToastStore";
+import { useConfirm } from "@/contexts/confirmDialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
 import { Spinner } from "@/components/ui/spinner";
 import { clearRamCache } from "@/api/modules/system";
 
@@ -21,15 +21,15 @@ const formatBytes = (value) => {
 };
 
 const formatPercent = (value) =>
-  value == null ? "—" : `${value.toFixed(1)}%`;
+  value == null ? "—" : `${Number(value).toFixed(1)}%`;
 
 const StatRow = ({ label, value, hint }) => (
-  <div className="flex items-center justify-between gap-4 py-2">
-    <span className="text-sm text-muted-foreground">{label}</span>
-    <span className="text-sm font-medium tabular-nums text-right">
+  <div className="flex items-baseline justify-between gap-3 border-b border-border/50 py-2 last:border-0">
+    <span className="text-[11px] text-muted-foreground">{label}</span>
+    <span className="text-right font-mono-data text-[11px] font-medium tabular-nums text-foreground">
       {value}
       {hint && (
-        <span className="text-xs ml-1 font-normal text-muted-foreground">{hint}</span>
+        <span className="ml-1 font-sans text-[10px] font-normal text-muted-foreground">{hint}</span>
       )}
     </span>
   </div>
@@ -40,6 +40,7 @@ const ArcCacheCard = () => {
   const fetchArcStat = useAppStore((state) => state.fetchArcStat);
   const fetchArcStatRef = useRef(fetchArcStat);
   const { success, error: showError } = useToastStore();
+  const confirm = useConfirm();
   const [isClearing, setIsClearing] = useState(false);
 
   useEffect(() => {
@@ -55,6 +56,18 @@ const ArcCacheCard = () => {
   }, []);
 
   const handleClearCache = async () => {
+    // Dropping the page cache and calling drop_caches affects the whole host,
+    // so it is confirmed rather than fired from a single icon press.
+    const confirmed = await confirm({
+      title: "Clear system cache",
+      description:
+        "This flushes the host page cache and runs sync and drop_caches across every pool. Disk-backed reads will be slower until the cache warms again.",
+      confirmText: "Clear cache",
+      cancelText: "Cancel",
+      confirmVariant: "destructive",
+    });
+    if (!confirmed) return;
+
     setIsClearing(true);
     try {
       const response = await clearRamCache();
@@ -70,34 +83,56 @@ const ArcCacheCard = () => {
     }
   };
 
+  const recentHitRate = arcStat?.interval_warming_up ? null : arcStat?.interval_hit_ratio;
+
   return (
-    <Card className="h-full xl:col-span-2">
+    <Card className="h-full">
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <Gauge className="size-4 text-muted-foreground" />
+          <span className="flex size-8 items-center justify-center rounded-lg border border-border/70 bg-muted/50 text-muted-foreground">
+            <Gauge className="size-4" />
+          </span>
           ZFS ARC Cache
         </CardTitle>
         <CardAction>
           <Button
             onClick={handleClearCache}
-            variant="outline"
-            size="sm"
+            variant="ghost"
+            size="icon-sm"
             disabled={isClearing}
             title="Clear system cache (sync + drop_caches)"
+            aria-label="Clear system cache"
           >
-            {isClearing ? (
-              <Spinner data-icon="inline-start" />
-            ) : (
-              <RefreshCw data-icon="inline-start" />
-            )}
-            Clear Cache
+            {isClearing ? <Spinner /> : <Eraser />}
           </Button>
         </CardAction>
       </CardHeader>
       <CardContent>
         {arcStat ? (
           <div>
-            <div className="divide-y divide-border">
+            <div className="flex items-end justify-between gap-4">
+              <div>
+                <p className="text-xs font-medium text-muted-foreground">
+                  Recent hit rate
+                </p>
+                <p className="mt-1.5 text-3xl font-semibold tracking-[-0.045em] tabular-nums text-foreground">
+                  {recentHitRate == null ? "—" : formatPercent(recentHitRate)}
+                </p>
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  {arcStat.interval_warming_up ? "Warming up…" : "last ~15s"}
+                </p>
+              </div>
+              <div className="mb-1 flex-1">
+                <div className="ml-auto h-1.5 w-full max-w-36 overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full rounded-full bg-primary"
+                    style={{ width: `${Math.max(0, Math.min(100, Number(recentHitRate) || 0))}%` }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 grid grid-cols-1 gap-x-5 sm:grid-cols-2">
               <StatRow
                 label="Cache Size"
                 value={formatBytes(arcStat.size)}
@@ -110,12 +145,7 @@ const ArcCacheCard = () => {
               <StatRow label="Hit Rate" value={formatPercent(arcStat.hit_ratio)} />
               <StatRow
                 label="Hit Rate (recent)"
-                value={
-                  arcStat.interval_warming_up
-                    ? "Warming up..."
-                    : formatPercent(arcStat.interval_hit_ratio)
-                }
-                hint={arcStat.interval_warming_up ? null : "last ~15s"}
+                value={formatPercent(arcStat.interval_hit_ratio)}
               />
               <StatRow
                 label="Demand Data"
@@ -137,14 +167,9 @@ const ArcCacheCard = () => {
                 }
               />
             </div>
-            {!arcStat.interval_warming_up && arcStat.interval_hit_ratio > 0 && (
-              <div className="pt-3">
-                <Progress value={arcStat.interval_hit_ratio} />
-              </div>
-            )}
           </div>
         ) : (
-          <div className="py-4 text-center text-sm text-destructive">
+          <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
             ARC stats unavailable. Is ZFS /proc kstat present?
           </div>
         )}

@@ -19,8 +19,8 @@ const ClientTableEmptyState = () => {
         <TableBody>
           <TableRow className="border-0 hover:bg-transparent">
             <TableCell colSpan="7">
-              <div className="flex flex-col items-center justify-center py-12 text-muted-foreground/60">
-                <Laptop className="mb-3 size-12 opacity-40" />
+              <div className="flex flex-col items-center justify-center py-14 text-muted-foreground/60">
+                <Laptop className="mb-3 size-10 opacity-40" />
                 <p className="text-sm font-medium">No clients configured</p>
                 <CardDescription className="mt-1 text-xs">Add your first client using the button above</CardDescription>
               </div>

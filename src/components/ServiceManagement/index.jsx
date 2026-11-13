@@ -1,6 +1,9 @@
 import { PlayCircle, StopCircle } from "lucide-react";
 import { useCallback, useState } from "react";
+import { useShallow } from "zustand/shallow";
 import { useServiceManager } from "../../hooks/useServiceManager";
+import { useAppStore } from "@/store/useAppStore";
+import { useConfirm } from "@/contexts/confirmDialog";
 import { Button, PageHeader } from "@/components/ui";
 import BootScript from "./BootScript";
 import FirewallBanner from "./FirewallBanner";
@@ -10,6 +13,10 @@ import ServicesList from "./ServicesList";
 const ServiceManagement = () => {
   const { fetchServiceConfig, startAllServices, stopAllServices } =
     useServiceManager();
+  const confirm = useConfirm();
+  const services = useAppStore(
+    useShallow((state) => ({ services: state.services })),
+  ).services;
   const [globalLoading, setGlobalLoading] = useState(null);
   const [modalState, setModalState] = useState({
     isOpen: false,
@@ -28,6 +35,28 @@ const ServiceManagement = () => {
       setGlobalLoading(null);
     }
   };
+
+  /**
+   * Stopping the whole stack is the widest-blast-radius action in the app:
+   * it severs PXE, DHCP/TFTP, the iSCSI target, and file sharing for every
+   * client at once, so it is gated and names what it is about to take down.
+   */
+  const handleStopAll = useCallback(async () => {
+    const running = (services || []).filter((service) => service.running);
+    const names = running.map((service) => service.display_name || service.name);
+    const confirmed = await confirm({
+      title: "Stop all services",
+      description: `This stops ${
+        names.length ? names.join(", ") : "every managed service"
+      }. Clients that are booting or streaming their disk lose their session immediately, and no new client can be provisioned until the services are started again.`,
+      confirmText: "Stop all services",
+      cancelText: "Cancel",
+      confirmVariant: "destructive",
+      size: "2xl",
+    });
+    if (!confirmed) return;
+    await handleGlobalAction("stop", stopAllServices);
+  }, [confirm, services, stopAllServices]);
 
   const handleViewConfig = useCallback(
     async (serviceKey, serviceName) => {
@@ -62,10 +91,10 @@ const ServiceManagement = () => {
   }, []);
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-5">
       <PageHeader
-        title="Service Management"
-        description="Manage and monitor system services."
+        title="Services"
+        description="Every daemon behind boot, storage, and file sharing — with live control."
         actions={
           <>
             <Button
@@ -81,7 +110,7 @@ const ServiceManagement = () => {
               icon={StopCircle}
               variant="destructive"
               loading={globalLoading === "stop"}
-              onClick={() => handleGlobalAction("stop", stopAllServices)}
+              onClick={handleStopAll}
               title="Stop all services"
             >
               Stop All

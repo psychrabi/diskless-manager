@@ -29,11 +29,15 @@ const DiskTable = ({ datasets, onRefresh }) => {
   const handleDeleteDisk = async (disk) => {
     const ok = await confirm({
       title: "Delete disk",
-      description: `Are you sure you want to delete disk "${disk.name}"? This action cannot be undone and might affect clones.`,
+      description: `This permanently deletes the dataset "${disk.name}"${disk.disk_type ? ` (${disk.disk_type})` : ""}, including any clones that depend on it. This cannot be undone.`,
       confirmText: "Delete disk",
       cancelText: "Cancel",
-      confirmVariant: "primary",
+      confirmVariant: "destructive",
       size: "2xl",
+      showInput: true,
+      inputLabel: "Dataset name",
+      requireTyping: true,
+      typingValue: disk.name,
     });
     if (ok) {
       const result = await deleteDataset(disk.name);

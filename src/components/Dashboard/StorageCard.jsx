@@ -1,11 +1,18 @@
-import { Database } from "lucide-react";
+import { Database, MoveDown, MoveUp } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAppStore } from "@/store/useAppStore";
 import { useMetrics } from "@/contexts/useMetrics";
 
 const formatRate = (value) => (value == null ? "—" : `${value.toFixed(2)} MB/s`);
+
+const parseSize = (value) => {
+  if (typeof value === "number") return value;
+  const match = /^([\d.]+)\s*([KMGTPE]?)(i?B)?$/i.exec(String(value ?? "").trim());
+  if (!match) return null;
+  const units = { K: 1024, M: 1024 ** 2, G: 1024 ** 3, T: 1024 ** 4, P: 1024 ** 5, E: 1024 ** 6 };
+  return Number(match[1]) * (units[match[2].toUpperCase()] || 1);
+};
 
 const StorageCard = () => {
   const zpoolStats = useAppStore((state) => state.zpoolStats);
@@ -16,75 +23,95 @@ const StorageCard = () => {
   const health = zpoolStats?.health;
   const healthLabel =
     !health || health === "-" || health === "ONLINE" ? "ONLINE" : health;
+  const used = parseSize(zpoolStats?.allocated);
+  const size = parseSize(zpoolStats?.size);
+  const usedPct = used != null && size ? Math.min(100, Math.round((used / size) * 100)) : null;
 
   return (
-    <Card className="h-full xl:col-span-2">
+    <Card className="h-full">
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <Database className="size-4 text-muted-foreground" />
+          <span className="flex size-8 items-center justify-center rounded-lg border border-border/70 bg-muted/50 text-muted-foreground">
+            <Database className="size-4" />
+          </span>
           Storage
         </CardTitle>
+        {zpoolStats && (
+          <CardAction>
+            <Badge variant={healthLabel === "ONLINE" ? "success" : "destructive"} className="gap-1.5">
+              <span className="size-1.5 rounded-full bg-current" />
+              {healthLabel}
+            </Badge>
+          </CardAction>
+        )}
       </CardHeader>
-      <CardContent className="flex flex-col gap-4">
+      <CardContent className="flex flex-col gap-5">
         {zpoolStats ? (
-          <div className="divide-y divide-border">
-            <div className="flex items-center justify-between gap-4 py-2">
-              <span className="text-sm text-muted-foreground">Pool</span>
-              <span className="text-sm font-medium text-right break-all">{zpoolStats.name}</span>
+          <>
+            <div className="flex items-end justify-between gap-4">
+              <div className="min-w-0">
+                <p className="text-xs font-medium text-muted-foreground">
+                  Allocated
+                </p>
+                <p className="mt-1 text-3xl font-semibold tracking-[-0.045em] tabular-nums text-foreground">
+                  {zpoolStats.allocated}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">of {zpoolStats.size}</p>
+              </div>
+              <div className="min-w-0 text-right">
+                <p className="text-xs font-medium text-muted-foreground">
+                  Pool
+                </p>
+                <p className="mt-1 truncate font-mono-data text-sm font-medium text-foreground">
+                  {zpoolStats.name}
+                </p>
+              </div>
             </div>
-            <div className="flex items-center justify-between gap-4 py-2">
-              <span className="text-sm text-muted-foreground">Size</span>
-              <span className="text-sm font-medium tabular-nums text-right">{zpoolStats.size}</span>
+
+            <div>
+              <div className="h-2 overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-primary to-primary/70 transition-[width] duration-500"
+                  style={{ width: `${usedPct ?? 0}%` }}
+                />
+              </div>
+              <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
+                <span>{usedPct == null ? "Usage unavailable" : `${usedPct}% of pool used`}</span>
+                <span>{zpoolStats.free} free</span>
+              </div>
             </div>
-            <div className="flex items-center justify-between gap-4 py-2">
-              <span className="text-sm text-muted-foreground">Used</span>
-              <span className="text-sm font-medium tabular-nums text-right">{zpoolStats.allocated}</span>
+
+            <div className="grid grid-cols-3 gap-2 border-t border-border/60 pt-4">
+              {[
+                { icon: MoveUp, label: "Read", value: formatRate(zfs?.read_speed_mbps) },
+                { icon: MoveDown, label: "Write", value: formatRate(zfs?.write_speed_mbps) },
+                { icon: Database, label: "Total", value: formatRate((zfs?.read_speed_mbps ?? 0) + (zfs?.write_speed_mbps ?? 0)) },
+              ].map(({ icon: Icon, label, value }) => (
+                <div key={label} className="min-w-0">
+                  <div className="flex items-center gap-1 text-[11px] font-medium text-muted-foreground">
+                    <Icon className="size-3" aria-hidden="true" />
+                    {label}
+                  </div>
+                  <p className="mt-1 truncate font-mono-data text-[11px] font-medium text-foreground">
+                    {value}
+                  </p>
+                </div>
+              ))}
             </div>
-            <div className="flex items-center justify-between gap-4 py-2">
-              <span className="text-sm text-muted-foreground">Available</span>
-              <span className="text-sm font-medium tabular-nums text-right">{zpoolStats.free}</span>
-            </div>
-            <div className="flex items-center justify-between gap-4 py-2">
-              <span className="text-sm text-muted-foreground">Health</span>
-              <Badge variant={healthLabel === "ONLINE" ? "outline" : "destructive"}>
-                {healthLabel}
-              </Badge>
-            </div>
-          </div>
+          </>
         ) : (
-          <div className="py-2 text-center text-sm text-destructive">
+          <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
             Failed to load ZFS pool info.
           </div>
         )}
 
-        <Separator />
-
         {error ? (
-          <p className="py-2 text-center text-sm text-destructive">Metrics stream is unavailable.</p>
+          <p className="text-center text-sm text-destructive">Metrics stream is unavailable.</p>
         ) : storage?.warming_up ? (
-          <p className="py-2 text-center text-sm text-muted-foreground">
-            Collecting a second sample…
-          </p>
-        ) : zfs ? (
-          <div className="divide-y divide-border">
-            <div className="flex items-center justify-between gap-4 py-2">
-              <span className="text-sm text-muted-foreground">Read</span>
-              <span className="text-sm font-medium tabular-nums text-right">{formatRate(zfs.read_speed_mbps)}</span>
-            </div>
-            <div className="flex items-center justify-between gap-4 py-2">
-              <span className="text-sm text-muted-foreground">Write</span>
-              <span className="text-sm font-medium tabular-nums text-right">{formatRate(zfs.write_speed_mbps)}</span>
-            </div>
-            <div className="flex items-center justify-between gap-4 py-2">
-              <span className="text-sm text-muted-foreground">Total</span>
-              <span className="text-sm font-medium tabular-nums text-right">{formatRate((zfs.read_speed_mbps ?? 0) + (zfs.write_speed_mbps ?? 0))}</span>
-            </div>
-          </div>
-        ) : (
-          <p className="py-2 text-center text-sm text-muted-foreground">
-            ZFS kstat counters are unavailable.
-          </p>
-        )}
+          <p className="text-center text-xs text-muted-foreground">Collecting a second sample…</p>
+        ) : !zfs ? (
+          <p className="text-center text-xs text-muted-foreground">ZFS kstat counters are unavailable.</p>
+        ) : null}
       </CardContent>
     </Card>
   );

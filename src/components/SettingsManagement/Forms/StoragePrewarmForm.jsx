@@ -4,6 +4,7 @@ import { Button, Input } from "../../ui";
 import { getRetentionPlan, runRetention } from "@/api/modules/system";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldContent, FieldDescription, FieldLabel } from "@/components/ui/field";
+import { useConfirm } from "@/contexts/confirmDialog";
 
 /**
  * Prewarmed replacement writebacks.
@@ -20,6 +21,7 @@ function StoragePrewarmForm({ control, register, errors, config }) {
   const [planError, setPlanError] = useState("");
   const [previewing, setPreviewing] = useState(false);
   const [executing, setExecuting] = useState(false);
+  const confirm = useConfirm();
 
   const preview = async () => {
     setPreviewing(true);
@@ -35,9 +37,14 @@ function StoragePrewarmForm({ control, register, errors, config }) {
   };
 
   const execute = async () => {
-    if (!window.confirm("Delete every eligible image snapshot? This cannot be undone.")) {
-      return;
-    }
+    const confirmed = await confirm({
+      title: "Delete eligible image snapshots",
+      description: `Delete every image snapshot that falls outside the retention policy? This cannot be undone, and clients restored from those snapshots lose that path back.`,
+      confirmText: "Delete snapshots",
+      cancelText: "Cancel",
+      confirmVariant: "destructive",
+    });
+    if (!confirmed) return;
     setExecuting(true);
     setPlanError("");
     try {
@@ -139,7 +146,7 @@ function StoragePrewarmForm({ control, register, errors, config }) {
         <div>
           <h3 className="text-sm font-medium">Image retention</h3>
           <p className="text-xs text-muted-foreground">
-            Remove old image recovery points. Planning is read-only; a destructive run only
+            Remove old image snapshots. Planning is read-only; a destructive run only
             happens after the confirmation prompt and never touches a snapshot a client, clone,
             spare or session still references.
           </p>

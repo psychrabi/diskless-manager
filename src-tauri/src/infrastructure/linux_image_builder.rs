@@ -1087,6 +1087,32 @@ fn write_file_under(root: &Path, relative: &Path, content: &[u8]) -> Result<()> 
     write_result.with_context(|| format!("write image file {}", relative.display()))
 }
 
+fn configure_ssh_host_key_generation(root: &Path, ssh_service: &str) -> Result<()> {
+    let keygen_unit = concat!(
+        "[Unit]\n",
+        "Description=Generate unique SSH host keys for this diskless client\n",
+        "Before=ssh.service sshd.service sshd-keygen.service\n",
+        "\n[Service]\n",
+        "Type=oneshot\n",
+        "ExecStart=/usr/bin/ssh-keygen -A\n",
+    );
+    write_file_under(
+        root,
+        Path::new("etc/systemd/system/diskless-manager-ssh-hostkeys.service"),
+        keygen_unit.as_bytes(),
+    )?;
+
+    let drop_in_path = PathBuf::from(format!(
+        "etc/systemd/system/{ssh_service}.d/10-diskless-manager-hostkeys.conf"
+    ));
+    let drop_in = concat!(
+        "[Unit]\n",
+        "Requires=diskless-manager-ssh-hostkeys.service\n",
+        "After=diskless-manager-ssh-hostkeys.service\n",
+    );
+    write_file_under(root, &drop_in_path, drop_in.as_bytes())
+}
+
 fn remove_file_under(root: &Path, relative: &Path) -> Result<()> {
     validate_relative_image_path(relative)?;
     let parent_relative = relative.parent().unwrap_or_else(|| Path::new("."));
@@ -1275,11 +1301,13 @@ fn configure_boot(
         chroot(mount, ["visudo", "--check"])?;
     }
     build_initramfs(mount, distro)?;
-    if distro == Distro::Ubuntu {
-        chroot(mount, ["systemctl", "enable", "ssh.service"])?;
+    let ssh_service = if distro == Distro::Ubuntu {
+        "ssh.service"
     } else {
-        chroot(mount, ["systemctl", "enable", "sshd.service"])?;
-    }
+        "sshd.service"
+    };
+    configure_ssh_host_key_generation(mount, ssh_service)?;
+    chroot(mount, ["systemctl", "enable", ssh_service])?;
     run(
         "zfs",
         [

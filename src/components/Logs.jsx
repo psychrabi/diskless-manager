@@ -27,11 +27,12 @@ const Logs = () => {
   }, [logUnit, fetchLogs]);
 
   const logOptions = (
-    <div className="flex gap-2">
+    <div className="flex items-center gap-2 rounded-xl border border-border/80 bg-card p-1 shadow-[0_1px_2px_rgb(0_0_0/0.03)]">
       <Select
         id="log-unit"
         value={logUnit}
         onChange={(e) => setLogUnit(e.target.value)}
+        className="min-w-44 border-0 bg-transparent shadow-none"
       >
         <NativeSelectOption value="app_log">Show App logs</NativeSelectOption>
         {Array.isArray(services) && services.length > 0 ? (
@@ -46,7 +47,7 @@ const Logs = () => {
       </Select>
       <Button
         variant="ghost"
-        size="icon"
+        size="icon-sm"
         onClick={() => fetchLogs(logUnit)}
         title="Refresh Logs"
         icon={RefreshCw}
@@ -55,10 +56,10 @@ const Logs = () => {
   );
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-5">
       <PageHeader
         title="Logs"
-        description="View application and service logs."
+        description="Server output and per-service diagnostics, without leaving the console."
         actions={logOptions}
       />
       <Activity mode={logUnit !== "app_log" ? "visible" : "hidden"}>

@@ -27,10 +27,10 @@ export const useMasterManager = () => {
     try {
       const ok = await confirm({
         title: "Delete Snapshot",
-        description: `Are you sure you want to delete snapshot "${snapshot}" for image "${image}"? This action cannot be undone and might affect clones.`,
+        description: `This permanently deletes the snapshot "${snapshot}" for image "${image}". Any clone restored from it loses that path back. This cannot be undone.`,
         confirmText: "Delete Snapshot",
         cancelText: "Cancel",
-        confirmVariant: "primary",
+        confirmVariant: "destructive",
         size: "2xl",
       });
       if (!ok) return;
@@ -50,14 +50,14 @@ export const useMasterManager = () => {
     if (!snapshot || !image) return;
     const newerNames = newerSnapshots.map((entry) => entry.name);
     const newerSummary = newerNames.length
-      ? `This permanently deletes ${newerNames.length} newer recovery point${
+      ? `This permanently deletes ${newerNames.length} newer snapshot${
           newerNames.length === 1 ? "" : "s"
         }: ${newerNames.join(", ")}.`
-      : "No newer recovery points will be deleted.";
+      : "No newer snapshots will be deleted.";
     try {
       const ok = await confirm({
         title: "Rollback Snapshot",
-        description: `Restore image "${image}" to snapshot "${snapshot}"? ${newerSummary} Clients assigned to newer recovery points must be reassigned first. This cannot be undone.`,
+        description: `Restore image "${image}" to snapshot "${snapshot}"? ${newerSummary} Clients assigned to newer snapshots must be reassigned first. This cannot be undone.`,
         confirmText: "Rollback Snapshot",
         cancelText: "Cancel",
         confirmVariant: newerNames.length ? "destructive" : "primary",
@@ -76,8 +76,8 @@ export const useMasterManager = () => {
     if (!snapshot || !image) return;
     try {
       const answer = await confirm({
-        title: "Apply Restore Point",
-        description: `Create a new master image from "${snapshot}" of "${image}"? The current image, newer restore points, and all client assignments are left unchanged. Assign clients to the new image afterwards.`,
+        title: "Apply Snapshot",
+        description: `Create a new master image from snapshot "${snapshot}" of "${image}"? The current image, newer snapshots, and all client assignments are left unchanged. Assign clients to the new image afterwards.`,
         confirmText: "Create Image",
         cancelText: "Cancel",
         confirmVariant: "primary",
@@ -97,7 +97,7 @@ export const useMasterManager = () => {
       await fetchMasters();
       success(
         "Image Management",
-        `Created ${created?.name || newName} from restore point "${snapshot}"`
+        `Created ${created?.name || newName} from snapshot "${snapshot}"`
       );
     } catch (err) {
       error(err?.error || err?.message || String(err));
@@ -117,14 +117,22 @@ export const useMasterManager = () => {
 
   const handleDeleteImage = useCallback(async (image) => {
     if (!image) return;
+    const recoveryPoints = image.snapshots?.length ?? 0;
     confirm({
       title: "Delete Image",
-      description: `Are you sure you want to delete image "${image.name}"? 
-      This action cannot be undone and might affect clones.`,
+      description: `This permanently deletes the image "${image.name}"${
+        recoveryPoints
+          ? ` and its ${recoveryPoints} snapshot${recoveryPoints === 1 ? "" : "s"}`
+          : ""
+      }, including every ZFS dataset behind it. Clients assigned to it must be reassigned before they can boot. This cannot be undone.`,
       confirmText: "Delete Image",
       cancelText: "Cancel",
-      confirmVariant: "primary",
+      confirmVariant: "destructive",
       size: "2xl",
+      showInput: true,
+      inputLabel: "Image name",
+      requireTyping: true,
+      typingValue: image.name,
     })
       .then(async (ok) => {
         if (!ok) return;

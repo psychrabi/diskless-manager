@@ -138,7 +138,7 @@ export const SnapshotsList = ({ master }) => {
         </Button>
         <History className="h-4 w-4 shrink-0 text-primary" />
         <span className="min-w-0 flex-1 truncate text-sm font-medium">
-          Restore Points
+          Snapshots
         </span>
         <Badge variant="secondary" className="shrink-0">
           {snapshots.length} snapshot{snapshots.length === 1 ? "" : "s"}

@@ -40,8 +40,8 @@ export default function DisksManagement() {
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
-        title="Disk Management"
-        description="Manage diskless boot server disks"
+        title="Disks"
+        description="Manage the diskless boot server disks and the datasets behind them."
         actions={
           datasets.length > 0 && (
             <Button

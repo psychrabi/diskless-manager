@@ -20,6 +20,12 @@ const stateVariant = (state) => {
   return "secondary";
 };
 
+const MicroLabel = ({ children }) => (
+  <p className="text-[11px] font-medium text-muted-foreground">
+    {children}
+  </p>
+);
+
 /**
  * Read-mostly storage health: pool state, the active scan, SMART health and the
  * recorded history. Starting or stopping a scan is the only mutation and the
@@ -97,21 +103,24 @@ export default function StorageMaintenanceCard() {
   const scanActive = Boolean(pool?.scan_in_progress);
 
   return (
-    <Card className="h-full xl:col-span-3">
+    <Card className="h-full">
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <Activity className="size-4 text-muted-foreground" />
+          <span className="flex size-8 items-center justify-center rounded-lg border border-border/70 bg-muted/50 text-muted-foreground">
+            <Activity className="size-4" />
+          </span>
           Storage maintenance
         </CardTitle>
-        <CardAction className="flex flex-wrap gap-1">
+        <CardAction className="flex flex-wrap gap-1.5">
           <Button
-            variant="outline"
-            size="sm"
+            variant="ghost"
+            size="icon-sm"
             onClick={() => load(true)}
             disabled={Boolean(busy)}
+            title="Refresh storage health"
+            aria-label="Refresh storage health"
           >
-            <RefreshCw data-icon="inline-start" />
-            Refresh
+            <RefreshCw className={busy ? "animate-spin" : undefined} />
           </Button>
           {scanActive ? (
             <Button variant="destructive" size="sm" onClick={stop} disabled={Boolean(busy)}>
@@ -142,9 +151,9 @@ export default function StorageMaintenanceCard() {
           )}
         </CardAction>
       </CardHeader>
-      <CardContent className="flex flex-col gap-3">
+      <CardContent className="flex flex-col gap-4">
         {error ? (
-          <p role="alert" className="text-sm text-destructive">
+          <p role="alert" className="rounded-xl border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
             {error}
           </p>
         ) : !status ? (
@@ -152,32 +161,49 @@ export default function StorageMaintenanceCard() {
         ) : (
           <>
             {pool ? (
-              <div className="divide-y divide-border">
-                <div className="flex items-center justify-between gap-4 py-2">
-                  <span className="text-sm text-muted-foreground">Pool</span>
-                  <span className="text-sm font-medium break-all">{pool.pool}</span>
+              <>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <MicroLabel>Pool</MicroLabel>
+                    <p className="mt-1.5 truncate font-mono-data text-[13px] font-medium">{pool.pool}</p>
+                  </div>
+                  <div>
+                    <MicroLabel>Health</MicroLabel>
+                    <div className="mt-1.5">
+                      <Badge variant={pool.state === "ONLINE" ? "success" : "destructive"}>
+                        {pool.state}
+                      </Badge>
+                    </div>
+                  </div>
                 </div>
-                <div className="flex items-center justify-between gap-4 py-2">
-                  <span className="text-sm text-muted-foreground">Health</span>
-                  <Badge variant={pool.state === "ONLINE" ? "outline" : "destructive"}>
-                    {pool.state}
-                  </Badge>
-                </div>
-                <div className="flex flex-col gap-1 py-2">
-                  <span className="text-sm text-muted-foreground">Last / active scan</span>
-                  <span className="text-xs break-words">
+
+                <div className="border-t border-border/60 pt-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <MicroLabel>Last / active scan</MicroLabel>
+                    {scanActive && <Badge variant="info">In progress</Badge>}
+                  </div>
+                  <p className="mt-1.5 text-[13px] leading-5 text-foreground">
                     {pool.scan || "No scan has been recorded on this pool."}
-                  </span>
+                  </p>
                   {pool.scan_in_progress && (
-                    <span className="text-xs text-muted-foreground">
-                      {pool.scan_kind ?? "scan"} {formatPercent(pool.scan_percent)} complete
-                    </span>
+                    <>
+                      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
+                        <div
+                          className="h-full rounded-full bg-primary"
+                          style={{ width: `${Math.max(0, Math.min(100, Number(pool.scan_percent) || 0))}%` }}
+                        />
+                      </div>
+                      <p className="mt-1.5 text-[11px] text-muted-foreground">
+                        {pool.scan_kind ?? "scan"} {formatPercent(pool.scan_percent)} complete
+                      </p>
+                    </>
                   )}
                 </div>
+
                 {pool.vdev_errors?.some(
                   (vdev) => vdev.read || vdev.write || vdev.checksum
                 ) && (
-                  <div className="py-2 text-xs text-destructive" data-testid="vdev-errors">
+                  <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive" data-testid="vdev-errors">
                     {pool.vdev_errors
                       .filter((vdev) => vdev.read || vdev.write || vdev.checksum)
                       .map((vdev) => (
@@ -188,74 +214,78 @@ export default function StorageMaintenanceCard() {
                       ))}
                   </div>
                 )}
-              </div>
+              </>
             ) : (
               <p className="text-sm text-muted-foreground">No ZFS pool was found.</p>
             )}
 
-            <div className="border-t pt-2">
-              <p className="text-sm text-muted-foreground">Devices (SMART)</p>
-              {status.smart?.length ? (
-                <ul className="mt-1 flex flex-col gap-1 text-xs">
-                  {status.smart.slice(0, 8).map((device) => (
-                    <li key={device.device} className="flex flex-wrap items-center gap-2">
-                      <span className="font-medium">{device.device}</span>
-                      {device.available ? (
-                        <>
-                          <Badge variant={device.health === "passed" ? "outline" : "destructive"}>
-                            {device.health}
-                          </Badge>
-                          {device.temperature_c != null && (
-                            <span className="text-muted-foreground">
-                              {device.temperature_c}°C
-                            </span>
-                          )}
-                          {device.wear_percent != null && (
-                            <span className="text-muted-foreground">
-                              wear {device.wear_percent}%
-                            </span>
-                          )}
-                          {device.media_errors != null && device.media_errors > 0 && (
-                            <span className="text-destructive">
-                              media errors {device.media_errors}
-                            </span>
-                          )}
-                        </>
-                      ) : (
-                        <span className="text-muted-foreground">
-                          {device.note || "unavailable"}
+            <div className="grid gap-4 border-t border-border/60 pt-4 sm:grid-cols-2">
+              <div className="min-w-0">
+                <MicroLabel>Devices (SMART)</MicroLabel>
+                {status.smart?.length ? (
+                  <ul className="mt-2 flex flex-col gap-2 text-xs">
+                    {status.smart.slice(0, 8).map((device) => (
+                      <li key={device.device} className="flex flex-wrap items-center gap-1.5">
+                        <span className="min-w-0 break-all font-mono-data text-[10px] text-foreground">
+                          {device.device}
                         </span>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="mt-1 text-xs text-muted-foreground">
-                  No physical pool members were reported.
-                </p>
-              )}
-            </div>
+                        {device.available ? (
+                          <>
+                            <Badge variant={device.health === "passed" ? "success" : "destructive"}>
+                              {device.health}
+                            </Badge>
+                            {device.temperature_c != null && (
+                              <span className="text-muted-foreground">
+                                {device.temperature_c}°C
+                              </span>
+                            )}
+                            {device.wear_percent != null && (
+                              <span className="text-muted-foreground">
+                                wear {device.wear_percent}%
+                              </span>
+                            )}
+                            {device.media_errors != null && device.media_errors > 0 && (
+                              <span className="text-destructive">
+                                media errors {device.media_errors}
+                              </span>
+                            )}
+                          </>
+                        ) : (
+                          <span className="text-muted-foreground">
+                            {device.note || "unavailable"}
+                          </span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    No physical pool members were reported.
+                  </p>
+                )}
+              </div>
 
-            <div className="border-t pt-2">
-              <p className="text-sm text-muted-foreground">History</p>
-              {status.runs?.length ? (
-                <ul className="mt-1 flex flex-col gap-1 text-xs">
-                  {status.runs.slice(0, 5).map((run) => (
-                    <li key={run.id} className="flex flex-wrap items-center gap-2">
-                      <Badge variant={stateVariant(run.state)}>{run.state}</Badge>
-                      <span className="font-medium">{run.operation}</span>
-                      <span className="text-muted-foreground">
-                        {run.finished_at || run.started_at}
-                      </span>
-                      {run.actor && (
-                        <span className="text-muted-foreground">· {run.actor}</span>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="mt-1 text-xs text-muted-foreground">No maintenance runs yet.</p>
-              )}
+              <div className="min-w-0">
+                <MicroLabel>History</MicroLabel>
+                {status.runs?.length ? (
+                  <ul className="mt-2 flex flex-col gap-2 text-xs">
+                    {status.runs.slice(0, 5).map((run) => (
+                      <li key={run.id} className="flex flex-wrap items-center gap-1.5">
+                        <Badge variant={stateVariant(run.state)}>{run.state}</Badge>
+                        <span className="font-medium">{run.operation}</span>
+                        <span className="text-muted-foreground">
+                          {run.finished_at || run.started_at}
+                        </span>
+                        {run.actor && (
+                          <span className="text-muted-foreground">· {run.actor}</span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="mt-2 text-xs text-muted-foreground">No maintenance runs yet.</p>
+                )}
+              </div>
             </div>
           </>
         )}

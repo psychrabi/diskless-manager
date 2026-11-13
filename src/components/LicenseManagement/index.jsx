@@ -6,7 +6,7 @@ const LicenseManagement = () => {
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
-        title="License Management"
+        title="License"
         description="Activate and review your server license."
       />
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-stretch">
