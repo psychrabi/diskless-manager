@@ -63,6 +63,32 @@ jobs:
       - name: Clippy
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
 
+  windows-client:
+    name: Windows client validation
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./tools/windows-servicer -> target"
+      - name: Test and lint Windows client
+        run: |
+          cargo test --locked --manifest-path tools/windows-servicer/Cargo.toml
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo clippy --locked --manifest-path tools/windows-servicer/Cargo.toml --all-targets --all-features -- -D warnings
+      - name: Parse embedded preparation scripts with Windows PowerShell
+        shell: powershell
+        run: |
+          Get-ChildItem tools/windows-servicer/assets/local-boot-*.ps1 | ForEach-Object {
+            $tokens = $null
+            $parseErrors = $null
+            [Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$parseErrors) | Out-Null
+            if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
+          }
+
   frontend:
     name: Frontend validation
     runs-on: ubuntu-latest

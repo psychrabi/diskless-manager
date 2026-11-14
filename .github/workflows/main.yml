@@ -133,6 +133,24 @@ jobs:
       - name: Build Windows servicing helper
         run: cargo build --release --manifest-path tools/windows-servicer/Cargo.toml
 
+      - name: Package Windows client
+        shell: pwsh
+        run: |
+          $bundle = 'tools/windows-servicer/target/client-bundle'
+          New-Item -ItemType Directory -Force -Path $bundle | Out-Null
+          Copy-Item tools/windows-servicer/target/release/diskless-windows-servicer.exe $bundle
+          Copy-Item tools/windows-servicer/install-client.ps1, tools/windows-servicer/uninstall-client.ps1, tools/windows-servicer/README.md, tools/windows-servicer/REA-NOTES.md $bundle
+          New-Item -ItemType Directory -Force -Path "$bundle/client-report" | Out-Null
+          Copy-Item tools/windows-servicer/client-report/TESTING.md "$bundle/client-report"
+          Compress-Archive -Path "$bundle/*" -DestinationPath tools/windows-servicer/target/diskless-windows-client.zip -Force
+
+      - name: Upload Windows client bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: diskless-windows-client
+          path: tools/windows-servicer/target/diskless-windows-client.zip
+          if-no-files-found: error
+
       - name: Upload Windows servicing helper artifact
         uses: actions/upload-artifact@v4
         with:
@@ -164,3 +182,14 @@ jobs:
         run: |
           gh release upload "${{ github.ref_name }}" windows-servicer/diskless-windows-servicer.exe --clobber
           gh release upload "${{ github.ref_name }}" windows-servicer/install.ps1 --clobber
+
+      - name: Download Windows client bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: diskless-windows-client
+          path: windows-client
+
+      - name: Attach client to GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.ref_name }}" windows-client/diskless-windows-client.zip --clobber
