@@ -14,13 +14,14 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
-#[cfg(windows)]
-const SERVICE_REPORT_ATTEMPTS: usize = 6;
-#[cfg(windows)]
-const SERVICE_REPORT_RETRY_DELAY: Duration = Duration::from_secs(10);
+/// Retry budget shared by the boot-time service and the `--retry` CLI flag:
+/// an iSCSI session or the network may not be settled immediately after boot.
+pub const REPORT_ATTEMPTS: usize = 6;
+pub const REPORT_RETRY_DELAY: Duration = Duration::from_secs(10);
+const MAX_LOG_BYTES: u64 = 1024 * 1024;
 
 /// Identity and inventory posted to `/api/pxe/network-drivers/reports`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -135,6 +136,98 @@ impl ReporterConfig {
         }
         Ok(format!("{base}/api/pxe/network-drivers/reports"))
     }
+}
+
+/// The diagnostic log path for a workspace directory. Shared with the GUI so
+/// failures can point at the same file the operation wrote.
+pub fn log_path(base: &Path) -> PathBuf {
+    base.join("logs").join("client.log")
+}
+
+/// Best-effort diagnostic log for client-side operations. Entries append to
+/// `logs\client.log` beside the reporter configuration (or beside a driver
+/// root's parent for local installs) and rotate to `client.log.1` once the
+/// file grows past `MAX_LOG_BYTES`. A failed log write is discarded: a missing
+/// log must never block a report or a driver installation.
+pub struct ClientLog {
+    path: PathBuf,
+}
+
+impl ClientLog {
+    /// Log for the workspace that contains `base` (a configuration file's
+    /// directory or a driver root's parent).
+    pub fn for_directory(base: &Path) -> Self {
+        Self {
+            path: log_path(base),
+        }
+    }
+
+    /// Log beside the reporter configuration file.
+    pub fn for_config(config_path: &Path) -> Self {
+        Self::for_directory(config_path.parent().unwrap_or_else(|| Path::new(".")))
+    }
+
+    pub fn write(&self, message: &str) {
+        let _ = self.append(message);
+    }
+
+    fn append(&self, message: &str) -> std::io::Result<()> {
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        if self.path.exists() && std::fs::metadata(&self.path)?.len() > MAX_LOG_BYTES {
+            let rotated = self.path.with_extension("log.1");
+            let _ = std::fs::remove_file(&rotated);
+            std::fs::rename(&self.path, rotated)?;
+        }
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)?;
+        writeln!(file, "{} {}", format_utc(unix_seconds_now()), message)
+    }
+}
+
+fn unix_seconds_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+/// Render a Unix timestamp as UTC ISO 8601 without a time-zone database: the
+/// days-since-epoch to civil-date conversion follows Howard Hinnant's algorithm.
+fn format_utc(timestamp: u64) -> String {
+    let (year, month, day) = civil_from_days((timestamp / 86_400) as i64);
+    let second_of_day = timestamp % 86_400;
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        second_of_day / 3600,
+        (second_of_day % 3600) / 60,
+        second_of_day % 60
+    )
+}
+
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let day_of_era = z - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_index = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_index + 2) / 5 + 1;
+    let month = if month_index < 10 {
+        month_index + 3
+    } else {
+        month_index - 9
+    };
+    (
+        if month <= 2 { year + 1 } else { year },
+        month as u32,
+        day as u32,
+    )
 }
 
 /// A physical network adapter as reported by PowerShell.
@@ -266,8 +359,102 @@ pub fn run_report_client(config_path: &Path) -> Result<()> {
         cfg!(windows),
         "client reporting runs on a managed Windows client"
     );
-    let config = ReporterConfig::load(config_path)?;
-    run_report_client_with_config(config)
+    let log = ClientLog::for_config(config_path);
+    let result = ReporterConfig::load(config_path).and_then(|config| report_flow(config, &log));
+    match &result {
+        Ok(()) => log.write("client report finished"),
+        Err(error) => log.write(&format!("client report failed: {error:#}")),
+    }
+    result
+}
+
+/// Run the reporting flow with the bounded retry budget shared by the
+/// boot-time service and the `--retry` CLI flag.
+pub fn run_report_client_with_retry(
+    config_path: &Path,
+    attempts: usize,
+    delay: Duration,
+) -> Result<()> {
+    anyhow::ensure!(
+        cfg!(windows),
+        "client reporting runs on a managed Windows client"
+    );
+    retry_report(attempts, delay, || run_report_client(config_path))
+}
+
+/// Verify the server is reachable with a HEAD request. Any HTTP status counts
+/// as success: the report endpoint answers POSTs, so even 405 proves the
+/// service is up. Backs the GUI's "Test server connection" operation.
+#[cfg(all(windows, feature = "gui"))]
+pub fn test_server_connection(config_path: &Path) -> Result<()> {
+    anyhow::ensure!(
+        cfg!(windows),
+        "server connectivity tests run on a managed Windows client"
+    );
+    let log = ClientLog::for_config(config_path);
+    let result = ReporterConfig::load(config_path)
+        .and_then(|config| test_server_connection_with_log(&config, &log));
+    match &result {
+        Ok(()) => log.write("server connection test succeeded"),
+        Err(error) => log.write(&format!("server connection test failed: {error:#}")),
+    }
+    result
+}
+
+#[cfg(all(windows, feature = "gui"))]
+fn test_server_connection_with_log(config: &ReporterConfig, log: &ClientLog) -> Result<()> {
+    let endpoint = config.report_endpoint()?;
+    log.write(&format!("testing server connection to {endpoint}"));
+    // Same catch pattern as `post_verification`: Windows PowerShell raises on
+    // any non-success status, so the status code is printed from both paths.
+    // Only a request that never reached the server (no response object) fails.
+    let script = format!(
+        "try {{ $r=Invoke-WebRequest -Uri '{endpoint}' -Method Head -UseBasicParsing -TimeoutSec {} }} catch {{ $r=$_.Exception.Response; if ($null -eq $r) {{ throw }} }}; [Console]::Out.WriteLine([int]$r.StatusCode)",
+        COMMAND_TIMEOUT.as_secs(),
+    );
+    let response = run_bounded(
+        "powershell",
+        &["-NoProfile", "-NonInteractive", "-Command", &script],
+    )?;
+    let status = response.trim();
+    anyhow::ensure!(
+        !status.is_empty() && status.chars().all(|c| c.is_ascii_digit()),
+        "connection test returned no HTTP status"
+    );
+    log.write(&format!("server responded with HTTP {status}"));
+    Ok(())
+}
+
+/// Reboot the client so freshly installed drivers take effect. The restart is
+/// scheduled 5 seconds out so pending output can flush. Requires elevation or
+/// the shutdown privilege.
+#[cfg(all(windows, feature = "gui"))]
+pub fn restart_client() -> Result<()> {
+    anyhow::ensure!(cfg!(windows), "client restarts run on Windows");
+    run_bounded("shutdown.exe", &["/r", "/t", "5", "/f"])?;
+    Ok(())
+}
+
+/// Relaunch this application with administrator rights through UAC. On
+/// success the elevated copy takes over and this process exits with 0; a
+/// cancelled UAC prompt surfaces as an error instead.
+#[cfg(all(windows, feature = "gui"))]
+pub fn restart_elevated() -> Result<()> {
+    anyhow::ensure!(cfg!(windows), "elevated restarts run on Windows");
+    anyhow::ensure!(
+        !crate::is_elevated(),
+        "this application is already elevated"
+    );
+    let exe = std::env::current_exe().context("failed to resolve this executable")?;
+    let script = format!(
+        "Start-Process -FilePath '{}' -Verb RunAs",
+        exe.display().to_string().replace('\'', "''")
+    );
+    run_bounded(
+        "powershell",
+        &["-NoProfile", "-NonInteractive", "-Command", &script],
+    )?;
+    std::process::exit(0);
 }
 
 /// Collect and upload all third-party NIC packages installed on this client.
@@ -277,13 +464,21 @@ pub fn run_collect_nic(config_path: &Path) -> Result<()> {
         cfg!(windows),
         "NIC collection runs on a managed Windows client"
     );
-    let mut config = ReporterConfig::load(config_path)?;
-    config.export_package = true;
-    run_report_client_with_config(config)
+    let log = ClientLog::for_config(config_path);
+    let result = ReporterConfig::load(config_path).and_then(|mut config| {
+        config.export_package = true;
+        report_flow(config, &log)
+    });
+    match &result {
+        Ok(()) => log.write("NIC collection finished"),
+        Err(error) => log.write(&format!("NIC collection failed: {error:#}")),
+    }
+    result
 }
 
-fn run_report_client_with_config(config: ReporterConfig) -> Result<()> {
+fn report_flow(config: ReporterConfig, log: &ClientLog) -> Result<()> {
     let endpoint = config.report_endpoint()?;
+    log.write(&format!("report endpoint {endpoint}"));
     let inventory_json = run_bounded(
         "powershell",
         &[
@@ -305,6 +500,12 @@ fn run_report_client_with_config(config: ReporterConfig) -> Result<()> {
         !boot.hardware_ids.is_empty(),
         "Boot NIC has no PnP hardware IDs"
     );
+    log.write(&format!(
+        "boot adapter {} ({}) exposes {} hardware id(s)",
+        boot.name,
+        boot.pnp_device_id,
+        boot.hardware_ids.len()
+    ));
     let os = run_bounded(
         "powershell",
         &[
@@ -332,18 +533,27 @@ fn run_report_client_with_config(config: ReporterConfig) -> Result<()> {
     report.validate()?;
 
     if config.installation_verification {
+        log.write("installation verification requested");
         if post_verification(&config, &report, &boot.mac_address)? {
+            log.write("installation verified; shutting down");
             run_bounded("shutdown.exe", &["/s", "/t", "0", "/f"])
                 .context("verified installation could not be shut down")?;
             return Ok(());
         }
+        log.write(
+            "installation verification was not published; continuing with the standard report",
+        );
         let mut config = config;
         config.installation_verification = false;
-        return run_report_client_with_config(config);
+        return report_flow(config, log);
     }
 
     let exported = if config.export_package {
         let infs = collect_published_nic_infs()?;
+        log.write(&format!(
+            "exporting {} published NIC package(s)",
+            infs.len()
+        ));
         Some(export_driver_packages(&infs)?)
     } else {
         None
@@ -399,18 +609,6 @@ fn post_verification(config: &ReporterConfig, report: &ClientReport, mac: &str) 
     verification_response(status.trim().parse()?, body.trim())
 }
 
-#[cfg(windows)]
-pub fn run_report_service_once(config_path: &Path) -> Result<()> {
-    anyhow::ensure!(
-        cfg!(windows),
-        "client reporting runs on a managed Windows client"
-    );
-    retry_report(SERVICE_REPORT_ATTEMPTS, SERVICE_REPORT_RETRY_DELAY, || {
-        run_report_client(config_path)
-    })
-}
-
-#[cfg(any(test, windows))]
 fn retry_report<F>(attempts: usize, delay: Duration, mut report: F) -> Result<()>
 where
     F: FnMut() -> Result<()>,
@@ -477,39 +675,106 @@ fn collect_published_nic_infs() -> Result<Vec<String>> {
     Ok(infs)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NicDriverInstallResult {
-    pub inf_count: usize,
-    pub reboot_required: bool,
+/// Outcome of one `pnputil /add-driver <inf> /install` attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NicDriverInstallOutcome {
+    /// The package installed for a present device.
+    Installed,
+    /// The package installed; the device uses it after the next reboot.
+    InstalledRebootRequired,
+    /// pnputil exit 259: the package joined the driver store but no present
+    /// device matched it (or a better driver is already bound). Benign; the
+    /// package still serves future devices. Matches `assets/auto-adapt.ps1`.
+    NoMatchingDevice,
 }
 
-fn pnputil_install_reboot_required(exit_code: i32) -> Result<bool> {
+impl std::fmt::Display for NicDriverInstallOutcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Installed => "installed",
+            Self::InstalledRebootRequired => "installed; reboot required",
+            Self::NoMatchingDevice => "no matching device",
+        })
+    }
+}
+
+/// One installed INF package and what happened to it.
+#[derive(Debug, Clone, Serialize)]
+pub struct NicDriverPackageResult {
+    pub inf: String,
+    pub outcome: NicDriverInstallOutcome,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NicDriverInstallResult {
+    pub inf_count: usize,
+    pub packages: Vec<NicDriverPackageResult>,
+}
+
+impl NicDriverInstallResult {
+    /// Packages that installed for a present device (exit 0 or 3010).
+    pub fn installed_count(&self) -> usize {
+        self.packages
+            .iter()
+            .filter(|package| package.outcome != NicDriverInstallOutcome::NoMatchingDevice)
+            .count()
+    }
+
+    pub fn no_matching_device_count(&self) -> usize {
+        self.packages
+            .iter()
+            .filter(|package| package.outcome == NicDriverInstallOutcome::NoMatchingDevice)
+            .count()
+    }
+
+    pub fn reboot_required(&self) -> bool {
+        self.packages
+            .iter()
+            .any(|package| package.outcome == NicDriverInstallOutcome::InstalledRebootRequired)
+    }
+}
+
+fn pnputil_install_outcome(exit_code: i32) -> Result<NicDriverInstallOutcome> {
     match exit_code {
-        0 => Ok(false),
-        3010 => Ok(true),
+        0 => Ok(NicDriverInstallOutcome::Installed),
+        3010 => Ok(NicDriverInstallOutcome::InstalledRebootRequired),
+        259 => Ok(NicDriverInstallOutcome::NoMatchingDevice),
         _ => bail!("pnputil failed with exit code {exit_code}"),
     }
 }
 
 /// Install collected or administrator-approved NIC packages into the local OS.
-/// Exit code 3010 is successful and signals that a reboot is needed to use them.
+/// Exit 0 installs for a present device, 3010 installs with a reboot pending,
+/// and 259 records a package that matched no present device (benign).
 pub fn install_nic_drivers(root: &Path) -> Result<NicDriverInstallResult> {
+    let log = ClientLog::for_directory(root.parent().unwrap_or(root));
+    log.write(&format!(
+        "NIC driver installation started from {}",
+        root.display()
+    ));
+    let result = install_nic_drivers_with_log(root, &log);
+    match &result {
+        Ok(summary) => log.write(&format!(
+            "NIC driver installation finished: {} package(s), {} installed, {} without a matching device, reboot required: {}",
+            summary.inf_count,
+            summary.installed_count(),
+            summary.no_matching_device_count(),
+            summary.reboot_required()
+        )),
+        Err(error) => log.write(&format!("NIC driver installation failed: {error:#}")),
+    }
+    result
+}
+
+fn install_nic_drivers_with_log(root: &Path, log: &ClientLog) -> Result<NicDriverInstallResult> {
     anyhow::ensure!(cfg!(windows), "NIC driver installation runs on Windows");
     anyhow::ensure!(
-        root.is_dir(),
-        "NIC driver directory does not exist: {}",
-        root.display()
+        crate::is_elevated(),
+        "Run as administrator to install NIC drivers"
     );
-    let mut infs = Vec::new();
-    collect_inf_files(root, &mut infs)?;
-    infs.sort();
-    infs.dedup();
-    anyhow::ensure!(
-        !infs.is_empty(),
-        "no INF files found under {}",
-        root.display()
-    );
-    let mut reboot_required = false;
+    let infs = network_driver_infs(root)?;
+    let mut packages = Vec::new();
     for inf in &infs {
         let (_, exit_code) = run_with_timeout_accepting(
             "pnputil",
@@ -520,20 +785,59 @@ pub fn install_nic_drivers(root: &Path) -> Result<NicDriverInstallResult> {
                 "/install",
             ],
             COMMAND_TIMEOUT,
-            &[0, 3010],
+            &[0, 3010, 259],
         )
-        .with_context(|| format!("failed to install NIC driver {}", inf.display()))?;
-        reboot_required |= pnputil_install_reboot_required(exit_code)?;
+        .with_context(|| {
+            format!(
+                "failed to install NIC driver {}; earlier packages may already be installed",
+                inf.display()
+            )
+        })?;
+        let outcome = pnputil_install_outcome(exit_code)?;
+        log.write(&format!("{}: {outcome}", inf.display()));
+        packages.push(NicDriverPackageResult {
+            inf: inf.display().to_string(),
+            outcome,
+        });
     }
     Ok(NicDriverInstallResult {
         inf_count: infs.len(),
-        reboot_required,
+        packages,
     })
+}
+
+fn network_driver_infs(root: &Path) -> Result<Vec<PathBuf>> {
+    anyhow::ensure!(
+        root.is_dir(),
+        "NIC driver directory does not exist: {}",
+        root.display()
+    );
+    let mut infs = Vec::new();
+    collect_inf_files(root, &mut infs)?;
+    infs.sort();
+    infs.dedup();
+    let mut network_infs = Vec::new();
+    for inf in infs {
+        if crate::windows_inf::inspect_inf_file(&inf)?.is_network_class {
+            network_infs.push(inf);
+        }
+    }
+    anyhow::ensure!(
+        !network_infs.is_empty(),
+        "no network-class INF packages found under {}",
+        root.display()
+    );
+    Ok(network_infs)
 }
 
 fn collect_inf_files(root: &Path, output: &mut Vec<PathBuf>) -> Result<()> {
     for entry in std::fs::read_dir(root)? {
-        let path = entry?.path();
+        let entry = entry?;
+        anyhow::ensure!(
+            !entry.file_type()?.is_symlink(),
+            "driver directory must not contain symbolic links"
+        );
+        let path = entry.path();
         if path.is_dir() {
             collect_inf_files(&path, output)?;
         } else if path
@@ -544,6 +848,56 @@ fn collect_inf_files(root: &Path, output: &mut Vec<PathBuf>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Export every third-party driver package in this OS's driver store into
+/// `dest` with `pnputil /export-driver *`. This is the local "capture all
+/// drivers" operation: the server's NIC catalog only accepts NIC packages,
+/// so a full capture stays on disk for an administrator to stage or archive.
+/// Returns the number of INF packages written under `dest`.
+pub fn collect_all_drivers(dest: &Path) -> Result<usize> {
+    anyhow::ensure!(cfg!(windows), "driver capture runs on Windows");
+    anyhow::ensure!(
+        !dest.as_os_str().is_empty(),
+        "a destination directory is required"
+    );
+    std::fs::create_dir_all(dest).with_context(|| {
+        format!(
+            "failed to create the driver capture directory {}",
+            dest.display()
+        )
+    })?;
+    // Log beside the capture directory so the export stays clean.
+    let log = ClientLog::for_directory(dest.parent().unwrap_or(dest));
+    log.write(&format!("driver capture started into {}", dest.display()));
+    let result = collect_all_drivers_with_log(dest, &log);
+    match &result {
+        Ok(count) => log.write(&format!("driver capture finished: {count} package(s)")),
+        Err(error) => log.write(&format!("driver capture failed: {error:#}")),
+    }
+    result
+}
+
+fn collect_all_drivers_with_log(dest: &Path, log: &ClientLog) -> Result<usize> {
+    run_bounded(
+        "pnputil",
+        &[
+            "/export-driver",
+            "*",
+            dest.to_str()
+                .context("driver capture path is not valid Unicode")?,
+        ],
+    )
+    .context("pnputil could not export the driver store")?;
+    let mut infs = Vec::new();
+    collect_inf_files(dest, &mut infs)?;
+    anyhow::ensure!(
+        !infs.is_empty(),
+        "pnputil exported no third-party driver packages to {}",
+        dest.display()
+    );
+    log.write(&format!("exported {} driver package(s)", infs.len()));
+    Ok(infs.len())
 }
 
 /// Export published third-party NIC packages with pnputil. Export failure is
@@ -691,10 +1045,48 @@ mod tests {
     }
 
     #[test]
-    fn pnputil_reboot_required_exit_is_success_but_other_errors_fail() {
-        assert!(!pnputil_install_reboot_required(0).unwrap());
-        assert!(pnputil_install_reboot_required(3010).unwrap());
-        assert!(pnputil_install_reboot_required(1).is_err());
+    fn pnputil_install_exit_codes_map_to_outcomes() {
+        assert_eq!(
+            pnputil_install_outcome(0).unwrap(),
+            NicDriverInstallOutcome::Installed
+        );
+        assert_eq!(
+            pnputil_install_outcome(3010).unwrap(),
+            NicDriverInstallOutcome::InstalledRebootRequired
+        );
+        assert_eq!(
+            pnputil_install_outcome(259).unwrap(),
+            NicDriverInstallOutcome::NoMatchingDevice
+        );
+        assert!(pnputil_install_outcome(1).is_err());
+    }
+
+    #[test]
+    fn install_result_counts_and_reboot_flag_aggregate_the_packages() {
+        let summary = NicDriverInstallResult {
+            inf_count: 3,
+            packages: vec![
+                NicDriverPackageResult {
+                    inf: "a.inf".to_string(),
+                    outcome: NicDriverInstallOutcome::Installed,
+                },
+                NicDriverPackageResult {
+                    inf: "b.inf".to_string(),
+                    outcome: NicDriverInstallOutcome::InstalledRebootRequired,
+                },
+                NicDriverPackageResult {
+                    inf: "c.inf".to_string(),
+                    outcome: NicDriverInstallOutcome::NoMatchingDevice,
+                },
+            ],
+        };
+        assert_eq!(summary.installed_count(), 2);
+        assert_eq!(summary.no_matching_device_count(), 1);
+        assert!(summary.reboot_required());
+        assert_eq!(
+            summary.packages[1].outcome.to_string(),
+            "installed; reboot required"
+        );
     }
 
     #[test]
@@ -713,6 +1105,21 @@ mod tests {
             .unwrap()
             .to_string_lossy()
             .eq_ignore_ascii_case("inf")));
+    }
+
+    #[test]
+    fn nic_install_preflight_excludes_other_device_classes() {
+        let root = tempfile::tempdir().unwrap();
+        let nic = root.path().join("nic.inf");
+        std::fs::write(&nic, "[Version]\nSignature=\"$Windows NT$\"\nClass=Net\nClassGuid={4d36e972-e325-11ce-bfc1-08002be10318}\n").unwrap();
+        std::fs::write(
+            root.path().join("gpu.inf"),
+            "[Version]\nSignature=\"$Windows NT$\"\nClass=Display\n",
+        )
+        .unwrap();
+        assert_eq!(network_driver_infs(root.path()).unwrap(), vec![nic.clone()]);
+        std::fs::remove_file(nic).unwrap();
+        assert!(network_driver_infs(root.path()).is_err());
     }
 
     #[test]
@@ -864,6 +1271,30 @@ mod tests {
         assert_eq!(normalize_architecture("AMD64"), "x64");
         assert_eq!(normalize_architecture("ARM64"), "arm64");
         assert!(parse_os_info(r#"{"OsName":""}"#).is_err());
+    }
+
+    #[test]
+    fn utc_timestamps_render_known_instants() {
+        assert_eq!(format_utc(0), "1970-01-01T00:00:00Z");
+        assert_eq!(format_utc(1_000_000_000), "2001-09-09T01:46:40Z");
+        assert_eq!(format_utc(1_709_164_800), "2024-02-29T00:00:00Z");
+        assert_eq!(format_utc(1_794_528_000), "2026-11-13T00:00:00Z");
+    }
+
+    #[test]
+    fn client_log_lines_are_timestamped_and_rotate_when_oversized() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = ClientLog::for_directory(dir.path());
+        let path = log_path(dir.path());
+        log.write("first");
+        log.write(&"x".repeat((MAX_LOG_BYTES + 1) as usize));
+        log.write("second");
+        let kept = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(kept.trim_end().split_once(' ').unwrap().0.len(), 20);
+        assert!(kept.trim_end().ends_with("second"));
+        let rotated = path.with_extension("log.1");
+        assert!(rotated.exists());
+        assert!(std::fs::read_to_string(rotated).unwrap().contains("first"));
     }
 
     #[cfg(unix)]

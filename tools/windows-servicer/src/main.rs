@@ -2,9 +2,16 @@
 //!
 //! Protocol:
 //!   diskless-windows-servicer.exe capabilities
+//!   diskless-windows-servicer.exe version
 //!   diskless-windows-servicer.exe prepare
+//!   diskless-windows-servicer.exe report-client [config] [--retry]
 //!   diskless-windows-servicer.exe collect-nic <report-config>
+//!   diskless-windows-servicer.exe collect-drivers <dest>
 //!   diskless-windows-servicer.exe install-nic-drivers <driver-root>
+//!
+//! Run with `help` (or no arguments off Windows) for the full command list.
+//!   diskless-windows-servicer.exe list-boot-nics
+//!   diskless-windows-servicer.exe prepare-client  (JSON on stdin; preview by default)
 //!
 //! The prepare command reads WindowsImagePreparationRequest JSON from stdin and
 //! writes a versioned JSON response to stdout.
@@ -23,6 +30,7 @@ mod windows_gpt_identity;
 mod windows_inf;
 #[path = "../../../src-tauri/src/infrastructure/pxe/windows_iscsi_servicing.rs"]
 mod windows_iscsi_servicing;
+mod windows_local_boot;
 #[path = "../../../src-tauri/src/infrastructure/pxe/windows_nexboot_adaptation.rs"]
 mod windows_nexboot_adaptation;
 #[path = "../../../src-tauri/src/infrastructure/pxe/windows_personalization.rs"]
@@ -44,20 +52,66 @@ use windows_image_preparation::{
 };
 
 const PROTOCOL_VERSION: u32 = 5;
+/// Deployed helper version, surfaced through `capabilities` and the `version`
+/// verb so an administrator can compare installations. Updates flow through
+/// re-running `install-client.ps1`; the helper never downloads executables
+/// from the server.
+pub const HELPER_VERSION: &str = env!("CARGO_PKG_VERSION");
 const MAX_REQUEST_BYTES: u64 = 1024 * 1024;
+/// Single source for command help so the two error paths and `help` cannot
+/// drift apart.
+const USAGE: &str = "\
+usage: diskless-windows-servicer <command> [args]
 
+commands:
+  capabilities                       print the capability JSON
+  version                            print the helper version JSON
+  prepare                            prepare a Windows image (JSON on stdin)
+  prepare-volume | adapt-volume      service a job-owned volume (JSON on stdin)
+  check-volume | check-volume-local  volume safety checks (JSON on stdin)
+  list-boot-nics                     list local network adapters as JSON
+  prepare-client                     prepare this client (JSON on stdin)
+  report-client [config] [--retry]   upload the session-bound client report
+  collect-nic <config>               collect and upload all local NIC packages
+  collect-drivers <dest>             export every third-party driver package
+  install-nic-drivers <root>         install the INF packages under <root>
+  report-service [config]            run the boot-time reporter service
+
+Run without arguments on a Windows client to open the worker GUI.";
+
+/// Capability payload reported to the server and displayed by the GUI. The GUI
+/// reuses this constructor so the two surfaces cannot drift.
 #[derive(Debug, Serialize)]
-struct WindowsServicerCapabilities {
-    protocol_version: u32,
-    platform: &'static str,
-    available: bool,
-    elevated: bool,
-    iscsi_volume_servicing: bool,
-    volume_safety: bool,
-    nexboot_boot_time: bool,
-    nic_collection: bool,
-    local_nic_installation: bool,
-    personalization: bool,
+pub struct WindowsServicerCapabilities {
+    pub protocol_version: u32,
+    pub version: &'static str,
+    pub platform: &'static str,
+    pub available: bool,
+    pub elevated: bool,
+    pub iscsi_volume_servicing: bool,
+    pub volume_safety: bool,
+    pub nexboot_boot_time: bool,
+    pub nic_collection: bool,
+    pub local_nic_installation: bool,
+    pub personalization: bool,
+    pub local_boot_preparation: bool,
+}
+
+pub fn capabilities() -> WindowsServicerCapabilities {
+    WindowsServicerCapabilities {
+        protocol_version: PROTOCOL_VERSION,
+        version: HELPER_VERSION,
+        platform: std::env::consts::OS,
+        available: windows_servicing_available(),
+        elevated: is_elevated(),
+        iscsi_volume_servicing: cfg!(windows),
+        volume_safety: cfg!(windows),
+        nexboot_boot_time: cfg!(windows),
+        nic_collection: cfg!(windows),
+        local_nic_installation: cfg!(windows),
+        personalization: cfg!(windows),
+        local_boot_preparation: cfg!(windows),
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -72,20 +126,45 @@ struct WindowsServicerResponse {
 
 fn main() {
     let exit_code = match std::env::args().nth(1).as_deref() {
-        Some("capabilities") => write_json(&WindowsServicerCapabilities {
-            protocol_version: PROTOCOL_VERSION,
-            platform: std::env::consts::OS,
-            available: windows_servicing_available(),
-            elevated: is_elevated(),
-            iscsi_volume_servicing: cfg!(windows),
-            volume_safety: cfg!(windows),
-            nexboot_boot_time: cfg!(windows),
-            nic_collection: cfg!(windows),
-            local_nic_installation: cfg!(windows),
-            personalization: cfg!(windows),
-        })
+        Some(command @ ("list-boot-nics" | "prepare-client")) => {
+            let result = (|| -> anyhow::Result<serde_json::Value> {
+                anyhow::ensure!(
+                    std::env::args().len() == 2,
+                    "{command} accepts no arguments; prepare-client reads JSON from stdin"
+                );
+                if command == "list-boot-nics" {
+                    Ok(serde_json::to_value(windows_local_boot::list_adapters()?)?)
+                } else {
+                    let request = serde_json::from_slice(&read_request()?)?;
+                    Ok(serde_json::to_value(windows_local_boot::prepare(
+                        &request,
+                    )?)?)
+                }
+            })();
+            let (code, response) = match result {
+                Ok(result) => (0, serde_json::json!({"ok": true, "result": result})),
+                Err(error) => (
+                    1,
+                    serde_json::json!({"ok": false, "error": format!("{error:#}")}),
+                ),
+            };
+            write_json(&response)
+                .map(|_| code)
+                .unwrap_or_else(report_output_error)
+        }
+        Some("capabilities") => write_json(&capabilities())
+            .map(|_| 0)
+            .unwrap_or_else(report_output_error),
+        Some("version") => write_json(&serde_json::json!({
+            "ok": true,
+            "version": HELPER_VERSION,
+        }))
         .map(|_| 0)
         .unwrap_or_else(report_output_error),
+        Some("help" | "--help" | "-h") => {
+            println!("{USAGE}");
+            0
+        }
         Some(command @ ("prepare" | "prepare-volume" | "adapt-volume")) => {
             match run_prepare(command) {
                 Ok(result) => write_json(&WindowsServicerResponse {
@@ -152,10 +231,20 @@ fn main() {
                 .unwrap_or_else(report_output_error)
         }
         Some("report-client") => {
-            let config = std::env::args().nth(2).unwrap_or_else(|| {
-                r"C:\ProgramData\Diskless Manager\client-report.json".to_string()
+            let args = std::env::args().skip(2).collect::<Vec<_>>();
+            let run = parse_report_client_args(&args).and_then(|(config, retry)| {
+                let path = std::path::Path::new(&config);
+                if retry {
+                    windows_client_report::run_report_client_with_retry(
+                        path,
+                        windows_client_report::REPORT_ATTEMPTS,
+                        windows_client_report::REPORT_RETRY_DELAY,
+                    )
+                } else {
+                    windows_client_report::run_report_client(path)
+                }
             });
-            match windows_client_report::run_report_client(std::path::Path::new(&config)) {
+            match run {
                 Ok(()) => write_json(&serde_json::json!({"ok": true}))
                     .map(|_| 0)
                     .unwrap_or_else(report_output_error),
@@ -193,7 +282,10 @@ fn main() {
                     "ok": true,
                     "operation": "install-nic-drivers",
                     "inf_count": result.inf_count,
-                    "reboot_required": result.reboot_required,
+                    "installed": result.installed_count(),
+                    "no_matching_device": result.no_matching_device_count(),
+                    "reboot_required": result.reboot_required(),
+                    "packages": result.packages,
                 }))
                 .map(|_| 0)
                 .unwrap_or_else(report_output_error),
@@ -215,9 +307,30 @@ fn main() {
                 }
             }
         }
+        Some("collect-drivers") => {
+            let dest = std::env::args()
+                .nth(2)
+                .unwrap_or_else(|| r"C:\ProgramData\Diskless Manager\Drivers".to_string());
+            match windows_client_report::collect_all_drivers(std::path::Path::new(&dest)) {
+                Ok(count) => write_json(&serde_json::json!({
+                    "ok": true,
+                    "operation": "collect-drivers",
+                    "destination": dest,
+                    "package_count": count,
+                }))
+                .map(|_| 0)
+                .unwrap_or_else(report_output_error),
+                Err(error) => {
+                    let _ = write_json(
+                        &serde_json::json!({"ok": false, "error": format!("{error:#}")}),
+                    );
+                    1
+                }
+            }
+        }
         Some(other) => {
             eprintln!("unknown command: {other}");
-            eprintln!("usage: diskless-windows-servicer <capabilities|prepare|report-client|collect-nic|install-nic-drivers|report-service>");
+            eprintln!("{USAGE}");
             2
         }
         None if cfg!(all(windows, feature = "gui")) => {
@@ -232,7 +345,7 @@ fn main() {
             unreachable!();
         }
         None => {
-            eprintln!("usage: diskless-windows-servicer <capabilities|prepare|report-client|collect-nic|install-nic-drivers|report-service>");
+            eprintln!("{USAGE}");
             2
         }
     };
@@ -251,6 +364,24 @@ fn parse_report_service_config(args: &[String]) -> anyhow::Result<std::path::Pat
         .first()
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from(DEFAULT_REPORT_CONFIG)))
+}
+
+fn parse_report_client_args(args: &[String]) -> anyhow::Result<(std::path::PathBuf, bool)> {
+    let mut config: Option<std::path::PathBuf> = None;
+    let mut retry = false;
+    for arg in args {
+        match arg.as_str() {
+            "--retry" if !retry => retry = true,
+            value if config.is_none() && !value.starts_with("--") => {
+                config = Some(std::path::PathBuf::from(value));
+            }
+            _ => anyhow::bail!("report-client accepts [config-path] [--retry]"),
+        }
+    }
+    Ok((
+        config.unwrap_or_else(|| std::path::PathBuf::from(DEFAULT_REPORT_CONFIG)),
+        retry,
+    ))
 }
 
 fn start_report_service(config_path: std::path::PathBuf) -> anyhow::Result<()> {
@@ -382,5 +513,51 @@ mod report_service_tests {
     #[test]
     fn report_service_rejects_extra_arguments() {
         assert!(parse_report_service_config(&["a".into(), "b".into()]).is_err());
+    }
+
+    /// The GUI must display the shared capability payload instead of a
+    /// hand-built stale copy (it once reported protocol version 3).
+    #[test]
+    fn gui_capabilities_come_from_the_shared_helper() {
+        let source = include_str!("gui.rs");
+        assert!(source.contains("crate::capabilities()"));
+        assert!(!source.contains("protocol_version"));
+    }
+
+    /// The GUI must save the complete ReporterConfig contract instead of a
+    /// hand-built JSON subset (it once reset export_package to false) and must
+    /// load the on-disk configuration at startup.
+    #[test]
+    fn gui_uses_the_reporter_config_contract() {
+        let source = include_str!("gui.rs");
+        assert!(source.contains("ReporterConfig {"));
+        assert!(source.contains("ReporterConfig::load"));
+        assert!(!source.contains(r#""export_package""#));
+    }
+
+    #[test]
+    fn report_client_accepts_optional_config_and_retry_flag() {
+        assert_eq!(
+            parse_report_client_args(&[]).unwrap(),
+            (std::path::PathBuf::from(DEFAULT_REPORT_CONFIG), false)
+        );
+        assert_eq!(
+            parse_report_client_args(&["custom.json".to_string()]).unwrap(),
+            (std::path::PathBuf::from("custom.json"), false)
+        );
+        assert_eq!(
+            parse_report_client_args(&["--retry".to_string()]).unwrap(),
+            (std::path::PathBuf::from(DEFAULT_REPORT_CONFIG), true)
+        );
+        assert_eq!(
+            parse_report_client_args(&["a".into(), "--retry".into()]).unwrap(),
+            (std::path::PathBuf::from("a"), true)
+        );
+        assert_eq!(
+            parse_report_client_args(&["--retry".into(), "a".into()]).unwrap(),
+            (std::path::PathBuf::from("a"), true)
+        );
+        assert!(parse_report_client_args(&["a".into(), "b".into()]).is_err());
+        assert!(parse_report_client_args(&["--rety".into()]).is_err());
     }
 }

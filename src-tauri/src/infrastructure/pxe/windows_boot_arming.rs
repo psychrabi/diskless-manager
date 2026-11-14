@@ -446,6 +446,16 @@ impl WindowsBootArmer {
         Self { reg: path.into() }
     }
 
+    /// Inspect the running OS without loading or modifying its SYSTEM hive.
+    /// Only the Windows client helper uses this entry point.
+    pub fn inspect_running(&self, services: &[String]) -> Result<WindowsBootInventory> {
+        anyhow::ensure!(cfg!(windows), "local boot preparation requires Windows");
+        for service in services {
+            validate_service_name(service)?;
+        }
+        self.inspect_loaded("HKLM\\SYSTEM", false, services)
+    }
+
     pub fn inspect(&self, system_hive: &Path) -> Result<WindowsBootInventory> {
         self.inspect_with_services(system_hive, &[])
     }

@@ -1,5 +1,9 @@
 # Windows client reporting test procedure (opt-in, Windows 10/11 only)
 
+For local NIC installation and boot preparation before capturing a reference
+image, follow [Windows Client preparation](../README.md). This procedure below
+tests reporting after an iSCSI boot.
+
 This is a manual hardware procedure. It runs only on a designated disposable
 managed test client that boots its image over iSCSI. Never run it against a
 production client.
@@ -25,16 +29,29 @@ cargo build --release --manifest-path tools\windows-servicer\Cargo.toml
 Install the resulting `diskless-windows-servicer.exe` with
 `install-client.ps1`, then launch the executable without arguments. The GUI
 provides fields for the server URL, client ID, report configuration path, and
-driver directory, plus buttons for saving configuration, checking capabilities,
-reporting the client, collecting/uploading NIC packages, and installing local
-NIC drivers.
+driver directory, plus the reporter toggles the configuration contract supports
+(export driver packages, installation verification, and the disposable
+test-client image revision). Buttons cover saving configuration, checking
+capabilities, testing server reachability (any HTTP status counts as
+reachable), reporting the client, collecting/uploading NIC packages, and
+installing local NIC drivers.
+
+The header shows whether the application is running elevated. Installing local
+NIC drivers is enabled only when elevated, and "Restart elevated" relaunches
+the application through UAC for that purpose. When a driver installation
+reports that a reboot is pending, a "Restart now" button reboots the client;
+the status area lists each INF package with its outcome (installed, installed
+with a reboot required, or no matching device).
 
 The existing command-line protocol is unchanged for server-side SSH servicing:
 
 ```
 diskless-windows-servicer.exe capabilities
+diskless-windows-servicer.exe version
 diskless-windows-servicer.exe prepare
+diskless-windows-servicer.exe report-client [config] [--retry]
 diskless-windows-servicer.exe collect-nic <report-config>
+diskless-windows-servicer.exe collect-drivers <dest>
 diskless-windows-servicer.exe install-nic-drivers <driver-root>
 ```
 
@@ -107,10 +124,57 @@ run the helper elevated:
   "C:\ProgramData\Diskless Manager\Drivers"
 ```
 
-The command recursively finds INF files and calls `pnputil /add-driver <inf> /install` for each package. This is the local equivalent of applying known
+The command recursively finds INF files and calls `pnputil /add-driver <inf> /install` for each package. An exit code of 0 means the package installed
+for a present device, 3010 means it installed and a reboot is required to use
+it, and 259 means the package joined the driver store but no present device
+matched it (or a better driver is already bound) — reported as
+`no_matching_device` without failing the run, matching
+`assets/auto-adapt.ps1`. The JSON result summarizes the per-package outcomes:
+
+```json
+{"ok": true, "operation": "install-nic-drivers", "inf_count": 2,
+ "installed": 1, "no_matching_device": 1, "reboot_required": true,
+ "packages": [{"inf": "oem10.inf", "outcome": "installed_reboot_required"}]}
+```
+
+This is the local equivalent of applying known
 PNP NIC drivers to the running OS. For image-wide deployment, use the server's
 managed Windows preparation flow instead; it performs offline injection and
 boot arming before publication.
+
+## Capture every third-party driver package
+
+`collect-nic` uploads only NIC packages. To stage a complete driver store,
+run the helper elevated:
+
+```
+& "C:\Program Files\Diskless Manager\diskless-windows-servicer.exe" `
+  collect-drivers `
+  "C:\ProgramData\Diskless Manager\Drivers"
+```
+
+`pnputil /export-driver *` writes one subdirectory per package under the
+destination, and the helper reports the exported package count. The worker GUI
+offers the same operation as "Export all driver packages" into its configured
+driver directory. The server's NIC catalog only accepts NIC packages, so a
+full capture stays on disk for an administrator to stage or archive; it is
+never uploaded through the session-bound report endpoint.
+
+## Diagnostics
+
+Every client-side operation appends a timestamped line to `logs\client.log`
+next to the reporter configuration (by default
+`C:\ProgramData\Diskless Manager\logs\client.log`); local driver installs log
+next to the driver directory they were given. The file rotates to
+`client.log.1` once it exceeds 1 MiB, and a failed log write never blocks the
+operation itself. Failed GUI operations print the log file that carries the
+details.
+
+The boot-time `report-service` also records start, success, and failure events
+in the Windows Application event log under the `DisklessManagerReporter`
+source. `install-client.ps1` registers that source so the events render their
+message text; without registration the events still appear with the raw text
+in the event detail view.
 
 ## Notes
 
@@ -123,4 +187,13 @@ live iSCSI session peer address.
 - Driver installation is deliberately explicit and elevated. The client does
 not download arbitrary packages from the server without an administrator
 first staging them in the local driver directory or selecting them through
-managed image preparation.
+managed image preparation. For the same reason the helper has no self-update:
+the deployed version is visible in the `capabilities` JSON (`version` field)
+and via `diskless-windows-servicer.exe version`, and refreshing a deployment
+means re-running `install-client.ps1` with a new build.
+
+- The helper and installer target x64 Windows clients; ARM64 clients are not
+covered by this procedure. The driver catalog itself stores packages per
+architecture (the reporter normalizes `ARM64` to `arm64`), but no ARM64
+helper build is produced, so do not expect this manual flow to work on an
+ARM64 reference machine.

@@ -78,11 +78,21 @@ $config | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $configPath -Encodi
 
 if ($RegisterStartupReport) {
     $taskName = "Diskless Manager Client Report"
-    $arguments = "`"$destination`" report-client `"$configPath`""
+    $arguments = "`"$destination`" report-client `"$configPath`" --retry"
     & schtasks.exe /Create /TN $taskName /SC ONSTART /RU SYSTEM /RL HIGHEST /TR $arguments /F | Out-Host
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to register the startup client-report task."
     }
+}
+
+# Register the event-log source so DisklessManagerReporter service events
+# render their message text instead of a description-lookup notice.
+$eventSourceKey = "HKLM:\SYSTEM\CurrentControlSet\Services\EventLog\Application\DisklessManagerReporter"
+New-Item -Path $eventSourceKey -Force | Out-Null
+$eventMessageFile = Join-Path $env:SystemRoot "Microsoft.NET\Framework64\v4.0.30319\EventLogMessages.dll"
+if (Test-Path -LiteralPath $eventMessageFile) {
+    Set-ItemProperty -LiteralPath $eventSourceKey -Name EventMessageFile -Value $eventMessageFile
+    Set-ItemProperty -LiteralPath $eventSourceKey -Name TypesSupported -Value 7
 }
 
 Write-Host "Installed Diskless Manager Windows client application:"
@@ -102,3 +112,5 @@ Write-Host "  & `"$destination`" install-nic-drivers `"$driverDirectory`""
 if ($RegisterStartupReport) {
     Write-Host "Startup reporting task registered: Diskless Manager Client Report"
 }
+Write-Host "Remove this installation with:"
+Write-Host "  & `"$PSScriptRoot\uninstall-client.ps1`""

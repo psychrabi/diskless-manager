@@ -66,7 +66,7 @@ foreach ($account in @("NT AUTHORITY\SYSTEM", "BUILTIN\Administrators")) {
 }
 Set-Acl -LiteralPath $configPath -AclObject $acl
 
-$action = New-ScheduledTaskAction -Execute $BinaryPath -Argument "report-client `"$configPath`""
+$action = New-ScheduledTaskAction -Execute $BinaryPath -Argument "report-client `"$configPath`" --retry"
 $trigger = New-ScheduledTaskTrigger -AtStartup
 $principal = New-ScheduledTaskPrincipal -UserId "NT AUTHORITY\SYSTEM" -RunLevel Highest
 Register-ScheduledTask -TaskName "DisklessManagerClientReport" `

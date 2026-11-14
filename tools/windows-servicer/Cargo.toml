@@ -19,7 +19,7 @@ tempfile = "3"
 zip = "2.2"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Services"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_EventLog", "Win32_System_Services"] }
 eframe = { version = "0.29", optional = true }
 
 [profile.release]
