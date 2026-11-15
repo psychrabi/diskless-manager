@@ -4,7 +4,9 @@ $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.Wind
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw 'Run the Windows client as administrator.'
 }
-$changes = @([Console]::In.ReadToEnd() | ConvertFrom-Json)
+# ConvertFrom-Json emits a JSON array as one object, so wrapping it in @() would
+# nest the changes and turn property access into member enumeration.
+$changes = [Console]::In.ReadToEnd() | ConvertFrom-Json
 $mutex = [Threading.Mutex]::new($false, 'Global\DisklessManagerLocalBootPreparation')
 $locked = $false
 $machine = [Microsoft.Win32.Registry]::LocalMachine

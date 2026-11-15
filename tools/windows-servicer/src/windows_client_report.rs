@@ -816,6 +816,11 @@ fn network_driver_infs(root: &Path) -> Result<Vec<PathBuf>> {
     collect_inf_files(root, &mut infs)?;
     infs.sort();
     infs.dedup();
+    // An empty staging directory is a valid no-op: there is nothing to install.
+    // A directory holding only non-network INFs is still an error below.
+    if infs.is_empty() {
+        return Ok(Vec::new());
+    }
     let mut network_infs = Vec::new();
     for inf in infs {
         if crate::windows_inf::inspect_inf_file(&inf)?.is_network_class {
@@ -1120,6 +1125,12 @@ mod tests {
         assert_eq!(network_driver_infs(root.path()).unwrap(), vec![nic.clone()]);
         std::fs::remove_file(nic).unwrap();
         assert!(network_driver_infs(root.path()).is_err());
+    }
+
+    #[test]
+    fn nic_install_preflight_accepts_an_empty_driver_root() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(network_driver_infs(root.path()).unwrap().is_empty());
     }
 
     #[test]
