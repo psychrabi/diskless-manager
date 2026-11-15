@@ -3,13 +3,13 @@ name: "Publish Release"
 on:
   push:
     tags:
-      - "v*"
+      - "release-v*.*.*"
   workflow_dispatch:
 
 jobs:
   changelog:
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/release-v')
     outputs:
       changelog: ${{ steps.build_changelog.outputs.changelog }}
     steps:
@@ -49,7 +49,7 @@ jobs:
 
   release:
     needs: changelog
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/release-v')
     permissions:
       contents: write
     runs-on: ubuntu-latest
@@ -116,7 +116,7 @@ jobs:
 
   windows-servicer:
     name: Build Windows servicing helper
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/release-v'))
     runs-on: windows-latest
     steps:
       - name: Checkout repository
@@ -162,7 +162,7 @@ jobs:
 
   publish-windows-servicer:
     name: Publish Windows servicing helper
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/release-v')
     needs:
       - release
       - windows-servicer
@@ -176,18 +176,35 @@ jobs:
           name: diskless-windows-servicer
           path: windows-servicer
 
+      - name: Download Windows client bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: diskless-windows-client
+          path: windows-client
+
+      - name: Download server archive
+        uses: actions/download-artifact@v4
+        with:
+          name: diskless-manager-linux-x86_64
+          path: server-archive
+
+      - name: Hash release artifacts
+        run: |
+          {
+            sha256sum server-archive/diskless-manager-linux-x86_64.tar.gz
+            sha256sum windows-servicer/diskless-windows-servicer.exe
+            sha256sum windows-servicer/install.ps1
+            sha256sum windows-client/diskless-windows-client.zip
+          } > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
       - name: Attach helper to GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release upload "${{ github.ref_name }}" windows-servicer/diskless-windows-servicer.exe --clobber
           gh release upload "${{ github.ref_name }}" windows-servicer/install.ps1 --clobber
-
-      - name: Download Windows client bundle
-        uses: actions/download-artifact@v4
-        with:
-          name: diskless-windows-client
-          path: windows-client
+          gh release upload "${{ github.ref_name }}" SHA256SUMS.txt --clobber
 
       - name: Attach client to GitHub release
         env:
