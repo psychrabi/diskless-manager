@@ -79,6 +79,11 @@ commands:
 
 Run without arguments on a Windows client to open the worker GUI.";
 
+/// Compile-time build stamp (Unix seconds, UTC) emitted by `build.rs`.
+pub fn build_date() -> String {
+    crate::windows_client_report::format_utc(env!("DM_BUILD_UNIX").parse().unwrap_or(0))
+}
+
 /// Capability payload reported to the server and displayed by the GUI. The GUI
 /// reuses this constructor so the two surfaces cannot drift.
 #[derive(Debug, Serialize)]
@@ -158,6 +163,7 @@ fn main() {
         Some("version") => write_json(&serde_json::json!({
             "ok": true,
             "version": HELPER_VERSION,
+            "build_date": build_date(),
         }))
         .map(|_| 0)
         .unwrap_or_else(report_output_error),

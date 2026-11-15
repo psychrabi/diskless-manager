@@ -48,6 +48,18 @@ struct OperationOutcome {
     adapters: Option<Vec<BootAdapter>>,
 }
 
+/// SHA-256 of the running executable, so an operator can compare it with the
+/// checksum published on the GitHub release. Fails soft: an unreadable
+/// executable shows as unavailable instead of blocking the GUI.
+fn executable_checksum() -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let exe = std::env::current_exe().ok()?;
+    let mut file = std::fs::File::open(exe).ok()?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher).ok()?;
+    Some(format!("{:x}", hasher.finalize()))
+}
+
 impl OperationOutcome {
     fn info(message: impl Into<String>) -> Self {
         Self {
@@ -72,6 +84,8 @@ struct WorkerApp {
     installation_verification: bool,
     elevated: bool,
     reboot_required: bool,
+    build_date: String,
+    checksum: Option<String>,
     status: String,
     busy: bool,
     result_receiver: Option<Receiver<OperationOutcome>>,
@@ -86,6 +100,8 @@ impl WorkerApp {
         let mut app = Self::default();
         app.ensure_defaults();
         app.elevated = crate::is_elevated();
+        app.build_date = crate::build_date();
+        app.checksum = executable_checksum();
         if let Ok(config) = ReporterConfig::load(Path::new(&app.config_path)) {
             app.server_url = config.server_url;
             app.client_id = config.client_id.unwrap_or_default();
@@ -300,6 +316,14 @@ impl eframe::App for WorkerApp {
           egui::ScrollArea::vertical().id_salt("client-page").show(ui, |ui| {
             ui.heading("Diskless Manager Windows Client");
             ui.label("Install signed NIC drivers, then prepare this Windows installation for diskless iSCSI boot.");
+            ui.label(format!(
+                "Version {} · built {} UTC",
+                crate::HELPER_VERSION, self.build_date
+            ));
+            ui.label(match &self.checksum {
+                Some(checksum) => format!("SHA-256: {checksum}"),
+                None => "SHA-256: unavailable".to_string(),
+            });
             ui.label(if self.elevated {
                 "Running elevated."
             } else {

@@ -84,6 +84,16 @@ The registry planning tests use fake inventories. They do not modify the host.
 Real driver installation, registry rollback, GUI behavior, and LAN boot require
 the disposable Windows hardware procedure.
 
+## Verifying a build
+
+The GUI header shows the version, the UTC build date, and the SHA-256 of the
+running executable; `diskless-windows-servicer.exe version` prints the version
+and build date as JSON. Compare the checksum with the `SHA256SUMS.txt` attached
+to the GitHub release before trusting a deployment. Releases are published from
+tags shaped `release-vX.Y.Z` (for example `release-v1.0.0`), which build the
+server archive, the Windows helper, and the Windows client bundle in GitHub
+Actions.
+
 ## Reference investigation
 
 The workflow was informed by static REA inspection of CCBoot's shipped client

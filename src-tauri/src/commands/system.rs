@@ -5,6 +5,10 @@ use std::process::Command;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SystemInfo {
+    /// Server package version (`CARGO_PKG_VERSION`) and its compile-time build
+    /// stamp, so the web UI can show what is running.
+    pub app_version: String,
+    pub build_date: String,
     pub hostname: String,
     pub os: String,
     pub kernel: String,
@@ -41,6 +45,14 @@ pub struct NetworkDetection {
     pub dns: Vec<String>,
     pub hostname: String,
     pub domain: String,
+}
+
+/// Compile-time build stamp emitted by `build.rs`, rendered as UTC ISO 8601.
+fn build_date() -> String {
+    let unix_seconds = env!("DISKLESS_BUILD_UNIX").parse::<i64>().unwrap_or(0);
+    chrono::DateTime::from_timestamp(unix_seconds, 0)
+        .map(|stamp| stamp.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+        .unwrap_or_default()
 }
 
 pub async fn get_system_info() -> Result<SystemInfo, String> {
@@ -85,6 +97,8 @@ pub async fn get_system_info() -> Result<SystemInfo, String> {
     let memory_available = parse_meminfo(&meminfo, "MemAvailable:");
 
     Ok(SystemInfo {
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
+        build_date: build_date(),
         hostname,
         os,
         kernel,

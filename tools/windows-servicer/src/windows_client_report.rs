@@ -197,7 +197,7 @@ fn unix_seconds_now() -> u64 {
 
 /// Render a Unix timestamp as UTC ISO 8601 without a time-zone database: the
 /// days-since-epoch to civil-date conversion follows Howard Hinnant's algorithm.
-fn format_utc(timestamp: u64) -> String {
+pub(crate) fn format_utc(timestamp: u64) -> String {
     let (year, month, day) = civil_from_days((timestamp / 86_400) as i64);
     let second_of_day = timestamp % 86_400;
     format!(

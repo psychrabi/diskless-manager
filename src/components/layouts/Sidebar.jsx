@@ -7,6 +7,7 @@ import {
 } from "@/components/ui/sidebar";
 import { navSections } from "./navigation";
 import NavUser from "./NavUser";
+import VersionInfo from "./VersionInfo";
 import { useAuth } from "@/contexts/auth";
 
 // Application navigation adapted from shadcn's sidebar-07 block.
@@ -80,6 +81,7 @@ export default function Sidebar() {
       <SidebarSeparator className="mx-4 opacity-70" />
       <SidebarFooter className="p-3 pt-2">
         <NavUser />
+        <VersionInfo />
       </SidebarFooter>
       <SidebarRail />
     </SidebarRoot>
