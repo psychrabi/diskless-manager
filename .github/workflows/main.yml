@@ -177,6 +177,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    # This job does not check out the repository, so gh needs an explicit
+    # repository to attach assets to the release.
+    env:
+      GH_REPO: ${{ github.repository }}
     steps:
       - name: Download Windows servicing helper
         uses: actions/download-artifact@v4
