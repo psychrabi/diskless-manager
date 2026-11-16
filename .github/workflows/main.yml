@@ -21,31 +21,62 @@ jobs:
       - name: Build changelog
         id: build_changelog
         run: |
-          ALL_TAGS=$(git tag --sort=-v:refname)
           CURRENT_TAG=${GITHUB_REF#refs/tags/}
-
-          PREVIOUS_TAG=""
-          FOUND_CURRENT=false
-          for tag in $ALL_TAGS; do
-            if [ "$tag" = "$CURRENT_TAG" ]; then
-              FOUND_CURRENT=true
-              continue
-            fi
-            if [ "$FOUND_CURRENT" = true ]; then
-              PREVIOUS_TAG=$tag
-              break
-            fi
-          done
-
-          if [ -z "$PREVIOUS_TAG" ]; then
-            changelog=$(git log --pretty=format:"- %s")
+          PREVIOUS_TAG=$(git tag --sort=-v:refname | grep -vxF "$CURRENT_TAG" | head -n1 || true)
+          if [ -n "$PREVIOUS_TAG" ]; then
+            COMMITS=$(git log --no-merges --pretty=format:'%s' "$PREVIOUS_TAG..$CURRENT_TAG")
           else
-            changelog=$(git log --pretty=format:"- %s" "$PREVIOUS_TAG..$CURRENT_TAG")
+            # The first tagged release would otherwise list the entire
+            # repository history. Summarize the final development stretch.
+            COMMITS=$(git log --no-merges --pretty=format:'%s' -n 40 "$CURRENT_TAG")
           fi
 
-          echo "changelog<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$changelog" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+          notes=$(mktemp)
+          if [ -n "$PREVIOUS_TAG" ]; then
+            printf 'Changes since %s.\n\n' "$PREVIOUS_TAG" > "$notes"
+          else
+            printf 'First tagged release. The entries below cover the final development stretch; earlier history remains in the commit log.\n\n' > "$notes"
+          fi
+
+          # Group conventional commits and drop routine maintenance noise so
+          # the release body stays readable.
+          add_section() {
+            title=$1
+            pattern=$2
+            lines=$(printf '%s\n' "$COMMITS" \
+              | grep -E "$pattern" \
+              | sed -E 's/^(feat|fix|perf|refactor|docs)(\([^)]*\))?!?:[[:space:]]*/- /' \
+              | awk '!seen[$0]++' || true)
+            if [ -n "$lines" ]; then
+              printf '## %s\n%s\n\n' "$title" "$lines" >> "$notes"
+            fi
+          }
+
+          add_section 'Features' '^feat(\([^)]*\))?!?:'
+          add_section 'Fixes' '^fix(\([^)]*\))?!?:'
+          add_section 'Improvements' '^(perf|refactor)(\([^)]*\))?!?:'
+          add_section 'Documentation' '^docs(\([^)]*\))?!?:'
+          other=$(printf '%s\n' "$COMMITS" \
+            | grep -Ev '^(feat|fix|perf|refactor|docs|ci|build|test|chore)(\([^)]*\))?!?:' \
+            | sed '/^$/d' \
+            | awk '!seen[$0]++' || true)
+          if [ -n "$other" ]; then
+            printf '## Other Changes\n' >> "$notes"
+            printf '%s\n' "$other" | sed 's/^/- /' >> "$notes"
+            printf '\n' >> "$notes"
+          fi
+
+          if [ -n "$PREVIOUS_TAG" ]; then
+            printf '**Full Changelog**: https://github.com/%s/compare/%s...%s\n' \
+              "$GITHUB_REPOSITORY" "$PREVIOUS_TAG" "$CURRENT_TAG" >> "$notes"
+          fi
+
+          {
+            echo "changelog<<EOF"
+            cat "$notes"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          cat "$notes"
 
   release:
     needs: changelog
