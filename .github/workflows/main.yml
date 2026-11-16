@@ -190,11 +190,12 @@ jobs:
 
       - name: Hash release artifacts
         run: |
+          # Plain basenames so `sha256sum -c SHA256SUMS.txt` verifies every
+          # downloaded release asset from a single directory.
           {
-            sha256sum server-archive/diskless-manager-linux-x86_64.tar.gz
-            sha256sum windows-servicer/diskless-windows-servicer.exe
-            sha256sum windows-servicer/install.ps1
-            sha256sum windows-client/diskless-windows-client.zip
+            (cd server-archive && sha256sum diskless-manager-linux-x86_64.tar.gz)
+            (cd windows-servicer && sha256sum diskless-windows-servicer.exe install.ps1)
+            (cd windows-client && sha256sum diskless-windows-client.zip)
           } > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
