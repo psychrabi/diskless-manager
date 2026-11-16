@@ -347,6 +347,8 @@ mod tests {
     #[test]
     fn startup_cleanup_replaces_policy_files_atomically_before_unregistration() {
         assert!(ADAPT_SCRIPT.contains("[IO.File]::Replace("));
+        // Windows PowerShell 5.1 binds $null as an empty backup path and fails.
+        assert!(ADAPT_SCRIPT.contains("[NullString]::Value"));
         assert!(!ADAPT_SCRIPT.contains("[IO.File]::WriteAllText($ini"));
     }
 

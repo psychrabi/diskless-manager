@@ -77,10 +77,7 @@ pub fn select_compatible_for_image(
         .filter(|package| {
             // Signed Windows packages must carry catalog files; unsigned or
             // damaged packages are never eligible for a published revision.
-            if package.catalog_files.is_empty() {
-                return false;
-            }
-            true
+            !package.catalog_files.is_empty()
         })
         .cloned()
         .collect();

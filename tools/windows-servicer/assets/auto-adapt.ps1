@@ -68,7 +68,9 @@ function Write-AtomicPolicyFile([string]$path, [string]$text, [Text.Encoding]$en
       $writer = [IO.StreamWriter]::new($stream, $encoding)
       try { $writer.Write($text); $writer.Flush(); $stream.Flush($true) } finally { $writer.Dispose() }
     } finally { $stream.Dispose() }
-    [IO.File]::Replace($temp, $path, $null)
+    # Windows PowerShell 5.1 binds $null as an empty string for [string]
+    # parameters, which File.Replace rejects; NullString passes a true null.
+    [IO.File]::Replace($temp, $path, [NullString]::Value)
   } finally {
     if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Force }
   }

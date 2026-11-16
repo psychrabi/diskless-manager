@@ -709,9 +709,22 @@ mod tests {
 
     #[test]
     fn hive_paths_must_be_absolute_and_stay_in_place() {
-        assert!(validate_hive_path(Path::new("/mnt/win/Windows/System32/config/SYSTEM")).is_ok());
+        // The helper also compiles this module on Windows, where a rooted path
+        // without a drive letter is not absolute. Use each platform's form so
+        // the test exercises validation rather than path syntax.
+        let valid = if cfg!(windows) {
+            r"C:\mnt\win\Windows\System32\config\SYSTEM"
+        } else {
+            "/mnt/win/Windows/System32/config/SYSTEM"
+        };
+        let traversal = if cfg!(windows) {
+            r"C:\mnt\..\etc\SYSTEM"
+        } else {
+            "/mnt/../etc/SYSTEM"
+        };
+        assert!(validate_hive_path(Path::new(valid)).is_ok());
         assert!(validate_hive_path(Path::new("Windows/System32/config/SYSTEM")).is_err());
-        assert!(validate_hive_path(Path::new("/mnt/../etc/SYSTEM")).is_err());
+        assert!(validate_hive_path(Path::new(traversal)).is_err());
     }
 
     #[test]
