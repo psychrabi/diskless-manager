@@ -151,13 +151,21 @@ jobs:
           path: tools/windows-servicer/target/diskless-windows-client.zip
           if-no-files-found: error
 
+      - name: Stage servicing helper artifact
+        shell: pwsh
+        run: |
+          $staging = 'tools/windows-servicer/target/servicer-artifact'
+          New-Item -ItemType Directory -Force -Path $staging | Out-Null
+          Copy-Item tools/windows-servicer/target/release/diskless-windows-servicer.exe $staging
+          Copy-Item tools/windows-servicer/install.ps1 $staging
+
       - name: Upload Windows servicing helper artifact
         uses: actions/upload-artifact@v4
         with:
           name: diskless-windows-servicer
-          path: |
-            tools/windows-servicer/target/release/diskless-windows-servicer.exe
-            tools/windows-servicer/install.ps1
+          # A wildcard flattens the staging directory, so the downloaded
+          # artifact has both files at its root for hashing and publishing.
+          path: tools/windows-servicer/target/servicer-artifact/*
           if-no-files-found: error
 
   publish-windows-servicer:
