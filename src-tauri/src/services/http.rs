@@ -88,14 +88,13 @@ impl HttpService {
 
     /// Remove obsolete manager scripts while preserving administrator menus.
     async fn remove_stale_generated_client_menus(&self) -> anyhow::Result<()> {
-        let config = crate::config::read_config_db(&self.db_pool).await?;
+        let macs: Vec<String> = sqlx::query_scalar("SELECT mac FROM clients")
+            .fetch_all(&self.db_pool)
+            .await?;
         let mut removed = 0usize;
-        for client in config.clients {
-            if crate::infrastructure::dhcp::remove_generated_client_ipxe_menu(
-                &self.settings,
-                &client.mac,
-            )
-            .await?
+        for mac in macs {
+            if crate::infrastructure::dhcp::remove_generated_client_ipxe_menu(&self.settings, &mac)
+                .await?
             {
                 removed += 1;
             }

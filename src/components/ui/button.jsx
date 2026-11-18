@@ -7,9 +7,9 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground shadow-sm hover:bg-primary/90",
+        default: "bg-primary text-primary-foreground hover:bg-primary/90",
         outline:
-          "border-border/90 bg-card text-foreground shadow-[0_1px_1px_rgb(0_0_0/0.03)] hover:bg-muted/70 hover:text-foreground aria-expanded:bg-muted",
+          "border-border bg-card text-foreground hover:border-foreground/25 hover:bg-muted/60 hover:text-foreground aria-expanded:bg-muted",
         secondary:
           "bg-secondary text-secondary-foreground hover:bg-[color-mix(in_oklch,var(--secondary),var(--foreground)_5%)] aria-expanded:bg-secondary",
         ghost:
@@ -26,13 +26,13 @@ const buttonVariants = cva(
       },
       size: {
         default: "h-9 px-3.5",
-        xs: "h-7 gap-1 rounded-md px-2 text-[11px]",
-        sm: "h-8 gap-1 rounded-lg px-3 text-xs",
-        lg: "h-10 gap-2 rounded-lg px-4 text-sm",
+        xs: "h-7 gap-1 rounded-sm px-2 text-[11px]",
+        sm: "h-8 gap-1 rounded-md px-3 text-xs",
+        lg: "h-10 gap-2 rounded-md px-4 text-sm",
         icon: "size-9",
-        "icon-xs": "size-7 rounded-md",
-        "icon-sm": "size-8 rounded-lg",
-        "icon-lg": "size-10 rounded-lg",
+        "icon-xs": "size-7 rounded-sm",
+        "icon-sm": "size-8 rounded-md",
+        "icon-lg": "size-10 rounded-md",
       },
     },
     defaultVariants: {

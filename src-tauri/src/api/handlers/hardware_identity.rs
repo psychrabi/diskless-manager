@@ -10,7 +10,7 @@ use axum::{
 };
 type ApiResult = Result<Json<IdentityStatus>, (StatusCode, Json<ErrorResponse>)>;
 fn admin(claims: &Claims) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
-    if claims.role == "admin" {
+    if claims.is_admin() {
         Ok(())
     } else {
         Err((

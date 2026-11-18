@@ -5,7 +5,7 @@ use std::fs;
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Traffic rates in megabytes per second, measured from kernel byte counters.
 #[derive(Debug, Clone, Serialize, Default)]
@@ -59,6 +59,35 @@ pub struct MetricsSnapshot {
     /// Sources that could not be read. No estimate is substituted for them.
     pub warnings: Vec<String>,
     /// UTC timestamp of the sample.
+    pub timestamp: i64,
+}
+
+/// One client row in the dashboard metrics response.
+#[derive(Debug, Clone, Serialize)]
+pub struct ClientMetric {
+    pub ip: String,
+    pub status: String,
+    /// Compatibility fields: actual iSCSI read and write throughput when available.
+    pub read_speed_mbps: Option<f64>,
+    /// Compatibility fields: actual iSCSI read and write throughput when available.
+    pub write_speed_mbps: Option<f64>,
+    /// All conntrack-accounted traffic involving this client IP.
+    pub network: Option<Throughput>,
+    /// Conntrack-accounted traffic for this client on the configured iSCSI port.
+    pub iscsi: Option<Throughput>,
+    /// Indicates a readable source without a preceding sample for a real rate.
+    pub warming_up: bool,
+    pub uptime_seconds: i64,
+}
+
+/// Dashboard metrics payload shared by REST and WebSocket transports.
+#[derive(Debug, Clone, Serialize)]
+pub struct MetricsUpdate {
+    pub clients: Vec<ClientMetric>,
+    /// Aggregate ZFS throughput across discovered pools.
+    pub storage: StorageTrafficMetrics,
+    /// Read errors from source counters; no estimates are returned for them.
+    pub warnings: Vec<String>,
     pub timestamp: i64,
 }
 
@@ -244,6 +273,10 @@ pub struct MetricsCollector {
     reader: LinuxMetricsReader,
     previous: Mutex<Option<(Instant, RawCounters)>>,
     previous_lio: Mutex<Option<(Instant, HashMap<String, DirectionalCounters>)>>,
+    /// One fleet-wide snapshot shared by every dashboard tab.
+    cached_update: std::sync::RwLock<Option<(Instant, MetricsUpdate)>>,
+    /// Ensures concurrent cache misses perform a single collection.
+    refresh: tokio::sync::Mutex<()>,
 }
 
 impl Default for MetricsCollector {
@@ -252,11 +285,51 @@ impl Default for MetricsCollector {
             reader: LinuxMetricsReader::default(),
             previous: std::sync::Mutex::new(None),
             previous_lio: std::sync::Mutex::new(None),
+            cached_update: std::sync::RwLock::new(None),
+            refresh: tokio::sync::Mutex::new(()),
         }
     }
 }
 
 impl MetricsCollector {
+    /// Return a snapshot no older than `max_age`, collecting once if needed.
+    ///
+    /// Concurrent REST and WebSocket callers share both the snapshot and the
+    /// collection work, so sampling cost no longer scales with open tabs.
+    pub async fn cached_update<F, Fut>(
+        &self,
+        max_age: Duration,
+        collect: F,
+    ) -> Result<MetricsUpdate, String>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<MetricsUpdate, String>>,
+    {
+        if let Some(update) = self.fresh_update(max_age) {
+            return Ok(update);
+        }
+        let _refresh = self.refresh.lock().await;
+        if let Some(update) = self.fresh_update(max_age) {
+            return Ok(update);
+        }
+        let update = collect().await?;
+        *self
+            .cached_update
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            Some((Instant::now(), update.clone()));
+        Ok(update)
+    }
+
+    fn fresh_update(&self, max_age: Duration) -> Option<MetricsUpdate> {
+        self.cached_update
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .filter(|(sampled_at, _)| sampled_at.elapsed() < max_age)
+            .map(|(_, update)| update.clone())
+    }
+
     /// Collects exactly one host sample and calculates rates from the preceding sample.
     pub fn collect(&self, client_ips: &[String], iscsi_port: u16) -> MetricsSnapshot {
         let valid_clients = client_ips
@@ -527,9 +600,10 @@ fn parse_zfs_kstat(content: &str) -> Option<ZfsCounters> {
 mod tests {
     use super::{
         parse_conntrack_counters, parse_zfs_kstat, ClientCounters, LinuxMetricsReader,
-        MetricsCollector, RawCounters, ZfsCounters,
+        MetricsCollector, RawCounters, StorageTrafficMetrics, ZfsCounters,
     };
     use std::net::IpAddr;
+    use std::time::Duration;
 
     #[test]
     fn attributes_conntrack_bytes_to_one_client_and_iscsi_session() {
@@ -641,6 +715,8 @@ mod tests {
             reader,
             previous: std::sync::Mutex::new(None),
             previous_lio: std::sync::Mutex::new(None),
+            cached_update: std::sync::RwLock::new(None),
+            refresh: tokio::sync::Mutex::new(()),
         };
         let first = collector.collect_lio(&[("192.168.1.101".into(), "block_pc001".into())]);
         assert_eq!(first["192.168.1.101"].total_read_bytes, 12_582_912);
@@ -672,5 +748,53 @@ mod tests {
 
         assert!(error.contains("nf_conntrack_acct=1"));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn dashboard_snapshots_are_shared_and_expire() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let collector = MetricsCollector::default();
+        let calls = std::sync::Arc::new(AtomicUsize::new(0));
+        let update = |timestamp| super::MetricsUpdate {
+            clients: Vec::new(),
+            storage: StorageTrafficMetrics {
+                zfs: None,
+                warming_up: false,
+            },
+            warnings: Vec::new(),
+            timestamp,
+        };
+
+        let first_calls = calls.clone();
+        let first = collector
+            .cached_update(Duration::from_secs(1), || async move {
+                first_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(update(1))
+            })
+            .await
+            .expect("first sample should succeed");
+        let second_calls = calls.clone();
+        let second = collector
+            .cached_update(Duration::from_secs(1), || async move {
+                second_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(update(2))
+            })
+            .await
+            .expect("cached sample should succeed");
+        assert_eq!(first.timestamp, 1);
+        assert_eq!(second.timestamp, 1);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        let third_calls = calls.clone();
+        let third = collector
+            .cached_update(Duration::ZERO, || async move {
+                third_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(update(3))
+            })
+            .await
+            .expect("expired sample should be recollected");
+        assert_eq!(third.timestamp, 3);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 }

@@ -27,7 +27,7 @@ export default function NavUser() {
             </Avatar>
             <div className="grid min-w-0 flex-1 text-left text-sm leading-tight group-data-[collapsible=icon]:hidden">
               <span className="truncate font-medium">{name}</span>
-              <span className="mt-1 truncate text-xs text-muted-foreground capitalize">{role}</span>
+              <span className="mt-1 truncate text-xs text-sidebar-foreground/60 capitalize">{role}</span>
             </div>
             <ChevronsUpDown className="ml-auto size-4 group-data-[collapsible=icon]:hidden" />
           </DropdownMenuTrigger>

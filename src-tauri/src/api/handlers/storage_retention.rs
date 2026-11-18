@@ -31,7 +31,7 @@ fn service(state: &AppState) -> RetentionService {
 }
 
 fn require_admin(claims: &Claims) -> ApiResult<()> {
-    if claims.role != "admin" {
+    if !claims.is_admin() {
         return Err(api_error(
             StatusCode::FORBIDDEN,
             "Administrator access required",

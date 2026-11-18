@@ -126,7 +126,7 @@ function Sidebar({
   }
   if (isMobile) {
     return <Sheet open={openMobile} onOpenChange={setOpenMobile} {...props}>
-        <SheetContent dir={dir} data-sidebar="sidebar" data-slot="sidebar" data-mobile="true" className="max-w-[calc(100vw-2rem)] bg-sidebar p-0 text-sidebar-foreground data-[side=left]:w-(--sidebar-width) data-[side=right]:w-(--sidebar-width)" style={{
+        <SheetContent dir={dir} data-sidebar="sidebar" data-slot="sidebar" data-mobile="true" className="max-w-[calc(100vw-2rem)] bg-sidebar p-0 text-sidebar-foreground data-[side=left]:w-(--sidebar-width) data-[side=right]:w-(--sidebar-width) [&_[data-slot=sheet-close]]:text-sidebar-foreground [&_[data-slot=sheet-close]]:hover:bg-sidebar-accent [&_[data-slot=sheet-close]]:hover:text-sidebar-accent-foreground" style={{
         "--sidebar-width": SIDEBAR_WIDTH_MOBILE
       }} side={side}>
           <SheetHeader className="sr-only">

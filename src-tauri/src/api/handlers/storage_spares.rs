@@ -42,7 +42,7 @@ pub async fn list_storage_spares(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> Result<Json<SparePrewarmView>, (StatusCode, Json<super::clients::ErrorResponse>)> {
-    if claims.role != "admin" {
+    if !claims.is_admin() {
         return Err((
             StatusCode::FORBIDDEN,
             Json(super::clients::ErrorResponse {

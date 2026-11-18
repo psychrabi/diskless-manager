@@ -4,7 +4,9 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
+use crate::api::error::api_error;
 use crate::state::AppState;
 use crate::types::disk::DatasetOperationResponse;
 
@@ -25,12 +27,16 @@ pub struct PoolExistsRequest {
     pub pool_name: Option<String>,
 }
 
-fn validate_pool_request(request: &CreatePoolRequest) -> Result<(), StatusCode> {
-    crate::validation::validate_pool_name(&request.name).map_err(|_| StatusCode::BAD_REQUEST)?;
+fn validate_pool_request(request: &CreatePoolRequest) -> Result<(), String> {
+    crate::validation::validate_pool_name(&request.name)
+        .map_err(|error| format!("Invalid pool name: {error}"))?;
     if !request
         .name
         .starts_with(|character: char| character.is_ascii_alphabetic())
-        || request.disk.is_empty()
+    {
+        return Err("A pool name must start with a letter".to_string());
+    }
+    if request.disk.is_empty()
         || !request
             .disk
             .starts_with(|character: char| character.is_ascii_alphanumeric())
@@ -40,7 +46,7 @@ fn validate_pool_request(request: &CreatePoolRequest) -> Result<(), StatusCode> 
         || request.disk == "."
         || request.disk == ".."
     {
-        return Err(StatusCode::BAD_REQUEST);
+        return Err("Select a single block device name, such as sdb or nvme0n1".to_string());
     }
     Ok(())
 }
@@ -77,11 +83,17 @@ pub async fn rename_disk(
     }
 }
 
+/// Create the pool, reporting the real `zpool` failure to the setup wizard.
+///
+/// The suite runs this from the setup wizard, so a bare 500 would leave the
+/// operator without the reason (`device is in use`, a missing device, and so
+/// on). Failures use the shared error contract and never include secrets.
 pub async fn create_pool(
     State(state): State<AppState>,
     Json(request): Json<CreatePoolRequest>,
-) -> Result<Json<DatasetOperationResponse>, StatusCode> {
-    validate_pool_request(&request)?;
+) -> Result<Json<DatasetOperationResponse>, (StatusCode, Json<Value>)> {
+    validate_pool_request(&request)
+        .map_err(|message| api_error(StatusCode::BAD_REQUEST, message, Value::Null))?;
     let _guard = state.client_mutations.lock().await;
     let output = tokio::process::Command::new("sudo")
         .args([
@@ -96,7 +108,23 @@ pub async fn create_pool(
 
     match output {
         Ok(output) if output.status.success() => {
-            persist_pool_name(&state.db_pool, &request.name).await?;
+            if persist_pool_name(&state.db_pool, &request.name)
+                .await
+                .is_err()
+            {
+                log::error!(
+                    "Pool '{}' was created but its name was not saved",
+                    request.name
+                );
+                return Err(api_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!(
+                        "ZFS pool '{}' was created, but the server could not save it as the active pool. Select it again after restarting the service.",
+                        request.name
+                    ),
+                    Value::Null,
+                ));
+            }
             let mut config = crate::config::get_config(&state.config);
             config.settings["zpool_name"] = serde_json::json!(request.name);
             crate::config::set_config(&state.config, &config);
@@ -106,11 +134,44 @@ pub async fn create_pool(
             )))
         }
         Ok(output) => {
-            let error_msg = String::from_utf8_lossy(&output.stderr).to_string();
+            let error_msg = zpool_failure_message(&output.stderr);
             log::error!("Failed to create ZFS pool: {error_msg}");
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
+            Err(api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Could not create ZFS pool '{}': {error_msg}", request.name),
+                serde_json::json!({ "disk": request.disk }),
+            ))
         }
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+        Err(error) => {
+            log::error!("Failed to run zpool create: {error}");
+            Err(api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Could not run zpool create: {error}"),
+                Value::Null,
+            ))
+        }
+    }
+}
+
+/// Collapse `zpool` stderr into one line without its `cannot create` prefix,
+/// so the wizard shows the reason rather than a bare 500.
+fn zpool_failure_message(stderr: &[u8]) -> String {
+    let text = String::from_utf8_lossy(stderr);
+    let combined = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let message = combined
+        .strip_prefix("cannot create")
+        .and_then(|rest| rest.split_once(':').map(|(_, reason)| reason.trim()))
+        .filter(|reason| !reason.is_empty())
+        .unwrap_or(combined.as_str());
+    if message.is_empty() {
+        "zpool reported no error message".to_string()
+    } else {
+        message.to_string()
     }
 }
 
@@ -148,12 +209,13 @@ mod setup_tests {
             ("", "sda"),
             ("tank", ""),
         ] {
-            assert_eq!(
+            assert!(
                 validate_pool_request(&CreatePoolRequest {
                     name: name.into(),
                     disk: disk.into()
-                }),
-                Err(StatusCode::BAD_REQUEST)
+                })
+                .is_err(),
+                "{name:?} / {disk:?} must be rejected"
             );
         }
         assert!(validate_pool_request(&CreatePoolRequest {
@@ -161,6 +223,22 @@ mod setup_tests {
             disk: "nvme0n1".into()
         })
         .is_ok());
+    }
+
+    #[test]
+    fn zpool_stderr_becomes_a_readable_single_line_reason() {
+        assert_eq!(
+            zpool_failure_message(b"cannot create 'tank': device '/dev/sda' is in use\n"),
+            "device '/dev/sda' is in use"
+        );
+        assert_eq!(
+            zpool_failure_message(b"invalid vdev specification\nuse '-f' to override\n"),
+            "invalid vdev specification use '-f' to override"
+        );
+        assert_eq!(
+            zpool_failure_message(b"   \n"),
+            "zpool reported no error message"
+        );
     }
 
     #[tokio::test]

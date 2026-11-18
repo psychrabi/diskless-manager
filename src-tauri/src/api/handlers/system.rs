@@ -346,19 +346,7 @@ async fn persist_settings_snapshot(
     new_config: &crate::types::AppConfig,
     settings: &crate::core::config::Settings,
 ) -> Result<(), StatusCode> {
-    let mut transaction = state
-        .db_pool
-        .begin()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    if let Some(values) = new_config.settings.as_object() {
-        for (key, value) in values {
-            sqlx::query("INSERT INTO app_config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-                .bind(key).bind(value.to_string()).execute(&mut *transaction).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
-    }
-    transaction
-        .commit()
+    crate::config::write_config(&state.db_pool, new_config)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     crate::config::set_config(&state.config, new_config);

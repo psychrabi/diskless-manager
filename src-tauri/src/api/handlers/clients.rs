@@ -1187,7 +1187,7 @@ async fn toggle_super_mode(
         return Ok(Json(client.clone()));
     };
 
-    if claims.role != "admin" {
+    if !claims.is_admin() {
         return Err((
             StatusCode::FORBIDDEN,
             Json(ErrorResponse {
@@ -1990,7 +1990,7 @@ pub async fn exit_legacy_super(
     Path(id): Path<String>,
     Json(request): Json<LegacySuperExitRequest>,
 ) -> Result<Json<crate::domain::Client>, (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
+    if !claims.is_admin() {
         return Err((
             StatusCode::FORBIDDEN,
             Json(ErrorResponse {

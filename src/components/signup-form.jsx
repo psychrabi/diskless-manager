@@ -7,36 +7,36 @@ import { Spinner } from "@/components/ui/spinner";
 // The signup block is used only for the existing first-administrator setup flow.
 export function SignupForm({ onSubmit, register, errors, isSubmitting, onLogin }) {
   return (
-    <Card className="w-full shadow-sm">
-      <CardHeader className="gap-2 px-6 pt-2 text-center">
-        <h1 className="text-2xl font-semibold tracking-tight">Set up your workspace</h1>
-        <CardDescription>Create the first administrator account for your server.</CardDescription>
+    <Card className="w-full border-border/80 bg-card/85 shadow-xl shadow-foreground/[0.04] backdrop-blur-sm">
+      <CardHeader className="gap-2 px-6 pt-6 text-center sm:text-left">
+        <h1 className="text-[28px] leading-tight font-semibold tracking-[-0.04em] text-balance">Set up your workspace</h1>
+        <CardDescription className="text-sm leading-6">Create the first administrator account for your server.</CardDescription>
       </CardHeader>
-      <CardContent className="px-6 pb-2">
+      <CardContent className="px-6 pb-6">
         <form onSubmit={onSubmit}>
           <FieldGroup>
             <Field data-invalid={!!errors.username}>
               <FieldLabel htmlFor="username">Username</FieldLabel>
-              <Input id="username" autoComplete="username" className="h-10" placeholder="admin" aria-invalid={!!errors.username} aria-describedby={errors.username ? "username-error" : undefined} {...register("username")} />
+              <Input id="username" autoComplete="username" className="h-11 rounded-lg bg-background" placeholder="admin" aria-invalid={!!errors.username} aria-describedby={errors.username ? "username-error" : undefined} disabled={isSubmitting} {...register("username")} />
               <FieldError id="username-error">{errors.username?.message}</FieldError>
             </Field>
             <Field data-invalid={!!errors.password}>
               <FieldLabel htmlFor="password">Password</FieldLabel>
-              <Input id="password" type="password" autoComplete="new-password" className="h-10" aria-invalid={!!errors.password} aria-describedby="password-help password-error" {...register("password")} />
+              <Input id="password" type="password" autoComplete="new-password" className="h-11 rounded-lg bg-background" aria-invalid={!!errors.password} aria-describedby="password-help password-error" disabled={isSubmitting} {...register("password")} />
               <FieldDescription id="password-help">Use at least 8 characters, including an uppercase letter, a lowercase letter, and a number.</FieldDescription>
               <FieldError id="password-error">{errors.password?.message}</FieldError>
             </Field>
             <Field data-invalid={!!errors.confirmPassword}>
               <FieldLabel htmlFor="confirmPassword">Confirm password</FieldLabel>
-              <Input id="confirmPassword" type="password" autoComplete="new-password" className="h-10" aria-invalid={!!errors.confirmPassword} aria-describedby={errors.confirmPassword ? "confirm-password-error" : undefined} {...register("confirmPassword")} />
+              <Input id="confirmPassword" type="password" autoComplete="new-password" className="h-11 rounded-lg bg-background" aria-invalid={!!errors.confirmPassword} aria-describedby={errors.confirmPassword ? "confirm-password-error" : undefined} disabled={isSubmitting} {...register("confirmPassword")} />
               <FieldError id="confirm-password-error">{errors.confirmPassword?.message}</FieldError>
             </Field>
-            <Field>
-              <Button type="submit" className="h-10" disabled={isSubmitting}>
+            <Field className="pt-1">
+              <Button type="submit" className="h-11 w-full" disabled={isSubmitting}>
                 {isSubmitting && <Spinner />}
                 {isSubmitting ? "Creating account…" : "Create admin account"}
               </Button>
-              <Button type="button" variant="ghost" onClick={onLogin}>Back to sign in</Button>
+              <Button type="button" variant="ghost" className="h-11" onClick={onLogin} disabled={isSubmitting}>Back to sign in</Button>
             </Field>
           </FieldGroup>
         </form>

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use super::image_copy_service::ImageCopyRegistry;
 use super::image_service::ImageService;
 use super::linux_image_builder_service::LinuxImageBuilderService;
 use super::BootHistoryService;
@@ -38,6 +39,8 @@ pub struct ApplicationServices {
     pub storage: Arc<StorageService>,
     pub provisioning: ProvisioningService,
     pub nvmeof_boot: NvmeOfBootService,
+    /// Running and recently finished image copies.
+    pub image_copies: ImageCopyRegistry,
 }
 
 impl ApplicationServices {
@@ -107,6 +110,7 @@ impl ApplicationServices {
             storage,
             provisioning,
             nvmeof_boot,
+            image_copies: ImageCopyRegistry::default(),
         }
     }
 }

@@ -1245,9 +1245,22 @@ pub async fn get_audit_logs(
         )
     })?;
 
-    let total = logs.len();
+    let total = audit_logger.count_logs(&filter).await.map_err(|e| {
+        error!("Failed to count audit logs: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                error: "Failed to count audit logs".to_string(),
+                details: Some(e.to_string()),
+            }),
+        )
+    })?;
 
-    Ok(Json(AuditLogsResponse { logs, total }))
+    Ok(Json(AuditLogsResponse {
+        logs,
+        total: usize::try_from(total).unwrap_or(usize::MAX),
+    }))
 }
 
 /// Get administrative audit events with optional filters.

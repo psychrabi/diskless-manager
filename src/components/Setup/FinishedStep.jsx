@@ -4,8 +4,8 @@ import { Button, Card } from "@/components/ui";
 
 const FinishedStep = ({ onNavigateHome, completing }) => {
   return (
-    <Card className="border-t-4 border-emerald-600 p-12 text-center space-y-6">
-      <div className="w-24 h-24 bg-emerald-600 text-white rounded-full flex items-center justify-center mx-auto shadow-2xl">
+    <Card className="border-t-4 border-success p-12 text-center space-y-6">
+      <div className="w-24 h-24 bg-success text-white rounded-full flex items-center justify-center mx-auto shadow-2xl">
         <CheckCircle size={64} />
       </div>
       <div className="space-y-2">

@@ -19,6 +19,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
   Boxes,
+  Copy,
   Edit,
   History,
   Layers,
@@ -45,6 +46,7 @@ import ImageHealthDialog from "./ImageHealthDialog";
 import RenameImageModal from "./RenameImageModal";
 import { SnapshotsList } from "./SnapshotsList";
 import ImageVersionModal from "./ImageVersionModal";
+import CopyImageModal from "./CopyImageModal";
 import { cn } from "@/lib/utils";
 
 const isWindowsImage = (master) =>
@@ -70,6 +72,7 @@ export const ImagesList = ({ masters }) => {
   const [recoveryImageName, setRecoveryImageName] = useState(null);
   const [healthImage, setHealthImage] = useState(null);
   const [openVersionModal, setOpenVersionModal] = useState(false);
+  const [openCopyModal, setOpenCopyModal] = useState(false);
   const [query, setQuery] = useState("");
   const [osFilter, setOsFilter] = useState("all");
 
@@ -261,6 +264,16 @@ export const ImagesList = ({ masters }) => {
                               <Edit />
                               Rename image
                             </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={() => {
+                                setSelectedImage(master);
+                                setOpenCopyModal(true);
+                              }}
+                              disabled={master.status !== "ready"}
+                            >
+                              <Copy />
+                              Copy image
+                            </DropdownMenuItem>
                             <DropdownMenuSeparator />
                             <DropdownMenuItem
                               variant="destructive"
@@ -315,6 +328,13 @@ export const ImagesList = ({ masters }) => {
         <RenameImageModal
           openRenameModal={openRenameModal}
           setOpenRenameModal={setOpenRenameModal}
+          selectedImage={selectedImage}
+        />
+      )}
+      {openCopyModal && (
+        <CopyImageModal
+          openCopyModal={openCopyModal}
+          setOpenCopyModal={setOpenCopyModal}
           selectedImage={selectedImage}
         />
       )}

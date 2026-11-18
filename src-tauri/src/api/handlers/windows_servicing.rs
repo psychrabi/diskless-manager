@@ -171,7 +171,7 @@ pub struct CatalogWindowsPreparationRequest {
 }
 
 fn require_admin(claims: &Claims) -> Result<(), (StatusCode, Json<WindowsServicingError>)> {
-    if claims.role != "admin" {
+    if !claims.is_admin() {
         return Err((
             StatusCode::FORBIDDEN,
             Json(WindowsServicingError {

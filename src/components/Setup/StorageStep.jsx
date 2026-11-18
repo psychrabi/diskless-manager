@@ -26,7 +26,7 @@ const StorageStep = ({
     >
       {poolExists ? (
         <div className="flex flex-col items-center py-8 space-y-6 text-center">
-          <div className="w-20 h-20 bg-emerald-600/20 text-emerald-600 rounded-full flex items-center justify-center">
+          <div className="w-20 h-20 bg-success/20 text-success rounded-full flex items-center justify-center">
             <CheckCircle size={48} />
           </div>
           <div className="space-y-2">
@@ -61,9 +61,9 @@ const StorageStep = ({
               error={errors.name}
             />
           </div>
-          <Alert variant="default" className="border-amber-600/20 bg-amber-600/10 text-amber-600">
+          <Alert variant="default" className="border-warning/20 bg-warning/10 text-warning">
             <AlertCircle />
-            <AlertDescription className="text-amber-600">
+            <AlertDescription className="text-warning">
               Creating a ZFS pool will format the selected disk. Ensure you have
               backups of any important data before proceeding.
             </AlertDescription>

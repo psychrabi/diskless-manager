@@ -5,6 +5,11 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/*
+ * Instrument panel: a cool graphite console with one signal violet. Surfaces are
+ * separated by hairlines (never by shadows), data sits on a faint dot grid, and
+ * colour is reserved for the primary action and for status.
+ */
 @layer base {
   html {
     color-scheme: light;
@@ -14,6 +19,20 @@
 
   html.dark {
     color-scheme: dark;
+  }
+
+  /* Larger monitors get a slightly larger base, so rem-based text and spacing
+     keep their proportions instead of shrinking into the extra room. */
+  @media (min-width: 1280px) {
+    html {
+      font-size: 16.5px;
+    }
+  }
+
+  @media (min-width: 1800px) {
+    html {
+      font-size: 17.5px;
+    }
   }
 
   * {
@@ -27,7 +46,7 @@
   }
 
   ::selection {
-    background: color-mix(in oklch, var(--primary) 24%, transparent);
+    background: color-mix(in oklab, var(--primary) 22%, transparent);
   }
 
   ::-webkit-scrollbar {
@@ -43,15 +62,14 @@
     border: 3px solid transparent;
     border-radius: 999px;
     background-clip: content-box;
-    background-color: color-mix(in oklch, var(--muted-foreground) 28%, transparent);
+    background-color: color-mix(in oklab, var(--muted-foreground) 32%, transparent);
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    background-color: color-mix(in oklch, var(--muted-foreground) 45%, transparent);
+    background-color: color-mix(in oklab, var(--muted-foreground) 50%, transparent);
   }
 }
 
-/* Respect reduced motion preferences */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -63,63 +81,104 @@
   }
 }
 
-/* Professional Typography Scale */
 @layer utilities {
+  /* Work surface: a 24px dot grid, quiet enough to sit under dense data. */
+  .app-canvas {
+    background-image: radial-gradient(
+      color-mix(in oklab, var(--border) 72%, transparent) 1px,
+      transparent 1px
+    );
+    background-size: 24px 24px;
+  }
+
+  /* Small structural label above titles and inside panel headers. */
+  .text-eyebrow {
+    @apply text-[10px] font-semibold tracking-[0.16em] uppercase;
+    color: var(--muted-foreground);
+  }
+
+  @media (min-width: 1280px) {
+    .text-eyebrow {
+      font-size: 11px;
+    }
+  }
+
   .text-display-lg {
-    @apply text-6xl leading-tight font-extrabold;
+    @apply text-5xl leading-none font-semibold tracking-[-0.045em] sm:text-6xl;
   }
   .text-display-md {
-    @apply text-4xl leading-tight font-bold;
+    @apply text-4xl leading-none font-semibold tracking-[-0.04em];
   }
   .text-display-sm {
-    @apply text-3xl leading-snug font-semibold;
+    @apply text-3xl leading-tight font-semibold tracking-[-0.035em];
   }
   .text-heading-lg {
-    @apply text-2xl leading-normal font-semibold;
+    @apply text-2xl leading-snug font-semibold tracking-[-0.025em];
   }
   .text-heading-md {
-    @apply text-xl leading-normal font-semibold;
+    @apply text-xl leading-snug font-semibold tracking-[-0.02em];
   }
   .text-heading-sm {
-    @apply text-lg leading-normal font-medium;
+    @apply text-base leading-snug font-medium tracking-[-0.01em];
   }
   .text-body-lg {
-    @apply text-lg leading-relaxed font-normal;
-  }
-  .text-body-md {
     @apply text-base leading-relaxed font-normal;
   }
+  .text-body-md {
+    @apply text-sm leading-relaxed font-normal;
+  }
   .text-body-sm {
-    @apply text-sm leading-normal font-normal;
+    @apply text-[13px] leading-normal font-normal;
   }
   .text-caption {
-    @apply text-xs leading-tight font-medium;
+    @apply text-[11px] leading-tight font-medium;
   }
+
+  /* Monospace only for identifiers an operator reads character by character. */
   .font-mono-data {
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
     font-variant-numeric: tabular-nums;
   }
+
   .hero-grid {
     background-image:
-      linear-gradient(to right, rgb(255 255 255 / 0.055) 1px, transparent 1px),
-      linear-gradient(to bottom, rgb(255 255 255 / 0.055) 1px, transparent 1px);
-    background-size: 44px 44px;
-    mask-image: radial-gradient(ellipse 80% 70% at 30% 35%, black, transparent 78%);
+      linear-gradient(to right, rgb(255 255 255 / 0.05) 1px, transparent 1px),
+      linear-gradient(to bottom, rgb(255 255 255 / 0.05) 1px, transparent 1px);
+    background-size: 48px 48px;
+    mask-image: radial-gradient(ellipse 85% 70% at 25% 35%, black, transparent 78%);
   }
+
   .surface-grid {
     background-image:
-      linear-gradient(to right, color-mix(in oklch, var(--border) 65%, transparent) 1px, transparent 1px),
-      linear-gradient(to bottom, color-mix(in oklch, var(--border) 65%, transparent) 1px, transparent 1px);
+      linear-gradient(to right, color-mix(in oklab, var(--border) 70%, transparent) 1px, transparent 1px),
+      linear-gradient(to bottom, color-mix(in oklab, var(--border) 70%, transparent) 1px, transparent 1px);
     background-size: 32px 32px;
   }
+
+  /* Hairline surfaces answer hover with a darker rule, not a lift. */
   .card-lift {
-    @apply transition-[box-shadow,transform] duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md;
+    @apply transition-colors duration-150 hover:border-foreground/25;
+  }
+
+  .ui-enter {
+    animation: ui-enter 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  /* Segmented meter used by stat tiles and pool usage bars. */
+  .meter-track {
+    background-image: repeating-linear-gradient(
+      to right,
+      transparent 0,
+      transparent 6px,
+      var(--background) 6px,
+      var(--background) 8px
+    );
   }
 }
 
 @theme inline {
   --font-heading: var(--font-sans);
-  --font-sans: 'Geist Variable', sans-serif;
+  --font-sans: "Geist Variable", sans-serif;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -154,8 +213,8 @@
   --color-card: var(--card);
   --color-foreground: var(--foreground);
   --color-background: var(--background);
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
+  --radius-sm: calc(var(--radius) * 0.5);
+  --radius-md: calc(var(--radius) * 0.75);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) * 1.4);
   --radius-2xl: calc(var(--radius) * 1.8);
@@ -164,78 +223,98 @@
 }
 
 :root {
-  --background: oklch(0.972 0.005 210);
-  --foreground: oklch(0.19 0.02 240);
-  --card: oklch(0.997 0.002 210);
-  --card-foreground: oklch(0.19 0.02 240);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.19 0.02 240);
-  --primary: oklch(0.47 0.092 190);
-  --primary-foreground: oklch(0.99 0 0);
-  --secondary: oklch(0.944 0.008 215);
-  --secondary-foreground: oklch(0.26 0.02 240);
-  --muted: oklch(0.944 0.006 215);
-  --muted-foreground: oklch(0.50 0.018 240);
-  --accent: oklch(0.93 0.026 190);
-  --accent-foreground: oklch(0.31 0.055 190);
-  --destructive: oklch(0.58 0.205 25);
-  --success: oklch(0.54 0.13 155);
-  --warning: oklch(0.52 0.12 72);
-  --info: oklch(0.55 0.13 235);
-  --border: oklch(0.89 0.008 220);
-  --input: oklch(0.885 0.008 220);
-  --ring: oklch(0.55 0.10 190);
-  --chart-1: oklch(0.55 0.11 190);
-  --chart-2: oklch(0.70 0.14 78);
-  --chart-3: oklch(0.55 0.14 290);
-  --chart-4: oklch(0.61 0.13 230);
-  --chart-5: oklch(0.59 0.16 15);
-  --radius: 0.75rem;
-  --sidebar: oklch(0.955 0.007 210);
-  --sidebar-foreground: oklch(0.23 0.02 240);
-  --sidebar-primary: oklch(0.47 0.092 190);
-  --sidebar-primary-foreground: oklch(0.99 0 0);
-  --sidebar-accent: oklch(0.918 0.028 190);
-  --sidebar-accent-foreground: oklch(0.285 0.06 190);
-  --sidebar-border: oklch(0.89 0.008 220);
-  --sidebar-ring: oklch(0.55 0.10 190);
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --duration-fast: 120ms;
+  --duration-enter: 200ms;
+  --duration-exit: 140ms;
+
+  --background: #f4f5f7;
+  --foreground: #16181d;
+  --card: #ffffff;
+  --card-foreground: #16181d;
+  --popover: #ffffff;
+  --popover-foreground: #16181d;
+  --primary: #4c36c8;
+  --primary-foreground: #ffffff;
+  --secondary: #eceef2;
+  --secondary-foreground: #242833;
+  --muted: #eceef2;
+  --muted-foreground: #5b606b;
+  --accent: #eae6fb;
+  --accent-foreground: #3a2a9e;
+  --destructive: #c0392b;
+  --success: #1d7a4a;
+  --warning: #9a6400;
+  --info: #1f5fa8;
+  --border: #e0e3e9;
+  --input: #d8dce4;
+  --ring: #6f5ce0;
+  --chart-1: #4c36c8;
+  --chart-2: #1d7a4a;
+  --chart-3: #9a6400;
+  --chart-4: #1f5fa8;
+  --chart-5: #c0392b;
+  --radius: 0.625rem;
+
+  /* The rail is graphite in both themes: it reads as the rack, not the page. */
+  --sidebar: #15171d;
+  --sidebar-foreground: #d3d7e0;
+  --sidebar-primary: #b9a5ff;
+  --sidebar-primary-foreground: #15171d;
+  --sidebar-accent: #242833;
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: rgb(255 255 255 / 0.09);
+  --sidebar-ring: #8b7ae8;
 }
 
 .dark {
-  --background: oklch(0.135 0.012 235);
-  --foreground: oklch(0.95 0.005 210);
-  --card: oklch(0.175 0.014 235);
-  --card-foreground: oklch(0.95 0.005 210);
-  --popover: oklch(0.19 0.014 235);
-  --popover-foreground: oklch(0.95 0.005 210);
-  --primary: oklch(0.78 0.112 185);
-  --primary-foreground: oklch(0.16 0.022 205);
-  --secondary: oklch(0.23 0.014 235);
-  --secondary-foreground: oklch(0.95 0.005 210);
-  --muted: oklch(0.218 0.012 235);
-  --muted-foreground: oklch(0.69 0.014 225);
-  --accent: oklch(0.245 0.028 190);
-  --accent-foreground: oklch(0.92 0.02 190);
-  --destructive: oklch(0.66 0.19 25);
-  --success: oklch(0.73 0.14 155);
-  --warning: oklch(0.80 0.14 78);
-  --info: oklch(0.72 0.12 225);
-  --border: oklch(1 0 0 / 8%);
-  --input: oklch(1 0 0 / 13%);
-  --ring: oklch(0.66 0.10 185);
-  --chart-1: oklch(0.78 0.11 185);
-  --chart-2: oklch(0.80 0.14 78);
-  --chart-3: oklch(0.72 0.13 290);
-  --chart-4: oklch(0.72 0.12 225);
-  --chart-5: oklch(0.70 0.16 15);
-  --sidebar: oklch(0.118 0.013 235);
-  --sidebar-foreground: oklch(0.92 0.006 210);
-  --sidebar-primary: oklch(0.78 0.112 185);
-  --sidebar-primary-foreground: oklch(0.16 0.022 205);
-  --sidebar-accent: oklch(0.195 0.022 210);
-  --sidebar-accent-foreground: oklch(0.94 0.015 190);
-  --sidebar-border: oklch(1 0 0 / 8%);
-  --sidebar-ring: oklch(0.66 0.10 185);
+  --background: #0f1115;
+  --foreground: #e7e9ee;
+  --card: #16181e;
+  --card-foreground: #e7e9ee;
+  --popover: #1a1d24;
+  --popover-foreground: #e7e9ee;
+  --primary: #b9a5ff;
+  --primary-foreground: #191027;
+  --secondary: #1f222a;
+  --secondary-foreground: #e7e9ee;
+  --muted: #1c1f26;
+  --muted-foreground: #9aa0ac;
+  --accent: #262239;
+  --accent-foreground: #d9cfff;
+  --destructive: #ff7a6b;
+  --success: #4ade80;
+  --warning: #f5b942;
+  --info: #7cc4ff;
+  --border: rgb(255 255 255 / 0.09);
+  --input: rgb(255 255 255 / 0.14);
+  --ring: #8b7ae8;
+  --chart-1: #b9a5ff;
+  --chart-2: #4ade80;
+  --chart-3: #f5b942;
+  --chart-4: #7cc4ff;
+  --chart-5: #ff7a6b;
+
+  --sidebar: #0b0c10;
+  --sidebar-foreground: #cfd3db;
+  --sidebar-primary: #b9a5ff;
+  --sidebar-primary-foreground: #0b0c10;
+  --sidebar-accent: #1e2129;
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: rgb(255 255 255 / 0.08);
+  --sidebar-ring: #8b7ae8;
+}
+
+@keyframes ui-enter {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 @media (any-pointer: coarse) {

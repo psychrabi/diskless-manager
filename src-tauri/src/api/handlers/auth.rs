@@ -160,7 +160,7 @@ pub async fn update_admin_password(
     use crate::auth::{hash_password, verify_password};
     use chrono::Utc;
 
-    if claims.role != "admin" {
+    if !claims.is_admin() {
         return Err(StatusCode::FORBIDDEN);
     }
 

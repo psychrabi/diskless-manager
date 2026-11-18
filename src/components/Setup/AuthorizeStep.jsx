@@ -60,9 +60,9 @@ const AuthorizeStep = ({ onAuthorized, authorized = false, checking = false }) =
           <li>Network configuration</li>
         </ul>
 
-        <Alert variant="default" className="border-amber-600/20 bg-amber-600/10 text-amber-600">
+        <Alert variant="default" className="border-warning/20 bg-warning/10 text-warning">
           <ShieldAlert />
-          <AlertDescription className="text-amber-600">
+          <AlertDescription className="text-warning">
             This creates a sudoers rule for the server account. The password
             prompt (Polkit) opens on the server computer. If no desktop
             authentication agent is available, use the terminal command shown

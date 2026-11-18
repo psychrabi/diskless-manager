@@ -380,13 +380,17 @@ fn preflight_deletion(storage: &StorageService, operation: &OfflineDeletion) -> 
     storage.ensure_offline_deletion(operation)
 }
 
-pub async fn run(state: AppState) {
+pub async fn run(state: AppState, mut shutdown: tokio::sync::watch::Receiver<bool>) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
-        interval.tick().await;
-        if let Err(error) = tick(&state).await {
-            tracing::error!(%error, "offline reset coordinator failed");
+        tokio::select! {
+            _ = interval.tick() => {
+                if let Err(error) = tick(&state).await {
+                    tracing::error!(%error, "offline reset coordinator failed");
+                }
+            }
+            _ = shutdown.changed() => break,
         }
     }
 }

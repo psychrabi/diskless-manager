@@ -23,39 +23,42 @@ pub fn get_client_by_id(config: &crate::config::RuntimeConfig, client_id: &str) 
     None
 }
 
-pub fn check_duplicate_client(
-    config: &crate::config::RuntimeConfig,
+/// Reject a client identity that already exists.
+///
+/// The runtime configuration no longer carries a client list, so uniqueness is
+/// checked against the authoritative `clients` table before provisioning.
+pub async fn check_duplicate_client(
+    pool: &SqlitePool,
     name: &str,
     mac: &str,
     ip: &str,
-) -> Option<String> {
-    let config = get_config(config);
+) -> Result<Option<String>, sqlx::Error> {
+    let conflict: Option<(String, String, String)> = sqlx::query_as(
+        "SELECT name, mac, ip FROM clients \
+         WHERE lower(name) = lower(?) OR upper(mac) = upper(?) OR ip = ? \
+         LIMIT 1",
+    )
+    .bind(name)
+    .bind(mac)
+    .bind(ip)
+    .fetch_optional(pool)
+    .await?;
 
-    for client in &config.clients {
-        let client_name = client.name.to_lowercase();
-        let client_ip = &client.ip;
-        let client_mac = client.mac.to_uppercase();
-
-        if name.to_lowercase() == client_name {
-            return Some(format!("A client with name '{}' already exists", name));
-        }
-
-        if ip == client_ip {
-            return Some(format!(
+    Ok(conflict.map(|(existing_name, existing_mac, existing_ip)| {
+        if name.eq_ignore_ascii_case(&existing_name) {
+            format!("A client with name '{}' already exists", name)
+        } else if ip == existing_ip {
+            format!(
                 "IP address {} is already in use by client '{}'",
-                ip, client.name
-            ));
-        }
-
-        if mac.to_uppercase() == client_mac {
-            return Some(format!(
+                ip, existing_name
+            )
+        } else {
+            format!(
                 "MAC address {} is already in use by client '{}'",
-                mac, client.name
-            ));
+                existing_mac, existing_name
+            )
         }
-    }
-
-    None
+    }))
 }
 
 fn configured_target_prefix(config: &crate::config::RuntimeConfig) -> String {
@@ -250,7 +253,12 @@ pub async fn add_client_provisioning(
     // Validate duplicates.
     // -----------------------------------------------------------------
 
-    if let Some(duplicate) = check_duplicate_client(&state.config, &name, &mac, &ip) {
+    if let Some(duplicate) = check_duplicate_client(&state.db_pool, &name, &mac, &ip)
+        .await
+        .map_err(|error| {
+            AppError::Internal(format!("failed to validate client identity: {error}"))
+        })?
+    {
         return Err(AppError::Validation(duplicate));
     }
 
@@ -560,5 +568,46 @@ mod tests {
         assert_eq!(paths.target_iqn, "iqn.2024-01.com.diskless:client.client_1");
 
         assert_eq!(paths.backstore, "block_client_1");
+    }
+
+    #[tokio::test]
+    async fn duplicate_client_identity_is_checked_against_the_database() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO clients (id, name, mac, ip, master, enabled, created_at, updated_at) VALUES ('client', 'PC001', '00:11:22:33:44:55', '192.168.1.101', 'diskless/image-disk/test', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let name = check_duplicate_client(&pool, "PC001", "00:11:22:33:44:66", "192.168.1.102")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(name.contains("name"), "{name}");
+
+        let mac = check_duplicate_client(&pool, "PC002", "00:11:22:33:44:55", "192.168.1.102")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(mac.contains("MAC"), "{mac}");
+
+        let ip = check_duplicate_client(&pool, "PC002", "00:11:22:33:44:66", "192.168.1.101")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(ip.contains("IP address"), "{ip}");
+
+        assert!(
+            check_duplicate_client(&pool, "PC002", "00:11:22:33:44:66", "192.168.1.102")
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 }

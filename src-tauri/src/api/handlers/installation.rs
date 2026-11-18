@@ -26,7 +26,7 @@ fn error(status: StatusCode, message: &str) -> ApiError {
     )
 }
 fn admin(claims: &Claims) -> Result<(), ApiError> {
-    if claims.role == "admin" {
+    if claims.is_admin() {
         Ok(())
     } else {
         Err(error(

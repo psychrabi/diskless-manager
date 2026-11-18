@@ -186,7 +186,7 @@ export const ContextMenu = ({
                 />
               </>
             ) : isSuper ? (
-              <div className="px-3 py-2 text-sm text-amber-700 dark:text-amber-300">
+              <div className="px-3 py-2 text-sm text-warning">
                 Super session status is unavailable. Refresh client status before taking action.
               </div>
             ) : (

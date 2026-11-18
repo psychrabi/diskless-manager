@@ -61,7 +61,7 @@ const AdminLayout = () => {
   }, [location]);
 
   return (
-    <SidebarProvider className="h-svh min-h-0 overflow-hidden bg-sidebar">
+    <SidebarProvider className="h-svh min-h-0 overflow-hidden bg-background">
       <a
         href="#main-content"
         onClick={(event) => {
@@ -73,20 +73,23 @@ const AdminLayout = () => {
         Skip to main content
       </a>
       <Sidebar />
-      <SidebarInset className="min-w-0 overflow-hidden border-border/70 bg-background md:rounded-2xl md:border md:shadow-sm">
+      <SidebarInset className="min-w-0 overflow-hidden bg-background">
         <Header />
-        <div id="main-content" tabIndex={-1} className="min-h-0 flex-1 overflow-y-auto outline-none">
-          <div className="app-canvas relative mx-auto w-full max-w-[1500px] p-4 sm:p-6 lg:p-8">
+        <div id="main-content" tabIndex={-1} className="min-h-0 flex-1 overflow-y-auto bg-background outline-none">
+          <div className="app-canvas relative mx-auto w-full max-w-[1560px] px-4 py-5 sm:px-6 sm:py-6 lg:px-8">
             {loading && (
-              <div className="absolute inset-0 z-40 flex items-center justify-center rounded-lg bg-background/50 backdrop-blur-sm" role="status" aria-live="polite">
-                <Loading className="size-10 text-primary" />
-                <span className="sr-only">Loading…</span>
+              <div className="absolute inset-0 z-40 flex items-center justify-center bg-background/70">
+                <Loading fullScreen={false} message="Refreshing data…" size="sm" className="min-h-0 py-0" />
               </div>
             )}
             {error && <Error error={error} />}
-            {isNavigating ? <Loading /> : (
+            {isNavigating ? (
+              <Loading fullScreen={false} message="Loading page…" />
+            ) : (
               <ErrorBoundary fullPage={false} resetKeys={[location.pathname]} onHome={() => navigate("/")}>
-                <Outlet />
+                <div key={location.pathname} className="ui-enter">
+                  <Outlet />
+                </div>
               </ErrorBoundary>
             )}
           </div>

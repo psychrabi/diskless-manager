@@ -42,44 +42,49 @@ const Setup = () => {
   } = wizard;
 
   return (
-    <div className="w-full max-w-4xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 px-2 sm:px-0">
-      <div className="text-center space-y-2">
-        <h1 className="text-3xl sm:text-4xl font-semibold tracking-tight text-foreground">
-          System Setup
+    <div className="ui-enter mx-auto w-full max-w-4xl space-y-8 px-2 sm:px-0">
+      <div className="space-y-2 text-center sm:text-left">
+        <h1 className="text-balance text-3xl font-semibold tracking-[-0.035em] text-foreground sm:text-4xl">
+          System setup
         </h1>
-        <p className="text-muted-foreground text-lg">
-          Configure your server for diskless booting
+        <p className="text-pretty text-base leading-7 text-muted-foreground sm:text-lg">
+          Configure this server for diskless booting, one step at a time.
         </p>
       </div>
 
-      <details>
-        <summary className="cursor-pointer">Restore an existing application backup</summary>
+      <details className="rounded-xl border border-border/70 bg-card/40 px-4 py-3">
+        <summary className="cursor-pointer text-sm font-medium text-foreground">Restore an existing application backup</summary>
         <div className="mt-4"><BackupManagement /></div>
       </details>
-      {setupError && <div role="alert"><p>{setupError}</p><Button onClick={checkAll}>Retry</Button></div>}
-      <nav aria-label="Setup steps" className="flex justify-between items-center gap-2 p-4 relative overflow-x-auto">
+      {setupError && (
+        <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          <p>{setupError}</p>
+          <Button variant="outline" onClick={checkAll}>Retry check</Button>
+        </div>
+      )}
+      <nav aria-label="Setup steps" className="relative flex items-center justify-between gap-2 overflow-x-auto rounded-2xl border border-border/70 bg-card/40 p-4">
         {steps.map((step) => (
           <Button
             key={step.id}
             variant="ghost"
             aria-current={activeStep === step.id ? "step" : undefined}
-            className="relative z-10 h-auto flex-col gap-2 group shrink-0 px-3 py-2"
+            className="group relative z-10 h-auto shrink-0 flex-col gap-2 px-3 py-2"
             disabled={checking || !setupStatus || (step.id === 9 ? !setupStatus.ready : steps.slice(0, step.id - 1).some(previous => previous.status !== "complete"))}
             onClick={() => setActiveStep(step.id)}
           >
             <div
-              className={`w-12 h-12 rounded-full flex items-center justify-center border-4 transition-all duration-300 ${
+              className={`flex h-12 w-12 items-center justify-center rounded-full border-4 transition-all duration-200 ease-out ${
                 step.status === "complete"
-                  ? "bg-emerald-600 border-emerald-600 text-white scale-110 group-hover:bg-emerald-600/80"
+                  ? "scale-105 border-success bg-success text-white"
                   : step.status === "current" || activeStep === step.id
-                    ? "bg-primary border-primary text-primary-foreground scale-110 shadow-lg shadow-primary/20"
-                    : "bg-background border-border text-muted-foreground group-hover:border-primary/50"
+                    ? "scale-105 border-primary bg-primary text-primary-foreground shadow-lg shadow-primary/20"
+                    : "border-border bg-background text-muted-foreground group-hover:border-primary/50"
               }`}
             >
-              <step.icon size={20} />
+              <step.icon size={20} aria-hidden="true" />
             </div>
             <span
-              className={`mt-2 text-xs sm:text-sm font-bold whitespace-nowrap ${
+              className={`mt-1 whitespace-nowrap text-xs font-semibold sm:text-sm ${
                 activeStep === step.id
                   ? "text-primary"
                   : step.status === "upcoming"
@@ -172,7 +177,9 @@ const Setup = () => {
         )}
       </div>
 
-      <p className="text-xs text-muted-foreground">{checking ? "Checking server readiness…" : setupStatus?.ready ? "Review your existing configuration and confirm setup to open the dashboard." : "Complete the required server configuration to continue."}</p>
+      <p className="flex items-center gap-2 text-xs text-muted-foreground sm:text-sm" aria-live="polite">
+        {checking ? "Checking server readiness…" : setupStatus?.ready ? "Configuration is ready. Review and confirm to open the dashboard." : "Complete the required steps to finish server setup."}
+      </p>
     </div>
   );
 };

@@ -2,6 +2,9 @@
 
 This branch separates Windows driver package handling from boot-time registry arming.
 
+Boot-time NIC inventory and client-driven servicing findings are recorded in
+[BOOT-NIC-INVENTORY-AND-AUTO-SERVICING.md](BOOT-NIC-INVENTORY-AND-AUTO-SERVICING.md).
+
 ## Goals
 
 - Parse complete Windows INF packages instead of guessing driver names by vendor.

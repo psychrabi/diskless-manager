@@ -45,7 +45,7 @@ pub async fn delete_client_writeback(
     Path(id): Path<String>,
     Extension(claims): Extension<Claims>,
 ) -> Result<Json<ClientStorageResponse>, (StatusCode, Json<super::clients::ErrorResponse>)> {
-    if claims.role != "admin" {
+    if !claims.is_admin() {
         return Err((
             StatusCode::FORBIDDEN,
             Json(super::clients::ErrorResponse {

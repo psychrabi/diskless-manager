@@ -297,7 +297,7 @@ pub async fn configure_service(
     Path(name): Path<String>,
     body: String,
 ) -> Result<Json<String>, StatusCode> {
-    if claims.role != "admin" {
+    if !claims.is_admin() {
         return Err(StatusCode::FORBIDDEN);
     }
     let _guard = state.client_mutations.lock().await;

@@ -20,22 +20,21 @@ export default function Dashboard() {
 
   if (loading) {
     return (
-      <div className="flex flex-col gap-5">
-        <div className="space-y-2">
-          <Skeleton className="h-3 w-24" />
-          <Skeleton className="h-8 w-56" />
-          <Skeleton className="h-4 w-96 max-w-full" />
+      <div className="flex flex-col gap-5" aria-busy="true" aria-label="Loading dashboard">
+        <div className="mb-1 space-y-2 border-b border-border pb-5 sm:mb-3 sm:pb-5">
+          <Skeleton className="h-8 w-48 sm:h-9 sm:w-56" />
+          <Skeleton className="h-4 w-full max-w-md" />
         </div>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           {Array.from({ length: 4 }, (_, i) => (
-            <Skeleton key={i} className="h-32 rounded-2xl" />
+            <Skeleton key={i} className="h-32 rounded-xl" />
           ))}
         </div>
         <div className="grid grid-cols-1 gap-5 xl:grid-cols-12">
-          <Skeleton className="h-72 rounded-2xl xl:col-span-8" />
-          <Skeleton className="h-72 rounded-2xl xl:col-span-4" />
-          <Skeleton className="h-80 rounded-2xl xl:col-span-5" />
-          <Skeleton className="h-80 rounded-2xl xl:col-span-7" />
+          <Skeleton className="h-72 rounded-xl xl:col-span-8" />
+          <Skeleton className="h-72 rounded-xl xl:col-span-4" />
+          <Skeleton className="h-80 rounded-xl xl:col-span-5" />
+          <Skeleton className="h-80 rounded-xl xl:col-span-7" />
         </div>
       </div>
     );

@@ -8,18 +8,26 @@ use axum::{
 };
 use futures::{sink::SinkExt, stream::StreamExt};
 use once_cell::sync::Lazy;
-use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tokio::time::interval;
 
 use crate::{
-    metrics::{StorageTrafficMetrics, Throughput},
+    metrics::{ClientMetric, MetricsUpdate},
     state::AppState,
     types::Claims,
 };
+
+/// How often a live dashboard socket revalidates its token against the database.
+#[cfg(not(test))]
+const SESSION_VALIDATION_INTERVAL: Duration = Duration::from_secs(30);
+/// Keep the revocation regression tests fast without weakening production.
+#[cfg(test)]
+const SESSION_VALIDATION_INTERVAL: Duration = Duration::from_millis(100);
+/// Shared sampling window for REST and WebSocket metrics readers.
+const METRICS_CACHE_TTL: Duration = Duration::from_secs(1);
 
 // Track when clients established their current iSCSI session.
 static CLIENT_SESSION_START_TIMES: Lazy<Arc<Mutex<HashMap<String, i64>>>> =
@@ -40,33 +48,6 @@ fn session_uptime(
     }
 }
 
-#[derive(Debug, Serialize)]
-pub struct ClientMetric {
-    pub ip: String,
-    pub status: String,
-    /// Compatibility fields: actual iSCSI read and write throughput when available.
-    pub read_speed_mbps: Option<f64>,
-    /// Compatibility fields: actual iSCSI read and write throughput when available.
-    pub write_speed_mbps: Option<f64>,
-    /// All conntrack-accounted traffic involving this client IP.
-    pub network: Option<Throughput>,
-    /// Conntrack-accounted traffic for this client on the configured iSCSI port.
-    pub iscsi: Option<Throughput>,
-    /// Indicates a readable source without a preceding sample for a real rate.
-    pub warming_up: bool,
-    pub uptime_seconds: i64,
-}
-
-#[derive(Debug, Serialize)]
-pub struct MetricsUpdate {
-    pub clients: Vec<ClientMetric>,
-    /// Aggregate ZFS throughput across discovered pools.
-    pub storage: StorageTrafficMetrics,
-    /// Read errors from source counters; no estimates are returned for them.
-    pub warnings: Vec<String>,
-    pub timestamp: i64,
-}
-
 pub async fn ws_metrics_handler(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
@@ -80,17 +61,30 @@ pub async fn ws_metrics_handler(
 }
 
 async fn handle_metrics_socket(socket: WebSocket, state: AppState, claims: Claims) {
+    handle_metrics_socket_with_validation(socket, state, claims, SESSION_VALIDATION_INTERVAL).await;
+}
+
+async fn handle_metrics_socket_with_validation(
+    socket: WebSocket,
+    state: AppState,
+    claims: Claims,
+    validation_interval: Duration,
+) {
     let (mut sender, mut receiver) = socket.split();
     let state_clone = state.clone();
     let mut interval = interval(Duration::from_secs(1));
+    let mut last_validated: Option<Instant> = None;
 
     loop {
         tokio::select! {
             _ = interval.tick() => {
                 let update = async {
-                    if crate::auth::validate_session(&state.db_pool, &claims).await.is_err() {
-                        let _ = sender.send(axum::extract::ws::Message::Close(None)).await;
-                        return false;
+                    if last_validated.map_or(true, |at| at.elapsed() >= validation_interval) {
+                        if crate::auth::validate_session(&state.db_pool, &claims).await.is_err() {
+                            let _ = sender.send(axum::extract::ws::Message::Close(None)).await;
+                            return false;
+                        }
+                        last_validated = Some(Instant::now());
                     }
                     match fetch_metrics(&state_clone).await {
                         Ok(metrics) => {
@@ -154,6 +148,13 @@ fn iscsi_peers(output: &str) -> HashSet<String> {
 }
 
 pub(crate) async fn fetch_metrics(state: &AppState) -> Result<MetricsUpdate, String> {
+    state
+        .metrics_collector
+        .cached_update(METRICS_CACHE_TTL, || fetch_metrics_uncached(state))
+        .await
+}
+
+async fn fetch_metrics_uncached(state: &AppState) -> Result<MetricsUpdate, String> {
     let settings = state.settings.read().await.clone();
     let iscsi_port = settings.iscsi.portal_port;
     let registered_clients = sqlx::query_as::<_, (String, String, Option<String>)>(
@@ -302,7 +303,13 @@ mod tests {
                 let closed_tx = closed_tx.clone();
                 async move {
                     ws.on_upgrade(move |socket| async move {
-                        super::handle_metrics_socket(socket, state, claims).await;
+                        super::handle_metrics_socket_with_validation(
+                            socket,
+                            state,
+                            claims,
+                            std::time::Duration::ZERO,
+                        )
+                        .await;
                         if let Some(sender) = closed_tx.lock().await.take() {
                             let _ = sender.send(());
                         }

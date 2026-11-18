@@ -28,8 +28,8 @@ const PublicLayout = () => {
 
   return (
     <div className="app-canvas flex min-h-svh flex-col bg-background text-foreground">
-      <header className="flex h-16 shrink-0 items-center justify-between px-6 md:px-10">
-        {isSetup ? <Brand titleClassName="text-sm" /> : <span className="text-xs font-medium text-muted-foreground">Boot server workspace</span>}
+      <header className="flex h-14 shrink-0 items-center justify-between border-b border-border px-4 sm:px-6 md:px-10">
+        {isSetup ? <Brand titleClassName="text-sm" /> : <span className="text-eyebrow">Boot server workspace</span>}
         <ThemeToggle />
       </header>
       <main className={isSetup ? "mx-auto w-full max-w-5xl flex-1 px-4 py-8 md:px-8" : "flex flex-1 items-center justify-center px-4 py-8 sm:px-6 md:pb-20"}>

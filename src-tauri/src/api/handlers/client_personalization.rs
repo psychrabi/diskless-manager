@@ -112,7 +112,7 @@ fn view(
 }
 
 fn require_admin(claims: &Claims) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
+    if !claims.is_admin() {
         return Err(forbidden("Administrator access required"));
     }
     Ok(())

@@ -167,9 +167,15 @@ impl AuditLogger {
         Ok(id)
     }
 
-    /// Query audit logs with optional filters
+    /// Query audit logs with optional filters, newest first.
+    ///
+    /// The default and maximum page sizes match administrative audit events so
+    /// an unfiltered UI request cannot load the whole operation history.
     pub async fn query_logs(&self, filter: &AuditLogFilter) -> anyhow::Result<Vec<AuditLogEntry>> {
-        let mut query = String::from(
+        let limit = filter.limit.unwrap_or(100).clamp(1, 500);
+        let offset = filter.offset.unwrap_or(0).max(0);
+
+        let mut query = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
             r#"
             SELECT id, client_id, client_name, client_ip, os_type,
                    operation_type, operation_mode, delay_minutes,
@@ -178,42 +184,15 @@ impl AuditLogger {
             WHERE 1=1
             "#,
         );
+        Self::push_log_filters(&mut query, filter);
+        query
+            .push(" ORDER BY timestamp DESC LIMIT ")
+            .push_bind(limit)
+            .push(" OFFSET ")
+            .push_bind(offset);
 
-        let mut params: Vec<String> = Vec::new();
-
-        if let Some(client_id) = &filter.client_id {
-            query.push_str(" AND client_id = ?");
-            params.push(client_id.clone());
-        }
-
-        if let Some(op_type) = &filter.operation_type {
-            query.push_str(" AND operation_type = ?");
-            params.push(op_type.clone());
-        }
-
-        if let Some(start_date) = &filter.start_date {
-            query.push_str(" AND timestamp >= ?");
-            params.push(start_date.clone());
-        }
-
-        if let Some(end_date) = &filter.end_date {
-            query.push_str(" AND timestamp <= ?");
-            params.push(end_date.clone());
-        }
-
-        query.push_str(" ORDER BY timestamp DESC");
-
-        if let Some(limit) = filter.limit {
-            query.push_str(&format!(" LIMIT {}", limit));
-        }
-
-        if let Some(offset) = filter.offset {
-            query.push_str(&format!(" OFFSET {}", offset));
-        }
-
-        let mut query_builder = sqlx::query_as::<
-            _,
-            (
+        let rows = query
+            .build_query_as::<(
                 String,
                 String,
                 String,
@@ -226,14 +205,9 @@ impl AuditLogger {
                 String,
                 Option<String>,
                 String,
-            ),
-        >(&query);
-
-        for param in params {
-            query_builder = query_builder.bind(param);
-        }
-
-        let rows = query_builder.fetch_all(self.db.as_ref()).await?;
+            )>()
+            .fetch_all(self.db.as_ref())
+            .await?;
 
         let entries = rows
             .into_iter()
@@ -272,6 +246,38 @@ impl AuditLogger {
             .collect();
 
         Ok(entries)
+    }
+
+    /// Count every operation matching the filter, independent of pagination.
+    pub async fn count_logs(&self, filter: &AuditLogFilter) -> anyhow::Result<i64> {
+        let mut query = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+            "SELECT COUNT(*) FROM control_operations WHERE 1=1",
+        );
+        Self::push_log_filters(&mut query, filter);
+        query
+            .build_query_scalar::<i64>()
+            .fetch_one(self.db.as_ref())
+            .await
+            .map_err(Into::into)
+    }
+
+    fn push_log_filters(query: &mut sqlx::QueryBuilder<'_, sqlx::Sqlite>, filter: &AuditLogFilter) {
+        if let Some(client_id) = &filter.client_id {
+            query.push(" AND client_id = ").push_bind(client_id.clone());
+        }
+        if let Some(op_type) = &filter.operation_type {
+            query
+                .push(" AND operation_type = ")
+                .push_bind(op_type.clone());
+        }
+        if let Some(start_date) = &filter.start_date {
+            query
+                .push(" AND timestamp >= ")
+                .push_bind(start_date.clone());
+        }
+        if let Some(end_date) = &filter.end_date {
+            query.push(" AND timestamp <= ").push_bind(end_date.clone());
+        }
     }
 
     /// Get operation history for a specific client
@@ -512,5 +518,44 @@ mod tests {
             .await
             .unwrap();
         assert!(none.is_empty());
+    }
+
+    #[tokio::test]
+    async fn operation_logs_are_paginated_by_default_and_counted_independently() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let logger = AuditLogger::new(Arc::new(pool));
+        sqlx::query(
+            "INSERT INTO clients (id, name, mac, ip, master, enabled, created_at, updated_at) VALUES ('client', 'PC001', '02:00:00:00:00:01', '192.0.2.10', 'diskless/linux', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        )
+        .execute(logger.db.as_ref())
+        .await
+        .expect("audit client fixture should be inserted");
+        for index in 0..120 {
+            sqlx::query(
+                "INSERT INTO control_operations (id, client_id, client_name, client_ip, os_type, operation_type, operation_mode, administrator, result, timestamp) VALUES (?, 'client', 'PC001', '192.0.2.10', 'linux', 'shutdown', 'graceful', 'admin', 'success', ?)",
+            )
+            .bind(format!("operation-{index}"))
+            .bind(format!("2026-01-01T00:{:02}:00Z", index % 60))
+            .execute(logger.db.as_ref())
+            .await
+            .unwrap();
+        }
+
+        let filter = AuditLogFilter {
+            client_id: None,
+            operation_type: None,
+            start_date: None,
+            end_date: None,
+            limit: None,
+            offset: None,
+        };
+        let logs = logger.query_logs(&filter).await.unwrap();
+        assert_eq!(logs.len(), 100, "unbounded reads must use the safe default");
+        assert_eq!(logger.count_logs(&filter).await.unwrap(), 120);
     }
 }

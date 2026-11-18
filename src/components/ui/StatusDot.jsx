@@ -11,12 +11,12 @@ export const StatusDot = ({ running, label, className = "" }) => {
       className={cn("relative flex size-2.5 shrink-0", className)}
     >
       {running && (
-        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-success opacity-75" />
       )}
       <span
         className={cn(
           "relative inline-flex size-2.5 rounded-full",
-          running ? "bg-emerald-500" : "bg-destructive"
+          running ? "bg-success" : "bg-destructive"
         )}
       />
     </span>

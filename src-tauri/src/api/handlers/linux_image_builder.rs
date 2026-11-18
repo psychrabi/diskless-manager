@@ -45,7 +45,7 @@ pub struct LinuxImagePreflightResponse {
 }
 
 fn require_admin(claims: &Claims) -> ApiResult<()> {
-    if claims.role == "admin" {
+    if claims.is_admin() {
         Ok(())
     } else {
         Err(api_error(

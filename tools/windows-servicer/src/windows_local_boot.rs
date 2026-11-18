@@ -125,17 +125,6 @@ fn plan_for_adapter(
         ..Default::default()
     };
     let mut plan = build_plan(&inventory, &config)?;
-    for service in [&adapter.service, "iScsiPrt", "Tcpip", "ndis"] {
-        plan.changes.push(RegistryArmChange {
-            key: format!(
-                "{}\\Services\\{service}\\StartOverride",
-                plan.active_control_set
-            ),
-            name: "0".into(),
-            value: RegistryArmValue::Dword(0),
-            reason: "allow the selected boot driver to start before the iSCSI disk".into(),
-        });
-    }
     plan.warnings
         .retain(|warning| !warning.starts_with("MSiSCSI service detected"));
     for (key, name, value, reason) in [

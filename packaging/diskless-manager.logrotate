@@ -1,0 +1,9 @@
+/root/.config/com.diskless.local/diskless-manager.log {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}

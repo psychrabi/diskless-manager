@@ -1,5 +1,5 @@
 Name:           diskless-manager
-Version:        1.0.0
+Version:        1.0.1
 Release:        1%{?dist}
 Summary:        Diskless boot server for PXE/iSCSI clients
 License:        MIT
@@ -19,11 +19,14 @@ mkdir -p %{buildroot}/lib/systemd/system
 install -m 0755 %{_sourcedir}/diskless-manager %{buildroot}/usr/bin/diskless-manager
 cp -r %{_sourcedir}/dist %{buildroot}/opt/diskless-manager/dist
 install -m 0644 %{_sourcedir}/diskless-manager.service %{buildroot}/lib/systemd/system/diskless-manager.service
+mkdir -p %{buildroot}/etc/logrotate.d
+install -m 0644 %{_sourcedir}/diskless-manager.logrotate %{buildroot}/etc/logrotate.d/diskless-manager
 
 %files
 /usr/bin/diskless-manager
 /opt/diskless-manager/dist/
 /lib/systemd/system/diskless-manager.service
+/etc/logrotate.d/diskless-manager
 
 %post
 %systemd_post diskless-manager.service

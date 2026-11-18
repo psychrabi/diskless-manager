@@ -55,7 +55,12 @@ pub async fn add_client_impl(
         .map(|value| value.trim().to_string())
         .unwrap_or_default();
 
-    if let Some(duplicate) = check_duplicate_client(&state.config, &name, &mac, &ip) {
+    if let Some(duplicate) = check_duplicate_client(&state.db_pool, &name, &mac, &ip)
+        .await
+        .map_err(|error| {
+            AppError::Internal(format!("failed to validate client identity: {error}"))
+        })?
+    {
         return Err(AppError::Validation(duplicate));
     }
 

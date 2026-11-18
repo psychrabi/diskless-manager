@@ -157,8 +157,8 @@ pub fn create_dhcp_entry_for_server(
     name: &str,
     mac: &str,
     ip: &str,
-    target_iqn: &str,
-    server_ip: &str,
+    _target_iqn: &str,
+    _server_ip: &str,
 ) -> String {
     let formatted_name = format_client_name(name);
 
@@ -167,13 +167,10 @@ pub fn create_dhcp_entry_for_server(
 hardware ethernet {mac};
 fixed-address {ip};
 option host-name "{formatted_name}";
-option root-path "iscsi:{server_ip}::::{target_iqn}";
 }}"#,
         formatted_name = formatted_name,
         mac = mac,
         ip = ip,
-        target_iqn = target_iqn,
-        server_ip = server_ip.trim(),
     );
 
     info!("DHCP entry for {}: {} bytes", name, entry.len());
@@ -252,7 +249,7 @@ mod tests {
     }
 
     #[test]
-    fn configured_server_is_used_for_the_iscsi_root_path() {
+    fn managed_reservation_leaves_iscsi_boot_path_to_the_ipxe_menu() {
         let entry = create_dhcp_entry_for_server(
             "client_1",
             "00:11:22:33:44:55",
@@ -261,7 +258,8 @@ mod tests {
             "192.168.1.250",
         );
 
-        assert!(entry.contains("option root-path \"iscsi:192.168.1.250::::iqn.test\";"));
+        assert!(entry.contains("fixed-address 192.168.1.100;"));
+        assert!(!entry.contains("root-path"));
     }
 
     #[test]

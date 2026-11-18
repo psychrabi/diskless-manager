@@ -170,7 +170,7 @@ pub async fn complete_setup(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> Result<Json<SetupStatus>, StatusCode> {
-    if claims.role != "admin" {
+    if !claims.is_admin() {
         return Err(StatusCode::FORBIDDEN);
     }
     let _guard = state.client_mutations.lock().await;

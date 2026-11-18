@@ -409,6 +409,54 @@ pub struct ExistingCriticalDevice {
     pub class_guid: Option<String>,
 }
 
+/// Strongest binding the offline image already holds for one Boot NIC group.
+///
+/// `DeviceInstance` and `CriticalDeviceDatabase` can start the NIC before
+/// disk-based PnP runs. `ClassBinding` proves the image has a network-class
+/// adapter for the driver service, but a class entry alone does not bind this
+/// hardware ID at boot, so it does not satisfy `require_boot_nic_binding`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BootNicBindingState {
+    /// `Enum\PCI` already records this NIC's hardware IDs.
+    DeviceInstance,
+    /// A `CriticalDeviceDatabase` entry maps the IDs to a registered NIC driver.
+    CriticalDeviceDatabase,
+    /// Only a network-class adapter instance exists for the driver service.
+    ClassBinding,
+    /// No device instance, class binding or CDDB entry covers these IDs.
+    Missing,
+}
+
+/// What one Windows image can do for one client's Boot NIC hardware-ID group.
+///
+/// This is the diagnostic form of the boot-NIC gate: the same evidence decides
+/// the gate, but the report keeps each mechanism separate so an administrator
+/// can tell a device instance from a class binding from a
+/// `CriticalDeviceDatabase` entry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BootNicBindingReport {
+    /// The hardware IDs this report covers; one entry per inventoried client
+    /// for a shared image, or the single Boot NIC for a per-client revision.
+    pub hardware_ids: Vec<String>,
+    /// Matching `Enum\PCI` entries, without the `PCI\` prefix.
+    #[serde(default)]
+    pub enum_pci_keys: Vec<String>,
+    /// Network-class services bound in the image for this NIC's driver package.
+    #[serde(default)]
+    pub class_binding_services: Vec<String>,
+    /// Existing `CriticalDeviceDatabase` keys that pass the arm-time checks.
+    #[serde(default)]
+    pub critical_device_database_keys: Vec<String>,
+    /// Whether this plan writes a `CriticalDeviceDatabase` entry for these IDs.
+    /// A planned entry starts the NIC at boot even when `state` is only a
+    /// class binding, and it becomes a `critical_device_database` state on the
+    /// next inspection.
+    #[serde(default)]
+    pub planned_critical_device_database: bool,
+    pub state: BootNicBindingState,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WindowsBootArmPlan {
     pub active_control_set: String,
@@ -418,6 +466,10 @@ pub struct WindowsBootArmPlan {
     pub hive_dirty: bool,
     pub changes: Vec<RegistryArmChange>,
     pub warnings: Vec<String>,
+    /// Per-Boot-NIC binding diagnostic. Empty when the caller supplies no
+    /// expected Boot NIC hardware IDs.
+    #[serde(default)]
+    pub boot_nic_bindings: Vec<BootNicBindingReport>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1081,51 +1133,25 @@ pub fn build_plan(
             }
         }
     }
-    if !config.expected_boot_nic_ids.is_empty() || !config.expected_boot_nic_groups.is_empty() {
-        let legacy_group = std::slice::from_ref(&config.expected_boot_nic_ids);
-        let groups = if config.expected_boot_nic_groups.is_empty() {
-            legacy_group
-        } else {
-            &config.expected_boot_nic_groups
-        };
-        for group in groups {
-            let has_mapping = group.iter().any(|id| {
-                let enum_key = id
-                    .trim()
-                    .trim_start_matches("PCI\\")
-                    .trim_start_matches("pci\\");
-                let cddb_key = cddb_hardware_id_key(id);
-                inventory
-                    .enum_pci_devices
-                    .iter()
-                    .any(|value| value.eq_ignore_ascii_case(enum_key))
-                    || inventory.critical_device_database.iter().any(|mapping| {
-                        mapping.key.eq_ignore_ascii_case(&cddb_key)
-                            && mapping
-                                .class_guid
-                                .as_deref()
-                                .is_some_and(|guid| guid.eq_ignore_ascii_case(NET_CLASS_GUID))
-                            && mapping.service.as_deref().is_some_and(|service| {
-                                let service = service.to_ascii_lowercase();
-                                existing.contains(&service)
-                                    && drivers.contains(&service)
-                                    && nic_services_contains(inventory, &service)
-                            })
-                    })
-                    || planned_cddb.contains_key(&cddb_key)
-            });
-            if has_mapping {
-                continue;
-            }
-            let message = format!(
-                "no Enum/CriticalDeviceDatabase mapping exists for the expected boot NIC IDs ({:?}); the image may not start its boot NIC before the iSCSI root",
-                group
-            );
-            if config.require_boot_nic_binding {
-                bail!("{message}");
-            }
-            warnings.push(message);
+    let boot_nic_bindings =
+        classify_boot_nic_bindings(config, inventory, &planned_cddb, &existing, &drivers);
+    for report in &boot_nic_bindings {
+        if report.planned_critical_device_database
+            || matches!(
+                report.state,
+                BootNicBindingState::DeviceInstance | BootNicBindingState::CriticalDeviceDatabase
+            )
+        {
+            continue;
         }
+        let message = format!(
+            "no Enum/CriticalDeviceDatabase mapping exists for the expected boot NIC IDs ({:?}); the image may not start its boot NIC before the iSCSI root",
+            report.hardware_ids
+        );
+        if config.require_boot_nic_binding {
+            bail!("{message}");
+        }
+        warnings.push(message);
     }
     let nic_services = inventory
         .native_nic_services
@@ -1162,6 +1188,16 @@ pub fn build_plan(
                 .unwrap_or(0)
                 | CM_SERVICE_NETWORK_BOOT_LOAD,
             "mark existing network driver for network boot",
+        );
+        push_dword(
+            &mut changes,
+            format!(
+                "{}\\Services\\{}\\StartOverride",
+                inventory.active_control_set, service
+            ),
+            "0",
+            0,
+            "prevent PnP StartOverride from disabling the boot NIC driver",
         );
         let is_realtek_8125_boot_nic = config
             .critical_device_boot_nic
@@ -1233,6 +1269,16 @@ pub fn build_plan(
                 "mark existing iSCSI port driver for network boot",
             );
         }
+        push_dword(
+            &mut changes,
+            format!(
+                "{}\\Services\\iScsiPrt\\StartOverride",
+                inventory.active_control_set
+            ),
+            "0",
+            0,
+            "prevent PnP StartOverride from disabling the iSCSI port driver",
+        );
     }
 
     for service in ["Tcpip", "ndis"] {
@@ -1244,12 +1290,49 @@ pub fn build_plan(
                 0,
                 "existing core network stack component required for boot networking",
             );
+            push_dword(
+                &mut changes,
+                format!(
+                    "{}\\Services\\{service}\\StartOverride",
+                    inventory.active_control_set
+                ),
+                "0",
+                0,
+                "prevent PnP StartOverride from disabling a boot network component",
+            );
+            if drivers.contains(&service.to_ascii_lowercase()) {
+                push_dword(
+                    &mut changes,
+                    format!("{}\\Services\\{service}", inventory.active_control_set),
+                    "BootFlags",
+                    inventory
+                        .driver_boot_flags
+                        .get(&service.to_ascii_lowercase())
+                        .copied()
+                        .unwrap_or(0)
+                        | CM_SERVICE_NETWORK_BOOT_LOAD,
+                    "mark existing core network driver for network boot",
+                );
+            }
         } else {
             warnings.push(format!(
                 "core network service {service} was not found in {}",
                 inventory.active_control_set
             ));
         }
+    }
+
+    if existing.contains("tcpip") {
+        push_dword(
+            &mut changes,
+            format!(
+                "{}\\Services\\Tcpip\\Parameters",
+                inventory.active_control_set
+            ),
+            "DisableDHCPMediaSense",
+            1,
+            "keep DHCP from resetting the network interface during iSCSI boot",
+        );
     }
 
     if existing.contains("msiscsi") {
@@ -1395,7 +1478,126 @@ pub fn build_plan(
         hive_dirty: inventory.hive_dirty,
         changes,
         warnings,
+        boot_nic_bindings,
     })
+}
+
+/// Classify every expected Boot NIC group against the offline image.
+///
+/// Groups come from `expected_boot_nic_groups`, or from the legacy single
+/// `expected_boot_nic_ids` list. A group without IDs is skipped: it cannot be
+/// matched to a device and must not be reported as covered.
+fn classify_boot_nic_bindings(
+    config: &WindowsBootArmConfig,
+    inventory: &WindowsBootInventory,
+    planned_cddb: &BTreeMap<String, String>,
+    existing: &BTreeSet<String>,
+    drivers: &BTreeSet<String>,
+) -> Vec<BootNicBindingReport> {
+    let legacy_group = std::slice::from_ref(&config.expected_boot_nic_ids);
+    let groups = if config.expected_boot_nic_groups.is_empty() {
+        legacy_group
+    } else {
+        &config.expected_boot_nic_groups
+    };
+    // Without a driver-package mapping there is no service to attribute to a
+    // hardware ID. For a single group the selected NIC services are the only
+    // candidates; a shared image stays unclassified rather than claiming one
+    // client's class binding for another client's adapter.
+    let selected_services = &inventory.selected_nic_services;
+    let fallback_services = (groups.len() == 1).then_some(selected_services);
+    let mut reports = Vec::new();
+    for group in groups {
+        let hardware_ids: Vec<String> = group
+            .iter()
+            .map(|id| id.trim().to_string())
+            .filter(|id| !id.is_empty())
+            .collect();
+        if hardware_ids.is_empty() {
+            continue;
+        }
+        let mut services: BTreeSet<String> = config
+            .critical_device_boot_nic
+            .iter()
+            .chain(&config.critical_device_boot_nics)
+            .filter(|entry| {
+                entry.hardware_ids.iter().any(|candidate| {
+                    hardware_ids
+                        .iter()
+                        .any(|id| candidate.trim().eq_ignore_ascii_case(id))
+                })
+            })
+            .map(|entry| entry.service.clone())
+            .collect();
+        if services.is_empty() {
+            services.extend(fallback_services.into_iter().flatten().cloned());
+        }
+        let enum_pci_keys: Vec<String> = hardware_ids
+            .iter()
+            .filter_map(|id| {
+                let key = id.trim_start_matches("PCI\\").trim_start_matches("pci\\");
+                inventory
+                    .enum_pci_devices
+                    .iter()
+                    .find(|value| value.eq_ignore_ascii_case(key))
+                    .cloned()
+            })
+            .collect();
+        let class_binding_services: Vec<String> = services
+            .iter()
+            .filter(|service| {
+                inventory
+                    .native_nic_services
+                    .iter()
+                    .any(|native| native.eq_ignore_ascii_case(service))
+            })
+            .cloned()
+            .collect();
+        let critical_device_database_keys: Vec<String> = hardware_ids
+            .iter()
+            .filter_map(|id| {
+                let key = cddb_hardware_id_key(id);
+                inventory
+                    .critical_device_database
+                    .iter()
+                    .find(|mapping| {
+                        mapping.key.eq_ignore_ascii_case(&key)
+                            && mapping
+                                .class_guid
+                                .as_deref()
+                                .is_some_and(|guid| guid.eq_ignore_ascii_case(NET_CLASS_GUID))
+                            && mapping.service.as_deref().is_some_and(|service| {
+                                let service = service.to_ascii_lowercase();
+                                existing.contains(&service)
+                                    && drivers.contains(&service)
+                                    && nic_services_contains(inventory, &service)
+                            })
+                    })
+                    .map(|mapping| mapping.key.clone())
+            })
+            .collect();
+        let planned_critical_device_database = hardware_ids
+            .iter()
+            .any(|id| planned_cddb.contains_key(&cddb_hardware_id_key(id)));
+        let state = if !enum_pci_keys.is_empty() {
+            BootNicBindingState::DeviceInstance
+        } else if !critical_device_database_keys.is_empty() {
+            BootNicBindingState::CriticalDeviceDatabase
+        } else if !class_binding_services.is_empty() {
+            BootNicBindingState::ClassBinding
+        } else {
+            BootNicBindingState::Missing
+        };
+        reports.push(BootNicBindingReport {
+            hardware_ids,
+            enum_pci_keys,
+            class_binding_services,
+            critical_device_database_keys,
+            planned_critical_device_database,
+            state,
+        });
+    }
+    reports
 }
 
 fn cddb_hardware_id_key(id: &str) -> String {
@@ -1615,6 +1817,29 @@ mod tests {
     }
 
     #[test]
+    fn network_boot_clears_start_overrides_and_disables_media_sense() {
+        let plan = build_plan(&inventory(), &WindowsBootArmConfig::default()).unwrap();
+
+        for service in ["e2fexpress", "iScsiPrt", "Tcpip", "ndis"] {
+            assert!(
+                plan.changes.iter().any(|change| {
+                    change
+                        .key
+                        .ends_with(&format!("Services\\{service}\\StartOverride"))
+                        && change.name == "0"
+                        && matches!(change.value, RegistryArmValue::Dword(0))
+                }),
+                "missing StartOverride for {service}"
+            );
+        }
+        assert!(plan.changes.iter().any(|change| {
+            change.key.ends_with("Services\\Tcpip\\Parameters")
+                && change.name == "DisableDHCPMediaSense"
+                && matches!(change.value, RegistryArmValue::Dword(1))
+        }));
+    }
+
+    #[test]
     fn nic_stability_defaults_write_service_parameters() {
         let base = build_plan(&inventory(), &WindowsBootArmConfig::default()).unwrap();
         assert!(!base
@@ -1822,6 +2047,65 @@ mod tests {
     }
 
     #[test]
+    fn binding_report_names_a_recorded_device_instance() {
+        let mut state = inventory();
+        state
+            .enum_pci_devices
+            .push("VEN_10EC&DEV_8125&SUBSYS_B0021F4C&REV_05".into());
+        let config = WindowsBootArmConfig {
+            expected_boot_nic_ids: vec!["PCI\\VEN_10EC&DEV_8125&SUBSYS_B0021F4C&REV_05".into()],
+            ..Default::default()
+        };
+        let plan = build_plan(&state, &config).unwrap();
+        let report = plan.boot_nic_bindings.first().unwrap();
+        assert_eq!(report.state, BootNicBindingState::DeviceInstance);
+        assert_eq!(
+            report.enum_pci_keys,
+            vec!["VEN_10EC&DEV_8125&SUBSYS_B0021F4C&REV_05"]
+        );
+        assert!(!report.planned_critical_device_database);
+    }
+
+    #[test]
+    fn binding_report_shows_class_binding_alone_does_not_satisfy_the_gate() {
+        let mut state = inventory();
+        state.selected_nic_services = vec!["e2fexpress".into()];
+        let config = WindowsBootArmConfig {
+            expected_boot_nic_ids: vec!["PCI\\VEN_10EC&DEV_8125&SUBSYS_B0021F4C&REV_05".into()],
+            ..Default::default()
+        };
+        let plan = build_plan(&state, &config).unwrap();
+        let report = plan.boot_nic_bindings.first().unwrap();
+        assert_eq!(report.state, BootNicBindingState::ClassBinding);
+        assert_eq!(report.class_binding_services, vec!["e2fexpress"]);
+        assert!(plan
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("no Enum/CriticalDeviceDatabase mapping")));
+    }
+
+    #[test]
+    fn binding_report_names_existing_critical_device_database_entry() {
+        let mut state = inventory();
+        state.critical_device_database.push(ExistingCriticalDevice {
+            key: "pci#ven_10ec&dev_8125&subsys_b0021f4c&rev_05".into(),
+            service: Some("e2fexpress".into()),
+            class_guid: Some(NET_CLASS_GUID.into()),
+        });
+        let config = WindowsBootArmConfig {
+            expected_boot_nic_ids: vec!["PCI\\VEN_10EC&DEV_8125&SUBSYS_B0021F4C&REV_05".into()],
+            ..Default::default()
+        };
+        let plan = build_plan(&state, &config).unwrap();
+        let report = plan.boot_nic_bindings.first().unwrap();
+        assert_eq!(report.state, BootNicBindingState::CriticalDeviceDatabase);
+        assert_eq!(
+            report.critical_device_database_keys,
+            vec!["pci#ven_10ec&dev_8125&subsys_b0021f4c&rev_05"]
+        );
+    }
+
+    #[test]
     fn existing_cddb_binding_satisfies_boot_nic_gate() {
         let mut state = inventory();
         state.critical_device_database.push(ExistingCriticalDevice {
@@ -1935,6 +2219,9 @@ mod tests {
                 .key
                 .contains("CriticalDeviceDatabase\\pci#ven_10ec&dev_8125&subsys_b0021f4c&rev_05")
         }));
+        let report = plan.boot_nic_bindings.first().unwrap();
+        assert!(report.planned_critical_device_database);
+        assert_eq!(report.state, BootNicBindingState::Missing);
     }
 
     #[test]

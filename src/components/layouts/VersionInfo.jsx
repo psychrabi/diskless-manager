@@ -10,7 +10,7 @@ export default function VersionInfo() {
   const built = serverInfo.build_date ? ` · built ${serverInfo.build_date}` : "";
   return (
     <div
-      className="px-2 pb-2 text-[11px] leading-tight text-muted-foreground group-data-[collapsible=icon]:hidden"
+      className="px-2 pb-2 text-[11px] leading-tight text-sidebar-foreground/50 group-data-[collapsible=icon]:hidden"
       data-testid="version-info"
     >
       {`v${serverInfo.app_version}${built}`}

@@ -367,16 +367,20 @@ fn safe_dataset_pair<'a>(client: &'a Client, snapshot: &'a str) -> Option<(&'a s
     Some((dataset, snapshot))
 }
 
-pub async fn run(state: AppState) {
+pub async fn run(state: AppState, mut shutdown: tokio::sync::watch::Receiver<bool>) {
     let capacity: Arc<dyn CapacityProbe> = Arc::new(SystemCapacity::new(state.config.clone()));
     let sessions: Arc<dyn SessionProbe> =
         Arc::new(SystemSessions::new(state.application.storage.clone()));
     let mut interval = tokio::time::interval(SWEEP_INTERVAL);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
-        interval.tick().await;
-        if let Err(error) = maintain(&state, capacity.clone(), sessions.clone()).await {
-            tracing::warn!(%error, "writeback spare sweep failed");
+        tokio::select! {
+            _ = interval.tick() => {
+                if let Err(error) = maintain(&state, capacity.clone(), sessions.clone()).await {
+                    tracing::warn!(%error, "writeback spare sweep failed");
+                }
+            }
+            _ = shutdown.changed() => break,
         }
     }
 }

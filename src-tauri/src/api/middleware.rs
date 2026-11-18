@@ -327,7 +327,7 @@ pub async fn require_auth(
     let claims = crate::auth::validate_token(&state.db_pool, token)
         .await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
-    if claims.role != "admin" && !user_request_is_allowed(request.method(), path) {
+    if !claims.is_admin() && !user_request_is_allowed(request.method(), path) {
         return Err(StatusCode::FORBIDDEN);
     }
 

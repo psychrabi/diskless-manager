@@ -27,6 +27,13 @@ pub struct Claims {
     pub session_version: i64,
 }
 
+impl Claims {
+    /// Administrative access is decided only by the stored role.
+    pub fn is_admin(&self) -> bool {
+        self.role == "admin"
+    }
+}
+
 /// Login request structure
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LoginRequest {

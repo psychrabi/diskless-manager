@@ -411,6 +411,7 @@ pub struct StorageConfig {
     pub spare_prewarm: SparePrewarmConfig,
     pub retention: RetentionConfig,
     pub maintenance: MaintenanceConfig,
+    pub dormant_cleanup: DormantCleanupConfig,
 }
 
 /// Prewarmed replacement writebacks, disabled until an administrator opts in.
@@ -481,6 +482,36 @@ impl RetentionConfig {
     pub const MAX_MIN_AGE_HOURS: u32 = 8760;
 }
 
+/// Reclaiming writeback datasets whose client no longer exists.
+///
+/// Disabled and a dry run by default: a preview is always available, and a
+/// destructive run needs the feature enabled, `dry_run` off and an explicit
+/// confirmation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DormantCleanupConfig {
+    pub enabled: bool,
+    /// Report the plan without destroying datasets.
+    pub dry_run: bool,
+    /// Minimum dataset age before it can be proposed.
+    pub min_age_hours: u32,
+}
+
+impl Default for DormantCleanupConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            dry_run: true,
+            min_age_hours: 24,
+        }
+    }
+}
+
+impl DormantCleanupConfig {
+    /// Longest accepted minimum age, in hours (one year).
+    pub const MAX_MIN_AGE_HOURS: u32 = 8760;
+}
+
 /// Scheduled ZFS scrub/TRIM, disabled until an administrator opts in.
 ///
 /// Scheduling is opt-in; a manual run from the storage card is always allowed
@@ -547,6 +578,7 @@ impl Default for StorageConfig {
             spare_prewarm: SparePrewarmConfig::default(),
             retention: RetentionConfig::default(),
             maintenance: MaintenanceConfig::default(),
+            dormant_cleanup: DormantCleanupConfig::default(),
         }
     }
 }
@@ -581,6 +613,12 @@ impl Settings {
                 .contains(&self.storage.retention.min_age_hours),
             "retention minimum age must be between 1 and {} hours",
             RetentionConfig::MAX_MIN_AGE_HOURS
+        );
+        anyhow::ensure!(
+            (1..=DormantCleanupConfig::MAX_MIN_AGE_HOURS)
+                .contains(&self.storage.dormant_cleanup.min_age_hours),
+            "dormant cleanup minimum age must be between 1 and {} hours",
+            DormantCleanupConfig::MAX_MIN_AGE_HOURS
         );
         anyhow::ensure!(
             (1..=MaintenanceConfig::MAX_INTERVAL_DAYS)

@@ -48,8 +48,8 @@ const DependencyStep = ({
                   <p className="mt-1 break-all text-xs text-muted-foreground">{svc.version || "---"}</p>
                 </div>
                 {svc.installed ? (
-                  <Badge variant="outline" className="gap-1 border-emerald-600/30 text-emerald-600"><Check size={12} /> Installed</Badge>
-                ) : <Badge variant="outline" className="gap-1 border-amber-600/30 text-amber-600">Missing</Badge>}
+                  <Badge variant="outline" className="gap-1 border-success/30 text-success"><Check size={12} /> Installed</Badge>
+                ) : <Badge variant="outline" className="gap-1 border-warning/30 text-warning">Missing</Badge>}
               </div>
               {!svc.installed && <Button className="mt-3 w-full" variant="success" size="sm" loading={installing === svc.name} onClick={() => onInstall(svc.name)}>Install</Button>}
             </article>
@@ -77,11 +77,11 @@ const DependencyStep = ({
                 </TableCell>
                 <TableCell className="text-center">
                   {svc.installed ? (
-                    <Badge variant="outline" className="gap-1 border-emerald-600/30 text-emerald-600">
+                    <Badge variant="outline" className="gap-1 border-success/30 text-success">
                       <Check size={12} /> Installed
                     </Badge>
                   ) : (
-                    <Badge variant="outline" className="gap-1 border-amber-600/30 text-amber-600">
+                    <Badge variant="outline" className="gap-1 border-warning/30 text-warning">
                       Missing
                     </Badge>
                   )}

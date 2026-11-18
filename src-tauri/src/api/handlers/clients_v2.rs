@@ -34,16 +34,42 @@ pub struct ClientWithLegacySuperState {
     pub legacy_super_snapshot: Option<String>,
 }
 
+/// Load legacy Super classification for every client, or one client when an id
+/// is supplied. The list endpoint classifies the whole fleet with one query.
+async fn legacy_super_states(
+    state: &AppState,
+    client_id: Option<&str>,
+) -> Result<std::collections::HashMap<String, (Option<String>, Option<String>)>, sqlx::Error> {
+    let mut query = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+        "SELECT c.id, \
+            CASE \
+                WHEN EXISTS (SELECT 1 FROM legacy_super_exits e WHERE e.client_id = c.id) THEN 'recovery_required' \
+                WHEN EXISTS (SELECT 1 FROM super_sessions s WHERE s.client_id = c.id AND s.state != 'completed') THEN NULL \
+                WHEN c.mode = 'super' THEN 'legacy' \
+                ELSE NULL \
+            END, \
+            (SELECT selected_snapshot FROM legacy_super_exits e WHERE e.client_id = c.id) \
+         FROM clients c",
+    );
+    if let Some(client_id) = client_id {
+        query.push(" WHERE c.id = ").push_bind(client_id);
+    }
+    let rows = query
+        .build_query_as::<(String, Option<String>, Option<String>)>()
+        .fetch_all(&state.db_pool)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, status, snapshot)| (id, (status, snapshot)))
+        .collect())
+}
+
 async fn with_legacy_super_state(
     state: &AppState,
     client: crate::domain::Client,
 ) -> Result<ClientWithLegacySuperState, sqlx::Error> {
-    let (status, snapshot): (Option<String>, Option<String>) = sqlx::query_as(
-        "SELECT CASE WHEN EXISTS (SELECT 1 FROM legacy_super_exits e WHERE e.client_id = c.id) THEN 'recovery_required' WHEN EXISTS (SELECT 1 FROM super_sessions s WHERE s.client_id = c.id AND s.state != 'completed') THEN NULL WHEN c.mode = 'super' THEN 'legacy' ELSE NULL END, (SELECT selected_snapshot FROM legacy_super_exits e WHERE e.client_id = c.id) FROM clients c WHERE c.id = ?",
-    )
-    .bind(client.id.as_str())
-    .fetch_one(&state.db_pool)
-    .await?;
+    let mut states = legacy_super_states(state, Some(client.id.as_str())).await?;
+    let (status, snapshot) = states.remove(client.id.as_str()).unwrap_or((None, None));
     Ok(ClientWithLegacySuperState {
         client,
         legacy_super_state: status,
@@ -63,19 +89,23 @@ pub async fn list_clients(
 ) -> Result<Json<Vec<serde_json::Value>>, ClientApiError> {
     match state.application.clients.list().await {
         Ok(clients) => {
+            let mut states = legacy_super_states(&state, None).await.map_err(|error| {
+                tracing::error!(%error, "failed to classify legacy Super clients");
+                ClientApiError {
+                    error: "Failed to load clients".into(),
+                }
+            })?;
             let mut result = Vec::with_capacity(clients.len());
             for client in clients {
-                let classified =
-                    with_legacy_super_state(&state, client)
-                        .await
-                        .map_err(|error| {
-                            tracing::error!(%error, "failed to classify legacy Super clients");
-                            ClientApiError {
-                                error: "Failed to load clients".into(),
-                            }
-                        })?;
+                let (legacy_super_state, legacy_super_snapshot) =
+                    states.remove(client.id.as_str()).unwrap_or((None, None));
                 result.push(
-                    serde_json::to_value(classified).map_err(|error| ClientApiError {
+                    serde_json::to_value(ClientWithLegacySuperState {
+                        client,
+                        legacy_super_state,
+                        legacy_super_snapshot,
+                    })
+                    .map_err(|error| ClientApiError {
                         error: format!("Failed to serialize clients: {error}"),
                     })?,
                 );
@@ -344,6 +374,17 @@ mod tests {
             response.legacy_super_snapshot.as_deref(),
             Some("pool/master@chosen")
         );
+
+        let states = legacy_super_states(&state, None)
+            .await
+            .expect("batch classification should succeed");
+        assert_eq!(states.len(), 2);
+        assert_eq!(
+            states["legacy"].0.as_deref(),
+            Some("recovery_required"),
+            "pending exits must be classified"
+        );
+        assert_eq!(states["normal"].0, None);
     }
 
     #[tokio::test]

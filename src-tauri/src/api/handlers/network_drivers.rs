@@ -29,7 +29,7 @@ pub struct NetworkDriverError {
 }
 
 fn require_admin(claims: &Claims) -> Result<(), (StatusCode, Json<NetworkDriverError>)> {
-    if claims.role != "admin" {
+    if !claims.is_admin() {
         return Err((
             StatusCode::FORBIDDEN,
             Json(NetworkDriverError {

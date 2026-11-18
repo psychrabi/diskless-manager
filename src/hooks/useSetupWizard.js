@@ -169,7 +169,7 @@ export const useSetupWizard = () => {
       success("ZFS Setup", `ZFS pool ${data.name} created successfully.`);
       await checkAll();
     } catch (e) {
-      error("Setup Wizard", `Failed to create ZFS pool: ${e}`);
+      error("Setup Wizard", `Failed to create ZFS pool: ${e.message || e}`);
     }
   };
 

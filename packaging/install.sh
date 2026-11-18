@@ -37,6 +37,9 @@ mkdir -p /opt/diskless-manager/dist
 cp -r dist/. /opt/diskless-manager/dist/
 if [ -d /usr/lib/systemd/system ]; then UNIT_DIR=/usr/lib/systemd/system; else UNIT_DIR=/lib/systemd/system; fi
 install -m 0644 diskless-manager.service "$UNIT_DIR/diskless-manager.service"
+if [ -d /etc/logrotate.d ] && [ -f diskless-manager.logrotate ]; then
+  install -m 0644 diskless-manager.logrotate /etc/logrotate.d/diskless-manager
+fi
 systemctl daemon-reload 2>/dev/null || true
 
 echo "Installed. Next steps:"

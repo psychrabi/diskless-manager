@@ -181,7 +181,7 @@ const ClientManagement = () => {
         title="Clients"
         description="Every diskless machine, its current image, and the storage it is streaming."
         actions={
-          <div className="grid w-full grid-cols-3 gap-2 sm:flex sm:w-auto sm:[&>button]:h-8 sm:[&>button]:flex-none [&>button]:h-11 [&>button]:min-w-0 [&>button]:flex-1 [&>button]:px-2 [&>button]:text-[11px] [&>button]:leading-tight [&>button]:whitespace-normal sm:[&>button]:px-3 sm:[&>button]:text-xs sm:[&>button]:whitespace-nowrap">
+          <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:[&>button]:h-8 sm:[&>button]:flex-none [&>button]:h-11 [&>button]:min-w-0 [&>button]:px-3 [&>button]:text-[11px] [&>button]:whitespace-nowrap sm:[&>button]:text-xs">
             <Button
               variant="outline"
               size="sm"
@@ -201,6 +201,7 @@ const ClientManagement = () => {
             <Button
               variant="default"
               size="sm"
+              className="col-span-2 sm:col-span-1"
               onClick={handleClientFormModalOpen}
             >
               <PlusCircle data-icon="inline-start" />

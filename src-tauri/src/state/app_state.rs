@@ -4,8 +4,8 @@ use crate::core::config::Settings;
 use crate::metrics::MetricsCollector;
 use crate::ssh_executor::SshExecutor;
 use log::{info, warn};
-use sqlx::sqlite::SqlitePool;
-use std::path::PathBuf;
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqliteSynchronous};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -72,6 +72,18 @@ impl AppState {
         )
     }
 
+    /// Connection options shared by the server and migration tests.
+    ///
+    /// WAL lets API reads proceed while lifecycle sweeps and audit writes run;
+    /// `synchronous=NORMAL` keeps that concurrency without an fsync per commit.
+    fn database_options(db_path: &Path) -> SqliteConnectOptions {
+        SqliteConnectOptions::new()
+            .filename(db_path)
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .synchronous(SqliteSynchronous::Normal)
+    }
+
     pub async fn new() -> anyhow::Result<Self> {
         // Determine config directory - use same as existing diskless-manager
         let config_dir = dirs::config_dir()
@@ -93,9 +105,8 @@ impl AppState {
 
         // Initialize database in the same directory
         let db_path = config_dir.join("diskless.db");
-        let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
 
-        let pool = SqlitePool::connect(&db_url).await?;
+        let pool = SqlitePool::connect_with(Self::database_options(&db_path)).await?;
         #[cfg(unix)]
         std::fs::set_permissions(
             &db_path,
@@ -226,10 +237,9 @@ impl AppState {
         static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
         MIGRATOR.run(pool).await?;
 
+        // Historical unversioned rows can predate columns that migration 0001
+        // only declares inside a CREATE TABLE that is a no-op for them.
         Self::ensure_clients_columns(pool).await?;
-        Self::migrate_legacy_images(pool).await?;
-        Self::create_support_tables(pool).await?;
-        Self::create_indexes(pool).await?;
 
         Ok(())
     }
@@ -284,345 +294,6 @@ impl AppState {
         }
         Ok(())
     }
-    /// Backfill the ImageKind columns and reclassify legacy image records.
-    async fn migrate_legacy_images(pool: &SqlitePool) -> anyhow::Result<()> {
-        sqlx::query(
-            r#"
-        CREATE TABLE IF NOT EXISTS images (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL UNIQUE,
-            kind TEXT NOT NULL DEFAULT 'master',
-            os_type TEXT NOT NULL,
-            size_gb INTEGER NOT NULL,
-            path TEXT NOT NULL,
-            format TEXT NOT NULL DEFAULT 'raw',
-            status TEXT NOT NULL DEFAULT 'ready',
-            description TEXT,
-            parent_id TEXT,
-            source_snapshot TEXT,
-            tags TEXT,
-            checksum TEXT,
-            is_default INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        )
-        "#,
-        )
-        .execute(pool)
-        .await?;
-
-        let has_kind: i64 = sqlx::query_scalar(
-            r#"
-        SELECT COUNT(*)
-        FROM pragma_table_info('images')
-        WHERE name = 'kind'
-        "#,
-        )
-        .fetch_one(pool)
-        .await?;
-
-        if has_kind == 0 {
-            sqlx::query(
-                r#"
-            ALTER TABLE images
-            ADD COLUMN kind TEXT NOT NULL DEFAULT 'master'
-            "#,
-            )
-            .execute(pool)
-            .await?;
-        }
-
-        let has_source_snapshot: i64 = sqlx::query_scalar(
-            r#"
-        SELECT COUNT(*)
-        FROM pragma_table_info('images')
-        WHERE name = 'source_snapshot'
-        "#,
-        )
-        .fetch_one(pool)
-        .await?;
-
-        if has_source_snapshot == 0 {
-            sqlx::query(
-                r#"
-            ALTER TABLE images
-            ADD COLUMN source_snapshot TEXT
-            "#,
-            )
-            .execute(pool)
-            .await?;
-        }
-
-        // ---------------------------------------------------------------------
-        // Migrate legacy image records.
-        //
-        // Before ImageKind existed, parent_id was used for both snapshots
-        // and clones. Detect the old records from their descriptions.
-        // ---------------------------------------------------------------------
-
-        sqlx::query(
-            r#"
-        UPDATE images
-        SET kind = 'snapshot'
-        WHERE
-            parent_id IS NOT NULL
-            AND description LIKE 'Snapshot of %'
-            AND (kind IS NULL OR kind = 'master')
-        "#,
-        )
-        .execute(pool)
-        .await?;
-
-        sqlx::query(
-            r#"
-        UPDATE images
-        SET
-            kind = 'clone',
-            source_snapshot = CASE
-                WHEN instr(description, '@') > 0
-                THEN substr(description, instr(description, '@') + 1)
-                ELSE source_snapshot
-            END
-        WHERE
-            parent_id IS NOT NULL
-            AND description LIKE 'Clone of %@%'
-            AND (kind IS NULL OR kind = 'master')
-        "#,
-        )
-        .execute(pool)
-        .await?;
-        Ok(())
-    }
-    async fn create_support_tables(pool: &SqlitePool) -> anyhow::Result<()> {
-        // App configuration table (for masters, services, settings JSON blobs)
-        sqlx::query(
-            r#"
-        CREATE TABLE IF NOT EXISTS app_config (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        )
-        "#,
-        )
-        .execute(pool)
-        .await?;
-
-        // Images table
-        sqlx::query(
-            r#"
-        CREATE TABLE IF NOT EXISTS images (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL UNIQUE,
-            os_type TEXT NOT NULL,
-            size_gb INTEGER NOT NULL,
-            path TEXT NOT NULL,
-            format TEXT NOT NULL DEFAULT 'raw',
-            status TEXT NOT NULL DEFAULT 'ready',
-            description TEXT,
-            parent_id TEXT,
-            tags TEXT,
-            checksum TEXT,
-            is_default INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        )
-        "#,
-        )
-        .execute(pool)
-        .await?;
-
-        // Image versions table
-        //
-        // A version is a named, assignable metadata record that points at one
-        // verified image asset. Source assets and snapshots are never renamed or
-        // promoted as a side effect of creating a version.
-        sqlx::query(
-            r#"
-        CREATE TABLE IF NOT EXISTS image_versions (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            base_name TEXT NOT NULL,
-            version TEXT NOT NULL,
-            image_asset_id TEXT NOT NULL REFERENCES images(id),
-            parent_version_id TEXT REFERENCES image_versions(id),
-            os_type TEXT NOT NULL,
-            source_description TEXT,
-            comment TEXT,
-            is_pinned INTEGER NOT NULL DEFAULT 0,
-            is_locked INTEGER NOT NULL DEFAULT 0,
-            ordering INTEGER NOT NULL DEFAULT 0,
-            published_by TEXT,
-            published_at TEXT NOT NULL,
-            last_used_at TEXT,
-            last_used_by_client_id TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            UNIQUE(base_name, version)
-        )
-        "#,
-        )
-        .execute(pool)
-        .await?;
-
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_image_versions_asset ON image_versions(image_asset_id)",
-        )
-        .execute(pool)
-        .await?;
-
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_image_versions_parent ON image_versions(parent_version_id)")
-            .execute(pool)
-            .await?;
-
-        // Boot logs table
-        sqlx::query(
-            r#"
-        CREATE TABLE IF NOT EXISTS boot_logs (
-            id TEXT PRIMARY KEY,
-            client_id TEXT NOT NULL,
-            image_id TEXT,
-            boot_time TEXT NOT NULL,
-            success INTEGER NOT NULL,
-            duration_ms INTEGER,
-            message TEXT,
-            FOREIGN KEY (client_id) REFERENCES clients(id)
-        )
-        "#,
-        )
-        .execute(pool)
-        .await?;
-
-        // Control operations audit log
-        sqlx::query(
-            r#"
-        CREATE TABLE IF NOT EXISTS control_operations (
-            id TEXT PRIMARY KEY,
-            client_id TEXT NOT NULL,
-            client_name TEXT NOT NULL,
-            client_ip TEXT NOT NULL,
-            os_type TEXT NOT NULL,
-            operation_type TEXT NOT NULL,
-            operation_mode TEXT NOT NULL,
-            delay_minutes INTEGER,
-            administrator TEXT,
-            result TEXT NOT NULL,
-            result_message TEXT,
-            duration_ms INTEGER,
-            timestamp TEXT NOT NULL,
-            FOREIGN KEY (client_id) REFERENCES clients(id)
-        )
-        "#,
-        )
-        .execute(pool)
-        .await?;
-
-        // Error log
-        sqlx::query(
-            r#"
-        CREATE TABLE IF NOT EXISTS error_logs (
-            id TEXT PRIMARY KEY,
-            client_id TEXT,
-            operation_type TEXT NOT NULL,
-            error_type TEXT NOT NULL,
-            error_message TEXT NOT NULL,
-            error_code TEXT,
-            stack_trace TEXT,
-            timestamp TEXT NOT NULL,
-            FOREIGN KEY (client_id) REFERENCES clients(id)
-        )
-        "#,
-        )
-        .execute(pool)
-        .await?;
-
-        // Scheduled operations
-        sqlx::query(
-            r#"
-        CREATE TABLE IF NOT EXISTS scheduled_operations (
-            id TEXT PRIMARY KEY,
-            client_id TEXT NOT NULL,
-            operation_type TEXT NOT NULL,
-            operation_mode TEXT NOT NULL,
-            scheduled_time TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            cancelled_at TEXT,
-            result TEXT,
-            FOREIGN KEY (client_id) REFERENCES clients(id)
-        )
-        "#,
-        )
-        .execute(pool)
-        .await?;
-
-        // OS type cache
-        sqlx::query(
-            r#"
-        CREATE TABLE IF NOT EXISTS os_type_cache (
-            client_id TEXT PRIMARY KEY,
-            os_type TEXT NOT NULL,
-            detected_at TEXT NOT NULL,
-            FOREIGN KEY (client_id) REFERENCES clients(id)
-        )
-        "#,
-        )
-        .execute(pool)
-        .await?;
-
-        // Users table
-        sqlx::query(
-            r#"
-        CREATE TABLE IF NOT EXISTS users (
-            id TEXT PRIMARY KEY,
-            username TEXT NOT NULL UNIQUE,
-            password_hash TEXT NOT NULL,
-            role TEXT NOT NULL DEFAULT 'user',
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            last_login TEXT
-        )
-        "#,
-        )
-        .execute(pool)
-        .await?;
-        Ok(())
-    }
-    async fn create_indexes(pool: &SqlitePool) -> anyhow::Result<()> {
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_clients_mac ON clients(mac)")
-            .execute(pool)
-            .await?;
-
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_images_name ON images(name)")
-            .execute(pool)
-            .await?;
-
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_boot_logs_client ON boot_logs(client_id)")
-            .execute(pool)
-            .await?;
-
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_control_ops_client ON control_operations(client_id)",
-        )
-        .execute(pool)
-        .await?;
-
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_control_ops_timestamp ON control_operations(timestamp)",
-        )
-        .execute(pool)
-        .await?;
-
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_error_logs_client ON error_logs(client_id)")
-            .execute(pool)
-            .await?;
-
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_scheduled_ops_client ON scheduled_operations(client_id)")
-        .execute(pool)
-        .await?;
-
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
-            .execute(pool)
-            .await?;
-        Ok(())
-    }
 
     async fn ensure_column(
         pool: &SqlitePool,
@@ -657,6 +328,27 @@ mod migration_tests {
             .connect("sqlite::memory:")
             .await
             .expect("in-memory database should open")
+    }
+
+    #[tokio::test]
+    async fn file_database_uses_wal_and_enforces_foreign_keys() {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+        let path = directory.path().join("diskless.db");
+        let pool = sqlx::SqlitePool::connect_with(AppState::database_options(&path))
+            .await
+            .expect("file database should open");
+
+        let journal_mode: String = sqlx::query_scalar("PRAGMA journal_mode")
+            .fetch_one(&pool)
+            .await
+            .expect("journal mode should be readable");
+        let foreign_keys: i64 = sqlx::query_scalar("PRAGMA foreign_keys")
+            .fetch_one(&pool)
+            .await
+            .expect("foreign key setting should be readable");
+
+        assert_eq!(journal_mode.to_ascii_lowercase(), "wal");
+        assert_eq!(foreign_keys, 1);
     }
 
     #[tokio::test]
@@ -779,6 +471,10 @@ mod migration_tests {
             .execute(&pool)
             .await
             .expect("legacy image should be inserted");
+        sqlx::query("INSERT INTO images (id,name,os_type,size_gb,path,format,status,description,parent_id,is_default,created_at,updated_at) VALUES ('legacy-snapshot','snap','windows',64,'/tank/snap','raw','ready','Snapshot of Windows 11','image-1',0,'now','now'), ('legacy-clone','clone','windows',64,'/tank/clone','raw','ready','Clone of Windows 11@snap','image-1',0,'now','now')")
+            .execute(&pool)
+            .await
+            .expect("legacy image classifications should be inserted");
 
         AppState::init_database(&pool)
             .await
@@ -795,6 +491,16 @@ mod migration_tests {
             .expect("image should remain");
         assert_eq!(client_name, "PC-01");
         assert_eq!(image_name, "Windows 11");
+
+        let (snapshot_kind, clone_kind, clone_source): (String, String, String) = sqlx::query_as(
+            "SELECT (SELECT kind FROM images WHERE id = 'legacy-snapshot'), (SELECT kind FROM images WHERE id = 'legacy-clone'), (SELECT source_snapshot FROM images WHERE id = 'legacy-clone')",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("legacy image classifications should be readable");
+        assert_eq!(snapshot_kind, "snapshot");
+        assert_eq!(clone_kind, "clone");
+        assert_eq!(clone_source, "snap");
 
         for column in [
             "snapshot",

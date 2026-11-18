@@ -46,7 +46,7 @@ impl From<AuthError> for ErrorResponse {
 
 /// Authentication middleware supplies claims checked against the current account.
 fn require_admin(claims: &Claims) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
-    if claims.role != "admin" {
+    if !claims.is_admin() {
         return Err((
             StatusCode::FORBIDDEN,
             Json(ErrorResponse {

@@ -3,7 +3,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::process::Command;
 
-use super::ws::{fetch_metrics, MetricsUpdate};
+use super::ws::fetch_metrics;
+use crate::metrics::MetricsUpdate;
 use crate::state::AppState;
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -29,20 +29,6 @@ pub fn set_config(runtime: &RuntimeConfig, config: &AppConfig) {
     *runtime.0.write().unwrap_or_else(|e| e.into_inner()) = config.clone();
 }
 
-/// Helper function to insert or replace a key-value pair in app_config table
-async fn upsert_config_value(
-    pool: &sqlx::SqlitePool,
-    key: &str,
-    value: &str,
-) -> anyhow::Result<()> {
-    sqlx::query("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)")
-        .bind(key)
-        .bind(value)
-        .execute(pool)
-        .await?;
-    Ok(())
-}
-
 fn parse_legacy_datetime(value: &str) -> anyhow::Result<chrono::DateTime<chrono::Utc>> {
     if let Ok(value) = chrono::DateTime::parse_from_rfc3339(value) {
         return Ok(value.with_timezone(&chrono::Utc));
@@ -163,20 +149,33 @@ pub(crate) async fn persist_config_client(
     }
 }
 
-/// Persist application settings; client snapshots are read-only here.
+/// Persist application settings and the legacy masters/services snapshots in
+/// one transaction so a failed write cannot leave a partial configuration.
 pub async fn write_config(pool: &sqlx::SqlitePool, config: &AppConfig) -> anyhow::Result<()> {
-    // 1. Persist masters and services to app_config
-    upsert_config_value(pool, "masters", &serde_json::to_string(&config.masters)?).await?;
+    let mut transaction = pool.begin().await?;
 
-    upsert_config_value(pool, "services", &serde_json::to_string(&config.services)?).await?;
+    for (key, value) in [
+        ("masters", serde_json::to_string(&config.masters)?),
+        ("services", serde_json::to_string(&config.services)?),
+    ] {
+        sqlx::query("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)")
+            .bind(key)
+            .bind(value)
+            .execute(&mut *transaction)
+            .await?;
+    }
 
-    // 2. Persist each setting under its own key in the app_config table
     if let Some(obj) = config.settings.as_object() {
-        for (k, v) in obj {
-            upsert_config_value(pool, k, &serde_json::to_string(v)?).await?;
+        for (key, value) in obj {
+            sqlx::query("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)")
+                .bind(key)
+                .bind(serde_json::to_string(value)?)
+                .execute(&mut *transaction)
+                .await?;
         }
     }
 
+    transaction.commit().await?;
     Ok(())
 }
 
@@ -218,84 +217,6 @@ pub async fn read_config_db(pool: &sqlx::SqlitePool) -> anyhow::Result<AppConfig
     }
 
     config.settings = Value::Object(settings_map);
-
-    #[derive(sqlx::FromRow)]
-    struct ClientRow {
-        id: String,
-        name: String,
-        mac: String,
-        ip: String,
-        master: Option<String>,
-        enabled: bool,
-        snapshot: Option<String>,
-        block_store: Option<String>,
-        target_iqn: Option<String>,
-        writeback: Option<String>,
-        block_device: Option<String>,
-        status: Option<String>,
-        mode: Option<String>,
-        pxe_mode: String,
-        keep_writeback: bool,
-        use_game_disk: bool,
-        chap_user: Option<String>,
-        chap_secret: Option<String>,
-        chap_enabled: Option<bool>,
-        installer_media_id: Option<String>,
-        created_at: Option<String>,
-        last_modified: Option<String>,
-    }
-
-    // Get clients from DB. This remains intentionally compatibility-oriented:
-    // config export must still be able to surface historical rows containing
-    // placeholder values that the strict domain repository would reject.
-    let clients = sqlx::query_as::<_, ClientRow>(
-        r#"
-        SELECT id, name, mac, ip, master, enabled, snapshot, block_store, target_iqn,
-               writeback, block_device, status, mode, pxe_mode, keep_writeback,
-               use_game_disk, chap_user, chap_secret, chap_enabled, installer_media_id,
-               created_at, last_modified
-        FROM clients
-        "#,
-    )
-    .fetch_all(pool)
-    .await?;
-
-    for c in clients {
-        config.clients.push(crate::core::client::Client {
-            id: c.id,
-            name: c.name,
-            mac: c.mac,
-            ip: c.ip,
-            master: c.master.unwrap_or_default(),
-            enabled: c.enabled,
-            created_at: c
-                .created_at
-                .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
-                .map(|dt| dt.with_timezone(&chrono::Utc))
-                .unwrap_or_else(chrono::Utc::now),
-            updated_at: c
-                .last_modified
-                .as_ref()
-                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                .map(|dt| dt.with_timezone(&chrono::Utc))
-                .unwrap_or_else(chrono::Utc::now),
-            snapshot: c.snapshot,
-            block_store: c.block_store,
-            target_iqn: c.target_iqn,
-            writeback: c.writeback,
-            last_modified: c.last_modified,
-            block_device: c.block_device,
-            status: c.status,
-            mode: c.mode,
-            pxe_mode: Some(c.pxe_mode),
-            keep_writeback: Some(c.keep_writeback),
-            use_game_disk: Some(c.use_game_disk),
-            chap_user: c.chap_user,
-            chap_secret: c.chap_secret,
-            chap_enabled: c.chap_enabled,
-            installer_media_id: c.installer_media_id,
-        });
-    }
 
     Ok(config)
 }

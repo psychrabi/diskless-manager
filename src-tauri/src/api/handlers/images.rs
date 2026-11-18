@@ -398,7 +398,7 @@ pub async fn apply_snapshot(
     Path((id, snapshot_name)): Path<(String, String)>,
     Json(request): Json<ApplySnapshotRequest>,
 ) -> Result<Json<Image>, ImageApiError> {
-    if claims.role != "admin" {
+    if !claims.is_admin() {
         return Err(image_api_error(
             StatusCode::FORBIDDEN,
             "Administrator role required",
@@ -620,7 +620,7 @@ pub async fn rollback_snapshot(
     Path((master_name, snapshot_name)): Path<(String, String)>,
     body: axum::body::Bytes,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    if claims.role != "admin" {
+    if !claims.is_admin() {
         return Err(StatusCode::FORBIDDEN);
     }
     let request = if body.is_empty() {

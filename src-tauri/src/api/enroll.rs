@@ -165,7 +165,10 @@ impl EnrollServer {
 }
 
 impl BoundEnrollServer {
-    pub async fn serve(self) -> anyhow::Result<()> {
+    pub async fn serve(
+        self,
+        mut shutdown: tokio::sync::watch::Receiver<bool>,
+    ) -> anyhow::Result<()> {
         info!(
             "Serving client enrollment on {}",
             self.listener.local_addr()?
@@ -174,6 +177,13 @@ impl BoundEnrollServer {
             self.listener,
             self.app.into_make_service_with_connect_info::<SocketAddr>(),
         )
+        .with_graceful_shutdown(async move {
+            while !*shutdown.borrow() {
+                if shutdown.changed().await.is_err() {
+                    break;
+                }
+            }
+        })
         .await
         .map_err(anyhow::Error::from)
     }

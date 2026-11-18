@@ -307,8 +307,8 @@ set target-iqn {target_iqn}
 set boot-url http://${{next-server}}{port_suffix}
 set keep-san 1
 {chap_settings}
+set root-path iscsi:${{next-server}}::::${{target-iqn}}
 {auto_pnp}
-isset ${{root-path}} || goto no_target
 echo Provisioning {slug}: attaching ${{root-path}}
 sanhook ${{root-path}} || goto failed
 
@@ -324,10 +324,6 @@ initrd ${{boot-url}}/boot/winpe/partition-windows.txt partition-windows.txt || g
 boot || goto failed
 
 :no_target
-echo No iSCSI root-path was supplied by DHCP.
-echo The client cannot be provisioned until a storage target exists.
-shell
-
 :failed
 imgfetch http://${{next-server}}:{enroll_port}/boot/failed/${{client-mac}} || echo Could not report boot failure
 echo WinPE provisioning boot failed.
@@ -372,6 +368,7 @@ set nvme-nqn {nvme_nqn}
 set boot-url http://${{next-server}}{port_suffix}
 set keep-san 1
 {chap_settings}
+set root-path iscsi:${{next-server}}::::${{target-iqn}}
 {auto_pnp}
 :start
 {menu}
@@ -680,6 +677,7 @@ mod tests {
         // iPXE has no --username flag: authentication rides the
         // username/password settings honored by sanboot, sanhook and iBFT.
         assert!(script.contains("set username chap-pc001"));
+        assert!(script.find("set password").unwrap() < script.find("set root-path").unwrap());
         assert!(script.contains("set password AbcDef123456"));
         assert!(!script.contains("--username"), "no such iPXE option");
         // Attach lines themselves stay plain.

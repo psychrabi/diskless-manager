@@ -662,13 +662,17 @@ pub fn within_window(hour: u32, config: &MaintenanceConfig) -> bool {
 }
 
 /// Background sweep; a no-op while scheduling is disabled.
-pub async fn run(state: AppState) {
+pub async fn run(state: AppState, mut shutdown: tokio::sync::watch::Receiver<bool>) {
     let service = MaintenanceService::new(state.db_pool.clone(), state.settings.clone());
     let mut interval = tokio::time::interval(SWEEP_INTERVAL);
     loop {
-        interval.tick().await;
-        if let Err(error) = service.tick().await {
-            tracing::warn!(%error, "storage maintenance sweep failed");
+        tokio::select! {
+            _ = interval.tick() => {
+                if let Err(error) = service.tick().await {
+                    tracing::warn!(%error, "storage maintenance sweep failed");
+                }
+            }
+            _ = shutdown.changed() => break,
         }
     }
 }

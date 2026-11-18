@@ -14,9 +14,9 @@ const ClientStatusIcon = memo(({ status }) => {
   const isOnline = isOnlineStatus(currentStatus);
   const isLeased = currentStatus === "Leased";
   const color = isOnline
-    ? "text-emerald-500"
+    ? "text-success"
     : isLeased
-      ? "text-amber-500"
+      ? "text-warning"
       : "text-destructive";
 
   return (

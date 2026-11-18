@@ -26,8 +26,8 @@ export default function Sidebar() {
   const closeMobile = () => setOpenMobile(false);
 
   return (
-    <SidebarRoot collapsible="icon" variant="inset">
-      <SidebarHeader className="px-3 pt-3 pb-1 max-md:pr-12">
+    <SidebarRoot collapsible="icon" variant="sidebar" className="border-r border-sidebar-border">
+      <SidebarHeader className="px-3 pt-4 pb-2 max-md:pr-12">
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton
@@ -35,26 +35,29 @@ export default function Sidebar() {
               render={<Link to="/" />}
               onClick={closeMobile}
               aria-label="Diskless Manager home"
-              className="h-14 rounded-xl px-2 hover:bg-sidebar-accent/60"
+              className="h-14 rounded-lg px-2 hover:bg-sidebar-accent/60"
             >
-              <div className="relative flex size-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-primary/70 shadow-sm ring-1 ring-primary/20">
-                <Boxes className="size-[18px] text-primary-foreground" />
-                <span className="absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full border-2 border-sidebar bg-success" />
+              <div className="flex size-9 shrink-0 items-center justify-center rounded-md border border-sidebar-border bg-white/[0.06] text-sidebar-foreground">
+                <Boxes className="size-[18px]" aria-hidden="true" />
               </div>
               <div className="grid min-w-0 flex-1 text-left leading-tight group-data-[collapsible=icon]:hidden">
-                <span className="truncate text-[15px] font-semibold tracking-[-0.015em]">Diskless Manager</span>
-                <span className="mt-1 truncate text-[11px] font-normal text-muted-foreground">Boot server control</span>
+                <span className="truncate text-sm font-semibold tracking-[-0.015em] text-sidebar-foreground">
+                  Diskless Manager
+                </span>
+                <span className="mt-1 truncate text-[10px] font-medium tracking-[0.14em] uppercase text-sidebar-foreground/45">
+                  Boot server
+                </span>
               </div>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>
-      <SidebarSeparator className="mx-4 opacity-70" />
+      <SidebarSeparator className="mx-4 opacity-100" />
       <SidebarContent className="group-data-[collapsible=icon]:overflow-y-auto">
-        <nav aria-label="Main navigation" className="py-1">
+        <nav aria-label="Main navigation" className="py-2">
           {visibleSections.map((section) => (
-            <SidebarGroup key={section.label} className="px-3 py-1.5">
-              <SidebarGroupLabel className="h-7 px-2.5 text-[10px] font-semibold tracking-[0.14em] uppercase text-muted-foreground/80">
+            <SidebarGroup key={section.label} className="px-3 py-1">
+              <SidebarGroupLabel className="h-7 px-2.5 text-[10px] font-semibold tracking-[0.16em] uppercase text-sidebar-foreground/65 xl:text-[10.5px]">
                 {section.label}
               </SidebarGroupLabel>
               <SidebarMenu className="gap-0.5">
@@ -66,7 +69,7 @@ export default function Sidebar() {
                       tooltip={item.label}
                       aria-label={item.label}
                       onClick={closeMobile}
-                      className="relative h-9 rounded-lg px-2.5 text-[13px] text-sidebar-foreground/75 before:absolute before:inset-y-2 before:left-0 before:w-[3px] before:rounded-full before:bg-primary before:opacity-0 data-active:bg-sidebar-accent data-active:font-medium data-active:text-sidebar-accent-foreground data-active:before:opacity-100 [&_svg]:text-sidebar-foreground/45 data-active:[&_svg]:text-primary"
+                      className="relative h-9 rounded-md px-2.5 text-[13px] text-sidebar-foreground/70 xl:h-10 xl:text-sm transition-colors duration-150 ease-out before:absolute before:inset-y-1.5 before:left-0 before:w-[2px] before:rounded-full before:bg-sidebar-primary before:opacity-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground data-active:bg-sidebar-accent data-active:font-medium data-active:text-sidebar-accent-foreground data-active:before:opacity-100 [&_svg]:text-sidebar-foreground/50 [&_svg]:transition-colors data-active:[&_svg]:text-sidebar-primary"
                     >
                       <item.icon />
                       <span>{item.label}</span>
@@ -78,7 +81,7 @@ export default function Sidebar() {
           ))}
         </nav>
       </SidebarContent>
-      <SidebarSeparator className="mx-4 opacity-70" />
+      <SidebarSeparator className="mx-4 opacity-100" />
       <SidebarFooter className="p-3 pt-2">
         <NavUser />
         <VersionInfo />

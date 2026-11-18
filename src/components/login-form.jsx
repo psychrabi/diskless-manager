@@ -8,22 +8,22 @@ import { Spinner } from "@/components/ui/spinner";
 // Adapted from shadcn login-03 for the server's username/password authentication.
 export function LoginForm({ className, onSubmit, register, errors, isSubmitting, canBootstrap, onCreateAdmin }) {
   return (
-    <Card className={cn("w-full border-border/80 bg-card/85 shadow-xl shadow-foreground/[0.04] backdrop-blur-sm", className)}>
+    <Card className={cn("w-full border-border bg-card", className)}>
       <CardHeader className="gap-2 px-6 pt-6 text-left">
-        <h1 className="text-[28px] leading-tight font-semibold tracking-[-0.04em]">Welcome back</h1>
-        <CardDescription>Sign in to manage your diskless boot server.</CardDescription>
+        <h1 className="text-[28px] leading-tight font-semibold tracking-[-0.045em] text-balance">Welcome back</h1>
+        <CardDescription className="text-sm leading-6">Sign in to manage your diskless boot server.</CardDescription>
       </CardHeader>
       <CardContent className="px-6 pb-6">
-        <form onSubmit={onSubmit}>
+        <form onSubmit={onSubmit} className="space-y-1">
           <FieldGroup>
             <Field data-invalid={!!errors.username}>
               <FieldLabel htmlFor="username">Username</FieldLabel>
-              <Input id="username" autoComplete="username" placeholder="Enter your username" className="h-11 rounded-lg bg-background" aria-invalid={!!errors.username} aria-describedby={errors.username ? "username-error" : undefined} {...register("username")} />
+              <Input id="username" autoComplete="username" placeholder="Enter your username" className="h-11 rounded-md bg-background" aria-invalid={!!errors.username} aria-describedby={errors.username ? "username-error" : undefined} disabled={isSubmitting} {...register("username")} />
               <FieldError id="username-error">{errors.username?.message}</FieldError>
             </Field>
             <Field data-invalid={!!errors.password}>
               <FieldLabel htmlFor="password">Password</FieldLabel>
-              <Input id="password" type="password" autoComplete="current-password" placeholder="Enter your password" className="h-11 rounded-lg bg-background" aria-invalid={!!errors.password} aria-describedby={errors.password ? "password-error" : undefined} {...register("password")} />
+              <Input id="password" type="password" autoComplete="current-password" placeholder="Enter your password" className="h-11 rounded-md bg-background" aria-invalid={!!errors.password} aria-describedby={errors.password ? "password-error" : undefined} disabled={isSubmitting} {...register("password")} />
               <FieldError id="password-error">{errors.password?.message}</FieldError>
             </Field>
             <Field>
@@ -33,9 +33,9 @@ export function LoginForm({ className, onSubmit, register, errors, isSubmitting,
               </Button>
             </Field>
             {canBootstrap && (
-              <Field className="border-t pt-5">
+              <Field className="border-t border-border/70 pt-5">
                 <p className="text-center text-sm text-muted-foreground">No administrator account exists yet.</p>
-                <Button type="button" variant="outline" onClick={onCreateAdmin}>Create your first admin account</Button>
+                <Button type="button" variant="outline" className="h-11" onClick={onCreateAdmin} disabled={isSubmitting}>Create your first admin account</Button>
               </Field>
             )}
           </FieldGroup>

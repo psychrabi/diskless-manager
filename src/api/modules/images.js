@@ -37,6 +37,26 @@ export async function validateWindowsComputerName(computerName) {
   );
 }
 
+/** Start an independent image copy (Phase 4C); returns the copy job. */
+export async function copyImage(id, name) {
+  return apiRequest(`/api/images/${encodeURIComponent(id)}/copy`, {
+    method: "POST",
+    body: JSON.stringify({ name: name || null }),
+  });
+}
+
+/** Running and recently finished image copies. */
+export async function listImageCopies() {
+  return apiRequest("/api/images/copies");
+}
+
+export async function cancelImageCopy(jobId) {
+  return apiRequest(
+    `/api/images/copies/${encodeURIComponent(jobId)}/cancel`,
+    { method: "POST" }
+  );
+}
+
 export async function renameImage(id, newName) {
   return apiRequest(`/api/images/${id}/rename`, {
     method: "PUT",

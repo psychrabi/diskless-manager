@@ -34,6 +34,7 @@ use crate::api::handlers::{
     dashboard::{get_client_io_metrics, get_client_overview, get_default_image},
     dhcp_reconciliation::{inspect_dhcp_reconciliation, repair_dhcp_reconciliation},
     disks::{create_pool, list_disks, pool_exists, rename_disk},
+    image_copy::{cancel_copy, copy_image, list_copies},
     image_versions::image_version_routes,
     images::{
         apply_snapshot, clone_image, create_image, create_snapshot, delete_image, delete_snapshot,
@@ -62,6 +63,7 @@ use crate::api::handlers::{
     },
     setup::{complete_setup, get_setup_status},
     ssh::{execute_ssh_command, get_windows_system_info, test_ssh_connection},
+    storage_dormant::{get_dormant_cleanup_plan, run_dormant_cleanup},
     storage_maintenance::{get_maintenance_status, start_maintenance, stop_maintenance},
     storage_retention::{get_retention_plan, run_retention},
     storage_spares::list_storage_spares,
@@ -139,23 +141,17 @@ async fn await_request(timeout: Duration, task: tokio::task::JoinHandle<Response
 async fn apply_request_timeout(request: Request<Body>, next: Next) -> Response {
     let path = request.uri().path();
     let timeout = request_timeout_for(path);
-    // shortcut: legacy storage handlers mix synchronous integrations with SQLx; migrate
-    // their commands to native async if blocking-pool occupancy becomes a bottleneck.
-    let legacy_storage = [
-        "/api/clients",
-        "/api/disks",
-        "/api/zfs",
-        "/api/services",
-        "/api/system",
-        "/api/reconciliation",
-    ]
-    .iter()
-    .any(|prefix| {
-        path == *prefix
-            || path
-                .strip_prefix(prefix)
-                .is_some_and(|tail| tail.starts_with('/'))
-    });
+    // These legacy prefixes still call synchronous ZFS/system integration code.
+    // The disk, service, and reconciliation handlers already use Tokio process
+    // and async repositories, so they stay on the async worker.
+    let legacy_storage = ["/api/clients", "/api/zfs", "/api/system"]
+        .iter()
+        .any(|prefix| {
+            path == *prefix
+                || path
+                    .strip_prefix(prefix)
+                    .is_some_and(|tail| tail.starts_with('/'))
+        });
     let task = if legacy_storage {
         let runtime = tokio::runtime::Handle::current();
         tokio::task::spawn_blocking(move || runtime.block_on(next.run(request)))
@@ -411,6 +407,9 @@ fn image_routes() -> Router<AppState> {
         .route("/api/images/import", post(import_image))
         .route("/api/images/import-scan", post(import_existing_images))
         .route("/api/images/{id}/clone", post(clone_image))
+        .route("/api/images/copies", get(list_copies))
+        .route("/api/images/copies/{job_id}/cancel", post(cancel_copy))
+        .route("/api/images/{id}/copy", post(copy_image))
         .route(
             "/api/images/{id}/snapshots",
             post(create_snapshot).get(get_snapshots),
@@ -514,6 +513,8 @@ fn system_routes() -> Router<AppState> {
         .route("/api/system/storage/spares", get(list_storage_spares))
         .route("/api/system/storage/retention", get(get_retention_plan))
         .route("/api/system/storage/retention/run", post(run_retention))
+        .route("/api/system/storage/dormant", get(get_dormant_cleanup_plan))
+        .route("/api/system/storage/dormant/run", post(run_dormant_cleanup))
         .route(
             "/api/system/storage/maintenance",
             get(get_maintenance_status),

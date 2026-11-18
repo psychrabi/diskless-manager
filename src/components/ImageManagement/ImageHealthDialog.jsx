@@ -49,8 +49,8 @@ const HealthCheckRow = ({ check }) => {
           check.status === "fail"
             ? "text-destructive"
             : check.status === "warn"
-              ? "text-amber-600 dark:text-amber-400"
-              : "text-emerald-600 dark:text-emerald-400"
+              ? "text-warning"
+              : "text-success"
         }`}
         aria-hidden="true"
       />
@@ -134,8 +134,8 @@ const ImageHealthDialog = ({ open, onOpenChange, image }) => {
                       health.status === "fail"
                         ? "text-destructive"
                         : health.status === "warn"
-                          ? "text-amber-600 dark:text-amber-400"
-                          : "text-emerald-600 dark:text-emerald-400"
+                          ? "text-warning"
+                          : "text-success"
                     }`}
                     aria-hidden="true"
                   />

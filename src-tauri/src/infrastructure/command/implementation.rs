@@ -1,7 +1,7 @@
 use crate::error::AppError;
 use crate::types::disk::{Disk, MemoryStats, RamUsage};
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::process::{Command, Output, Stdio};
 
 #[derive(thiserror::Error, Debug)]
@@ -428,9 +428,32 @@ pub fn log_file_path() -> std::path::PathBuf {
     crate::log_file_path()
 }
 
-/// Read the whole log file as a string (returns empty string on error)
+/// Maximum number of trailing bytes returned for the application log.
+const MAX_LOG_TAIL_BYTES: u64 = 256 * 1024;
+
+/// Read the tail of the application log (returns empty string on error).
+///
+/// The log file is append-only and unbounded between rotations; reading the
+/// whole file into a response would copy its full history into memory.
 pub fn read_logs() -> String {
-    fs::read_to_string(log_file_path()).unwrap_or_default()
+    read_log_tail(&log_file_path(), MAX_LOG_TAIL_BYTES).unwrap_or_default()
+}
+
+fn read_log_tail(path: &std::path::Path, max_bytes: u64) -> std::io::Result<String> {
+    let mut file = fs::File::open(path)?;
+    let length = file.metadata()?.len();
+    let start = length.saturating_sub(max_bytes);
+    file.seek(SeekFrom::Start(start))?;
+    let mut bytes = Vec::new();
+    file.take(max_bytes).read_to_end(&mut bytes)?;
+    let text = String::from_utf8_lossy(&bytes);
+    if start > 0 {
+        // A tail can begin in the middle of a record. Drop that partial line.
+        if let Some(newline) = text.find('\n') {
+            return Ok(text[newline + 1..].to_owned());
+        }
+    }
+    Ok(text.into_owned())
 }
 
 /// Read logs for a specific systemd unit
@@ -473,4 +496,23 @@ pub fn clear_logs() -> Result<(), AppError> {
         .open(path)
         .map(drop)
         .map_err(AppError::Io)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_log_tail;
+
+    #[test]
+    fn log_tail_returns_only_complete_trailing_lines() {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+        let path = directory.path().join("diskless-manager.log");
+        std::fs::write(&path, "old line\nsecond line\nthird line\n")
+            .expect("log fixture should be written");
+
+        let tail = read_log_tail(&path, 20).expect("tail should be readable");
+        assert_eq!(tail, "third line\n");
+
+        let whole = read_log_tail(&path, 1024).expect("small file should be readable");
+        assert!(whole.starts_with("old line\n"));
+    }
 }

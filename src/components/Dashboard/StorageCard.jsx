@@ -69,9 +69,9 @@ const StorageCard = () => {
             </div>
 
             <div>
-              <div className="h-2 overflow-hidden rounded-full bg-muted">
+              <div className="h-2 overflow-hidden bg-muted">
                 <div
-                  className="h-full rounded-full bg-gradient-to-r from-primary to-primary/70 transition-[width] duration-500"
+                  className="meter-track h-full bg-primary transition-[width] duration-500"
                   style={{ width: `${usedPct ?? 0}%` }}
                 />
               </div>

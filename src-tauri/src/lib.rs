@@ -25,9 +25,10 @@ pub mod validation;
 
 pub mod api;
 
-use log::info;
+use log::{info, warn};
 
 use state::AppState;
+use std::time::Duration;
 
 const DHCP_CONFIG_PATH: &str = "/etc/dhcp/dhcpd.conf";
 const DHCP_CLIENTS_PATH: &str = "/etc/dhcp/clients.conf";
@@ -59,15 +60,22 @@ pub async fn run() -> anyhow::Result<()> {
         .await?;
     let (api_shutdown_tx, api_shutdown_rx) = tokio::sync::oneshot::channel();
     let api_task = tokio::spawn(api_server.serve_with_shutdown(api_shutdown_rx));
-    let lifecycle_task = tokio::spawn(crate::application::client_lifecycle::run(state.clone()));
+    let (background_shutdown_tx, background_shutdown_rx) = tokio::sync::watch::channel(false);
+    let lifecycle_task = tokio::spawn(crate::application::client_lifecycle::run(
+        state.clone(),
+        background_shutdown_rx.clone(),
+    ));
     // Prewarms replacement writebacks while clients are offline; disabled by
     // default in settings, and it only ever creates job-owned spare clones.
     let spare_task = tokio::spawn(crate::application::writeback_spare_service::run(
         state.clone(),
+        background_shutdown_rx.clone(),
     ));
     // Scheduled scrub/TRIM, disabled by default. Manual runs are on demand.
-    let maintenance_task =
-        tokio::spawn(crate::application::maintenance_service::run(state.clone()));
+    let maintenance_task = tokio::spawn(crate::application::maintenance_service::run(
+        state.clone(),
+        background_shutdown_rx.clone(),
+    ));
 
     // Dedicated PXE client enrollment listener. Bound to the LAN on its own
     // port (default 4237) so iPXE clients can register an unprovisioned
@@ -78,19 +86,37 @@ pub async fn run() -> anyhow::Result<()> {
     let enroll_server = crate::api::enroll::EnrollServer::new(enroll_state, enroll_addr)
         .bind()
         .await?;
-    let enroll_task = tokio::spawn(enroll_server.serve());
+    let enroll_task = tokio::spawn(enroll_server.serve(background_shutdown_rx.clone()));
 
     info!("Diskless manager running; press Ctrl-C to stop");
     shutdown_signal().await;
     info!("Shutdown signal received");
     let _ = api_shutdown_tx.send(());
-    lifecycle_task.abort();
-    spare_task.abort();
-    maintenance_task.abort();
-    enroll_task.abort();
-    api_task
+    let _ = background_shutdown_tx.send(true);
+
+    // Let in-flight sweeps finish their current step before process exit.
+    // Recovery records remain the fallback if the grace period expires.
+    let background_tasks = async {
+        let _ = lifecycle_task.await;
+        let _ = spare_task.await;
+        let _ = maintenance_task.await;
+        let _ = enroll_task.await;
+    };
+    if tokio::time::timeout(Duration::from_secs(30), background_tasks)
         .await
-        .map_err(|error| anyhow::anyhow!("API server task failed: {error}"))??;
+        .is_err()
+    {
+        warn!("background tasks did not stop within 30s; exiting");
+    }
+
+    // Open WebSocket dashboards can delay hyper's graceful shutdown. Bound the
+    // wait so a slow client cannot keep the process alive indefinitely.
+    match tokio::time::timeout(Duration::from_secs(30), api_task).await {
+        Ok(result) => {
+            result.map_err(|error| anyhow::anyhow!("API server task failed: {error}"))??;
+        }
+        Err(_) => warn!("API server did not stop within 30s; exiting"),
+    }
     Ok(())
 }
 

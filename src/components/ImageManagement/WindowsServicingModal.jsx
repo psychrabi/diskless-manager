@@ -12,6 +12,7 @@ import {
   prepareWindowsImageRemoteCatalog,
 } from "@/api/modules/windowsServicing";
 import { Button, Modal, Select } from "@/components/ui";
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useConfirm } from "@/contexts/confirmDialog";
@@ -118,6 +119,25 @@ function Toggle({ id, checked, onChange, label, description, danger = false }) {
       </span>
     </label>
   );
+}
+
+const BOOT_NIC_BINDING_STATES = {
+  device_instance:
+    "A recorded device instance can bind this NIC before PnP runs.",
+  critical_device_database:
+    "Only a CriticalDeviceDatabase entry covers this NIC; the image records no device instance for it.",
+  class_binding:
+    "Only a network-class binding exists; it does not start the NIC before the iSCSI root.",
+  missing:
+    "No device instance, class binding or CriticalDeviceDatabase entry covers this NIC.",
+};
+
+function describeBootNicBinding(binding) {
+  const description = BOOT_NIC_BINDING_STATES[binding?.state] || "";
+  if (binding?.planned_critical_device_database) {
+    return `${description} This run adds a CriticalDeviceDatabase entry for it.`.trim();
+  }
+  return description;
 }
 
 function formatRegistryValue(value) {
@@ -608,7 +628,7 @@ export default function WindowsServicingModal({ isOpen, onClose, onPrepared }) {
               <span
                 className={
                   worker.available
-                    ? "text-sm text-emerald-600"
+                    ? "text-sm text-success"
                     : "text-sm text-destructive"
                 }
               >
@@ -1041,7 +1061,7 @@ export default function WindowsServicingModal({ isOpen, onClose, onPrepared }) {
                         "none"}
                     </p>
                     {personalization.warnings?.length > 0 && (
-                      <ul className="space-y-1 text-amber-700 dark:text-amber-500">
+                      <ul className="space-y-1 text-warning">
                         {personalization.warnings.map((warning) => (
                           <li key={warning}>• {warning}</li>
                         ))}
@@ -1053,7 +1073,7 @@ export default function WindowsServicingModal({ isOpen, onClose, onPrepared }) {
               <span
                 className={
                   preparationResult.committed
-                    ? "rounded-full bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-emerald-700"
+                    ? "rounded-full bg-success/10 px-2.5 py-1 text-xs font-medium text-success"
                     : "rounded-full bg-muted px-2.5 py-1 text-xs font-medium"
                 }
               >
@@ -1062,7 +1082,7 @@ export default function WindowsServicingModal({ isOpen, onClose, onPrepared }) {
             </div>
 
             {result.staging && !result.staging.cleanupSucceeded && (
-              <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-sm">
+              <div className="rounded-md border border-warning/30 bg-warning/5 p-3 text-sm">
                 <div className="flex items-center gap-2 font-medium">
                   <ShieldAlert className="size-4" />
                   Driver staging cleanup did not complete
@@ -1101,8 +1121,69 @@ export default function WindowsServicingModal({ isOpen, onClose, onPrepared }) {
                   </div>
                 </div>
 
+                {plan.boot_nic_bindings?.length > 0 && (
+                  <div>
+                    <h4 className="mb-2 text-sm font-semibold">
+                      Boot NIC bindings
+                    </h4>
+                    <div className="space-y-2">
+                      {plan.boot_nic_bindings.map((binding) => (
+                        <div
+                          key={binding.hardware_ids.join("|")}
+                          className="rounded-md border p-3 text-sm"
+                        >
+                          <p className="break-all font-mono text-xs">
+                            {binding.hardware_ids.join(", ")}
+                          </p>
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            <Badge
+                              variant={
+                                binding.enum_pci_keys?.length
+                                  ? "success"
+                                  : "outline"
+                              }
+                            >
+                              Device instance
+                            </Badge>
+                            <Badge
+                              variant={
+                                binding.class_binding_services?.length
+                                  ? "info"
+                                  : "outline"
+                              }
+                            >
+                              Class binding
+                            </Badge>
+                            <Badge
+                              variant={
+                                binding.critical_device_database_keys?.length
+                                  ? "success"
+                                  : "outline"
+                              }
+                            >
+                              CDDB entry
+                            </Badge>
+                            {binding.planned_critical_device_database && (
+                              <Badge variant="warning">CDDB entry planned</Badge>
+                            )}
+                          </div>
+                          {binding.class_binding_services?.length > 0 && (
+                            <p className="mt-1 font-mono text-xs text-muted-foreground">
+                              Class-bound:{" "}
+                              {binding.class_binding_services.join(", ")}
+                            </p>
+                          )}
+                          <p className="mt-2 text-xs text-muted-foreground">
+                            {describeBootNicBinding(binding)}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {plan.warnings?.length > 0 && (
-                  <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3">
+                  <div className="rounded-md border border-warning/30 bg-warning/5 p-3">
                     <div className="mb-2 flex items-center gap-2 font-medium">
                       <ShieldAlert className="size-4" />
                       Warnings

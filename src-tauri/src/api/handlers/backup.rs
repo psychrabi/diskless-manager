@@ -40,7 +40,7 @@ pub async fn create_backup(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> Result<([(header::HeaderName, &'static str); 3], Vec<u8>), StatusCode> {
-    if claims.role != "admin" {
+    if !claims.is_admin() {
         return Err(StatusCode::FORBIDDEN);
     }
     let dir = state
@@ -71,7 +71,7 @@ pub async fn restore_backup(
     Extension(claims): Extension<Claims>,
     bytes: Bytes,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    if claims.role != "admin" {
+    if !claims.is_admin() {
         return Err((
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error":"Administrator required"})),
