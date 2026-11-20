@@ -20,7 +20,7 @@ it("explains missing connection details and reuses credentials only when request
   await user.type(hosts[0], "192.0.2.20");
   await user.type(passwords[0], "synthetic-password");
   expect(hosts[1]).toHaveValue("");
-  await user.click(screen.getByRole("button", { name: "Use connection details" }));
+  await user.click(screen.getByRole("button", { name: "Reuse credentials" }));
   expect(hosts[1]).toHaveValue("192.0.2.20");
   expect(passwords[1]).toHaveValue("synthetic-password");
   await user.click(screen.getByRole("button", { name: "Execute Command" }));

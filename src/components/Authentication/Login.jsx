@@ -98,7 +98,7 @@ const Login = () => {
                 <span className="size-1.5 rounded-full bg-[#b9a5ff]/80" />
               </div>
               <span className="font-mono-data text-[10px] tracking-[0.14em] text-white/55 uppercase">
-                boot sequence
+                example boot sequence
               </span>
             </div>
             <div className="divide-y divide-white/6 px-4">

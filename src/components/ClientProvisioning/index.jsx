@@ -12,7 +12,7 @@ import {
 } from "@/api/modules/clientProvisioning";
 import { listMasters } from "@/api/modules/images";
 import { listInstallerMedia } from "@/api/modules/installerMedia";
-import { ArrowRight, Circle, Disc3, HardDrive, MonitorCheck } from "lucide-react";
+import { ArrowRight, Circle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const selectClass = "h-10 w-full rounded-lg border border-input bg-background px-3 text-[13px] text-foreground shadow-xs outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/20 disabled:cursor-not-allowed disabled:opacity-60";
@@ -23,18 +23,6 @@ const recipes = [
 ];
 const factoryPhases = ["Prepare", "Install", "Adapt", "Save", "Verify", "Publish"];
 const factoryPhaseIndex = { preparing: 0, waiting: 1, installing: 1, adapting: 2, saving: 3, verifying: 4, published: 5 };
-
-const IntroCard = ({ icon: Icon, title, children }) => (
-  <div className="rounded-2xl border border-dashed border-border/80 bg-card p-5 shadow-none">
-    <div className="flex items-center">
-      <span className="flex size-9 items-center justify-center rounded-xl border border-primary/15 bg-primary/10 text-primary">
-        <Icon className="size-4" aria-hidden="true" />
-      </span>
-    </div>
-    <h3 className="mt-4 text-[13px] font-semibold text-foreground">{title}</h3>
-    <p className="mt-1.5 text-xs leading-5 text-muted-foreground">{children}</p>
-  </div>
-);
 
 export default function ClientProvisioning() {
   const clients = useAppStore((state) => state.clients);
@@ -126,7 +114,7 @@ export default function ClientProvisioning() {
         </div>
         <ol className="mt-4 grid grid-cols-3 gap-2 xl:grid-cols-6">
           {factoryPhases.map((phase, index) => (
-            <li key={phase} className="flex items-center gap-2 rounded-xl border border-border/60 bg-muted/20 px-3 py-2">
+            <li key={phase} className="flex items-center gap-2 rounded-xl border border-border bg-muted/45 px-3 py-2">
               <span className="flex size-5 shrink-0 items-center justify-center rounded-md border border-border/70 bg-card font-mono-data text-[9px] font-semibold text-muted-foreground">{index + 1}</span>
               <span className="text-[11px] font-medium text-foreground">{phase}</span>
               {index < factoryPhases.length - 1 && <ArrowRight className="ml-auto hidden size-3 text-muted-foreground/40 xl:block" aria-hidden="true" />}
@@ -180,13 +168,7 @@ export default function ClientProvisioning() {
         )}
       </div>
 
-      {!client ? (
-        <div className="grid gap-4 md:grid-cols-3">
-          <IntroCard icon={HardDrive} title="Choose an offline target">The factory uses this machine as a temporary builder. Its current disk and assignment stay untouched.</IntroCard>
-          <IntroCard icon={Disc3} title="Provide installation media">Use validated Windows or Linux media. Adapting an existing Windows image needs a ready source snapshot.</IntroCard>
-          <IntroCard icon={MonitorCheck} title="Prove it boots">The client PXE boots the draft. The image is published only after a normal boot reports back successfully.</IntroCard>
-        </div>
-      ) : (
+      {client && (
         <>
           <div className="grid gap-3 sm:grid-cols-3">
             {[

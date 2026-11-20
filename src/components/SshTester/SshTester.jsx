@@ -308,9 +308,9 @@ const SshTester = () => {
 
       <Card
         title="Execute SSH Command"
-        subtitle="Run a command on a remote client using SSH port 22"
+        subtitle="Run a command using SSH port 22. Reuse copies host, username, and password."
         icon={Terminal}
-        actions={<Button variant="outline" disabled={!canUseConnectionActions} onClick={() => setCommandForm({ ...commandForm, host: connectionForm.host, username: connectionForm.username, password: connectionForm.password })}>Use connection details</Button>}
+        actions={<Button variant="outline" disabled={!canUseConnectionActions} onClick={() => setCommandForm({ ...commandForm, host: connectionForm.host, username: connectionForm.username, password: connectionForm.password })}>Reuse credentials</Button>}
       >
         <div className="flex flex-col gap-4">
 

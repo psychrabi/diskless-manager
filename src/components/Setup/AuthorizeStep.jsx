@@ -49,24 +49,13 @@ const AuthorizeStep = ({ onAuthorized, authorized = false, checking = false }) =
     >
       <div className="space-y-4">
         <FieldDescription>
-          The application requires privileged access to manage system services,
-          storage, and configuration files. This includes:
+          Grant access to manage services, storage, packages, and network settings.
         </FieldDescription>
-
-        <ul className="text-sm text-muted-foreground space-y-1.5 list-disc list-inside">
-          <li>Service management (DHCP, TFTP, HTTP, Samba)</li>
-          <li>ZFS storage pool operations</li>
-          <li>Package installation and updates</li>
-          <li>Network configuration</li>
-        </ul>
 
         <Alert variant="default" className="border-warning/20 bg-warning/10 text-warning">
           <ShieldAlert />
           <AlertDescription className="text-warning">
-            This creates a sudoers rule for the server account. The password
-            prompt (Polkit) opens on the server computer. If no desktop
-            authentication agent is available, use the terminal command shown
-            below after a failed attempt, then retry authorization.
+            This creates a sudoers rule for the server account. The password prompt opens on the server. On a headless server, follow the terminal instructions if the prompt fails.
           </AlertDescription>
         </Alert>
 

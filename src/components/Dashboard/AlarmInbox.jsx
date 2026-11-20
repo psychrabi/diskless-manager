@@ -195,10 +195,7 @@ const AlarmInbox = () => {
           Alarms
           {activeCount > 0 && <Badge variant="destructive">{activeCount}</Badge>}
         </CardTitle>
-        <CardDescription>
-          Boot failures, storage recovery, service outages, pool health, and prewarmed
-          writebacks. Dismissing an alarm hides it — it does not fix the fault.
-        </CardDescription>
+        {activeCount > 0 && <CardDescription>Review active boot, service, and storage faults.</CardDescription>}
         <CardAction>
           <Button
             variant="ghost"

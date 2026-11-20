@@ -53,7 +53,7 @@ export default function BackupManagement() {
 
   return (
     <Card title="Application backup and restore" subtitle="Save or recover application data">
-      <div className="space-y-4">
+      <div className="max-w-3xl space-y-4">
         <p className="text-sm text-muted-foreground">
           Backups include users, clients, image metadata, settings, licenses, configuration files, and authentication secrets.
           ZFS datasets and OS image disk contents are excluded. Store backups securely.
@@ -61,13 +61,13 @@ export default function BackupManagement() {
         <Button onClick={handleDownload} disabled={Boolean(busy)} loading={busy === "download"}>Download backup</Button>
         <div className="space-y-2 border-t border-border pt-4">
           <h3 className="text-sm font-semibold">Restore from a backup</h3>
+          <p className="rounded-lg border border-warning/20 bg-warning/10 p-3 text-sm text-warning">Restore replaces application data after the server restarts. ZFS datasets and OS image disks are kept.</p>
           <Label htmlFor={fileId}>Backup file</Label>
           <input id={fileId} type="file" accept=".json,application/json" disabled={Boolean(busy)}
             className="block w-full text-sm file:mr-3 file:rounded-md file:border file:border-input file:bg-background file:px-3 file:py-2 file:text-foreground"
             onChange={(event) => setFile(event.target.files?.[0] || null)} />
           <p className="text-sm text-muted-foreground">Choose an application backup JSON file (maximum 64 MiB). You may need to sign in with an account from the original backup.</p>
         </div>
-        <p className="text-sm text-muted-foreground">Restore replaces application data after the backend restarts. ZFS datasets and OS image disk contents are excluded.</p>
         <Button variant="destructive" onClick={handleRestore} disabled={!file || Boolean(busy)} loading={busy === "restore"}>Restore on restart</Button>
         {error && <p role="alert" className="break-words text-sm text-destructive">{error}</p>}
         {message && <p role="status" className="break-words text-sm">{message}</p>}

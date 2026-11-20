@@ -94,7 +94,7 @@ const ServiceManagement = () => {
     <div className="flex flex-col gap-5">
       <PageHeader
         title="Services"
-        description="Every daemon behind boot, storage, and file sharing — with live control."
+        description="Manage boot, storage, and file sharing. Stopping all services disconnects active clients."
         actions={
           <>
             <Button
@@ -125,8 +125,8 @@ const ServiceManagement = () => {
         <FirewallBanner />
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4">
           <ServicesList onViewConfig={handleViewConfig} />
-          <BootScript onViewConfig={handleViewConfig} />
         </div>
+        <BootScript onViewConfig={handleViewConfig} />
         <ServiceConfigModal
           isOpen={modalState.isOpen}
           onClose={closeModal}

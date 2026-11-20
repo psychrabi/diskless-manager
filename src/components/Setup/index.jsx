@@ -70,7 +70,7 @@ const Setup = () => {
               <Button variant={activeStep === step.id ? "secondary" : "ghost"} className="h-auto sm:h-auto min-h-11 w-full justify-start whitespace-normal text-left" aria-current={activeStep === step.id ? "step" : undefined}
                 disabled={checking || !setupStatus || (step.id === 9 ? !setupStatus.ready : steps.slice(0, step.id - 1).some(previous => previous.status !== "complete"))}
                 onClick={() => setActiveStep(step.id)}>
-                {step.id}. {step.title}{step.status === "complete" ? " · Complete" : ""}
+                {step.id}. {step.title}{step.status === "complete" ? (step.id < activeStep ? " · Complete" : " · Configured") : ""}
               </Button>
             </li>
           ))}
@@ -82,13 +82,13 @@ const Setup = () => {
             key={step.id}
             variant="ghost"
             aria-current={activeStep === step.id ? "step" : undefined}
-            className="group relative z-10 h-auto sm:h-auto shrink-0 flex-col gap-2 px-3 py-2"
+            className="group relative z-10 h-auto sm:h-auto shrink-0 flex-col gap-2 px-3 py-2 disabled:opacity-100"
             disabled={checking || !setupStatus || (step.id === 9 ? !setupStatus.ready : steps.slice(0, step.id - 1).some(previous => previous.status !== "complete"))}
             onClick={() => setActiveStep(step.id)}
           >
             <div
               className={`flex h-12 w-12 items-center justify-center rounded-full border-4 transition-all duration-200 ease-out ${
-                step.status === "complete"
+                step.status === "complete" && step.id < activeStep
                   ? "scale-105 border-success bg-success text-white"
                   : step.status === "current" || activeStep === step.id
                     ? "scale-105 border-primary bg-primary text-primary-foreground shadow-lg shadow-primary/20"
@@ -107,7 +107,7 @@ const Setup = () => {
               }`}
             >
               {step.title}
-              {step.status === "complete" && <span className="block text-[10px] font-normal">Complete</span>}
+              {step.status === "complete" && <span className="block text-[10px] font-normal">{step.id < activeStep ? "Complete" : "Configured"}</span>}
             </span>
           </Button>
         ))}

@@ -218,7 +218,7 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
           </div>
 
           <div className="xl:col-span-2">
-            <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <Label className="flex items-center gap-2 text-sm font-semibold text-foreground">
                 <Shield size={14} /> Addressing (Static IP)
               </Label>
@@ -228,7 +228,7 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
                 size="sm"
                 onClick={onAutoPopulate}
                 icon={RefreshCcw}
-                className="w-full whitespace-nowrap transition-colors hover:bg-primary/20 hover:text-primary sm:w-auto"
+                className="whitespace-nowrap hover:bg-primary/10 hover:text-primary"
                 title="Fill from system defaults"
               >
                 Auto-Detect
@@ -298,8 +298,8 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
             Reset
           </Button>
           <Button
-            className="min-w-0 flex-1 shrink px-1 text-center text-xs leading-tight whitespace-normal sm:px-2 sm:text-sm sm:whitespace-nowrap"
-            variant="destructive"
+            variant="outline"
+            className="min-w-0 flex-1 shrink px-1 text-center text-xs leading-tight text-destructive whitespace-normal sm:px-2 sm:text-sm sm:whitespace-nowrap"
             type="button"
             onClick={handleApplyStatic}
             disabled={isSubmitting}
