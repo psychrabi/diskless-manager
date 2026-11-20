@@ -123,6 +123,16 @@ const ServiceManagement = () => {
       />
       <div className="space-y-4 min-h-[50vh]">
         <FirewallBanner />
+        {services.length > 0 && (
+          <ul aria-label="Service status" className="flex flex-wrap gap-2 md:hidden">
+            {services.map((service) => (
+              <li key={service.name} className="rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-medium">
+                <span className={service.running ? "text-success" : "text-destructive"}>{service.display_name || service.name.toUpperCase()}</span>
+                <span className="ml-1.5 text-muted-foreground">{service.running ? "Running" : "Stopped"}</span>
+              </li>
+            ))}
+          </ul>
+        )}
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4">
           <ServicesList onViewConfig={handleViewConfig} />
         </div>

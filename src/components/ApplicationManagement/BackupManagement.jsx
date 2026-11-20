@@ -58,7 +58,7 @@ export default function BackupManagement() {
           Backups include users, clients, image metadata, settings, licenses, configuration files, and authentication secrets.
           ZFS datasets and OS image disk contents are excluded. Store backups securely.
         </p>
-        <Button onClick={handleDownload} disabled={Boolean(busy)} loading={busy === "download"}>Download backup</Button>
+        <Button variant="outline" onClick={handleDownload} disabled={Boolean(busy)} loading={busy === "download"}>Download backup</Button>
         <div className="space-y-2 border-t border-border pt-4">
           <h3 className="text-sm font-semibold">Restore from a backup</h3>
           <p className="rounded-lg border border-warning/20 bg-warning/10 p-3 text-sm text-warning">Restore replaces application data after the server restarts. ZFS datasets and OS image disks are kept.</p>

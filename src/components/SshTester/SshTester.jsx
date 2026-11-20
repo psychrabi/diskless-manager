@@ -233,7 +233,8 @@ const SshTester = () => {
             </div>
           </div>
 
-          {(!connectionForm.host || !connectionForm.username) && <p className="text-sm text-muted-foreground">Enter a host address and username to test the connection or get system information.</p>}
+          {!connectionForm.host && <p className="text-sm text-muted-foreground">Enter the host address to test the connection or get system information.</p>}
+          {connectionForm.host && !connectionForm.username && <p className="text-sm text-muted-foreground">Enter the SSH username.</p>}
           <div className="flex flex-wrap gap-2 justify-end">
             <Button
               variant="primary"
@@ -308,7 +309,7 @@ const SshTester = () => {
 
       <Card
         title="Execute SSH Command"
-        subtitle="Run a command using SSH port 22. Reuse copies host, username, and password."
+        subtitle="Edit the command destination or reuse the credentials from the connection test."
         icon={Terminal}
         actions={<Button variant="outline" disabled={!canUseConnectionActions} onClick={() => setCommandForm({ ...commandForm, host: connectionForm.host, username: connectionForm.username, password: connectionForm.password })}>Reuse credentials</Button>}
       >
@@ -390,7 +391,8 @@ const SshTester = () => {
           </div>
 
           {(!commandForm.host || !commandForm.username || !commandForm.command) && <p className="text-sm text-muted-foreground">Enter a host address, username, and command, or reuse the connection details above.</p>}
-          <div className="flex flex-wrap gap-2 justify-end">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-3">
+            <p className="min-w-0 break-all text-sm text-muted-foreground">Destination: {commandForm.host || "No host selected"} · Port 22</p>
             <Button
               variant="primary"
               loading={loading}

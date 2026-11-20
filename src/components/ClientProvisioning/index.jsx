@@ -117,7 +117,7 @@ export default function ClientProvisioning() {
             <li key={phase} className="flex items-center gap-2 rounded-xl border border-border bg-muted/45 px-3 py-2">
               <span className="flex size-5 shrink-0 items-center justify-center rounded-md border border-border/70 bg-card font-mono-data text-[9px] font-semibold text-muted-foreground">{index + 1}</span>
               <span className="text-[11px] font-medium text-foreground">{phase}</span>
-              {index < factoryPhases.length - 1 && <ArrowRight className="ml-auto hidden size-3 text-muted-foreground/40 xl:block" aria-hidden="true" />}
+              {index < factoryPhases.length - 1 && <ArrowRight className="ml-auto hidden size-3 text-muted-foreground xl:block" aria-hidden="true" />}
             </li>
           ))}
         </ol>
@@ -167,6 +167,13 @@ export default function ClientProvisioning() {
           </Card>
         )}
       </div>
+
+      <details className="rounded-xl border border-border bg-card px-4 py-3 md:hidden">
+        <summary className="cursor-pointer text-sm font-semibold">How image publishing works</summary>
+        <ol className="mt-2 grid grid-cols-2 gap-x-4 gap-y-2 text-sm text-muted-foreground">
+          {factoryPhases.map((phase, index) => <li key={phase}>{index + 1}. {phase}</li>)}
+        </ol>
+      </details>
 
       {client && (
         <>

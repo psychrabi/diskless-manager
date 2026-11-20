@@ -13,8 +13,8 @@ it("aligns client metrics with headers and keeps internal paths out of table cel
   expect(headers.map((h) => h.textContent)).toEqual([
     "Name",
     "Network",
-    "I/O (MB/s)",
-    "I/O (Total)",
+    "I/O (MB/s)Read / write",
+    "I/O (Total)Read / written",
     "Image",
     "Mode",
     "Uptime",

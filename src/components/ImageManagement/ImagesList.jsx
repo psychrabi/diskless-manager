@@ -241,7 +241,7 @@ export const ImagesList = ({ masters }) => {
                               />
                             }
                           >
-                            <span className="md:hidden">More</span><span className="hidden md:inline">More actions</span>
+                            <span className="md:hidden">Snapshots ({master.snapshots?.length ?? 0}) &amp; more</span><span className="hidden md:inline">More actions</span>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="min-w-44">
                             <DropdownMenuItem className="md:hidden" onClick={() => setRecoveryImageName(master.name)}>

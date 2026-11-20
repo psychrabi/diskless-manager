@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
-import { Button, Card, Input, Modal, StatusBadge } from "@/components/ui";
+import { Button, Card, Input, Modal } from "@/components/ui";
 import { getServiceIcon } from "@/constants/serviceIcons";
 
 const serviceNames = { dhcp: "DHCP", tftp: "TFTP", http: "HTTP", iscsi: "iSCSI", nfs: "NFS", samba: "Samba" };
@@ -110,25 +110,14 @@ export default function ServiceCard({
         {serviceDescriptions[service.name] || "System service"}
       </p>
 
-      <div className="flex items-center justify-between px-3 py-2 bg-muted/50 rounded-lg mb-4 text-sm">
-        <span className="text-muted-foreground">
-          PID: <span className=" text-muted-foreground">{service.pid ?? "\u2014"}</span>
-        </span>
-        <StatusBadge
-          status={service.starts_on_boot ? "success" : "neutral"}
-          size="sm"
-          showIcon={false}
-        >
-          {service.starts_on_boot ? "Starts on boot" : "Manual start"}
-        </StatusBadge>
-      </div>
+      {service.pid != null && <p className="mb-3 text-xs text-muted-foreground">Process ID: {service.pid}</p>}
 
       <div className="flex flex-wrap gap-2">
         {service.running ? (
           <>
             <Button
               icon={RefreshCcw}
-              variant="warning"
+              variant="outline"
               className="flex-1"
               loading={loadingAction === "restart"}
               onClick={() => handleAction("restart", restartService)}
@@ -158,7 +147,7 @@ export default function ServiceCard({
         )}
         <Button
           icon={Eye}
-          variant="info"
+          variant="ghost"
           className="flex-1"
           onClick={() => onViewConfig(service.name, displayName)}
         >
@@ -173,7 +162,7 @@ export default function ServiceCard({
         onClick={handleBootToggle}
         title={service.starts_on_boot ? "Stop starting on boot" : "Start on boot"}
       >
-        {service.starts_on_boot ? "On boot: on" : "On boot: off"}
+        {service.starts_on_boot ? "Starts on boot" : "Manual start only"}
       </Button>
       <Modal isOpen={!!elevation} onClose={() => setElevation(null)} title="Administrator authorization" size="sm">
         <form onSubmit={authorizeAndRetry} className="space-y-4">

@@ -23,9 +23,11 @@ const ClientTableHeader = ({ fixed = false }) => {
       </TableHead>
       <TableHead className={headerCellClass("text-center", fixed)}>
         I/O (MB/s)
+        <span className="block text-[10px] font-normal text-muted-foreground">Read / write</span>
       </TableHead>
       <TableHead className={headerCellClass("hidden text-center lg:table-cell max-2xl:hidden", fixed)}>
         I/O (Total)
+        <span className="block text-[10px] font-normal text-muted-foreground">Read / written</span>
       </TableHead>
       <TableHead className={headerCellClass("hidden text-center xl:table-cell", fixed)}>
         Image

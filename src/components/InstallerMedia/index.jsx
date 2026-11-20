@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Link } from "react-router-dom";
+import { Badge } from "@/components/ui/badge";
 import { Button, Input, PageHeader } from "@/components/ui";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Progress } from "@/components/ui/progress";
@@ -177,16 +179,22 @@ export default function InstallerMedia() {
       </Card>
 
       <Card>
-        <CardHeader><CardTitle>Installer ISO catalog</CardTitle><CardDescription>Validated installer images available for client assignment.</CardDescription></CardHeader>
+        <CardHeader><CardTitle>Installer ISO catalog</CardTitle><CardDescription>Choose an ISO for a client in <Link to="/client-provisioning" className="font-medium text-primary underline underline-offset-4">Image factory</Link>.</CardDescription></CardHeader>
         <CardContent className="space-y-4">
           {loading ? <p role="status">Loading installer media…</p> : media.length === 0 ? <p>No installer ISOs have been uploaded.</p> : media.map((item) => (
             <article key={item.id} className="rounded-lg border p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0">
                   <h3 className="font-semibold">{item.display_name}</h3>
-                  <p className="text-sm text-muted-foreground">{mediaTypes.find((type) => type.value === item.media_type)?.label || item.media_type} · {formatBytes(item.byte_size)} · Validation: {item.validation_state}</p>
-                  <p className="break-all text-xs text-muted-foreground">SHA-256: {item.checksum}</p>
-                  <p className="mt-2 text-sm">Default: {item.is_default ? "Yes" : "No"}</p>
+                  <p className="text-sm text-muted-foreground">{mediaTypes.find((type) => type.value === item.media_type)?.label || item.media_type} · {formatBytes(item.byte_size)}</p>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <Badge variant={item.validation_state === "valid" ? "success" : "secondary"}>{item.validation_state === "valid" ? "Validated" : item.validation_state}</Badge>
+                    <Badge variant="outline">Default: {item.is_default ? "Yes" : "No"}</Badge>
+                  </div>
+                  <details className="mt-2 text-xs text-muted-foreground">
+                    <summary className="cursor-pointer">SHA-256 checksum</summary>
+                    <code className="mt-1 block break-all">{item.checksum}</code>
+                  </details>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {!item.is_default && <Button variant="outline" disabled={busy} onClick={() => runAction(() => setDefaultInstallerMedia(item.id), `${item.display_name} is now the default installer ISO.`)}>Set as default</Button>}

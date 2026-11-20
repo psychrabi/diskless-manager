@@ -13,7 +13,7 @@ it("explains missing connection details and reuses credentials only when request
   const user = userEvent.setup();
   render(<SshTester />);
   expect(screen.getByRole("button", { name: "Test Connection" })).toBeDisabled();
-  expect(screen.getByText(/Enter a host address and username/)).toBeVisible();
+  expect(screen.getByText(/Enter the host address/)).toBeVisible();
   const hosts = screen.getAllByLabelText("Host/IP Address");
   const passwords = screen.getAllByLabelText("Password");
   expect(passwords[0]).toHaveAccessibleDescription("Leave blank to use SSH key authentication.");
