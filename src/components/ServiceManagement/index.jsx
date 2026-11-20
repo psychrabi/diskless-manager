@@ -99,7 +99,8 @@ const ServiceManagement = () => {
           <>
             <Button
               icon={PlayCircle}
-              variant="success"
+              variant="default"
+              disabled={services.length === 0 || services.every((service) => service.running) || !!globalLoading}
               loading={globalLoading === "start"}
               onClick={() => handleGlobalAction("start", startAllServices)}
               title="Start all services"
@@ -108,7 +109,9 @@ const ServiceManagement = () => {
             </Button>
             <Button
               icon={StopCircle}
-              variant="destructive"
+              variant="outline"
+              className="text-destructive hover:bg-destructive/10"
+              disabled={!services.some((service) => service.running) || !!globalLoading}
               loading={globalLoading === "stop"}
               onClick={handleStopAll}
               title="Stop all services"

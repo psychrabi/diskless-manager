@@ -12,7 +12,7 @@ import {
 } from "@/api/modules/clientProvisioning";
 import { listMasters } from "@/api/modules/images";
 import { listInstallerMedia } from "@/api/modules/installerMedia";
-import { ArrowRight, CheckCircle2, Disc3, HardDrive, MonitorCheck } from "lucide-react";
+import { ArrowRight, Circle, Disc3, HardDrive, MonitorCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const selectClass = "h-10 w-full rounded-lg border border-input bg-background px-3 text-[13px] text-foreground shadow-xs outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/20 disabled:cursor-not-allowed disabled:opacity-60";
@@ -116,7 +116,7 @@ export default function ClientProvisioning() {
         description="Build a private image, adapt it for diskless boot, and publish it only after a successful verification boot."
       />
 
-      <div className="rounded-2xl border border-border/80 bg-card p-5 shadow-[0_1px_2px_rgb(0_0_0/0.03)]">
+      <div className="hidden rounded-2xl border border-border/80 bg-card p-5 shadow-xs md:block">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <p className="text-xs font-medium text-muted-foreground">Pipeline</p>
@@ -124,7 +124,7 @@ export default function ClientProvisioning() {
           </div>
           <Badge variant="outline">Offline client required</Badge>
         </div>
-        <ol className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
+        <ol className="mt-4 grid grid-cols-3 gap-2 xl:grid-cols-6">
           {factoryPhases.map((phase, index) => (
             <li key={phase} className="flex items-center gap-2 rounded-xl border border-border/60 bg-muted/20 px-3 py-2">
               <span className="flex size-5 shrink-0 items-center justify-center rounded-md border border-border/70 bg-card font-mono-data text-[9px] font-semibold text-muted-foreground">{index + 1}</span>
@@ -139,13 +139,13 @@ export default function ClientProvisioning() {
         <Card>
           <CardHeader>
             <CardTitle>Target client</CardTitle>
-            <CardDescription>Select the offline machine that will build and verify this image.</CardDescription>
+            <CardDescription>Choose a client, then power it off before starting the build. It will boot again to verify the image.</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3">
             <label htmlFor="factory-client" className="text-xs font-medium text-muted-foreground">Client</label>
             <select id="factory-client" className={cn(selectClass, "max-w-md")} value={clientId} onChange={(event) => chooseClient(event.target.value)} disabled={busy}>
               <option value="">Select a client</option>
-              {clients.map((item) => <option key={item.id} value={item.id}>{item.name} ({item.ip || item.mac})</option>)}
+              {clients.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.status || "Status unknown"} ({item.ip || item.mac})</option>)}
             </select>
             {client && (
               <div className="rounded-xl border border-border/70 bg-muted/20 p-3">
@@ -159,7 +159,7 @@ export default function ClientProvisioning() {
           <Card className="bg-muted/15">
             <CardHeader>
               <CardTitle>Before you begin</CardTitle>
-              <CardDescription>Three checks keep a factory run predictable.</CardDescription>
+              <CardDescription>Requirements checked when you prepare an installation.</CardDescription>
             </CardHeader>
             <CardContent className="grid gap-3">
               {[
@@ -168,7 +168,7 @@ export default function ClientProvisioning() {
                 ["Current image is safe", "Builds always happen in a private draft, never in place."],
               ].map(([title, body]) => (
                 <div key={title} className="flex gap-2.5">
-                  <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-success" aria-hidden="true" />
+                  <Circle className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
                   <div>
                     <p className="text-[12px] font-medium text-foreground">{title}</p>
                     <p className="mt-0.5 text-[11px] leading-4 text-muted-foreground">{body}</p>

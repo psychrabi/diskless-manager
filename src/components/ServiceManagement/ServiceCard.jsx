@@ -13,6 +13,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button, Card, Input, Modal, StatusBadge } from "@/components/ui";
 import { getServiceIcon } from "@/constants/serviceIcons";
 
+const serviceNames = { dhcp: "DHCP", tftp: "TFTP", http: "HTTP", iscsi: "iSCSI", nfs: "NFS", samba: "Samba" };
+
 const serviceDescriptions = {
   dhcp: "Provides IP addresses and PXE boot parameters to network boot clients.",
   tftp: "Serves boot files (bootloader, kernel, initrd, boot menu ipxe files) via TFTP protocol.",
@@ -42,13 +44,13 @@ export default function ServiceCard({
     const labels = { start: "started", stop: "stopped", restart: "restarted" };
     try {
       await fn(service.name);
-      success(`${service.display_name} ${labels[action] || action} successfully`);
+      success(`${displayName} ${labels[action] || action} successfully`);
     } catch (e) {
       if (e.status === 403) {
         setElevation({ action, fn });
         return;
       }
-      showError(`Failed to ${action} ${service.display_name}: ${e.message || e}`);
+      showError(`Failed to ${action} ${displayName}: ${e.message || e}`);
     } finally {
       setLoadingAction(null);
     }
@@ -62,7 +64,7 @@ export default function ServiceCard({
       if (response.user?.role !== "admin") throw new Error("Administrator account required");
       await elevation.fn(service.name, response.token);
       const labels = { start: "started", stop: "stopped", restart: "restarted" };
-      success(`${service.display_name} ${labels[elevation.action]} successfully`);
+      success(`${displayName} ${labels[elevation.action]} successfully`);
       setElevation(null);
       setAdminPassword("");
     } catch (e) {
@@ -81,20 +83,21 @@ export default function ServiceCard({
     setLoadingAction(action);
     try {
       await fn(service.name);
-      success(`${service.display_name} ${label}`);
+      success(`${displayName} ${label}`);
     } catch (e) {
-      showError(`Failed to change boot setting for ${service.display_name}: ${e.message || e}`);
+      showError(`Failed to change boot setting for ${displayName}: ${e.message || e}`);
     } finally {
       setLoadingAction(null);
     }
   };
 
   const Icon = getServiceIcon(service.name);
+  const displayName = service.display_name || serviceNames[service.name] || service.name;
 
   return (
     <Card
       icon={Icon}
-      title={service.display_name}
+      title={displayName}
       subtitle={service.name}
       actions={
         <Badge variant={service.running ? "success" : "destructive"} className="gap-1.5">
@@ -120,7 +123,7 @@ export default function ServiceCard({
         </StatusBadge>
       </div>
 
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         {service.running ? (
           <>
             <Button
@@ -157,7 +160,7 @@ export default function ServiceCard({
           icon={Eye}
           variant="info"
           className="flex-1"
-          onClick={() => onViewConfig(service.name, service.display_name)}
+          onClick={() => onViewConfig(service.name, displayName)}
         >
           View Config
         </Button>

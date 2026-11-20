@@ -163,14 +163,14 @@ export default function UserManagement() {
                           onClick={() => handleEditUser(user)}
                           icon={Pencil}
                           title="Edit user"
-                        />
+                        >Edit</Button>
                         <Button
                           variant="ghost"
                           size="sm"
                           onClick={() => handleChangePassword(user)}
                           icon={Key}
                           title="Change password"
-                        />
+                        >Change password</Button>
                         <Button
                           variant="ghost"
                           size="sm"
@@ -178,7 +178,7 @@ export default function UserManagement() {
                           icon={Trash2}
                           title="Delete user"
                           className="text-destructive hover:bg-destructive/10"
-                        />
+                        >Delete</Button>
                       </div>
                     </TableCell>
                   </TableRow>

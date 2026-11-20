@@ -24,6 +24,9 @@ const sizeMap = {
   lg: "lg",
   xl: "lg",
   icon: "icon",
+  "icon-sm": "icon-sm",
+  "icon-xs": "icon-xs",
+  "icon-lg": "icon-lg",
 };
 
 export const Button = forwardRef(
@@ -68,7 +71,7 @@ export const Button = forwardRef(
         ) : (
           Icon && <Icon data-icon={children ? "inline-start" : undefined} />
         )}
-        {children && <span className={cn(loading && "opacity-70")}>{children}</span>}
+        {children && <span className={cn("inline-flex items-center justify-center gap-1.5", loading && "opacity-70")}>{children}</span>}
       </ShadcnButton>
     );
   }

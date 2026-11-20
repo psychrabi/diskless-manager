@@ -140,16 +140,21 @@ const ClientTableRow = ({ client, clientMetrics, onMoreActions }) => {
             <Detail label="IP address">{client.ip}</Detail>
             <Detail label="Boot image"><span title={client.master}>{client.master?.split("/").at(-1)}</span>{snapshotName && <span className="block truncate text-xs text-muted-foreground" title={client.snapshot}>{snapshotName}</span>}</Detail>
             <Detail label="Uptime"><UptimeCell uptimeSeconds={clientMetrics?.uptime_seconds} /></Detail>
+          </dl>
+          <details className="mt-3 border-t pt-2 text-sm">
+            <summary className="cursor-pointer py-1 font-medium text-muted-foreground">Storage activity</summary>
+            <dl className="mt-2 grid grid-cols-2 gap-4">
             <Detail label="Read / write (MB/s)">
               {clientMetrics?.iscsi ? <span className="tabular-nums">{clientMetrics.iscsi.read_speed_mbps?.toFixed(2) ?? "—"} / {clientMetrics.iscsi.write_speed_mbps?.toFixed(2) ?? "—"}</span> : "No sample"}
             </Detail>
             <Detail label="Total read / written">
               {clientMetrics?.iscsi ? `${formatDiskBytes(clientMetrics.iscsi.total_read_bytes)} / ${formatDiskBytes(clientMetrics.iscsi.total_write_bytes)}` : "No sample"}
             </Detail>
-          </dl>
+            </dl>
+          </details>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t pt-2">
             <Button variant="outline" size="sm" className="h-11" onClick={(event) => onMoreActions?.(event, client)}>
-              <MoreHorizontal data-icon="inline-start" />More actions
+              <MoreHorizontal data-icon="inline-start" />Manage client
             </Button>
             <ControlActionButtons client={client} onActionComplete={() => {}} />
           </div>
@@ -162,7 +167,9 @@ const ClientTableRow = ({ client, clientMetrics, onMoreActions }) => {
             <span className={`absolute -right-0.5 -bottom-0.5 size-2 rounded-full border-2 border-card ${isOnlineStatus(client.status) ? "bg-success" : "bg-destructive"}`} />
           </div>
           <div className="min-w-0">
-            <span className="block truncate text-sm font-semibold">{client.name}</span>
+            {onMoreActions ? (
+              <button type="button" className="block max-w-full truncate text-left text-sm font-semibold text-primary underline-offset-4 hover:underline focus-visible:underline" onClick={(event) => onMoreActions(event, client)} aria-label={`Manage ${client.name}`}>{client.name}</button>
+            ) : <span className="block truncate text-sm font-semibold">{client.name}</span>}
             <span className="block text-xs text-muted-foreground">{client.status || "Offline"}</span>
           </div>
         </div>

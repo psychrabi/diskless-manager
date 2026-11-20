@@ -43,7 +43,7 @@ const ControlActionButtons = ({ client, onActionComplete }) => {
           render={<Button variant="outline" size="sm" className="h-11 xl:h-8" />}
           aria-label={`Controls for ${client.name}`}
         >
-          Controls <ChevronDown data-icon="inline-end" />
+          Power & remote <ChevronDown data-icon="inline-end" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           {isOnline ? (

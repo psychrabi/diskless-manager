@@ -15,16 +15,16 @@ export default function LicenseCard() {
             {isActive ? license.license_status : "Not activated"}
           </StatusBadge>
         </div>
-        <div className="flex items-center justify-between gap-4">
+        {license.license_expires && <div className="flex items-center justify-between gap-4">
           <span className="text-sm text-muted-foreground">Expires</span>
           <span className="text-sm font-medium text-right">{license.license_expires || "\u2014"}</span>
-        </div>
-        <div className="flex items-center justify-between gap-4">
+        </div>}
+        {license.license_key && <div className="flex items-center justify-between gap-4">
           <span className="text-sm text-muted-foreground">Key</span>
           <span className=" text-xs text-muted-foreground text-right break-all">
             {license.license_key || "\u2014"}
           </span>
-        </div>
+        </div>}
       </div>
     </Card>
   );

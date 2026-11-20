@@ -212,6 +212,7 @@ export const ImagesList = ({ masters }) => {
                           variant="outline"
                           size="sm"
                           icon={History}
+                          className="hidden md:inline-flex"
                           onClick={() => setRecoveryImageName(master.name)}
                           title={`Snapshots for ${master.name}`}
                         >
@@ -243,6 +244,9 @@ export const ImagesList = ({ masters }) => {
                             <span className="md:hidden">More</span><span className="hidden md:inline">More actions</span>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="min-w-44">
+                            <DropdownMenuItem className="md:hidden" onClick={() => setRecoveryImageName(master.name)}>
+                              <History /> Snapshots ({master.snapshots?.length ?? 0})
+                            </DropdownMenuItem>
                             <DropdownMenuItem
                               onClick={() => setDefaultMaster(master.name)}
                               disabled={master.is_default || master.status !== "ready"}

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { AlertCircle, RefreshCw, RotateCw } from "lucide-react";
+import { AlertCircle, CircleCheck, RefreshCw, RotateCw } from "lucide-react";
 import { getPendingClientRecoveries, retryPendingClientRecovery } from "@/api/modules/reconciliation";
 import { Button, PageHeader } from "@/components/ui";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -61,27 +61,20 @@ export default function PendingRecovery() {
         title="Pending Recovery"
         description="Review boot provisioning failures and retry interrupted client storage recovery."
         actions={(
-          <Button variant="outline" size="sm" onClick={refresh} disabled={loading}>
-            <RefreshCw data-icon="inline-start" /> Refresh
+          <Button variant="outline" size="sm" className="max-sm:flex-none" icon={RefreshCw} onClick={refresh} disabled={loading}>
+            Refresh
           </Button>
         )}
       />
-      <Alert>
-        <AlertCircle />
-            <AlertTitle>Failures stay visible until resolved</AlertTitle>
-        <AlertDescription>
-              Storage recovery retries automatically. Boot provisioning retries on the client's next PXE boot.
-        </AlertDescription>
-      </Alert>
-
       {loadError && <Alert variant="destructive"><AlertTitle>Could not load recoveries</AlertTitle><AlertDescription>{loadError}</AlertDescription></Alert>}
       {loading ? (
         <div className="flex justify-center py-12"><Spinner className="size-8" /></div>
-      ) : recoveries.length === 0 ? (
-        <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground">
-          <p className="font-medium text-foreground">No pending recovery or boot failures</p>
-          <p className="mt-1 text-sm">Interrupted storage operations and boot provisioning failures will appear here.</p>
-        </div>
+      ) : loadError && recoveries.length === 0 ? null : recoveries.length === 0 ? (
+        <Alert className="bg-card">
+          <CircleCheck className="text-success" />
+          <AlertTitle>No pending recovery or boot failures</AlertTitle>
+          <AlertDescription>Interrupted storage operations and boot provisioning failures will appear here.</AlertDescription>
+        </Alert>
       ) : (
         <div className="overflow-hidden rounded-lg border border-border">
           <Table>
@@ -132,6 +125,13 @@ export default function PendingRecovery() {
           </Table>
         </div>
       )}
+      {recoveries.length > 0 && <Alert>
+        <AlertCircle />
+            <AlertTitle>Failures stay visible until resolved</AlertTitle>
+        <AlertDescription>
+              Storage recovery retries automatically. Boot provisioning retries on the client's next PXE boot.
+        </AlertDescription>
+      </Alert>}
     </div>
   );
 }

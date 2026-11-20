@@ -45,7 +45,7 @@ const AuthorizeStep = ({ onAuthorized, authorized = false, checking = false }) =
       title="Authorize Application"
       subtitle="Grant privileged access for system management"
       icon={ShieldCheck}
-      className="w-full max-w-md mx-auto"
+      className="w-full max-w-2xl mx-auto"
     >
       <div className="space-y-4">
         <FieldDescription>

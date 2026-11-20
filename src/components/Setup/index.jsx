@@ -62,13 +62,27 @@ const Setup = () => {
           <Button variant="outline" onClick={checkAll}>Retry check</Button>
         </div>
       )}
-      <nav aria-label="Setup steps" className="relative flex items-center justify-between gap-2 overflow-x-auto rounded-2xl border border-border/70 bg-card/40 p-4">
+      <details className="rounded-xl border border-border bg-card p-4 lg:hidden">
+        <summary className="cursor-pointer text-sm font-semibold">Step {activeStep} of {steps.length} — {steps.find(step => step.id === activeStep)?.title}</summary>
+        <ol className="mt-3 grid grid-cols-2 gap-2">
+          {steps.map((step) => (
+            <li key={step.id}>
+              <Button variant={activeStep === step.id ? "secondary" : "ghost"} className="h-auto sm:h-auto min-h-11 w-full justify-start whitespace-normal text-left" aria-current={activeStep === step.id ? "step" : undefined}
+                disabled={checking || !setupStatus || (step.id === 9 ? !setupStatus.ready : steps.slice(0, step.id - 1).some(previous => previous.status !== "complete"))}
+                onClick={() => setActiveStep(step.id)}>
+                {step.id}. {step.title}{step.status === "complete" ? " · Complete" : ""}
+              </Button>
+            </li>
+          ))}
+        </ol>
+      </details>
+      <nav aria-label="Setup steps" className="relative hidden lg:flex items-center justify-between gap-2 overflow-x-auto rounded-2xl border border-border/70 bg-card/40 p-4">
         {steps.map((step) => (
           <Button
             key={step.id}
             variant="ghost"
             aria-current={activeStep === step.id ? "step" : undefined}
-            className="group relative z-10 h-auto shrink-0 flex-col gap-2 px-3 py-2"
+            className="group relative z-10 h-auto sm:h-auto shrink-0 flex-col gap-2 px-3 py-2"
             disabled={checking || !setupStatus || (step.id === 9 ? !setupStatus.ready : steps.slice(0, step.id - 1).some(previous => previous.status !== "complete"))}
             onClick={() => setActiveStep(step.id)}
           >
@@ -93,6 +107,7 @@ const Setup = () => {
               }`}
             >
               {step.title}
+              {step.status === "complete" && <span className="block text-[10px] font-normal">Complete</span>}
             </span>
           </Button>
         ))}

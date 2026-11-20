@@ -18,6 +18,7 @@ export default function RouteErrorBoundary({ fullPage = true }) {
       fullPage={fullPage}
       title={notFound ? "Page not found" : undefined}
       description={notFound ? "This page doesn’t exist. Return to the dashboard and choose a page from the navigation." : undefined}
+      homePrimary={notFound}
       showDetails={!notFound && import.meta.env.DEV}
       onRetry={notFound ? undefined : () => navigate(`${location.pathname}${location.search}${location.hash}`, { replace: true })}
       onHome={() => { clearSavedRoute(); navigate("/", { replace: true }); }}

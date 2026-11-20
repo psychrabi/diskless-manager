@@ -51,13 +51,11 @@ export default function PrivilegeManagementForm() {
           password prompts.
         </p>
 
-        <div className="flex items-center gap-3 p-3 bg-warning/10 border border-warning/20 rounded-lg text-warning text-xs">
+        <div className="flex items-start gap-3 rounded-lg border border-warning/20 bg-warning/10 p-3 text-left text-sm leading-relaxed text-warning">
           <ShieldAlert size={24} className="shrink-0" />
           <p>
-            This will create a specific sudoers rule for the current user. A
-            one-time password prompt (Polkit) opens on the server computer. If
-            the server has no desktop authentication agent, use the terminal
-            command shown below after a failed attempt.
+            Creates a sudoers rule for the server account. A one-time password prompt opens on the server computer.
+            <span className="mt-2 block">No desktop authentication agent? After a failed attempt, follow the terminal instructions shown here.</span>
           </p>
         </div>
 

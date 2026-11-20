@@ -261,7 +261,7 @@ const ClientManagement = () => {
         <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground md:hidden">
           <span className="font-medium text-foreground">{clients.length} clients</span>
           <span className="flex items-center gap-1.5"><span aria-hidden="true" className="size-2 rounded-full bg-success" />{onlineClients} online</span>
-          <span>{offlineClients} offline</span>
+          <span className="flex items-center gap-1.5"><span aria-hidden="true" className="size-2 rounded-full bg-destructive" />{offlineClients} offline</span>
           <span>{persistentClients} persistent</span>
         </p>
       )}

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button, Input, PageHeader } from "@/components/ui";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Progress } from "@/components/ui/progress";
 import { useConfirm } from "@/contexts/confirmDialog";
 import { useToastStore } from "@/store/useToastStore";
@@ -17,6 +18,7 @@ const mediaTypes = [
 
 function formatBytes(value) {
   if (!Number.isFinite(value)) return "Unknown";
+  if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(1)} GiB`;
   if (value < 1024 ** 2) return `${value} bytes`;
   return `${(value / 1024 ** 2).toFixed(1)} MiB`;
 }
@@ -119,13 +121,20 @@ export default function InstallerMedia() {
           <CardDescription>Installer ISOs are structurally checked and checksummed before they enter the catalog.</CardDescription>
         </CardHeader>
         <CardContent>
-          <p className="mb-4 text-sm text-muted-foreground">Configured maximum upload size: {maxBytes == null ? "Loading…" : formatBytes(maxBytes)}</p>
+          <div className="mb-4 flex flex-wrap items-center gap-2 text-sm text-muted-foreground" aria-live="polite">
+            <span>Maximum upload size</span>
+            {loading ? <Skeleton className="h-5 w-20" aria-label="Loading upload limit" /> : <span className="font-medium text-foreground">{maxBytes == null ? "Unavailable" : formatBytes(maxBytes)}</span>}
+          </div>
+          {!loading && !maxBytes && <div role="status" className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-warning/25 bg-warning/8 px-3 py-2 text-sm">
+            <span>The server’s upload limit could not be loaded.</span>
+            <Button variant="outline" size="sm" onClick={load}>Retry</Button>
+          </div>}
           <form className="grid gap-4 md:grid-cols-2" onSubmit={handleUpload}>
             <label className="grid gap-1 text-sm">Display name
               <Input value={displayName} onChange={(event) => setDisplayName(event.target.value)} required maxLength={120} disabled={uploadActive} />
             </label>
             <label className="grid gap-1 text-sm">Media type
-              <select className="h-9 rounded-lg border border-input bg-background px-3" value={mediaType} onChange={(event) => setMediaType(event.target.value)} disabled={uploadActive}>
+              <select className="h-11 rounded-lg border border-input bg-background px-3" value={mediaType} onChange={(event) => setMediaType(event.target.value)} disabled={uploadActive}>
                 {mediaTypes.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}
               </select>
             </label>
@@ -160,6 +169,7 @@ export default function InstallerMedia() {
               </div>
             )}
             <div className="md:col-span-2">
+              <p className="mb-3 text-sm text-muted-foreground">{!loading && !maxBytes ? "Upload is unavailable until the server returns its upload limit." : "Enter a display name and choose an ISO file before uploading."}</p>
               <Button disabled={uploadActive || busy || loading || !maxBytes} onClick={handleUpload}>Upload and validate</Button>
             </div>
           </form>

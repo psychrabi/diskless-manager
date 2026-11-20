@@ -59,13 +59,15 @@ export default function BackupManagement() {
           ZFS datasets and OS image disk contents are excluded. Store backups securely.
         </p>
         <Button onClick={handleDownload} disabled={Boolean(busy)} loading={busy === "download"}>Download backup</Button>
-        <div className="space-y-2">
+        <div className="space-y-2 border-t border-border pt-4">
+          <h3 className="text-sm font-semibold">Restore from a backup</h3>
           <Label htmlFor={fileId}>Backup file</Label>
           <input id={fileId} type="file" accept=".json,application/json" disabled={Boolean(busy)}
             className="block w-full text-sm file:mr-3 file:rounded-md file:border file:border-input file:bg-background file:px-3 file:py-2 file:text-foreground"
             onChange={(event) => setFile(event.target.files?.[0] || null)} />
-          <p className="text-sm text-muted-foreground">Choose an application backup JSON file (maximum 64 MiB). Restore applies after restarting the backend. You may need to sign in with an account from the original backup.</p>
+          <p className="text-sm text-muted-foreground">Choose an application backup JSON file (maximum 64 MiB). You may need to sign in with an account from the original backup.</p>
         </div>
+        <p className="text-sm text-muted-foreground">Restore replaces application data after the backend restarts. ZFS datasets and OS image disk contents are excluded.</p>
         <Button variant="destructive" onClick={handleRestore} disabled={!file || Boolean(busy)} loading={busy === "restore"}>Restore on restart</Button>
         {error && <p role="alert" className="break-words text-sm text-destructive">{error}</p>}
         {message && <p role="status" className="break-words text-sm">{message}</p>}

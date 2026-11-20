@@ -11,8 +11,8 @@ const LicenseManagement = () => {
       />
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-stretch">
         {/* License activation */}
-        <LicenseActivation />
         <LicenseCard />
+        <LicenseActivation />
       </div>
     </div>
   );

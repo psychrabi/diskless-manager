@@ -81,3 +81,22 @@ it("keeps the saved configuration without applying it when the confirmation is d
   expect(settings.updateServer).toHaveBeenCalled();
   expect(settings.applyNetworkSettings).not.toHaveBeenCalled();
 });
+
+it("names the saved address when applying saved settings after unsaved edits", async () => {
+  confirm.mockResolvedValue(true);
+  useAppStore.setState({
+    appConfig: { settings: { server: serverSettings } },
+    fetchServerInfo: vi.fn().mockResolvedValue({}),
+  });
+  render(<NetworkConfig />);
+  await screen.findByText("eth0");
+  const user = userEvent.setup();
+  const address = screen.getByLabelText("IP Address");
+  await user.clear(address);
+  await user.type(address, "192.0.2.42");
+  await user.click(screen.getByRole("button", { name: "Apply saved settings" }));
+  expect(confirm.mock.calls[0][0].description).toContain(serverSettings.ip_address);
+  expect(confirm.mock.calls[0][0].description).not.toContain("192.0.2.42");
+  expect(settings.updateServer).not.toHaveBeenCalled();
+  await waitFor(() => expect(settings.applyNetworkSettings).toHaveBeenCalledOnce());
+});
