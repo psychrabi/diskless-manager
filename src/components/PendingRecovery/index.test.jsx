@@ -25,3 +25,11 @@ it("shows boot failures and omits manual retry", async () => {
   expect(screen.getByText("target unavailable")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Retry now" })).not.toBeInTheDocument();
 });
+
+it("does not report a healthy empty state when loading recoveries fails", async () => {
+  getPendingClientRecoveries.mockRejectedValueOnce(new Error("Server unavailable"));
+  render(<PendingRecovery />);
+  expect(await screen.findByText("Could not load recoveries")).toBeVisible();
+  expect(screen.queryByText("No pending recovery or boot failures")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled();
+});

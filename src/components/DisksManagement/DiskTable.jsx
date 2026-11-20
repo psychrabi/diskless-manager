@@ -67,13 +67,13 @@ const DiskTable = ({ datasets, onRefresh }) => {
             </dl>
             <div className="mt-4 flex gap-2 border-t pt-3">
               <Button variant="info" className="flex-1" onClick={() => handleRenameDisk(dataset)}>Rename</Button>
-              <Button variant="ghost" className="flex-1" onClick={() => handleDeleteDisk(dataset)}>Delete</Button>
+              <Button variant="destructive" className="flex-1" onClick={() => handleDeleteDisk(dataset)}>Delete</Button>
             </div>
           </article>
         ))}
       </div>
-      <div className="hidden overflow-x-auto lg:block">
-      <Table className="rounded-lg bg-background" aria-label="ZFS datasets list">
+      <div className="hidden overflow-hidden rounded-xl border border-border bg-card lg:block">
+      <Table className="bg-card" aria-label="ZFS datasets list">
         <TableHeader>
           <TableRow>
             <TableHead>Name</TableHead>
@@ -110,7 +110,7 @@ const DiskTable = ({ datasets, onRefresh }) => {
                     Rename
                   </Button>
                   <Button
-                    variant="ghost"
+                    variant="destructive"
                     size="sm"
                     onClick={() => handleDeleteDisk(dataset)}
                   >

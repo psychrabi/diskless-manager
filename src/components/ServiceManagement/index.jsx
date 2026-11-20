@@ -94,12 +94,13 @@ const ServiceManagement = () => {
     <div className="flex flex-col gap-5">
       <PageHeader
         title="Services"
-        description="Every daemon behind boot, storage, and file sharing — with live control."
+        description="Manage boot, storage, and file sharing. Stopping all services disconnects active clients."
         actions={
           <>
             <Button
               icon={PlayCircle}
-              variant="success"
+              variant="default"
+              disabled={services.length === 0 || services.every((service) => service.running) || !!globalLoading}
               loading={globalLoading === "start"}
               onClick={() => handleGlobalAction("start", startAllServices)}
               title="Start all services"
@@ -108,7 +109,9 @@ const ServiceManagement = () => {
             </Button>
             <Button
               icon={StopCircle}
-              variant="destructive"
+              variant="outline"
+              className="text-destructive hover:bg-destructive/10"
+              disabled={!services.some((service) => service.running) || !!globalLoading}
               loading={globalLoading === "stop"}
               onClick={handleStopAll}
               title="Stop all services"
@@ -120,10 +123,20 @@ const ServiceManagement = () => {
       />
       <div className="space-y-4 min-h-[50vh]">
         <FirewallBanner />
+        {services.length > 0 && (
+          <ul aria-label="Service status" className="flex flex-wrap gap-2 md:hidden">
+            {services.map((service) => (
+              <li key={service.name} className="rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-medium">
+                <span className={service.running ? "text-success" : "text-destructive"}>{service.display_name || service.name.toUpperCase()}</span>
+                <span className="ml-1.5 text-muted-foreground">{service.running ? "Running" : "Stopped"}</span>
+              </li>
+            ))}
+          </ul>
+        )}
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4">
           <ServicesList onViewConfig={handleViewConfig} />
-          <BootScript onViewConfig={handleViewConfig} />
         </div>
+        <BootScript onViewConfig={handleViewConfig} />
         <ServiceConfigModal
           isOpen={modalState.isOpen}
           onClose={closeModal}

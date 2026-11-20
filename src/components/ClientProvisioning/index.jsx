@@ -12,7 +12,7 @@ import {
 } from "@/api/modules/clientProvisioning";
 import { listMasters } from "@/api/modules/images";
 import { listInstallerMedia } from "@/api/modules/installerMedia";
-import { ArrowRight, CheckCircle2, Disc3, HardDrive, MonitorCheck } from "lucide-react";
+import { ArrowRight, Circle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const selectClass = "h-10 w-full rounded-lg border border-input bg-background px-3 text-[13px] text-foreground shadow-xs outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/20 disabled:cursor-not-allowed disabled:opacity-60";
@@ -23,18 +23,6 @@ const recipes = [
 ];
 const factoryPhases = ["Prepare", "Install", "Adapt", "Save", "Verify", "Publish"];
 const factoryPhaseIndex = { preparing: 0, waiting: 1, installing: 1, adapting: 2, saving: 3, verifying: 4, published: 5 };
-
-const IntroCard = ({ icon: Icon, title, children }) => (
-  <div className="rounded-2xl border border-dashed border-border/80 bg-card p-5 shadow-none">
-    <div className="flex items-center">
-      <span className="flex size-9 items-center justify-center rounded-xl border border-primary/15 bg-primary/10 text-primary">
-        <Icon className="size-4" aria-hidden="true" />
-      </span>
-    </div>
-    <h3 className="mt-4 text-[13px] font-semibold text-foreground">{title}</h3>
-    <p className="mt-1.5 text-xs leading-5 text-muted-foreground">{children}</p>
-  </div>
-);
 
 export default function ClientProvisioning() {
   const clients = useAppStore((state) => state.clients);
@@ -116,7 +104,7 @@ export default function ClientProvisioning() {
         description="Build a private image, adapt it for diskless boot, and publish it only after a successful verification boot."
       />
 
-      <div className="rounded-2xl border border-border/80 bg-card p-5 shadow-[0_1px_2px_rgb(0_0_0/0.03)]">
+      <div className="hidden rounded-2xl border border-border/80 bg-card p-5 shadow-xs md:block">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <p className="text-xs font-medium text-muted-foreground">Pipeline</p>
@@ -124,12 +112,12 @@ export default function ClientProvisioning() {
           </div>
           <Badge variant="outline">Offline client required</Badge>
         </div>
-        <ol className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
+        <ol className="mt-4 grid grid-cols-3 gap-2 xl:grid-cols-6">
           {factoryPhases.map((phase, index) => (
-            <li key={phase} className="flex items-center gap-2 rounded-xl border border-border/60 bg-muted/20 px-3 py-2">
+            <li key={phase} className="flex items-center gap-2 rounded-xl border border-border bg-muted/45 px-3 py-2">
               <span className="flex size-5 shrink-0 items-center justify-center rounded-md border border-border/70 bg-card font-mono-data text-[9px] font-semibold text-muted-foreground">{index + 1}</span>
               <span className="text-[11px] font-medium text-foreground">{phase}</span>
-              {index < factoryPhases.length - 1 && <ArrowRight className="ml-auto hidden size-3 text-muted-foreground/40 xl:block" aria-hidden="true" />}
+              {index < factoryPhases.length - 1 && <ArrowRight className="ml-auto hidden size-3 text-muted-foreground xl:block" aria-hidden="true" />}
             </li>
           ))}
         </ol>
@@ -139,13 +127,13 @@ export default function ClientProvisioning() {
         <Card>
           <CardHeader>
             <CardTitle>Target client</CardTitle>
-            <CardDescription>Select the offline machine that will build and verify this image.</CardDescription>
+            <CardDescription>Choose a client, then power it off before starting the build. It will boot again to verify the image.</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3">
             <label htmlFor="factory-client" className="text-xs font-medium text-muted-foreground">Client</label>
             <select id="factory-client" className={cn(selectClass, "max-w-md")} value={clientId} onChange={(event) => chooseClient(event.target.value)} disabled={busy}>
               <option value="">Select a client</option>
-              {clients.map((item) => <option key={item.id} value={item.id}>{item.name} ({item.ip || item.mac})</option>)}
+              {clients.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.status || "Status unknown"} ({item.ip || item.mac})</option>)}
             </select>
             {client && (
               <div className="rounded-xl border border-border/70 bg-muted/20 p-3">
@@ -159,7 +147,7 @@ export default function ClientProvisioning() {
           <Card className="bg-muted/15">
             <CardHeader>
               <CardTitle>Before you begin</CardTitle>
-              <CardDescription>Three checks keep a factory run predictable.</CardDescription>
+              <CardDescription>Requirements checked when you prepare an installation.</CardDescription>
             </CardHeader>
             <CardContent className="grid gap-3">
               {[
@@ -168,7 +156,7 @@ export default function ClientProvisioning() {
                 ["Current image is safe", "Builds always happen in a private draft, never in place."],
               ].map(([title, body]) => (
                 <div key={title} className="flex gap-2.5">
-                  <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-success" aria-hidden="true" />
+                  <Circle className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
                   <div>
                     <p className="text-[12px] font-medium text-foreground">{title}</p>
                     <p className="mt-0.5 text-[11px] leading-4 text-muted-foreground">{body}</p>
@@ -180,13 +168,14 @@ export default function ClientProvisioning() {
         )}
       </div>
 
-      {!client ? (
-        <div className="grid gap-4 md:grid-cols-3">
-          <IntroCard icon={HardDrive} title="Choose an offline target">The factory uses this machine as a temporary builder. Its current disk and assignment stay untouched.</IntroCard>
-          <IntroCard icon={Disc3} title="Provide installation media">Use validated Windows or Linux media. Adapting an existing Windows image needs a ready source snapshot.</IntroCard>
-          <IntroCard icon={MonitorCheck} title="Prove it boots">The client PXE boots the draft. The image is published only after a normal boot reports back successfully.</IntroCard>
-        </div>
-      ) : (
+      <details className="rounded-xl border border-border bg-card px-4 py-3 md:hidden">
+        <summary className="cursor-pointer text-sm font-semibold">How image publishing works</summary>
+        <ol className="mt-2 grid grid-cols-2 gap-x-4 gap-y-2 text-sm text-muted-foreground">
+          {factoryPhases.map((phase, index) => <li key={phase}>{index + 1}. {phase}</li>)}
+        </ol>
+      </details>
+
+      {client && (
         <>
           <div className="grid gap-3 sm:grid-cols-3">
             {[

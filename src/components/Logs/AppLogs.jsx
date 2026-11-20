@@ -2,10 +2,12 @@ import { useToastStore } from "@/store/useToastStore";
 import { getLogs, clearLogs } from "@/api/modules/logs";
 import { BrushCleaning, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { useConfirm } from "@/contexts/confirmDialog";
 import { Button, Card } from "@/components/ui";
 import LogViewer from "./LogViewer";
 
 export default function AppLogs() {
+  const confirm = useConfirm();
   const [logs, setLogs] = useState("");
   const [loading, setLoading] = useState(false);
   const { success, error } = useToastStore();
@@ -28,6 +30,7 @@ export default function AppLogs() {
   }, [error]);
 
   async function handleClearLogs() {
+    if (!await confirm({ title: "Clear application logs?", description: "This permanently removes the captured application logs. Save any diagnostics you need before clearing them.", confirmText: "Clear logs", confirmVariant: "destructive" })) return;
     setLoading(true);
     try {
       await clearLogs();
@@ -52,7 +55,7 @@ export default function AppLogs() {
       subtitle={
         logs
           ? `${logs.split("\n").filter(Boolean).length.toLocaleString()} lines · newest last`
-          : "No output captured yet"
+          : "Server output · newest last"
       }
       className="overflow-hidden"
       bodyClass="p-3 pt-1"
@@ -65,15 +68,15 @@ export default function AppLogs() {
             icon={RefreshCw}
             loading={loading}
             title="Refresh logs"
-          />
+          >Refresh</Button>
           <Button
             onClick={handleClearLogs}
             variant="destructive"
             size="sm"
             icon={BrushCleaning}
-            disabled={loading}
+            disabled={loading || !logs}
             title="Clear logs"
-          />
+          >Clear logs</Button>
         </>
       }
     >

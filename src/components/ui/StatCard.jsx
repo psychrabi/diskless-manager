@@ -30,13 +30,13 @@ export function StatCard({
   return (
     <div
       className={cn(
-        "min-w-0 bg-card p-4 transition-colors duration-150 hover:bg-muted/25 sm:p-5",
+        "min-w-0 rounded-xl border border-border bg-card p-4 shadow-xs sm:p-5",
         className
       )}
     >
       <div className="flex items-start justify-between gap-2 sm:gap-4">
         <div className="min-w-0">
-          <p className="text-[10px] font-semibold tracking-[0.14em] uppercase text-muted-foreground xl:text-[11px]">
+          <p className="text-sm font-medium leading-tight text-muted-foreground">
             {label}
           </p>
           <p className="mt-2.5 text-[30px] leading-none font-semibold tracking-[-0.04em] tabular-nums text-foreground xl:text-[34px]">
@@ -47,7 +47,7 @@ export function StatCard({
         {Icon && (
           <span
             className={cn(
-              "flex size-8 shrink-0 items-center justify-center rounded-md border sm:size-9",
+              "flex size-8 shrink-0 items-center justify-center rounded-lg sm:size-9",
               TONES[tone] || TONES.primary
             )}
           >
@@ -56,10 +56,10 @@ export function StatCard({
         )}
       </div>
       {pct != null && (
-        <div className="mt-3.5 h-1.5 overflow-hidden bg-muted">
+        <div className="mt-3.5 h-1.5 overflow-hidden rounded-full bg-muted">
           <div
             className={cn(
-              "meter-track h-full transition-[width] duration-500",
+              "h-full rounded-full transition-[width] duration-500",
               METERS[tone] || METERS.primary
             )}
             style={{ width: `${pct}%` }}

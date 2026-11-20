@@ -37,14 +37,14 @@ export default function Sidebar() {
               aria-label="Diskless Manager home"
               className="h-14 rounded-lg px-2 hover:bg-sidebar-accent/60"
             >
-              <div className="flex size-9 shrink-0 items-center justify-center rounded-md border border-sidebar-border bg-white/[0.06] text-sidebar-foreground">
+              <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
                 <Boxes className="size-[18px]" aria-hidden="true" />
               </div>
               <div className="grid min-w-0 flex-1 text-left leading-tight group-data-[collapsible=icon]:hidden">
                 <span className="truncate text-sm font-semibold tracking-[-0.015em] text-sidebar-foreground">
                   Diskless Manager
                 </span>
-                <span className="mt-1 truncate text-[10px] font-medium tracking-[0.14em] uppercase text-sidebar-foreground/45">
+                <span className="mt-0.5 truncate text-xs text-sidebar-foreground/70">
                   Boot server
                 </span>
               </div>
@@ -57,7 +57,7 @@ export default function Sidebar() {
         <nav aria-label="Main navigation" className="py-2">
           {visibleSections.map((section) => (
             <SidebarGroup key={section.label} className="px-3 py-1">
-              <SidebarGroupLabel className="h-7 px-2.5 text-[10px] font-semibold tracking-[0.16em] uppercase text-sidebar-foreground/65 xl:text-[10.5px]">
+              <SidebarGroupLabel className="h-7 px-2.5 text-xs font-medium text-sidebar-foreground/75">
                 {section.label}
               </SidebarGroupLabel>
               <SidebarMenu className="gap-0.5">
@@ -69,7 +69,7 @@ export default function Sidebar() {
                       tooltip={item.label}
                       aria-label={item.label}
                       onClick={closeMobile}
-                      className="relative h-9 rounded-md px-2.5 text-[13px] text-sidebar-foreground/70 xl:h-10 xl:text-sm transition-colors duration-150 ease-out before:absolute before:inset-y-1.5 before:left-0 before:w-[2px] before:rounded-full before:bg-sidebar-primary before:opacity-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground data-active:bg-sidebar-accent data-active:font-medium data-active:text-sidebar-accent-foreground data-active:before:opacity-100 [&_svg]:text-sidebar-foreground/50 [&_svg]:transition-colors data-active:[&_svg]:text-sidebar-primary"
+                      className="relative h-9 rounded-md px-2.5 text-[13px] text-sidebar-foreground/85 xl:h-10 xl:text-sm transition-colors duration-150 ease-out before:absolute before:inset-y-1.5 before:left-0 before:w-[2px] before:rounded-full before:bg-sidebar-primary before:opacity-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground data-active:bg-sidebar-accent data-active:font-medium data-active:text-sidebar-accent-foreground data-active:before:opacity-100 [&_svg]:text-sidebar-foreground/70 [&_svg]:transition-colors data-active:[&_svg]:text-sidebar-primary"
                     >
                       <item.icon />
                       <span>{item.label}</span>

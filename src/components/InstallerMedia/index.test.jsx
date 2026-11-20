@@ -1,3 +1,4 @@
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -46,19 +47,19 @@ describe("Installer Media page", () => {
   it("shows loading and load errors", async () => {
     let finish;
     api.list.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
-    render(<InstallerMedia />);
+    render(<InstallerMedia />, { wrapper: MemoryRouter });
     expect(screen.getByRole("status")).toHaveTextContent("Loading installer media");
     finish([item]);
     expect(await screen.findByText("WinPE test")).toBeInTheDocument();
 
     api.list.mockRejectedValueOnce(new Error("Catalog unavailable"));
-    render(<InstallerMedia />);
+    render(<InstallerMedia />, { wrapper: MemoryRouter });
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Installer media", "Catalog unavailable"));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("offers exactly the four supported media types", async () => {
-    render(<InstallerMedia />);
+    render(<InstallerMedia />, { wrapper: MemoryRouter });
     await screen.findByText("WinPE test");
     const options = within(screen.getByLabelText("Media type"))
       .getAllByRole("option")
@@ -67,7 +68,7 @@ describe("Installer Media page", () => {
   });
 
   it("keeps the installer catalog free of client test and boot-result controls", async () => {
-    render(<InstallerMedia />);
+    render(<InstallerMedia />, { wrapper: MemoryRouter });
     const article = await screen.findByRole("article");
     expect(within(article).getByText("Default: No")).toBeInTheDocument();
     expect(within(article).queryByLabelText("Test client")).not.toBeInTheDocument();
@@ -77,7 +78,7 @@ describe("Installer Media page", () => {
 
   it("uploads the chosen media type and displays the upload result", async () => {
     const user = userEvent.setup();
-    render(<InstallerMedia />);
+    render(<InstallerMedia />, { wrapper: MemoryRouter });
     await screen.findByText("WinPE test");
     await user.type(screen.getByLabelText("Display name"), "New Linux ISO");
     await user.selectOptions(screen.getByLabelText("Media type"), "linux_iso");
@@ -103,7 +104,7 @@ describe("Installer Media page", () => {
     }));
 
     const user = userEvent.setup();
-    render(<InstallerMedia />);
+    render(<InstallerMedia />, { wrapper: MemoryRouter });
     await screen.findByText("WinPE test");
     await user.type(screen.getByLabelText("Display name"), "New Linux ISO");
     const file = new File(["iso"], "linux.iso", { type: "application/octet-stream" });
@@ -132,7 +133,7 @@ describe("Installer Media page", () => {
     }));
 
     const user = userEvent.setup();
-    const { unmount } = render(<InstallerMedia />);
+    const { unmount } = render(<InstallerMedia />, { wrapper: MemoryRouter });
     await screen.findByText("WinPE test");
     await user.type(screen.getByLabelText("Display name"), "Background ISO");
     const file = new File(["iso"], "background.iso", { type: "application/octet-stream" });
@@ -144,7 +145,7 @@ describe("Installer Media page", () => {
     expect(useInstallerMediaUploadStore.getState()).toMatchObject({ status: "uploading", displayName: "Background ISO" });
     expect(toast.success).not.toHaveBeenCalled();
 
-    render(<InstallerMedia />);
+    render(<InstallerMedia />, { wrapper: MemoryRouter });
     expect(await screen.findByText("Uploading background.iso…")).toBeInTheDocument();
     expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "0");
 
@@ -156,7 +157,7 @@ describe("Installer Media page", () => {
 
   it("sets the single global default", async () => {
     const user = userEvent.setup();
-    render(<InstallerMedia />);
+    render(<InstallerMedia />, { wrapper: MemoryRouter });
     const article = await screen.findByRole("article");
     await user.click(within(article).getByRole("button", { name: "Set as default" }));
     expect(api.setDefault).toHaveBeenCalledWith("media-1");
@@ -165,7 +166,7 @@ describe("Installer Media page", () => {
 
   it("reports a referenced-media delete refusal", async () => {
     const user = userEvent.setup();
-    render(<InstallerMedia />);
+    render(<InstallerMedia />, { wrapper: MemoryRouter });
     await screen.findByRole("article");
     api.remove.mockRejectedValueOnce(new Error("Media is selected or in use"));
     await user.click(within(await screen.findByRole("article")).getByRole("button", { name: "Delete" }));

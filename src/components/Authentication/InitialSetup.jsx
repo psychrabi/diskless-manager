@@ -67,16 +67,14 @@ const InitialSetup = () => {
   };
 
   return (
-    <div className="flex min-h-svh items-center justify-center bg-background px-5 py-14 sm:px-10">
-      <div className="ui-enter w-full max-w-[440px]">
-        <SignupForm
-          onSubmit={handleSubmit(onSubmit)}
-          register={register}
-          errors={errors}
-          isSubmitting={isSubmitting}
-          onLogin={() => navigate("/login")}
-        />
-      </div>
+    <div className="ui-enter w-full min-w-0">
+      <SignupForm
+        onSubmit={handleSubmit(onSubmit)}
+        register={register}
+        errors={errors}
+        isSubmitting={isSubmitting}
+        onLogin={() => navigate("/login")}
+      />
     </div>
   );
 };
