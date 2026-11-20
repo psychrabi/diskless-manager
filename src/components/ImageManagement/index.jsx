@@ -129,7 +129,7 @@ const ImageManagement = () => {
             )}
           </div>
         }/>
-      <div className="space-y-5 min-h-[50vh]">
+      <div className="space-y-5">
         {mastersError && (
           <div role="alert" className="flex items-center justify-between gap-4 rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm">
             <span>{mastersError}</span>

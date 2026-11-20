@@ -119,12 +119,15 @@ const Detail = ({ label, children }) => (
 const ClientTableRow = ({ client, clientMetrics, onMoreActions }) => {
   return (
     <>
-      <TableCell colSpan={9} className="p-3 xl:hidden">
+      <TableCell colSpan={8} className="p-3 xl:hidden">
         <article data-testid="client-mobile-card" className="rounded-xl border border-border/80 bg-card p-4 text-left shadow-xs">
           <div className="flex items-start justify-between gap-3">
             <div className="flex min-w-0 items-center gap-2">
               <ClientStatusIcon status={client.status} />
-              <span className="truncate font-semibold">{client.name}</span>
+              <div className="min-w-0">
+                <span className="block truncate font-semibold">{client.name}</span>
+                <span className="block text-xs text-muted-foreground">{client.status || "Offline"}</span>
+              </div>
             </div>
             <div className="flex shrink-0 flex-col items-end gap-1">
               <ClientModeBadge client={client} />
@@ -158,16 +161,15 @@ const ClientTableRow = ({ client, clientMetrics, onMoreActions }) => {
             <span className={`absolute -right-0.5 -bottom-0.5 size-2 rounded-full border-2 border-card ${isOnlineStatus(client.status) ? "bg-success" : "bg-destructive"}`} />
           </div>
           <div className="min-w-0">
-            <span className="block truncate text-[13px] font-semibold">{client.name}</span>
-            <span className="block text-[10px] text-muted-foreground">{client.status || "Offline"}</span>
+            <span className="block truncate text-sm font-semibold">{client.name}</span>
+            <span className="block text-xs text-muted-foreground">{client.status || "Offline"}</span>
           </div>
         </div>
       </TableCell>
-      <TableCell className="hidden text-center font-mono-data text-[11px] text-muted-foreground xl:table-cell">
-        {client.mac}
+      <TableCell className="hidden font-mono-data xl:table-cell">
+        <span className="block text-[13px]">{client.ip}</span>
+        <span className="mt-0.5 block text-xs text-muted-foreground">{client.mac}</span>
       </TableCell>
-      <TableCell className="hidden text-center font-mono-data text-[11px] text-muted-foreground xl:table-cell">
-        {client.ip}</TableCell>
       <TableCell className="hidden text-center text-xs xl:table-cell">
         <div className="flex gap-1 justify-evenly">
           <RateLine
@@ -193,7 +195,7 @@ const ClientTableRow = ({ client, clientMetrics, onMoreActions }) => {
         </div>
       </TableCell>
       <TableCell className="hidden max-w-40 xl:table-cell">
-        <span className="block truncate text-center text-[11px] text-muted-foreground">{client.master}</span>
+        <span className="block truncate text-center text-[13px] text-muted-foreground">{client.master}</span>
       </TableCell>
       <TableCell className="hidden text-center xl:table-cell">
         <div className="flex flex-col items-center gap-1">

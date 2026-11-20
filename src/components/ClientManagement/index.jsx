@@ -4,11 +4,12 @@ import {
   CardContent,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageHeader, StatCard } from "@/components/ui";
 import { LoadingSkeleton } from "@/components/ui/LoadingSkeleton";
 import { ContextMenu } from "../ui/ContextMenu";
-import { HardDrive, PlusCircle, Users, Wifi, WifiOff, History, Clock } from "lucide-react";
+import { HardDrive, PlusCircle, Users, Wifi, WifiOff, History, Clock, ChevronDown } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useShallow } from "zustand/react/shallow";
@@ -161,7 +162,7 @@ const ClientManagement = () => {
           <Skeleton className="h-8 w-48" />
           <Skeleton className="h-4 w-96 max-w-full" />
         </div>
-        <div className="grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-border/80 bg-border/70 xl:grid-cols-4">
+        <div className="hidden grid-cols-2 gap-4 md:grid xl:grid-cols-4">
           {Array.from({ length: 4 }, (_, i) => (
             <Skeleton key={i} className="h-32 rounded-2xl" />
           ))}
@@ -181,27 +182,23 @@ const ClientManagement = () => {
         title="Clients"
         description="Every diskless machine, its current image, and the storage it is streaming."
         actions={
-          <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:[&>button]:h-8 sm:[&>button]:flex-none [&>button]:h-11 [&>button]:min-w-0 [&>button]:px-3 [&>button]:text-[11px] [&>button]:whitespace-nowrap sm:[&>button]:text-xs">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setIsScheduledOperationsOpen(true)}
-            >
-              <Clock data-icon="inline-start" />
-              Scheduled Ops
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setIsAuditLogViewerOpen(true)}
-            >
-              <History data-icon="inline-start" />
-              Audit Logs
-            </Button>
+          <div className="flex w-full gap-2 sm:w-auto sm:[&>button]:flex-none [&>button]:h-10 [&>button]:flex-1 [&>button]:whitespace-nowrap">
+            <DropdownMenu>
+              <DropdownMenuTrigger render={<Button variant="outline" />}>
+                Operations <ChevronDown data-icon="inline-end" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => setIsScheduledOperationsOpen(true)}>
+                  <Clock /> Scheduled Ops
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setIsAuditLogViewerOpen(true)}>
+                  <History /> Audit Logs
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <Button
               variant="default"
               size="sm"
-              className="col-span-2 sm:col-span-1"
               onClick={handleClientFormModalOpen}
             >
               <PlusCircle data-icon="inline-start" />
@@ -222,7 +219,7 @@ const ClientManagement = () => {
         </div>
       )}
       {clients.length > 0 && (
-        <div className="grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-border/80 bg-border/70 xl:grid-cols-4">
+        <div className="hidden grid-cols-2 gap-4 md:grid xl:grid-cols-4">
           <StatCard
             icon={Users}
             label="Total clients"
@@ -258,6 +255,15 @@ const ClientManagement = () => {
             className="p-3 sm:p-5"
           />
         </div>
+      )}
+
+      {clients.length > 0 && (
+        <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground md:hidden">
+          <span className="font-medium text-foreground">{clients.length} clients</span>
+          <span className="flex items-center gap-1.5"><span aria-hidden="true" className="size-2 rounded-full bg-success" />{onlineClients} online</span>
+          <span>{offlineClients} offline</span>
+          <span>{persistentClients} persistent</span>
+        </p>
       )}
 
       {/* Client Table or Empty State */}

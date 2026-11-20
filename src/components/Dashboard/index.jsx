@@ -1,3 +1,5 @@
+import { CircleAlert } from "lucide-react";
+import { useMetrics } from "@/contexts/useMetrics";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageHeader } from "@/components/ui";
 import { useAppStore } from "@/store/useAppStore";
@@ -12,6 +14,7 @@ import StorageCard from "./StorageCard";
 import StorageMaintenanceCard from "./StorageMaintenanceCard";
 
 export default function Dashboard() {
+  const { error } = useMetrics();
   const { loading } = useAppStore(
     useShallow((state) => ({
       loading: state.loading,
@@ -46,6 +49,12 @@ export default function Dashboard() {
         title="Dashboard"
         description="Clients, storage, and the services behind every boot."
       />
+      {error && (
+        <div role="status" className="flex items-start gap-3 rounded-xl border border-warning/25 bg-warning/8 px-4 py-3 text-sm">
+          <CircleAlert className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
+          <p><strong>Live telemetry unavailable.</strong> Client and storage activity may be out of date.</p>
+        </div>
+      )}
       <MetricsCard />
       <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)]">
         <AlarmInbox />

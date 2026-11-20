@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils";
 
 const headerCellClass = (baseClassName = "", fixed) => {
   return cn(
-    "h-9 px-3 text-[10px] font-semibold tracking-[0.08em] uppercase text-muted-foreground",
+    "h-10 px-3 text-xs font-semibold text-muted-foreground",
     baseClassName,
     fixed && "bg-card"
   );
@@ -18,11 +18,8 @@ const ClientTableHeader = ({ fixed = false }) => {
       )}
     >
       <TableHead className={headerCellClass("min-w-48", fixed)}>Name</TableHead>
-      <TableHead className={headerCellClass("hidden text-center xl:table-cell", fixed)}>
-        MAC Address
-      </TableHead>
-      <TableHead className={headerCellClass("hidden text-center xl:table-cell", fixed)}>
-        IP Address
+      <TableHead className={headerCellClass("hidden xl:table-cell", fixed)}>
+        Network
       </TableHead>
       <TableHead className={headerCellClass("text-center", fixed)}>
         I/O (MB/s)
