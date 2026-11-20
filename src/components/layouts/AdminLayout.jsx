@@ -76,7 +76,7 @@ const AdminLayout = () => {
       <SidebarInset className="min-w-0 overflow-hidden bg-background">
         <Header />
         <div id="main-content" tabIndex={-1} className="min-h-0 flex-1 overflow-y-auto bg-background outline-none">
-          <div className="app-canvas relative mx-auto w-full max-w-[1560px] px-4 py-5 sm:px-6 sm:py-6 lg:px-8">
+          <div className="relative mx-auto w-full max-w-[1640px] px-4 py-5 sm:px-7 sm:py-7 lg:px-10">
             {loading && (
               <div className="absolute inset-0 z-40 flex items-center justify-center bg-background/70">
                 <Loading fullScreen={false} message="Refreshing data…" size="sm" className="min-h-0 py-0" />

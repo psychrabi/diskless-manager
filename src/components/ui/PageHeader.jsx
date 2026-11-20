@@ -10,16 +10,16 @@ export const PageHeader = ({
   return (
     <div
       className={cn(
-        "mb-6 flex flex-col justify-between gap-4 border-b border-border pb-5 sm:mb-7 sm:flex-row sm:items-end sm:gap-6",
+        "mb-2 flex flex-col justify-between gap-4 sm:mb-3 sm:flex-row sm:items-end sm:gap-6",
         className
       )}
     >
       <div className="min-w-0 space-y-2">
-        <h1 className="text-balance text-[30px] leading-[1.02] font-semibold tracking-[-0.045em] text-foreground sm:text-[38px] xl:text-[42px]">
+        <h1 className="text-balance text-[30px] leading-tight font-semibold tracking-[-0.035em] text-foreground sm:text-[36px]">
           {title}
         </h1>
         {description && (
-          <p className="max-w-2xl text-pretty text-[13px] leading-6 text-muted-foreground xl:text-[15px] xl:leading-7">{description}</p>
+          <p className="max-w-2xl text-pretty text-sm leading-6 text-muted-foreground">{description}</p>
         )}
         {children}
       </div>

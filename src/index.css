@@ -5,11 +5,6 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/*
- * Instrument panel: a cool graphite console with one signal violet. Surfaces are
- * separated by hairlines (never by shadows), data sits on a faint dot grid, and
- * colour is reserved for the primary action and for status.
- */
 @layer base {
   html {
     color-scheme: light;
@@ -82,15 +77,6 @@
 }
 
 @layer utilities {
-  /* Work surface: a 24px dot grid, quiet enough to sit under dense data. */
-  .app-canvas {
-    background-image: radial-gradient(
-      color-mix(in oklab, var(--border) 72%, transparent) 1px,
-      transparent 1px
-    );
-    background-size: 24px 24px;
-  }
-
   /* Small structural label above titles and inside panel headers. */
   .text-eyebrow {
     @apply text-[10px] font-semibold tracking-[0.16em] uppercase;
@@ -229,81 +215,80 @@
   --duration-enter: 200ms;
   --duration-exit: 140ms;
 
-  --background: #f4f5f7;
-  --foreground: #16181d;
+  --background: #f3f6f9;
+  --foreground: #172739;
   --card: #ffffff;
-  --card-foreground: #16181d;
+  --card-foreground: #172739;
   --popover: #ffffff;
-  --popover-foreground: #16181d;
-  --primary: #4c36c8;
+  --popover-foreground: #172739;
+  --primary: #2455b5;
   --primary-foreground: #ffffff;
-  --secondary: #eceef2;
-  --secondary-foreground: #242833;
-  --muted: #eceef2;
-  --muted-foreground: #5b606b;
-  --accent: #eae6fb;
-  --accent-foreground: #3a2a9e;
+  --secondary: #eaf0f6;
+  --secondary-foreground: #243b56;
+  --muted: #eaf0f6;
+  --muted-foreground: #506175;
+  --accent: #e4edfb;
+  --accent-foreground: #204790;
   --destructive: #c0392b;
   --success: #1d7a4a;
   --warning: #9a6400;
   --info: #1f5fa8;
-  --border: #e0e3e9;
-  --input: #d8dce4;
-  --ring: #6f5ce0;
-  --chart-1: #4c36c8;
+  --border: #dce5ee;
+  --input: #cbd7e4;
+  --ring: #4779d0;
+  --chart-1: #2455b5;
   --chart-2: #1d7a4a;
   --chart-3: #9a6400;
   --chart-4: #1f5fa8;
   --chart-5: #c0392b;
   --radius: 0.625rem;
 
-  /* The rail is graphite in both themes: it reads as the rack, not the page. */
-  --sidebar: #15171d;
-  --sidebar-foreground: #d3d7e0;
-  --sidebar-primary: #b9a5ff;
-  --sidebar-primary-foreground: #15171d;
-  --sidebar-accent: #242833;
+  --sidebar: #142439;
+  --sidebar-foreground: #d7e4f4;
+  --sidebar-primary: #a8c8ff;
+  --sidebar-primary-foreground: #142439;
+  --sidebar-accent: #243b56;
   --sidebar-accent-foreground: #ffffff;
   --sidebar-border: rgb(255 255 255 / 0.09);
-  --sidebar-ring: #8b7ae8;
+  --sidebar-ring: #84aff5;
 }
 
 .dark {
-  --background: #0f1115;
+  --background: #0e1824;
   --foreground: #e7e9ee;
-  --card: #16181e;
+  --card: #162331;
   --card-foreground: #e7e9ee;
-  --popover: #1a1d24;
+  --popover: #192939;
   --popover-foreground: #e7e9ee;
-  --primary: #b9a5ff;
+  --primary: #a8c8ff;
   --primary-foreground: #191027;
-  --secondary: #1f222a;
+  --secondary: #213244;
   --secondary-foreground: #e7e9ee;
-  --muted: #1c1f26;
-  --muted-foreground: #9aa0ac;
-  --accent: #262239;
-  --accent-foreground: #d9cfff;
+  --muted: #1c2b3b;
+  --muted-foreground: #a8b8ca;
+  --accent: #213857;
+  --accent-foreground: #dae8ff;
   --destructive: #ff7a6b;
   --success: #4ade80;
   --warning: #f5b942;
   --info: #7cc4ff;
   --border: rgb(255 255 255 / 0.09);
   --input: rgb(255 255 255 / 0.14);
-  --ring: #8b7ae8;
-  --chart-1: #b9a5ff;
+  --ring: #84aff5;
+  --chart-1: #a8c8ff;
   --chart-2: #4ade80;
   --chart-3: #f5b942;
   --chart-4: #7cc4ff;
   --chart-5: #ff7a6b;
 
-  --sidebar: #0b0c10;
+  --sidebar: #0a131e;
   --sidebar-foreground: #cfd3db;
-  --sidebar-primary: #b9a5ff;
-  --sidebar-primary-foreground: #0b0c10;
-  --sidebar-accent: #1e2129;
+  --sidebar-primary: #a8c8ff;
+  --sidebar-primary-foreground: #0a131e;
+  --sidebar-accent: #1b2e45;
   --sidebar-accent-foreground: #ffffff;
   --sidebar-border: rgb(255 255 255 / 0.08);
-  --sidebar-ring: #8b7ae8;
+  --sidebar-ring: #84aff5;
 }
 
 @keyframes ui-enter {

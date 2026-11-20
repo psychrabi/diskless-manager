@@ -32,7 +32,7 @@ export default function MetricsCard() {
   const servicePct = serviceCount > 0 ? (runningServices / serviceCount) * 100 : 0;
 
   return (
-    <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-border bg-border xl:grid-cols-4">
+    <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
       <StatCard
         icon={Laptop2}
         label="Clients online"
