@@ -25,7 +25,7 @@ it("keeps the image page actions inside a responsive action group", () => {
   state.masters = [{ id: "image-1", name: "ubuntu" }];
   const { container } = render(<ImageManagement />);
   const actions = container.querySelector('[data-testid="image-page-actions"]');
-  expect(actions).toHaveClass("flex-col", "sm:flex-row");
+  expect(actions).toHaveClass("grid-cols-2", "sm:flex");
   expect(screen.getByRole("button", { name: "Windows Servicing" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Import Existing" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Create Image" })).toBeInTheDocument();

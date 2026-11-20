@@ -146,8 +146,8 @@ export const ImagesList = ({ masters }) => {
             <p className="mt-1 text-xs text-muted-foreground">Try a different OS filter or search term.</p>
           </div>
         ) : (
-          <Table aria-label="Images">
-            <TableHeader>
+          <Table aria-label="Images" className="block md:table">
+            <TableHeader className="hidden md:table-header-group">
               <TableRow className="bg-muted/20 hover:bg-transparent">
                 <TableHead className="h-9 px-4 text-[10px] font-semibold tracking-[0.08em] uppercase text-muted-foreground">Image</TableHead>
                 <TableHead className="h-9 text-[10px] font-semibold tracking-[0.08em] uppercase text-muted-foreground">Size</TableHead>
@@ -155,13 +155,13 @@ export const ImagesList = ({ masters }) => {
                 <TableHead className="h-9 px-4 text-right text-[10px] font-semibold tracking-[0.08em] uppercase text-muted-foreground">Actions</TableHead>
               </TableRow>
             </TableHeader>
-            <TableBody>
+            <TableBody className="block md:table-row-group">
               {filteredMasters.map((master) => {
                 const windows = isWindowsImage(master);
                 const OsIcon = windows ? Monitor : isLinuxImage(master) ? Terminal : Layers;
                 return (
-                  <TableRow key={master.id} className="group border-border/60 hover:bg-muted/25">
-                    <TableCell className="min-w-64 whitespace-normal px-4 py-3">
+                  <TableRow key={master.id} className="group grid grid-cols-[1fr_auto] items-center gap-x-3 border-border/60 px-4 py-3 hover:bg-muted/25 md:table-row md:p-0">
+                    <TableCell className="col-span-2 min-w-0 whitespace-normal px-0 pb-2 pt-0 md:min-w-48 md:px-4 md:py-3">
                       <div className="flex items-start gap-3">
                         <span className={cn(
                           "flex size-9 shrink-0 items-center justify-center rounded-xl border",
@@ -173,7 +173,7 @@ export const ImagesList = ({ masters }) => {
                         </span>
                         <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-2">
-                            <span className="text-[13px] font-semibold text-foreground">{master.name}</span>
+                            <span className="text-sm font-semibold text-foreground">{master.name}</span>
                             {master.is_default && (
                               <Badge variant="secondary" className="gap-1">
                                 <Star className="size-3" />
@@ -181,7 +181,7 @@ export const ImagesList = ({ masters }) => {
                               </Badge>
                             )}
                           </div>
-                          <p className="mt-0.5 break-all font-mono-data text-[10px] text-muted-foreground">{master.path}</p>
+                          <p className="mt-0.5 break-all font-mono-data text-xs text-muted-foreground">{master.path}</p>
                           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                             {master.status === "missing" && (
                               <span className="text-[10px] text-destructive" role="status">
@@ -197,17 +197,17 @@ export const ImagesList = ({ masters }) => {
                         </div>
                       </div>
                     </TableCell>
-                    <TableCell className="font-mono-data text-[11px] tabular-nums text-muted-foreground">
+                    <TableCell className="px-0 py-0 font-mono-data text-xs tabular-nums text-muted-foreground md:px-3 md:py-3">
                       {master.size_gb} GB
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="justify-self-end px-0 py-0 md:px-3 md:py-3">
                       <Badge variant={master.status === "ready" ? "success" : "destructive"} className="gap-1.5">
                         <span className="size-1.5 rounded-full bg-current" />
                         {master.status === "missing" ? "Missing" : master.status === "failed" ? "Build failed" : master.status === "ready" ? "Available" : master.status}
                       </Badge>
                     </TableCell>
-                    <TableCell className="px-3">
-                      <div className="flex flex-wrap items-center justify-end gap-1">
+                    <TableCell className="col-span-2 px-0 pb-0 pt-3 md:px-3 md:py-3">
+                      <div className="flex flex-wrap items-center gap-1.5 md:justify-end">
                         <Button
                           variant="outline"
                           size="sm"
@@ -233,13 +233,14 @@ export const ImagesList = ({ masters }) => {
                           <DropdownMenuTrigger
                             render={
                               <Button
-                                variant="ghost"
-                                size="icon-sm"
+                                variant="outline"
+                                size="sm"
+                                icon={MoreHorizontal}
                                 aria-label={`More actions for ${master.name}`}
                               />
                             }
                           >
-                            <MoreHorizontal />
+                            <span className="md:hidden">More</span><span className="hidden md:inline">More actions</span>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="min-w-44">
                             <DropdownMenuItem

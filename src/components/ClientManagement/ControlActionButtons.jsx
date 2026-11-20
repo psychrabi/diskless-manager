@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { Play, Power, RefreshCw, ScreenShare } from "lucide-react";
+import { ChevronDown, Play, Power, RefreshCw, ScreenShare } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { updateClient } from "@/api/modules/clients";
 import { useToastStore } from "@/store/useToastStore";
 import PowerActionModal from "./PowerActionModal";
@@ -37,40 +38,25 @@ const ControlActionButtons = ({ client, onActionComplete }) => {
 
   return (
     <>
-      <div className="flex justify-center gap-0">
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          className="size-11 xl:size-8"
-          title="Reboot client"
-          disabled={!isOnline}
-          onClick={() => setPowerAction("reboot")}
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={<Button variant="outline" size="sm" className="h-11 xl:h-8" />}
+          aria-label={`Controls for ${client.name}`}
         >
-          <RefreshCw />
-        </Button>
-
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          className="size-11 xl:size-8"
-          title={isOnline ? "Shutdown client" : "Power on client"}
-          disabled={waking}
-          onClick={() => (isOnline ? setPowerAction("shutdown") : handleWake())}
-        >
-          {isOnline ? <Power /> : <Play />}
-        </Button>
-
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          className="size-11 xl:size-8"
-          title="Remote control"
-          disabled={!isOnline}
-          onClick={() => setRemoteModalOpen(true)}
-        >
-          <ScreenShare />
-        </Button>
-      </div>
+          Controls <ChevronDown data-icon="inline-end" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          {isOnline ? (
+            <>
+              <DropdownMenuItem onClick={() => setRemoteModalOpen(true)}><ScreenShare /> Remote control</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setPowerAction("reboot")}><RefreshCw /> Reboot</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setPowerAction("shutdown")}><Power /> Shut down</DropdownMenuItem>
+            </>
+          ) : (
+            <DropdownMenuItem disabled={waking} onClick={handleWake}><Play /> Power on</DropdownMenuItem>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
 
       {/* Modals */}
       <PowerActionModal

@@ -60,7 +60,7 @@ it("renders key client details and actions in the narrow-screen card", () => {
   expect(within(mobileCard).getByText("PC001")).toBeInTheDocument();
   expect(within(mobileCard).getByText("00:11:22:33:44:55")).toBeInTheDocument();
   expect(within(mobileCard).getByText("192.168.1.101")).toBeInTheDocument();
-  expect(within(mobileCard).getByTitle("Reboot client")).toBeInTheDocument();
+  expect(within(mobileCard).getByRole("button", { name: "Controls for PC001" })).toBeInTheDocument();
   fireEvent.click(within(mobileCard).getByRole("button", { name: "More actions" }));
   expect(onMoreActions).toHaveBeenCalledWith(expect.anything(), client);
 });

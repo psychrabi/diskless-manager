@@ -15,8 +15,9 @@ describe("ClientTableHeader", () => {
     expect(container.querySelector("thead").textContent).toContain("I/O (MB/s)");
     expect(container.querySelector("thead").textContent).toContain("I/O (Total)");
     expect(container.querySelector("thead").textContent).toContain("Name");
+    expect(container.querySelector("thead").textContent).toContain("Network");
     expect(container.querySelector("thead").textContent).toContain("Mode");
     expect(container.querySelector("thead").textContent).toContain("Actions");
-    expect(container.querySelector("thead").textContent).not.toMatch(/Restore Point|Boot disk|Network|iSCSI/);
+    expect(container.querySelector("thead").textContent).not.toMatch(/Restore Point|Boot disk|iSCSI/);
   });
 });

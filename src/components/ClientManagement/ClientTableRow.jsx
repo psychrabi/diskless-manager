@@ -117,6 +117,7 @@ const Detail = ({ label, children }) => (
 );
 
 const ClientTableRow = ({ client, clientMetrics, onMoreActions }) => {
+  const snapshotName = client.snapshot?.split("@").at(-1);
   return (
     <>
       <TableCell colSpan={8} className="p-3 xl:hidden">
@@ -137,13 +138,13 @@ const ClientTableRow = ({ client, clientMetrics, onMoreActions }) => {
           <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3">
             <Detail label="MAC address">{client.mac}</Detail>
             <Detail label="IP address">{client.ip}</Detail>
-            <Detail label="Image">{client.master}</Detail>
+            <Detail label="Boot image"><span title={client.master}>{client.master?.split("/").at(-1)}</span>{snapshotName && <span className="block truncate text-xs text-muted-foreground" title={client.snapshot}>{snapshotName}</span>}</Detail>
             <Detail label="Uptime"><UptimeCell uptimeSeconds={clientMetrics?.uptime_seconds} /></Detail>
             <Detail label="Read / write (MB/s)">
-              <span className="tabular-nums">{clientMetrics?.iscsi?.read_speed_mbps?.toFixed(2) ?? "-"} / {clientMetrics?.iscsi?.write_speed_mbps?.toFixed(2) ?? "-"}</span>
+              {clientMetrics?.iscsi ? <span className="tabular-nums">{clientMetrics.iscsi.read_speed_mbps?.toFixed(2) ?? "—"} / {clientMetrics.iscsi.write_speed_mbps?.toFixed(2) ?? "—"}</span> : "No sample"}
             </Detail>
             <Detail label="Total read / written">
-              {formatDiskBytes(clientMetrics?.iscsi?.total_read_bytes)} / {formatDiskBytes(clientMetrics?.iscsi?.total_write_bytes)}
+              {clientMetrics?.iscsi ? `${formatDiskBytes(clientMetrics.iscsi.total_read_bytes)} / ${formatDiskBytes(clientMetrics.iscsi.total_write_bytes)}` : "No sample"}
             </Detail>
           </dl>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t pt-2">
@@ -171,7 +172,7 @@ const ClientTableRow = ({ client, clientMetrics, onMoreActions }) => {
         <span className="mt-0.5 block text-xs text-muted-foreground">{client.mac}</span>
       </TableCell>
       <TableCell className="hidden text-center text-xs xl:table-cell">
-        <div className="flex gap-1 justify-evenly">
+        {clientMetrics?.iscsi ? <div className="flex gap-2 justify-evenly">
           <RateLine
             metricValue={clientMetrics?.iscsi?.read_speed_mbps}
             icon={MoveUp}
@@ -184,18 +185,19 @@ const ClientTableRow = ({ client, clientMetrics, onMoreActions }) => {
             iconClassName="text-muted-foreground"
             label="Write speed (MB/s)"
           />
-        </div>
+        </div> : <span className="text-muted-foreground">No sample</span>}
       </TableCell>
       <TableCell className="hidden text-center text-xs xl:table-cell max-2xl:hidden">
-        <div className="flex gap-1 justify-evenly">
+        {clientMetrics?.iscsi ? <div className="flex gap-2 justify-evenly">
           <TotalLine icon={MoveUp}
           iconClassName="text-primary" byteValue={clientMetrics?.iscsi?.total_read_bytes} label="Total read" />
           <TotalLine icon={MoveDown}
           iconClassName="text-primary" byteValue={clientMetrics?.iscsi?.total_write_bytes} label="Total written" />
-        </div>
+        </div> : <span className="text-muted-foreground">No sample</span>}
       </TableCell>
       <TableCell className="hidden max-w-40 xl:table-cell">
-        <span className="block truncate text-center text-[13px] text-muted-foreground">{client.master}</span>
+        <span className="block truncate text-center text-[13px]" title={client.master}>{client.master?.split("/").at(-1)}</span>
+        {snapshotName && <span className="block truncate text-center text-xs text-muted-foreground" title={client.snapshot}>{snapshotName}</span>}
       </TableCell>
       <TableCell className="hidden text-center xl:table-cell">
         <div className="flex flex-col items-center gap-1">

@@ -16,13 +16,14 @@ const parseSize = (value) => {
 
 const StorageCard = () => {
   const zpoolStats = useAppStore((state) => state.zpoolStats);
+  const fetchedAt = useAppStore((state) => state.zpoolStatsFetchedAt);
   const { metrics, error } = useMetrics();
   const storage = metrics?.storage;
   const zfs = storage?.zfs;
 
   const health = zpoolStats?.health;
   const healthLabel =
-    !health || health === "-" || health === "ONLINE" ? "ONLINE" : health;
+    !health || health === "-" ? "Unknown" : health;
   const used = parseSize(zpoolStats?.allocated);
   const size = parseSize(zpoolStats?.size);
   const usedPct = used != null && size ? Math.min(100, Math.round((used / size) * 100)) : null;
@@ -38,7 +39,7 @@ const StorageCard = () => {
         </CardTitle>
         {zpoolStats && (
           <CardAction>
-            <Badge variant={healthLabel === "ONLINE" ? "success" : "destructive"} className="gap-1.5">
+            <Badge variant={healthLabel === "ONLINE" ? "success" : healthLabel === "Unknown" ? "secondary" : "destructive"} className="gap-1.5">
               <span className="size-1.5 rounded-full bg-current" />
               {healthLabel}
             </Badge>
@@ -51,7 +52,7 @@ const StorageCard = () => {
             <div className="flex items-end justify-between gap-4">
               <div className="min-w-0">
                 <p className="text-xs font-medium text-muted-foreground">
-                  Allocated
+                  ZFS pool allocation
                 </p>
                 <p className="mt-1 text-3xl font-semibold tracking-[-0.045em] tabular-nums text-foreground">
                   {zpoolStats.allocated}
@@ -85,7 +86,7 @@ const StorageCard = () => {
               {[
                 { icon: MoveUp, label: "Read", value: formatRate(zfs?.read_speed_mbps) },
                 { icon: MoveDown, label: "Write", value: formatRate(zfs?.write_speed_mbps) },
-                { icon: Database, label: "Total", value: formatRate((zfs?.read_speed_mbps ?? 0) + (zfs?.write_speed_mbps ?? 0)) },
+                { icon: Database, label: "Total", value: formatRate(zfs?.read_speed_mbps == null || zfs?.write_speed_mbps == null ? null : zfs.read_speed_mbps + zfs.write_speed_mbps) },
               ].map(({ icon: Icon, label, value }) => (
                 <div key={label} className="min-w-0">
                   <div className="flex items-center gap-1 text-[11px] font-medium text-muted-foreground">
@@ -106,7 +107,10 @@ const StorageCard = () => {
         )}
 
         {error ? (
-          <p className="text-center text-sm text-destructive">Metrics stream is unavailable.</p>
+          <p className="text-sm text-muted-foreground">
+            Live I/O samples unavailable.
+            {zpoolStats && fetchedAt && ` Pool status fetched at ${new Date(fetchedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.`}
+          </p>
         ) : storage?.warming_up ? (
           <p className="text-center text-xs text-muted-foreground">Collecting a second sample…</p>
         ) : !zfs ? (

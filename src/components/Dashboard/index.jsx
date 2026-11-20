@@ -57,17 +57,17 @@ export default function Dashboard() {
       )}
       <MetricsCard />
       <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)]">
-        <AlarmInbox />
-        <ServicesStatus />
+        <div className="flex min-w-0 flex-col gap-5">
+          <AlarmInbox />
+          <StorageCard />
+        </div>
+        <div className="flex min-w-0 flex-col gap-5">
+          <ServicesStatus />
+          <StorageMaintenanceCard />
+        </div>
       </div>
 
       <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-12">
-        <div className="xl:col-span-5">
-          <StorageCard />
-        </div>
-        <div className="xl:col-span-7">
-          <StorageMaintenanceCard />
-        </div>
         <div className="xl:col-span-4">
           <ArcCacheCard />
         </div>

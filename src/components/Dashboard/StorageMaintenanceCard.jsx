@@ -216,7 +216,7 @@ export default function StorageMaintenanceCard() {
                 )}
               </>
             ) : (
-              <p className="text-sm text-muted-foreground">No ZFS pool was found.</p>
+              <p className="text-sm text-muted-foreground">No maintenance status returned for a ZFS pool.</p>
             )}
 
             <div className="grid gap-4 border-t border-border/60 pt-4 sm:grid-cols-2">
