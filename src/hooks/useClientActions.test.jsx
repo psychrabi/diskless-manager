@@ -36,6 +36,19 @@ it("saves an active managed Super session through the lifecycle API", async () =
   expect(closeContextMenu).toHaveBeenCalledOnce();
 });
 
+it("retries the recorded save without allowing it to be discarded", async () => {
+  const { result } = renderHook(() => useClientActions());
+  const client = { id: "client-1", name: "PC001", status: "Offline" };
+  const status = { session: { state: "recoveryrequired", resume_state: "saving" } };
+
+  await act(() => result.current.discardSuper(client, status));
+  await act(() => result.current.saveSuper(client, status));
+
+  expect(mocks.discardSuper).not.toHaveBeenCalled();
+  expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ title: "Retry Super Save" }));
+  expect(mocks.saveSuper).toHaveBeenCalledWith("client-1");
+});
+
 it("confirms discard and calls the lifecycle API", async () => {
   const { result } = renderHook(() => useClientActions());
 

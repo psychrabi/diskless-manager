@@ -122,6 +122,12 @@ export const ContextMenu = ({
   const canStartNormal = hasReadyAssignment && !isOnline && !targetClient?.mutation_state && !hasPendingRecovery && !superLoading;
   const sessionCanFinish = !isOnline && !targetClient?.mutation_state && !hasPendingRecovery && sessionState === "active";
 
+  const retrySave = sessionState === "recoveryrequired" && session?.resume_state === "saving";
+  const retryDiscard = sessionState === "recoveryrequired" && session?.resume_state === "discarding";
+  const canRetry = !isOnline && !targetClient?.mutation_state && !hasPendingRecovery;
+  const canSave = !session?.verification_only && (sessionCanFinish || (retrySave && canRetry));
+  const canDiscard = sessionCanFinish || (retryDiscard && canRetry);
+
   const handleAction = (cb) => {
     cb(targetClient);
     onClose();
@@ -149,11 +155,11 @@ export const ContextMenu = ({
             <SectionHeader label="Super session" />
             <div className="px-3 py-1.5 text-xs text-muted-foreground">
               <Badge variant="secondary">Super session: {sessionState === "recoveryrequired" ? "Recovery required" : session?.state?.replaceAll("_", " ")}</Badge>
-              <p className="mt-1">Save and Discard are available after the client is offline.</p>
+              <p className="mt-1">Take the client offline before finishing the Super session.</p>
               {hasPendingRecovery && <p className="mt-1 text-destructive">Client storage recovery is pending.</p>}
             </div>
-            <MenuItem icon={History} label={session?.verification_only ? "Save unavailable (verification only)" : "Save Super Changes"} disabled />
-            <MenuItem icon={ShieldAlert} label="Discard Super Changes" variant="destructive" disabled />
+            <MenuItem icon={History} label={session?.verification_only ? "Save unavailable (verification only)" : retrySave ? "Retry Super Save" : "Save Super Changes"} disabled />
+            <MenuItem icon={ShieldAlert} label={retryDiscard ? "Retry Super Discard" : "Discard Super Changes"} variant="destructive" disabled />
           </>
         )}
         {!isOnline && user?.role === "admin" && (
@@ -180,17 +186,17 @@ export const ContextMenu = ({
                 </div>
                 <MenuItem
                   icon={History}
-                  label={session?.verification_only ? "Save unavailable (verification only)" : "Save Super Changes"}
+                  label={session?.verification_only ? "Save unavailable (verification only)" : retrySave ? "Retry Super Save" : "Save Super Changes"}
                   variant="secondary"
-                  disabled={!sessionCanFinish || session?.verification_only}
-                  onClick={() => sessionCanFinish && !session?.verification_only && actions.saveSuper(targetClient, superStatus)}
+                  disabled={!canSave}
+                  onClick={() => canSave && actions.saveSuper(targetClient, superStatus)}
                 />
                 <MenuItem
                   icon={ShieldAlert}
-                  label="Discard Super Changes"
+                  label={retryDiscard ? "Retry Super Discard" : "Discard Super Changes"}
                   variant="destructive"
-                  disabled={!sessionCanFinish}
-                  onClick={() => sessionCanFinish && actions.discardSuper(targetClient, superStatus)}
+                  disabled={!canDiscard}
+                  onClick={() => canDiscard && actions.discardSuper(targetClient, superStatus)}
                 />
               </>
             ) : isSuper ? (

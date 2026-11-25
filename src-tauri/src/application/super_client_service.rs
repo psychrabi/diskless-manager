@@ -459,18 +459,6 @@ impl SuperClientService {
     async fn recover_one(&self, mut session: SuperSession) -> Result<()> {
         self.validate_no_conflicting_disk_owner(&session.client_id)
             .await?;
-        if session.state == SuperSessionState::RecoveryRequired {
-            let action = session
-                .resume_state
-                .context("recovery record has no resumable operation")?;
-            anyhow::ensure!(
-                self.sessions
-                    .transition_state(&session.id, SuperSessionState::RecoveryRequired, action)
-                    .await?,
-                "recovery state changed"
-            );
-            session.state = action;
-        }
         let client_id =
             ClientId::from_string(session.client_id.clone()).map_err(anyhow::Error::from)?;
         let client = self
@@ -495,6 +483,18 @@ impl SuperClientService {
                 "Super-session state changed while normalizing its working clone"
             );
             session.working_clone = working_dataset;
+        }
+        if session.state == SuperSessionState::RecoveryRequired {
+            let action = session
+                .resume_state
+                .context("recovery record has no resumable operation")?;
+            anyhow::ensure!(
+                self.sessions
+                    .transition_state(&session.id, SuperSessionState::RecoveryRequired, action)
+                    .await?,
+                "recovery state changed"
+            );
+            session.state = action;
         }
         let result = match session.state {
             SuperSessionState::Preparing => {
@@ -977,10 +977,6 @@ impl SuperClientService {
             .await?
             .context("client has no Super session")?;
         anyhow::ensure!(
-            session.state == SuperSessionState::Active,
-            "Super session is not active and requires recovery"
-        );
-        anyhow::ensure!(
             !save || !session.verification_only,
             "verification-only sessions cannot be saved"
         );
@@ -989,6 +985,15 @@ impl SuperClientService {
         } else {
             SuperSessionState::Discarding
         };
+        if session.state == SuperSessionState::RecoveryRequired
+            && session.resume_state == Some(expected)
+        {
+            return self.recover_one(session).await;
+        }
+        anyhow::ensure!(
+            session.state == SuperSessionState::Active,
+            "Super session is not active and requires recovery"
+        );
         anyhow::ensure!(
             self.sessions
                 .transition_state(&session.id, SuperSessionState::Active, expected)
@@ -2952,7 +2957,8 @@ mod tests {
             calls: Mutex::new(Vec::new()),
         });
         service.volume_safety = retry.clone();
-        service.recover_incomplete().await.unwrap();
+        assert!(service.discard(client.id.as_str()).await.is_err());
+        service.save(client.id.as_str()).await.unwrap();
         assert_eq!(
             retry.calls.lock().unwrap().as_slice(),
             guard.calls.lock().unwrap().as_slice()

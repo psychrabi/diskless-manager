@@ -299,12 +299,13 @@ export const useClientActions = (
       showError("Client Management", "Verification-only sessions cannot be saved.");
       return;
     }
-    if (isOnlineStatus(client.status) || client.mutation_state || client.recovery_required || status?.storage_recovery || session?.state !== "active") {
-      showError("Client Management", "Save is available only for an offline active Super session with no pending mutation or recovery.");
+    const retry = session?.state?.replaceAll("_", "") === "recoveryrequired" && session.resume_state === "saving";
+    if (isOnlineStatus(client.status) || client.mutation_state || client.recovery_required || status?.storage_recovery || (session?.state !== "active" && !retry)) {
+      showError("Client Management", "Save is available only for an offline client with an active Super session or a matching pending operation.");
       return;
     }
     const ok = await confirm({
-      title: "Save Super Changes",
+      title: retry ? "Retry Super Save" : "Save Super Changes",
       description: `Publish ${client.name}'s installer changes as a new image revision and return the client to normal mode?`,
       confirmText: "Save Changes",
       cancelText: "Cancel",
@@ -318,6 +319,7 @@ export const useClientActions = (
       fetchData?.();
       closeContextMenu?.();
     } catch (error) {
+      closeContextMenu?.();
       showError("Client Management", `Failed to save Super changes: ${error.message || String(error)}`);
     }
   }, [confirm, showError, success, fetchData, closeContextMenu]);
@@ -325,12 +327,13 @@ export const useClientActions = (
   const handleDiscardSuper = useCallback(async (client, status) => {
     const session = status?.session;
     if (!client) return;
-    if (isOnlineStatus(client.status) || client.mutation_state || client.recovery_required || status?.storage_recovery || session?.state !== "active") {
-      showError("Client Management", "Discard is available only for an offline active Super session with no pending mutation or recovery.");
+    const retry = session?.state?.replaceAll("_", "") === "recoveryrequired" && session.resume_state === "discarding";
+    if (isOnlineStatus(client.status) || client.mutation_state || client.recovery_required || status?.storage_recovery || (session?.state !== "active" && !retry)) {
+      showError("Client Management", "Discard is available only for an offline client with an active Super session or a matching pending operation.");
       return;
     }
     const ok = await confirm({
-      title: "Discard Super Changes",
+      title: retry ? "Retry Super Discard" : "Discard Super Changes",
       description: `Permanently remove ${client.name}'s Super-session changes and restore its prior image assignment?`,
       confirmText: "Discard Changes",
       cancelText: "Cancel",
@@ -344,6 +347,7 @@ export const useClientActions = (
       fetchData?.();
       closeContextMenu?.();
     } catch (error) {
+      closeContextMenu?.();
       showError("Client Management", `Failed to discard Super changes: ${error.message || String(error)}`);
     }
   }, [confirm, showError, success, fetchData, closeContextMenu]);

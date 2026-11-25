@@ -585,7 +585,7 @@ pub async fn super_status(
             )
         })?;
     let value = if let Some(s) = session {
-        json!({"id":s.id,"client_id":s.client_id,"prior_image_id":s.prior_image_id,"prior_snapshot":s.prior_snapshot,"installer_media_id":s.installer_media_id,"verification_only":s.verification_only,"state":format!("{:?}",s.state).to_lowercase(),"created_at":s.created_at,"updated_at":s.updated_at})
+        json!({"id":s.id,"client_id":s.client_id,"prior_image_id":s.prior_image_id,"prior_snapshot":s.prior_snapshot,"installer_media_id":s.installer_media_id,"verification_only":s.verification_only,"state":format!("{:?}",s.state).to_lowercase(),"resume_state":s.resume_state.map(|state| state.as_str()),"created_at":s.created_at,"updated_at":s.updated_at})
     } else {
         Value::Null
     };

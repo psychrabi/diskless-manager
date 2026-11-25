@@ -94,6 +94,17 @@ it("disables finishing actions while a Super session needs recovery", () => {
   expect(screen.getByRole("button", { name: "Discard Super Changes" })).toBeDisabled();
 });
 
+it("offers Retry Super Save for an offline client with a pending save", () => {
+  const client = { id: "c1", name: "PC001", status: "Offline" };
+  const superStatus = { session: { state: "recoveryrequired", resume_state: "saving" } };
+  show(client, { superStatus });
+  const retry = screen.getByRole("button", { name: "Retry Super Save" });
+  expect(retry).toBeEnabled();
+  fireEvent.click(retry);
+  expect(actions.saveSuper).toHaveBeenCalledWith(client, superStatus);
+  expect(screen.getByRole("button", { name: "Discard Super Changes" })).toBeDisabled();
+});
+
 it("treats the API's lowercase online status as online for Super controls", () => {
   show({ id: "c1", name: "PC001", ip: "192.0.2.1", mac: "02:00:00:00:00:01", status: "online", master: "tank/image/windows", snapshot: "tank/image/windows@clean", pxe_mode: "uefi" }, {
     targetImage: { os_type: "windows", status: "ready" },
