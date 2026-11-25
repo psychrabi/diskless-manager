@@ -4,6 +4,7 @@ import { useConfirm } from "@/contexts/confirmDialog";
 import { downloadBackup, restoreBackup } from "@/api/modules/backup";
 import { Button, Card } from "@/components/ui";
 import { Label } from "@/components/ui/label";
+import { Archive } from "lucide-react";
 
 export default function BackupManagement() {
   const { user } = useAuth();
@@ -52,7 +53,7 @@ export default function BackupManagement() {
   }
 
   return (
-    <Card title="Application backup and restore" subtitle="Save or recover application data">
+    <Card title="Application backup and restore" subtitle="Save or recover application data" icon={Archive}>
       <div className="space-y-4">
         <p className="text-sm text-muted-foreground">
           Backups include users, clients, image metadata, settings, licenses, configuration files, and authentication secrets.

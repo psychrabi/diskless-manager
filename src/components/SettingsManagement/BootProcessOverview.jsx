@@ -23,6 +23,7 @@ export default function BootProcessOverview() {
     <Card
       title="Boot Process Overview"
       icon={GitPullRequestArrow}
+      className="h-full"
     >
       <ol aria-label="Network boot sequence" className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {bootSteps.map((step, i) => {

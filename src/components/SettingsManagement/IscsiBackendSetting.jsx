@@ -1,6 +1,7 @@
 import { getSettings, saveSettings } from "@/api/modules/system";
 import { Card } from "@/components/ui";
 import { Label } from "@/components/ui/label";
+import { Save } from "lucide-react";
 import { NativeSelect } from "@/components/ui/native-select";
 import { useConfirm } from "@/contexts/confirmDialog";
 import { useAppStore } from "@/store/useAppStore";
@@ -50,7 +51,7 @@ const IscsiBackendSetting = () => {
   };
 
   return (
-    <Card title="iSCSI Provisioning Backend" className="h-full">
+    <Card title="iSCSI Provisioning Backend" icon={Save} className="h-full">
       <Label htmlFor="iscsi-backend">Backend</Label>
       <NativeSelect
         id="iscsi-backend"

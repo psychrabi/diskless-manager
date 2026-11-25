@@ -80,7 +80,7 @@ const SettingsManagement = () => {
             <NetworkConfig />
           </section>
 
-          <div className="grid gap-5 2xl:grid-cols-2">
+          <div className="grid gap-5 2xl:grid-cols-2 items-stretch">
             <section id="iscsi-backend" className="scroll-mt-6">
               <IscsiBackendSetting />
             </section>
@@ -96,7 +96,7 @@ const SettingsManagement = () => {
             ))}
           </div>
 
-          <div className="grid gap-5 2xl:grid-cols-2">
+          <div className="grid gap-5 2xl:grid-cols-2 items-stretch">
             <section id="enrollment" className="scroll-mt-6">
               <EnrollmentControl />
             </section>
