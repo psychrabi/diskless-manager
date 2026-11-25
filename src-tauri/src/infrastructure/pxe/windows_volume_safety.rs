@@ -9,7 +9,7 @@ pub struct WindowsVolumeSafetyResult {
     pub disk_released: bool,
 }
 
-fn hive_dirty(path: &Path) -> Result<bool> {
+pub(crate) fn hive_dirty(path: &Path) -> Result<bool> {
     let mut header = [0u8; 512];
     std::fs::File::open(path)?.read_exact(&mut header)?;
     if &header[..4] != b"regf" {
@@ -59,6 +59,21 @@ fn ensure_not_hibernated(root: &Path) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn checked_system_hive(root: &Path) -> Result<std::path::PathBuf> {
+    ensure_not_hibernated(root)?;
+    let config = root.join("Windows/System32/config").canonicalize()?;
+    anyhow::ensure!(
+        config.starts_with(root),
+        "SYSTEM configuration escapes candidate volume"
+    );
+    let hive = config.join("SYSTEM");
+    anyhow::ensure!(
+        hive.canonicalize()?.starts_with(&config),
+        "SYSTEM hive escapes candidate configuration directory"
+    );
+    Ok(hive)
+}
+
 pub fn check_offline_volume(root: &Path) -> Result<WindowsVolumeSafetyResult> {
     if !cfg!(windows) {
         bail!("native SYSTEM recovery requires the Windows worker");
@@ -72,17 +87,8 @@ pub fn check_offline_volume(root: &Path) -> Result<WindowsVolumeSafetyResult> {
             "refusing the worker's running Windows installation"
         );
     }
-    ensure_not_hibernated(&root)?;
-    let config = root.join("Windows/System32/config").canonicalize()?;
-    anyhow::ensure!(
-        config.starts_with(&root),
-        "SYSTEM configuration escapes candidate volume"
-    );
-    let hive = config.join("SYSTEM");
-    anyhow::ensure!(
-        hive.canonicalize()?.starts_with(&config),
-        "SYSTEM hive escapes candidate configuration directory"
-    );
+    let hive = checked_system_hive(&root)?;
+    let config = hive.parent().context("SYSTEM hive has no parent")?;
     let dirty = hive_dirty(&hive)?;
     if dirty {
         for name in ["SYSTEM.LOG1", "SYSTEM.LOG2"] {
@@ -91,7 +97,7 @@ pub fn check_offline_volume(root: &Path) -> Result<WindowsVolumeSafetyResult> {
                     .join(name)
                     .canonicalize()
                     .with_context(|| format!("dirty SYSTEM requires {name}"))?
-                    .starts_with(&config),
+                    .starts_with(config),
                 "SYSTEM log escapes candidate configuration directory"
             );
             let metadata = std::fs::metadata(config.join(name)).with_context(|| {

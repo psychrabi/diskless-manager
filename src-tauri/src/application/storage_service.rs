@@ -255,6 +255,13 @@ impl StorageService {
             .with_context(|| format!("storage volume '{dataset}' must be unmounted"))
     }
 
+    pub(crate) fn verify_windows_super_candidate(&self, dataset: &str) -> Result<()> {
+        crate::infrastructure::pxe::windows_driver_coverage::verify_super_candidate(
+            self.image_backend.as_ref(),
+            dataset,
+        )
+    }
+
     pub fn clone_origin(&self, dataset: &str) -> Result<Option<String>> {
         self.image_backend.clone_origin(dataset)
     }

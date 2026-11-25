@@ -20,38 +20,6 @@ use chrono::Utc;
 use std::sync::Arc;
 use uuid::Uuid;
 
-/// Injectable worker boundary: success requires native checks and confirmed disk release.
-trait VolumeSafetyGuard: Send + Sync {
-    fn check<'a>(
-        &'a self,
-        profile: crate::core::config::WindowsServicingConfig,
-        connection: crate::infrastructure::pxe::windows_iscsi_servicing::WindowsIscsiConnection,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>>;
-}
-struct RemoteVolumeSafetyGuard;
-impl VolumeSafetyGuard for RemoteVolumeSafetyGuard {
-    fn check<'a>(
-        &'a self,
-        profile: crate::core::config::WindowsServicingConfig,
-        connection: crate::infrastructure::pxe::windows_iscsi_servicing::WindowsIscsiConnection,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
-        Box::pin(async move {
-            crate::infrastructure::pxe::RemoteWindowsServicer::new()
-                .check_volume(
-                    crate::infrastructure::pxe::RemoteWindowsCapabilitiesRequest {
-                        host: profile.worker_host,
-                        username: profile.worker_username,
-                        password: None,
-                        executable_path: Some(profile.helper_executable_path),
-                    },
-                    connection,
-                )
-                .await?;
-            Ok(())
-        })
-    }
-}
-
 /// Operational prerequisites that callers can resolve without changing media.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum SuperSessionConflict {
@@ -91,7 +59,8 @@ pub struct SuperClientService {
     settings: Settings,
     media_service: InstallerMediaService,
     mutation_locks: ClientMutationLocks,
-    volume_safety: Arc<dyn VolumeSafetyGuard>,
+    #[cfg(test)]
+    volume_safety: Option<Arc<tests::FakeVolumeSafety>>,
 }
 
 /// Dependencies required to construct a [`SuperClientService`].
@@ -121,7 +90,8 @@ impl SuperClientService {
             settings: deps.settings,
             media_service: deps.media_service,
             mutation_locks: deps.mutation_locks,
-            volume_safety: Arc::new(RemoteVolumeSafetyGuard),
+            #[cfg(test)]
+            volume_safety: None,
         }
     }
 
@@ -1030,68 +1000,44 @@ impl SuperClientService {
         }
     }
 
-    async fn check_windows_candidate(
+    fn check_windows_candidate(
         &self,
         session: &SuperSession,
         revision: &crate::core::image::Image,
     ) -> Result<()> {
         use crate::infrastructure::{
-            iscsi::IscsiTargetSpec,
-            pxe::windows_iscsi_servicing::{WindowsIscsiConnection, SERVICING_IQN_PREFIX},
+            iscsi::IscsiTargetSpec, pxe::windows_iscsi_servicing::SERVICING_IQN_PREFIX,
         };
-        let profile = self.settings.windows_servicing.clone();
-        anyhow::ensure!(
-            !profile.worker_host.trim().is_empty() && !profile.worker_username.trim().is_empty() && !profile.iscsi_portal.trim().is_empty(),
-            "configure the Windows servicing worker SSH host, username and iSCSI portal in System Settings before saving Windows"
-        );
-        let job = Uuid::parse_str(&session.id)
-            .context("Windows save requires a UUID Super session identifier")?;
-        let target = format!("{SERVICING_IQN_PREFIX}{job}");
-        let backstore = format!("super_check_{}", job.simple());
         self.storage.validate_unmounted(&revision.name)?;
-        let chap = ChapCredentials::generate(&format!("super-check-{job}"))?;
-        let mut spec = IscsiTargetSpec::new(&target, &backstore, &revision.path, 0);
-        spec.chap = Some(chap.clone());
-        // Deterministic names permit safe retry after a process interruption. Only
-        // matching candidate resources may be removed, never another target's LUNs.
-        if self.iscsi.target_exists(&target)? {
-            let state = self.iscsi.inspect_target(&spec)?;
-            let actual = self.iscsi.list_target_luns(&target)?;
-            anyhow::ensure!(
-                actual.len() == 1
-                    && actual[0].backstore == backstore
-                    && state.luns.len() == 1
-                    && state.luns[0].backstore == backstore
-                    && state.luns[0].block_device_matches,
-                "Windows safety target ownership mismatch; inspect retained Super recovery"
-            );
-            self.iscsi
-                .remove_target_with_backstores(&target, std::slice::from_ref(&backstore))?;
-            self.iscsi.remove_target(&target)?;
+        if let Ok(job) = Uuid::parse_str(&session.id) {
+            let target = format!("{SERVICING_IQN_PREFIX}{job}");
+            let backstore = format!("super_check_{}", job.simple());
+            let spec = IscsiTargetSpec::new(&target, &backstore, &revision.path, 0);
+            // Older saves can leave a servicing target behind. Only
+            // matching candidate resources may be removed, never another target's LUNs.
+            if self.iscsi.target_exists(&target)? {
+                let state = self.iscsi.inspect_target(&spec)?;
+                let actual = self.iscsi.list_target_luns(&target)?;
+                anyhow::ensure!(
+                    actual.len() == 1
+                        && actual[0].backstore == backstore
+                        && state.luns.len() == 1
+                        && state.luns[0].backstore == backstore
+                        && state.luns[0].block_device_matches,
+                    "Windows safety target ownership mismatch; inspect retained Super recovery"
+                );
+                self.iscsi
+                    .remove_target_with_backstores(&target, std::slice::from_ref(&backstore))?;
+                self.iscsi.remove_target(&target)?;
+            }
         }
-        let size = self.images.get_info(&revision.id).await?.virtual_size;
-        let connection = WindowsIscsiConnection {
-            portal: profile.iscsi_portal.clone(),
-            target_iqn: target.clone(),
-            chap_username: chap.username,
-            chap_password: chap.password,
-            expected_size_bytes: size,
-        };
-        connection.validate()?;
-        self.iscsi.create_target_transaction(&spec)?;
-        // On error retain candidate, target and Super recovery record: a timed-out
-        // SSH command may still own a mounted hive on the Windows worker.
-        self.volume_safety
-            .check(profile, connection)
-            .await
-            .context("Windows candidate safety verification failed")?;
-        // The application provisioner refuses this removal while any target
-        // session exists, covering dynamic worker ACLs as well as named ACLs.
-        self.iscsi
-            .remove_target_with_backstores(&target, std::slice::from_ref(&backstore))?;
-        self.iscsi.remove_target(&target)?;
-        self.storage.validate_unmounted(&revision.name)?;
-        Ok(())
+        #[cfg(test)]
+        if let Some(guard) = &self.volume_safety {
+            return guard.check(&revision.name);
+        }
+        self.storage
+            .verify_windows_super_candidate(&revision.name)?;
+        self.storage.validate_unmounted(&revision.name)
     }
 
     async fn finish_storage(
@@ -1192,7 +1138,8 @@ impl SuperClientService {
                     )
                     .await?;
                 if revision.os_type == crate::core::image::OsType::Windows {
-                    self.check_windows_candidate(session, &revision).await?;
+                    self.check_windows_candidate(session, &revision)
+                        .context("Windows candidate safety verification failed")?;
                 }
                 self.ensure_snapshot(
                     &revision.id,
@@ -2796,22 +2743,15 @@ mod tests {
             .any(|snapshot| snapshot.name == snapshot_name));
     }
 
-    struct FakeVolumeSafety {
+    pub(super) struct FakeVolumeSafety {
         fail: bool,
         calls: Mutex<Vec<String>>,
     }
-    impl VolumeSafetyGuard for FakeVolumeSafety {
-        fn check<'a>(
-            &'a self,
-            _profile: crate::core::config::WindowsServicingConfig,
-            connection: crate::infrastructure::pxe::windows_iscsi_servicing::WindowsIscsiConnection,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
-            Box::pin(async move {
-                connection.validate()?;
-                self.calls.lock().unwrap().push(connection.target_iqn);
-                anyhow::ensure!(!self.fail, "injected native replay failure");
-                Ok(())
-            })
+    impl FakeVolumeSafety {
+        pub(super) fn check(&self, candidate: &str) -> Result<()> {
+            self.calls.lock().unwrap().push(candidate.to_owned());
+            anyhow::ensure!(!self.fail, "injected offline verification failure");
+            Ok(())
         }
     }
 
@@ -2849,59 +2789,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn windows_save_requires_worker_and_retains_unpublished_candidate() {
-        let (service, clients, sessions, backend, _, client, _root) = fixture().await;
-        sqlx::query(
-            "UPDATE images SET os_type = 'windows' WHERE name = 'pool/super-working-session1'",
-        )
-        .execute(sessions.pool())
-        .await
-        .unwrap();
-        backend
-            .datasets
-            .lock()
-            .unwrap()
-            .insert("pool/super-working-session1".into());
-        sessions
-            .insert(&active_session(&client, SuperSessionState::Active))
-            .await
-            .unwrap();
-        let error = service.save(client.id.as_str()).await.unwrap_err();
-        assert!(format!("{error:#}").contains("configure the Windows servicing worker"));
-        let candidate = service
-            .images
-            .get("pool/super-revision-session1")
-            .await
-            .unwrap();
-        assert_eq!(candidate.status, "preparing");
-        assert!(service
-            .images
-            .snapshots(&candidate.id)
-            .await
-            .unwrap()
-            .is_empty());
-        assert_eq!(
-            clients
-                .find_by_id(&client.id)
-                .await
-                .unwrap()
-                .unwrap()
-                .master,
-            client.master
-        );
-        assert_eq!(
-            sessions
-                .get_for_client(client.id.as_str())
-                .await
-                .unwrap()
-                .unwrap()
-                .state,
-            SuperSessionState::RecoveryRequired
-        );
-    }
-
-    #[tokio::test]
-    async fn windows_save_native_failure_is_retryable_before_publication() {
+    async fn windows_save_without_worker_retries_offline_verification_before_publication() {
         let (mut service, clients, sessions, backend, _, client, _root) = fixture().await;
         sqlx::query(
             "UPDATE images SET os_type = 'windows' WHERE name = 'pool/super-working-session1'",
@@ -2917,16 +2805,13 @@ mod tests {
         let mut session = active_session(&client, SuperSessionState::Active);
         session.id = "12345678-1234-1234-1234-123456789abc".into();
         sessions.insert(&session).await.unwrap();
-        service.settings.windows_servicing.worker_host = "worker.example.test".into();
-        service.settings.windows_servicing.worker_username = "servicer".into();
-        service.settings.windows_servicing.iscsi_portal = "192.0.2.1".into();
         let guard = Arc::new(FakeVolumeSafety {
             fail: true,
             calls: Mutex::new(Vec::new()),
         });
-        service.volume_safety = guard.clone();
+        service.volume_safety = Some(guard.clone());
         let error = service.save(client.id.as_str()).await.unwrap_err();
-        assert!(format!("{error:#}").contains("injected native replay failure"));
+        assert!(format!("{error:#}").contains("injected offline verification failure"));
         assert_eq!(guard.calls.lock().unwrap().len(), 1);
         let candidate = service
             .images
@@ -2956,7 +2841,7 @@ mod tests {
             fail: false,
             calls: Mutex::new(Vec::new()),
         });
-        service.volume_safety = retry.clone();
+        service.volume_safety = Some(retry.clone());
         assert!(service.discard(client.id.as_str()).await.is_err());
         service.save(client.id.as_str()).await.unwrap();
         assert_eq!(

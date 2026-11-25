@@ -93,6 +93,36 @@ fn inspect_clone(
     boot_nic_ids: &[String],
     architecture: &str,
 ) -> Result<bool> {
+    inspect_windows_clone(backend, clone, |root| {
+        driver_store_covers_boot_nic(root, boot_nic_ids, architecture)
+    })
+}
+
+/// Inspect a detached candidate without writing to its Windows volume.
+pub(crate) fn verify_super_candidate(backend: &dyn ImageBackend, clone: &str) -> Result<()> {
+    backend.settle_device_changes()?;
+    anyhow::ensure!(
+        inspect_windows_clone(backend, clone, verify_super_volume)?,
+        "no Windows installation was found on the candidate"
+    );
+    Ok(())
+}
+
+fn verify_super_volume(root: &Path) -> Result<bool> {
+    use super::windows_volume_safety::{checked_system_hive, hive_dirty};
+    let hive = checked_system_hive(&root.canonicalize()?)?;
+    anyhow::ensure!(
+        !hive_dirty(&hive)?,
+        "Windows SYSTEM hive is dirty; shut down Windows fully before saving"
+    );
+    Ok(true)
+}
+
+fn inspect_windows_clone(
+    backend: &dyn ImageBackend,
+    clone: &str,
+    inspect: impl Fn(&Path) -> Result<bool>,
+) -> Result<bool> {
     let probe = backend
         .probe_boot(clone)
         .with_context(|| format!("failed to inspect partitions of '{clone}'"))?;
@@ -127,7 +157,7 @@ fn inspect_clone(
             continue;
         }
         let inspection = if mount.path().join("Windows/System32").is_dir() {
-            driver_store_covers_boot_nic(mount.path(), boot_nic_ids, architecture)
+            inspect(mount.path())
         } else {
             Ok(false)
         };
@@ -164,7 +194,7 @@ fn inspect_clone(
 
 fn mount_read_only(device: &Path, mountpoint: &Path) -> Result<()> {
     let output = Command::new("ntfs-3g")
-        .args(["-o", "ro,noatime,nodev,nosuid,noexec"])
+        .args(["-o", "ro,norecover,noatime,nodev,nosuid,noexec"])
         .arg(device)
         .arg(mountpoint)
         .output()
@@ -495,6 +525,40 @@ mod tests {
     use crate::core::image::BootProbe;
     use crate::infrastructure::image::ImageBackendInfo;
     use std::sync::Mutex;
+
+    #[test]
+    fn super_volume_requires_a_clean_shutdown() {
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("Windows/System32/config");
+        fs::create_dir_all(&config).unwrap();
+        let write_hive = |sequence: u32| {
+            let mut header = [0; 512];
+            header[..4].copy_from_slice(b"regf");
+            let words = [(4, 2u32), (8, sequence), (0x14, 1), (0x18, 5), (0x20, 1)];
+            for (offset, word) in words {
+                header[offset..offset + 4].copy_from_slice(&word.to_le_bytes());
+            }
+            let checksum = words
+                .iter()
+                .fold(u32::from_le_bytes(*b"regf"), |sum, (_, word)| sum ^ word);
+            header[0x1fc..].copy_from_slice(&checksum.to_le_bytes());
+            fs::write(config.join("SYSTEM"), header).unwrap();
+        };
+
+        write_hive(2);
+        assert!(verify_super_volume(root.path()).unwrap());
+        write_hive(3);
+        assert!(verify_super_volume(root.path())
+            .unwrap_err()
+            .to_string()
+            .contains("hive is dirty"));
+        write_hive(2);
+        fs::write(root.path().join("hiberfil.sys"), b"hibr").unwrap();
+        assert!(verify_super_volume(root.path())
+            .unwrap_err()
+            .to_string()
+            .contains("Windows is hibernated"));
+    }
 
     #[derive(Default)]
     struct CleanupBackend {

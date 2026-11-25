@@ -13,7 +13,6 @@ use crate::{
     api::handlers::clients::ErrorResponse,
     application::super_client_service::SuperSessionConflict,
     domain::ClientId,
-    error::AppError,
     persistence::repositories::installer_media::{
         BootVerification, InstallerMedia, InstallerMediaType,
     },
@@ -38,20 +37,6 @@ fn admin(claims: &Claims) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
 /// A failed Windows safety check is an operational failure, not bad input.
 /// Classify it before the generic validation heuristics so the UI does not
 /// blame the media or submitted values.
-fn windows_worker_unavailable(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| {
-        matches!(
-            cause.downcast_ref::<AppError>(),
-            Some(
-                AppError::SshConnection(_)
-                    | AppError::SshTimeout
-                    | AppError::SshCommand(_)
-                    | AppError::SshAuth(_)
-            )
-        ) || cause.to_string().contains("Windows servicing worker")
-    })
-}
-
 fn windows_safety_failure(error: &anyhow::Error) -> bool {
     error
         .chain()
@@ -70,12 +55,10 @@ fn safe_error(error: &anyhow::Error) -> (StatusCode, Json<ErrorResponse>) {
     }
     let detail = format!("{error:#}").to_ascii_lowercase();
     let safety_failure = windows_safety_failure(error);
-    let status = if detail.contains("not cataloged") || detail.contains("does not exist") {
-        StatusCode::NOT_FOUND
-    } else if windows_worker_unavailable(error) {
-        StatusCode::SERVICE_UNAVAILABLE
-    } else if safety_failure {
+    let status = if safety_failure {
         StatusCode::CONFLICT
+    } else if detail.contains("not cataloged") || detail.contains("does not exist") {
+        StatusCode::NOT_FOUND
     } else if detail.contains("exceed")
         || detail.contains("must be")
         || detail.contains("invalid")
@@ -104,12 +87,9 @@ fn safe_error(error: &anyhow::Error) -> (StatusCode, Json<ErrorResponse>) {
     }
     let message = match status {
         StatusCode::NOT_FOUND => "Requested media or client was not found",
-        StatusCode::SERVICE_UNAVAILABLE => {
-            "Windows servicing worker is unavailable; check its SSH host and retry"
-        }
         StatusCode::UNPROCESSABLE_ENTITY => "The media or requested values are invalid",
         StatusCode::CONFLICT if safety_failure => {
-            "Windows safety verification failed; inspect the worker and retry Super recovery"
+            "Windows safety verification failed. Check that Windows was fully shut down and see server logs before retrying."
         }
         StatusCode::CONFLICT => "The operation conflicts with current client or media state",
         _ => "The operation could not be completed",
@@ -686,18 +666,6 @@ mod tests {
         .await;
         assert!(matches!(result, Err(UploadCoordinationError::Pump)));
         assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
-    }
-
-    #[test]
-    fn worker_unavailability_is_not_reported_as_invalid_media() {
-        let error = anyhow::Error::new(AppError::SshConnection(
-            "Failed to connect to 192.0.2.50: connection timed out".into(),
-        ))
-        .context("remote Windows servicing capability check failed")
-        .context("Super-session recovery failed; durable record retained");
-        let (status, response) = safe_error(&error);
-        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-        assert!(response.0.error.contains("worker is unavailable"));
     }
 
     #[test]
