@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use crate::{
     api::handlers::clients::ErrorResponse,
+    application::super_client_service::SuperSessionConflict,
     domain::ClientId,
     persistence::repositories::installer_media::{
         BootVerification, InstallerMedia, InstallerMediaType,
@@ -34,6 +35,15 @@ fn admin(claims: &Claims) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
 }
 
 fn safe_error(error: &anyhow::Error) -> (StatusCode, Json<ErrorResponse>) {
+    if let Some(conflict) = error.downcast_ref::<SuperSessionConflict>() {
+        return (
+            StatusCode::CONFLICT,
+            Json(ErrorResponse {
+                status: StatusCode::CONFLICT.as_u16(),
+                error: conflict.to_string(),
+            }),
+        );
+    }
     let detail = format!("{error:#}").to_ascii_lowercase();
     let status = if detail.contains("not cataloged") || detail.contains("does not exist") {
         StatusCode::NOT_FOUND

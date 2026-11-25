@@ -52,6 +52,30 @@ impl VolumeSafetyGuard for RemoteVolumeSafetyGuard {
     }
 }
 
+/// Operational prerequisites that callers can resolve without changing media.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SuperSessionConflict {
+    #[error("Client must be enabled and offline to start Super mode")]
+    ClientUnavailable,
+    #[error("Client has an active iSCSI session. Shut it down before starting Super mode")]
+    ActiveSession,
+    #[error("Client storage recovery is pending. Retry that recovery first")]
+    StorageRecovery,
+    #[error(
+        "An unfinished installation owns this client's disk. Resolve installer recovery first"
+    )]
+    InstallationRecovery,
+}
+
+fn can_change_super_storage(status: &ClientStatus) -> bool {
+    // Ready and Provisioning are saved provisioning states. Callers must
+    // independently verify that the client has no active storage session.
+    matches!(
+        status,
+        ClientStatus::Offline | ClientStatus::Ready | ClientStatus::Provisioning
+    )
+}
+
 /// Coordinates clone-backed Super sessions. Normal sessions edit an isolated
 /// working clone and never depend on installer media; verification-only sessions
 /// additionally attach a read-only installer ISO for media boot testing.
@@ -208,16 +232,7 @@ impl SuperClientService {
                 .is_empty(),
             "legacy Super exit requires no active iSCSI sessions"
         );
-        let pending_storage_recovery: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM client_offline_resets WHERE client_id = ? AND operation IS NOT NULL",
-        )
-        .bind(client_id)
-        .fetch_one(self.sessions.pool())
-        .await?;
-        anyhow::ensure!(
-            pending_storage_recovery == 0,
-            "client storage recovery is pending; retry that recovery first"
-        );
+        self.validate_no_pending_storage_recovery(client_id).await?;
         let pending: Option<(String,)> =
             sqlx::query_as("SELECT selected_snapshot FROM legacy_super_exits WHERE client_id = ?")
                 .bind(client_id)
@@ -465,7 +480,7 @@ impl SuperClientService {
             .context("session client was deleted")?;
         if session.state != SuperSessionState::Active {
             anyhow::ensure!(
-                client.status == ClientStatus::Offline,
+                can_change_super_storage(&client.status),
                 "cannot recover Super session while client is online"
             );
         }
@@ -651,10 +666,21 @@ impl SuperClientService {
             .context("prior assigned client storage must be unmounted before recovery")
     }
 
+    async fn validate_no_pending_storage_recovery(&self, client_id: &str) -> Result<()> {
+        let pending: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM client_offline_resets WHERE client_id = ? AND operation IS NOT NULL)",
+        )
+        .bind(client_id)
+        .fetch_one(self.sessions.pool())
+        .await?;
+        anyhow::ensure!(!pending, SuperSessionConflict::StorageRecovery);
+        Ok(())
+    }
+
     async fn validate_no_conflicting_disk_owner(&self, client_id: &str) -> Result<()> {
         let installation: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM installation_sessions WHERE client_id = ? AND closed_at IS NULL)")
             .bind(client_id).fetch_one(self.sessions.pool()).await?;
-        anyhow::ensure!(!installation, "unfinished installation owns this client's disk; finish installer recovery before changing Super mode");
+        anyhow::ensure!(!installation, SuperSessionConflict::InstallationRecovery);
         let identity: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM client_identity_caches WHERE client_id = ?)",
         )
@@ -677,8 +703,8 @@ impl SuperClientService {
             .await?
             .context("client does not exist")?;
         anyhow::ensure!(
-            client.enabled && client.status == ClientStatus::Offline,
-            "client must be enabled and offline"
+            client.enabled && can_change_super_storage(&client.status),
+            SuperSessionConflict::ClientUnavailable
         );
         anyhow::ensure!(
             client.mode == BootMode::Normal,
@@ -692,7 +718,7 @@ impl SuperClientService {
             self.iscsi
                 .active_session_peer_ips(target_iqn, &client.name)?
                 .is_empty(),
-            "client has an active iSCSI session"
+            SuperSessionConflict::ActiveSession
         );
         if let Some(existing) = self.sessions.get_for_client(client_id).await? {
             anyhow::ensure!(
@@ -700,6 +726,7 @@ impl SuperClientService {
                 "client already has an incomplete Super-session operation"
             );
         }
+        self.validate_no_pending_storage_recovery(client_id).await?;
         let prior_storage = self.normal_spec(&client).await?;
         self.storage
             .validate_unmounted(&prior_storage.dataset)
@@ -1077,7 +1104,7 @@ impl SuperClientService {
             .await?
             .context("client does not exist")?;
         anyhow::ensure!(
-            client.status == ClientStatus::Offline,
+            can_change_super_storage(&client.status),
             "client must be offline"
         );
         let target = client
@@ -2401,6 +2428,48 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(tokio::fs::read_to_string(menu).await.unwrap(), normal_menu);
+    }
+
+    #[tokio::test]
+    async fn offline_provisioning_and_ready_clients_can_enter_and_discard_super() {
+        for status in [ClientStatus::Provisioning, ClientStatus::Ready] {
+            let (service, clients, sessions, _, iscsi, mut client, _root) = fixture().await;
+            client.status = status;
+            clients.update(&client).await.unwrap();
+
+            iscsi.active_session.store(true, Ordering::SeqCst);
+            let error = service
+                .enter(client.id.as_str(), false, false)
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains("active iSCSI session"));
+            iscsi.active_session.store(false, Ordering::SeqCst);
+
+            sqlx::query("INSERT INTO client_offline_resets(client_id, fingerprint, operation) VALUES (?, '', '{}')")
+                .bind(client.id.as_str())
+                .execute(sessions.pool())
+                .await
+                .unwrap();
+            let error = service
+                .enter(client.id.as_str(), false, false)
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains("storage recovery is pending"));
+            sqlx::query("DELETE FROM client_offline_resets WHERE client_id = ?")
+                .bind(client.id.as_str())
+                .execute(sessions.pool())
+                .await
+                .unwrap();
+
+            let session = service
+                .enter(client.id.as_str(), false, false)
+                .await
+                .unwrap();
+            assert_eq!(session.state, SuperSessionState::Active);
+            service.discard(client.id.as_str()).await.unwrap();
+            let updated = clients.find_by_id(&client.id).await.unwrap().unwrap();
+            assert_eq!(updated.mode, BootMode::Normal);
+        }
     }
 
     #[tokio::test]
