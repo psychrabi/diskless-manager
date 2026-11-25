@@ -118,6 +118,54 @@ fn retry_delay(failures: i64) -> i64 {
     30 * (1_i64 << failures.clamp(0, 5))
 }
 
+/// A Super session owns the client's iSCSI target until it is saved or
+/// discarded. The ordinary writeback lifecycle must stay out of the way while
+/// that is true.
+async fn incomplete_super_session(state: &AppState, client_id: &str) -> Result<bool> {
+    Ok(state
+        .application
+        .super_sessions
+        .get_for_client(client_id)
+        .await?
+        .is_some_and(|session| session.state != crate::persistence::SuperSessionState::Completed))
+}
+
+/// Drop a pending writeback deletion that an incomplete Super session has
+/// superseded.
+///
+/// Entering Super mode rejects pending storage operations, so a journal seen
+/// while a session is incomplete was created by the ordinary lifecycle after
+/// the session started. It targets the normal writeback, not the session's
+/// working clone, and cannot run while the session owns the target. Clearing it
+/// lets the lifecycle evaluate the client again after the session finishes.
+/// Replacement journals fail closed because they must never coexist with an
+/// incomplete session.
+pub(crate) async fn clear_suspended_deletion_journal(
+    pool: &sqlx::SqlitePool,
+    client_id: &str,
+) -> Result<bool> {
+    let journal: Option<Option<String>> =
+        sqlx::query_scalar("SELECT operation FROM client_offline_resets WHERE client_id = ?")
+            .bind(client_id)
+            .fetch_optional(pool)
+            .await?;
+    let Some(Some(journal)) = journal else {
+        return Ok(false);
+    };
+    match deserialize_pending_journal(serde_json::from_str(&journal)?)? {
+        PendingJournal::Deletion(_) => {
+            sqlx::query("UPDATE client_offline_resets SET operation = NULL, failures = 0, retry_after = 0, last_error = NULL WHERE client_id = ? AND operation IS NOT NULL")
+                .bind(client_id)
+                .execute(pool)
+                .await?;
+            Ok(true)
+        }
+        PendingJournal::Replacement(_) => {
+            bail!("client has an incomplete Super session and a pending storage replacement")
+        }
+    }
+}
+
 async fn storage_spec(pool: &sqlx::SqlitePool, client: &Client) -> Result<ClientStorageSpec> {
     let cached_source =
         super::hardware_identity_service::cached_source_for_client(pool, client).await?;
@@ -162,6 +210,9 @@ async fn storage_spec(pool: &sqlx::SqlitePool, client: &Client) -> Result<Client
 
 /// Caller must hold `state.client_mutations`; pending operations are rejected here.
 pub async fn delete_writeback_locked(state: &AppState, client: &Client) -> Result<()> {
+    if incomplete_super_session(state, client.id.as_str()).await? {
+        return Err(PendingRecoverySafetyError::IncompleteSuperSession.into());
+    }
     if super::client_storage_reservations::has_storage_reservation(
         &state.db_pool,
         client.id.as_str(),
@@ -466,6 +517,13 @@ async fn process(state: &AppState, client: &Client) -> Result<()> {
     if has_identity_cache != 0 {
         return Ok(());
     }
+    // The Super session owns the target and working clone. Suspending the
+    // ordinary writeback lifecycle prevents it from trying to remove a target
+    // that legitimately exports the session's backstore.
+    if incomplete_super_session(state, client.id.as_str()).await? {
+        clear_suspended_deletion_journal(&state.db_pool, client.id.as_str()).await?;
+        return Ok(());
+    }
     let settings = state.settings.read().await.clone();
     let now = chrono::Utc::now().timestamp();
     let eligible =
@@ -630,6 +688,10 @@ pub enum PendingRecoverySafetyError {
     StorageReserved,
     #[error("client storage is shared with another client")]
     SharedStorage,
+    #[error(
+        "client has an incomplete Super session; finish or discard it before changing writeback storage"
+    )]
+    IncompleteSuperSession,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -744,13 +806,24 @@ pub async fn retry_pending_recovery(state: &AppState, id: &str) -> Result<bool> 
     let Some(journal) = journal else {
         return Ok(false);
     };
-    let parsed: serde_json::Value = serde_json::from_str(&journal)?;
+    let parsed = deserialize_pending_journal(serde_json::from_str(&journal)?)?;
     let client_id = crate::domain::ClientId::from_string(id.to_owned())?;
     let client = ClientRepository::new(state.db_pool.clone())
         .find_by_id(&client_id)
         .await?
         .context("client no longer exists")?;
-    match deserialize_pending_journal(parsed)? {
+    if incomplete_super_session(state, id).await? {
+        match parsed {
+            PendingJournal::Deletion(_) => {
+                clear_suspended_deletion_journal(&state.db_pool, id).await?;
+                return Ok(false);
+            }
+            PendingJournal::Replacement(_) => {
+                return Err(PendingRecoverySafetyError::IncompleteSuperSession.into());
+            }
+        }
+    }
+    match parsed {
         PendingJournal::Deletion(mut operation) => {
             validate_deletion_owner(&state.db_pool, &client, &operation).await?;
             validate_unshared_storage(state, &client, &operation.spec).await?;
@@ -807,6 +880,171 @@ mod tests {
         .unwrap()
         .unwrap();
         drop(guard);
+    }
+
+    fn suspended_deletion_journal() -> String {
+        serialize_deletion_journal(&OfflineDeletion::new(
+            ClientStorageSpec {
+                installer_iso: None,
+                client_id: "client".into(),
+                client_name: "pc".into(),
+                source: StorageSource::Snapshot("pool/master@ready".into()),
+                dataset: "pool/clients/pc".into(),
+                backstore: "block_pc".into(),
+                target_iqn: "iqn.test:pc".into(),
+                lun: 0,
+                use_game_disk: false,
+                game_disks: Vec::new(),
+                chap: None,
+            },
+            Vec::new(),
+        ))
+        .unwrap()
+    }
+
+    async fn client_with_super_session(
+        session_state: crate::persistence::SuperSessionState,
+    ) -> (AppState, Client) {
+        let (state, _, _, _) = crate::api::security_tests::setup().await;
+        sqlx::query("INSERT INTO images (id, name, kind, os_type, size_gb, path, format, status, created_at, updated_at) VALUES ('image', 'pool/master', 'master', 'windows', 50, '/dev/zvol/pool/master', 'raw', 'ready', '2026-09-13T00:00:00+00:00', '2026-09-13T00:00:00+00:00')")
+            .execute(&state.db_pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO clients (id, name, mac, ip, master, snapshot, writeback, block_device, block_store, target_iqn, mode, created_at, updated_at) VALUES ('client', 'pc', '00:11:22:33:44:55', '192.168.1.101', 'pool/master', 'pool/master@ready', 'pool/clients/pc', '/dev/zvol/pool/clients/pc', 'block_pc', 'iqn.test:pc', 'super', '2026-09-13T00:00:00+00:00', '2026-09-13T00:00:00+00:00')")
+            .execute(&state.db_pool)
+            .await
+            .unwrap();
+        state
+            .application
+            .super_sessions
+            .insert(&crate::persistence::SuperSession {
+                id: "session".into(),
+                client_id: "client".into(),
+                prior_image_id: "image".into(),
+                prior_snapshot: Some("pool/master@ready".into()),
+                working_origin_snapshot: Some("pool/master@ready".into()),
+                working_clone: "pool/super-session".into(),
+                installer_media_id: None,
+                verification_only: false,
+                state: session_state,
+                resume_state: None,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            })
+            .await
+            .unwrap();
+        let client = ClientRepository::new(state.db_pool.clone())
+            .find_by_id(&ClientId::from_string("client").unwrap())
+            .await
+            .unwrap()
+            .expect("client should exist");
+        (state, client)
+    }
+
+    #[tokio::test]
+    async fn incomplete_super_session_suspends_the_ordinary_writeback_lifecycle() {
+        let (state, client) =
+            client_with_super_session(crate::persistence::SuperSessionState::Active).await;
+        sqlx::query("INSERT INTO client_offline_resets (client_id, fingerprint, offline_since, failures, retry_after, last_error, operation) VALUES ('client', '', 100, 11, 999, 'stale failure', ?)")
+            .bind(suspended_deletion_journal())
+            .execute(&state.db_pool)
+            .await
+            .unwrap();
+
+        process(&state, &client).await.unwrap();
+
+        let (operation, failures, retry_after, last_error): (
+            Option<String>,
+            i64,
+            i64,
+            Option<String>,
+        ) = sqlx::query_as(
+            "SELECT operation, failures, retry_after, last_error FROM client_offline_resets WHERE client_id = 'client'",
+        )
+        .fetch_one(&state.db_pool)
+        .await
+        .unwrap();
+        assert!(operation.is_none(), "the stale journal must be cleared");
+        assert_eq!((failures, retry_after, last_error), (0, 0, None));
+    }
+
+    #[tokio::test]
+    async fn completed_super_session_does_not_suspend_the_lifecycle() {
+        let (state, _) =
+            client_with_super_session(crate::persistence::SuperSessionState::Completed).await;
+        assert!(!incomplete_super_session(&state, "client").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn retry_clears_a_deletion_suspended_by_an_active_super_session() {
+        let (state, _) =
+            client_with_super_session(crate::persistence::SuperSessionState::Active).await;
+        sqlx::query("INSERT INTO client_offline_resets (client_id, fingerprint, offline_since, failures, retry_after, last_error, operation) VALUES ('client', '', 100, 11, 999, 'stale failure', ?)")
+            .bind(suspended_deletion_journal())
+            .execute(&state.db_pool)
+            .await
+            .unwrap();
+
+        assert!(!retry_pending_recovery(&state, "client").await.unwrap());
+
+        let operation: Option<String> = sqlx::query_scalar(
+            "SELECT operation FROM client_offline_resets WHERE client_id = 'client'",
+        )
+        .fetch_one(&state.db_pool)
+        .await
+        .unwrap();
+        assert!(operation.is_none());
+    }
+
+    #[tokio::test]
+    async fn retry_refuses_a_replacement_journal_during_an_active_super_session() {
+        let (state, _) =
+            client_with_super_session(crate::persistence::SuperSessionState::Active).await;
+        let replacement = OfflineReplacement::new(ClientStorageSpec {
+            installer_iso: None,
+            client_id: "client".into(),
+            client_name: "pc".into(),
+            source: StorageSource::Snapshot("pool/master@ready".into()),
+            dataset: "pool/clients/pc".into(),
+            backstore: "block_pc".into(),
+            target_iqn: "iqn.test:pc".into(),
+            lun: 0,
+            use_game_disk: false,
+            game_disks: Vec::new(),
+            chap: None,
+        });
+        sqlx::query("INSERT INTO client_offline_resets (client_id, fingerprint, operation) VALUES ('client', '', ?)")
+            .bind(serde_json::to_string(&replacement).unwrap())
+            .execute(&state.db_pool)
+            .await
+            .unwrap();
+
+        let error = retry_pending_recovery(&state, "client").await.unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<PendingRecoverySafetyError>(),
+            Some(PendingRecoverySafetyError::IncompleteSuperSession)
+        ));
+        let operation: Option<String> = sqlx::query_scalar(
+            "SELECT operation FROM client_offline_resets WHERE client_id = 'client'",
+        )
+        .fetch_one(&state.db_pool)
+        .await
+        .unwrap();
+        assert!(
+            operation.is_some(),
+            "a replacement journal must never be discarded silently"
+        );
+    }
+
+    #[tokio::test]
+    async fn manual_writeback_deletion_is_refused_during_an_active_super_session() {
+        let (state, client) =
+            client_with_super_session(crate::persistence::SuperSessionState::Active).await;
+        let error = delete_writeback_locked(&state, &client).await.unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<PendingRecoverySafetyError>(),
+            Some(PendingRecoverySafetyError::IncompleteSuperSession)
+        ));
     }
 
     #[test]

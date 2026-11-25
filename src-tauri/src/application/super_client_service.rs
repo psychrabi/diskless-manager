@@ -1118,6 +1118,14 @@ impl SuperClientService {
                 .is_empty(),
             "client has an active iSCSI session"
         );
+        // A pending ordinary writeback deletion cannot run while this session
+        // owns the target. Saving changes the writeback identity and
+        // discarding rebuilds it, so the journal is obsolete either way.
+        crate::application::client_lifecycle::clear_suspended_deletion_journal(
+            self.sessions.pool(),
+            client_id,
+        )
+        .await?;
         if !save {
             client = self.prior_assignment(&client, session).await?;
         }
