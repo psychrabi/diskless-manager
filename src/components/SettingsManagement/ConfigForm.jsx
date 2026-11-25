@@ -94,15 +94,20 @@ const ConfigForm = ({ schema, section, title, FormComponent }) => {
   }[section] || section.charAt(0).toUpperCase() + section.slice(1);
 
   return (
-    <Card title={`${title} Configuration`} icon={getServiceIcon(section)} className="h-full">
-      <form onSubmit={handleSubmit(onSubmit)}>
+    <Card
+      title={`${title} Configuration`}
+      icon={getServiceIcon(section)}
+      className="h-full"
+      bodyClass="flex flex-1 flex-col"
+    >
+      <form onSubmit={handleSubmit(onSubmit)} className="flex h-full flex-col">
         <FormComponent
           control={control}
           register={register}
           errors={errors}
           config={config?.settings?.[section]}
         />
-        <div className="flex justify-end mt-4">
+        <div className="mt-auto flex justify-end pt-4">
           <Button
             variant="primary"
             type="submit"

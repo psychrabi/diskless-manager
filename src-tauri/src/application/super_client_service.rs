@@ -1076,7 +1076,10 @@ impl SuperClientService {
         self.iscsi.create_target_transaction(&spec)?;
         // On error retain candidate, target and Super recovery record: a timed-out
         // SSH command may still own a mounted hive on the Windows worker.
-        self.volume_safety.check(profile, connection).await?;
+        self.volume_safety
+            .check(profile, connection)
+            .await
+            .context("Windows candidate safety verification failed")?;
         // The application provisioner refuses this removal while any target
         // session exists, covering dynamic worker ACLs as well as named ACLs.
         self.iscsi

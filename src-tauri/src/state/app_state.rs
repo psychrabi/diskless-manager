@@ -172,11 +172,20 @@ impl AppState {
             ssh_executor: Arc::new(SshExecutor::new()),
             application,
         };
-        state
+        // A retained recovery record must survive an unavailable external
+        // dependency (for example an offline Windows servicing worker). Keep
+        // serving the management UI so an administrator can retry or discard
+        // the operation; client boot remains blocked while it is incomplete.
+        if let Err(error) = state
             .super_client_service()
             .await
             .recover_incomplete()
-            .await?;
+            .await
+        {
+            warn!(
+                "Super-session recovery is still pending; management service started with the durable record retained: {error}"
+            );
+        }
         crate::persistence::repositories::installation::InstallationRepository::new(
             state.db_pool.clone(),
         )
