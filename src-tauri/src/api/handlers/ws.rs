@@ -180,7 +180,7 @@ async fn fetch_metrics_uncached(state: &AppState) -> Result<MetricsUpdate, Strin
             )
         });
         client_ips.push(ip.clone());
-        lio_sources.push((ip.clone(), format!("block_{normalized_name}")));
+        lio_sources.push((ip.clone(), target_iqn.clone()));
         target_by_ip.insert(ip, target_iqn);
     }
     let collector = Arc::clone(&state.metrics_collector);
@@ -212,8 +212,7 @@ async fn fetch_metrics_uncached(state: &AppState) -> Result<MetricsUpdate, Strin
     for mut sample in snapshot.clients {
         let ip = sample.ip;
         sample.iscsi = lio_rates.get(&ip).cloned();
-        if let Some(lio) = lio_rates.get(&ip).cloned() {
-            sample.iscsi = Some(lio.clone());
+        if let Some(lio) = sample.iscsi.clone() {
             sample.network.get_or_insert(lio);
         }
         let connected = peers.contains(&ip)

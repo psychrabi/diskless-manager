@@ -40,7 +40,8 @@ pub fn log_file_path() -> std::path::PathBuf {
         .unwrap_or_else(|| std::path::PathBuf::from("."));
     let dir = base.join("com.diskless.local");
     let _ = std::fs::create_dir_all(&dir);
-    dir.join("diskless-manager.log")
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    dir.join(format!("diskless-manager.log.{today}"))
 }
 
 pub async fn run() -> anyhow::Result<()> {

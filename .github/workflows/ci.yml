@@ -80,10 +80,10 @@ jobs:
           cargo test --locked --manifest-path tools/windows-servicer/Cargo.toml
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cargo clippy --locked --manifest-path tools/windows-servicer/Cargo.toml --all-targets --all-features -- -D warnings
-      - name: Parse embedded preparation scripts with Windows PowerShell
+      - name: Parse embedded PowerShell scripts
         shell: powershell
         run: |
-          Get-ChildItem tools/windows-servicer/assets/local-boot-*.ps1 | ForEach-Object {
+          Get-ChildItem tools/windows-servicer/assets/local-boot-*.ps1, tools/windows-servicer/assets/report-inventory.ps1 | ForEach-Object {
             $tokens = $null
             $parseErrors = $null
             [Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$parseErrors) | Out-Null

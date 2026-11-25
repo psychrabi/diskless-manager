@@ -396,6 +396,9 @@ pub struct WindowsBootInventory {
     pub wfp_lwf_start: Option<u32>,
     #[serde(default)]
     pub enum_pci_devices: Vec<String>,
+    /// Services recorded on concrete PCI instances, keyed by lowercased device ID.
+    #[serde(default)]
+    pub enum_pci_services: BTreeMap<String, BTreeSet<String>>,
     #[serde(default)]
     pub critical_device_database: Vec<ExistingCriticalDevice>,
 }
@@ -856,6 +859,12 @@ impl WindowsBootArmer {
                 Some(names)
             })
             .unwrap_or_default();
+        let enum_services = self.query(&["query", &enum_pci_key, "/s", "/v", "Service"])?;
+        let enum_pci_services = if enum_services.status.success() {
+            parse_enum_pci_services(&String::from_utf8_lossy(&enum_services.stdout))
+        } else {
+            BTreeMap::new()
+        };
         let cddb_key = format!("{mount}\\{control_set}\\Control\\CriticalDeviceDatabase");
         let critical_device_keys = self
             .query(&["query", &cddb_key])
@@ -915,6 +924,7 @@ impl WindowsBootArmer {
             msiscsi_image_path,
             wfp_lwf_start,
             enum_pci_devices,
+            enum_pci_services,
             critical_device_database,
         })
     }
@@ -1553,6 +1563,20 @@ fn classify_boot_nic_bindings(
             })
             .cloned()
             .collect();
+        let is_boot_nic_service = |service: &str| {
+            let service = service.to_ascii_lowercase();
+            existing.contains(&service)
+                && drivers.contains(&service)
+                && nic_services_contains(inventory, &service)
+                && (services.is_empty()
+                    || services.iter().any(|s| s.eq_ignore_ascii_case(&service)))
+        };
+        let has_bound_pci_instance = enum_pci_keys.iter().any(|key| {
+            inventory
+                .enum_pci_services
+                .get(&key.to_ascii_lowercase())
+                .is_some_and(|bound| bound.iter().any(|service| is_boot_nic_service(service)))
+        });
         let critical_device_database_keys: Vec<String> = hardware_ids
             .iter()
             .filter_map(|id| {
@@ -1566,12 +1590,7 @@ fn classify_boot_nic_bindings(
                                 .class_guid
                                 .as_deref()
                                 .is_some_and(|guid| guid.eq_ignore_ascii_case(NET_CLASS_GUID))
-                            && mapping.service.as_deref().is_some_and(|service| {
-                                let service = service.to_ascii_lowercase();
-                                existing.contains(&service)
-                                    && drivers.contains(&service)
-                                    && nic_services_contains(inventory, &service)
-                            })
+                            && mapping.service.as_deref().is_some_and(is_boot_nic_service)
                     })
                     .map(|mapping| mapping.key.clone())
             })
@@ -1579,7 +1598,7 @@ fn classify_boot_nic_bindings(
         let planned_critical_device_database = hardware_ids
             .iter()
             .any(|id| planned_cddb.contains_key(&cddb_hardware_id_key(id)));
-        let state = if !enum_pci_keys.is_empty() {
+        let state = if has_bound_pci_instance {
             BootNicBindingState::DeviceInstance
         } else if !critical_device_database_keys.is_empty() {
             BootNicBindingState::CriticalDeviceDatabase
@@ -1640,6 +1659,28 @@ fn validate_service_name(service: &str) -> Result<()> {
         bail!("invalid NIC driver service name: {service:?}");
     }
     Ok(())
+}
+
+fn parse_enum_pci_services(output: &str) -> BTreeMap<String, BTreeSet<String>> {
+    let mut services = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut device = None;
+    for line in output.lines().map(str::trim) {
+        if line
+            .to_ascii_lowercase()
+            .starts_with("hkey_local_machine\\")
+        {
+            let key = line.to_ascii_lowercase();
+            device = key
+                .split_once("\\enum\\pci\\")
+                .and_then(|(_, tail)| tail.split_once('\\'))
+                .filter(|(_, instance)| !instance.is_empty() && !instance.contains('\\'))
+                .map(|(hardware_id, _)| hardware_id.to_owned());
+        } else if let (Some(device), Some(service)) = (&device, parse_reg_sz_value(line, "Service"))
+        {
+            services.entry(device.clone()).or_default().insert(service);
+        }
+    }
+    services
 }
 
 fn enum_pci_device_key(line: &str) -> Option<String> {
@@ -1791,6 +1832,7 @@ mod tests {
             msiscsi_image_path: None,
             wfp_lwf_start: None,
             enum_pci_devices: Vec::new(),
+            enum_pci_services: BTreeMap::new(),
             critical_device_database: Vec::new(),
         }
     }
@@ -2030,11 +2072,29 @@ mod tests {
     }
 
     #[test]
+    fn strict_shared_image_rejects_a_pci_key_without_a_boot_driver() {
+        let mut state = inventory();
+        let nic = r"VEN_10EC&DEV_8125&SUBSYS_B0021F4C&REV_05";
+        state.enum_pci_devices.push(nic.into());
+        let config = WindowsBootArmConfig {
+            expected_boot_nic_groups: vec![vec![format!(r"PCI\{nic}")]],
+            require_boot_nic_binding: true,
+            ..Default::default()
+        };
+
+        assert!(build_plan(&state, &config).is_err());
+    }
+
+    #[test]
     fn no_warning_when_boot_nic_is_mapped() {
         let mut state = inventory();
         state
             .enum_pci_devices
             .push("VEN_10EC&DEV_8125&SUBSYS_B0021F4C&REV_05".into());
+        state.enum_pci_services.insert(
+            "ven_10ec&dev_8125&subsys_b0021f4c&rev_05".into(),
+            BTreeSet::from(["e2fexpress".into()]),
+        );
         let config = WindowsBootArmConfig {
             expected_boot_nic_ids: vec!["PCI\\VEN_10EC&DEV_8125&SUBSYS_B0021F4C&REV_05".into()],
             ..Default::default()
@@ -2052,6 +2112,10 @@ mod tests {
         state
             .enum_pci_devices
             .push("VEN_10EC&DEV_8125&SUBSYS_B0021F4C&REV_05".into());
+        state.enum_pci_services.insert(
+            "ven_10ec&dev_8125&subsys_b0021f4c&rev_05".into(),
+            BTreeSet::from(["e2fexpress".into()]),
+        );
         let config = WindowsBootArmConfig {
             expected_boot_nic_ids: vec!["PCI\\VEN_10EC&DEV_8125&SUBSYS_B0021F4C&REV_05".into()],
             ..Default::default()
@@ -2167,6 +2231,33 @@ mod tests {
             Some(NET_CLASS_GUID)
         );
         assert!(parse_reg_sz_value("    Service    REG_DWORD    1", "Service").is_none());
+    }
+
+    #[test]
+    fn enum_parser_reads_only_services_on_concrete_pci_instances() {
+        let output = r"
+HKEY_LOCAL_MACHINE\OFFLINE\ControlSet001\Enum\PCI\VEN_10EC&DEV_8125
+    Service    REG_SZ    category
+HKEY_LOCAL_MACHINE\OFFLINE\ControlSet001\Enum\PCI\VEN_10EC&DEV_8125\3&0
+    Service    REG_SZ    rt640x64
+HKEY_LOCAL_MACHINE\OFFLINE\ControlSet001\Enum\PCI\VEN_10EC&DEV_8125\3&0\Device Parameters
+    Service    REG_SZ    nested
+HKEY_LOCAL_MACHINE\OFFLINE\ControlSet001\Enum\PCI\VEN_8086&DEV_15F3\4&0
+    Service    REG_SZ    e2fexpress
+";
+        assert_eq!(
+            parse_enum_pci_services(output),
+            BTreeMap::from([
+                (
+                    "ven_10ec&dev_8125".into(),
+                    BTreeSet::from(["rt640x64".into()])
+                ),
+                (
+                    "ven_8086&dev_15f3".into(),
+                    BTreeSet::from(["e2fexpress".into()])
+                ),
+            ])
+        );
     }
 
     #[test]

@@ -353,9 +353,7 @@ mod tests {
     fn existing_windows_branch_cannot_repartition_or_install() {
         let script = include_str!("installer/install.ps1");
         let (_, branch) = script.split_once("    if ($AdaptExisting) {").unwrap();
-        let (adapt, fresh) = branch
-            .split_once("    } else {\n    Invoke-WebRequest")
-            .unwrap();
+        let (adapt, fresh) = branch.split_once("    } else {\n").unwrap();
         for forbidden in [
             "Clear-Disk",
             "Initialize-Disk",
@@ -373,7 +371,11 @@ mod tests {
         assert!(adapt.contains("Get-Partition -DiskNumber $Disk.Number"));
         assert!(adapt.contains("$Candidates.Count -ne 1"));
         assert!(adapt.contains("Add-PartitionAccessPath @Mount"));
-        assert!(fresh.contains("Clear-Disk"));
+        // A freshly provisioned draft has no partition table, and Clear-Disk
+        // fails on an uninitialized disk in WinPE.
+        assert!(fresh.contains(
+            "if ((Get-Disk -Number $Disk.Number).PartitionStyle -ne 'RAW') {\n        $Disk | Clear-Disk -RemoveData -RemoveOEM -Confirm:$false\n    }"
+        ));
         assert!(fresh.contains("/Apply-Image"));
         assert!(fresh.contains("bcdboot.exe"));
         let gate = script
@@ -395,14 +397,75 @@ mod tests {
     #[test]
     fn winpe_disk_mismatch_reports_found_sizes() {
         let script = include_str!("installer/install.ps1");
-        assert!(script.contains("$SessionDisks = @($Sessions[0] | Get-Disk)"));
-        assert!(script
-            .contains("for ($Attempt = 0; $Disks.Count -ne 1 -and $Attempt -lt 30; $Attempt++)"));
-        assert!(script.contains("Start-Sleep -Seconds 1"));
+        assert!(script.contains("$SessionDisks = @(Get-TargetDisks $Sessions[0])"));
+        let retry = script.split_once("for ($Attempt = 0;").unwrap().1;
+        let retry = retry.split_once("if ($Disks.Count -ne 1)").unwrap().0;
+        assert!(retry.contains("Update-HostStorageCache"));
+        assert!(
+            retry.contains("Get-IscsiSession | Where-Object TargetNodeAddress -EQ $ExpectedIqn")
+        );
+        assert!(retry.contains("$SessionDisks = @(Get-TargetDisks $Sessions[0])"));
         assert!(
             script.contains("Expected exactly one iSCSI disk with recorded size $ExpectedBytes")
         );
         assert!(script.contains("found $($Disks.Count) (session disks: $Seen)"));
+    }
+
+    #[test]
+    fn winpe_fallback_checks_disk_identity_against_the_connected_target_session() {
+        let script = include_str!("installer/install.ps1");
+        let fallback = script.split_once("function Get-TargetDisks").unwrap().1;
+        let fallback = fallback.split_once("\ntry {").unwrap().0;
+        for check in [
+            "$_.BusType -eq 'iSCSI' -and $_.Size -eq $ExpectedBytes",
+            "$_ | Get-IscsiSession -ErrorAction SilentlyContinue",
+            "$_.IsConnected -and $_.TargetNodeAddress -eq $ExpectedIqn",
+            "$_.SessionIdentifier -eq $Session.SessionIdentifier",
+        ] {
+            assert!(
+                fallback.contains(check),
+                "missing disk identity check: {check}"
+            );
+        }
+        // A local disk without an iSCSI session terminates the CIM association
+        // query under $ErrorActionPreference = 'Stop', which aborted a real
+        // installation before any report. Discovery must tolerate that and
+        // still find the boot LUN when the session association is unavailable.
+        assert!(fallback.contains("$Session | Get-Disk -ErrorAction SilentlyContinue"));
+        assert!(fallback.contains("$Candidates"));
+        assert!(
+            fallback.contains("\n    $Candidates\n}"),
+            "size-and-bus candidates are the last-resort identity"
+        );
+    }
+
+    #[test]
+    fn winpe_stages_the_windows_image_on_the_target_volume_not_the_ram_disk() {
+        let script = include_str!("installer/install.ps1");
+        let (_, fresh) = script
+            .split_once("    } else {\n")
+            .expect("fresh install branch");
+        let fresh = fresh.split_once("    Report 'adapting'").unwrap().0;
+        // WinPE's X: RAM disk is sized from boot.wim and held only ~0.5 GB free on a
+        // real image, while sources/install.wim is several gigabytes.
+        assert!(!fresh.contains("X:\\install.wim"));
+        assert!(fresh.contains("$ImagePath = Join-Path $WindowsRoot 'install.wim'"));
+        assert!(fresh.contains("DownloadFile(\"$Base/install.wim\", $ImagePath)"));
+        let download = fresh.find("DownloadFile").unwrap();
+        let apply = fresh.find("/Apply-Image").unwrap();
+        assert!(download < apply);
+        assert!(fresh.contains("/ImageFile:$ImagePath"));
+        assert!(fresh.contains("/ScratchDir:$Scratch"));
+        let remove_image = fresh.find("Remove-Item $ImagePath -Force").unwrap();
+        assert!(
+            apply < remove_image,
+            "the staged image is deleted after apply"
+        );
+        assert!(script
+            .split_once("\n} catch {\n")
+            .unwrap()
+            .1
+            .contains("Could not remove the downloaded image from the private target"));
     }
 
     #[test]
@@ -474,7 +537,10 @@ mod tests {
         ] {
             assert!(windows.find(check).unwrap() < windows.find("Clear-Disk").unwrap());
         }
-        assert!(windows.find("Invoke-WebRequest").unwrap() < windows.find("Clear-Disk").unwrap());
+        assert!(
+            windows.find("-Method Head").unwrap() < windows.find("Clear-Disk").unwrap(),
+            "the image source is checked before the target is repartitioned"
+        );
         assert!(
             windows.contains("$Base/adaptation")
                 && windows.contains("driver_bundle_sha256")

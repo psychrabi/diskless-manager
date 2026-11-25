@@ -64,8 +64,10 @@ Remote Desktop dialog (default port: 3389). Some configurations require an
 active desktop session. If the setting is absent, install the distribution's
 `gnome-remote-desktop` or `krdp` package as appropriate.
 
-The server needs `xfreerdp` or `xfreerdp3`, already included in the app's
-dependency checks. Passwords are sent through stdin rather than process arguments.
+The server needs a FreeRDP viewer for its desktop: `wlfreerdp` or `wlfreerdp3`
+for Wayland, or `xfreerdp` or `xfreerdp3` for X11. The app finds the active local
+desktop session and opens the viewer there, so the server must be logged in to a
+desktop session. Passwords are sent through stdin rather than process arguments.
 FreeRDP trusts the certificate on first use and checks it on later connections.
 
 ## Preserve setup

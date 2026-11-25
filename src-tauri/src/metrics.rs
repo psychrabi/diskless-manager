@@ -120,7 +120,7 @@ struct RawCounters {
 pub struct LinuxMetricsReader {
     proc_root: PathBuf,
     zfs_kstat_root: PathBuf,
-    target_core_root: PathBuf,
+    target_root: PathBuf,
 }
 
 impl Default for LinuxMetricsReader {
@@ -128,7 +128,7 @@ impl Default for LinuxMetricsReader {
         Self {
             proc_root: PathBuf::from("/proc"),
             zfs_kstat_root: PathBuf::from("/proc/spl/kstat/zfs"),
-            target_core_root: PathBuf::from("/sys/kernel/config/target/core"),
+            target_root: PathBuf::from("/sys/kernel/config/target"),
         }
     }
 }
@@ -137,38 +137,46 @@ impl LinuxMetricsReader {
     #[cfg(test)]
     fn with_roots(proc_root: PathBuf, zfs_kstat_root: PathBuf) -> Self {
         Self {
-            target_core_root: proc_root.join("missing-target-core"),
+            target_root: proc_root.join("missing-target"),
             proc_root,
             zfs_kstat_root,
         }
     }
 
-    fn read_lio_backstore(&self, backstore: &str) -> Result<DirectionalCounters, String> {
-        let plugins = fs::read_dir(&self.target_core_root).map_err(|error| error.to_string())?;
-        for plugin in plugins {
-            let plugin = plugin.map_err(|error| error.to_string())?;
-            let statistics = plugin.path().join(backstore).join("statistics/scsi_lu");
-            if !statistics.is_dir() {
-                continue;
-            }
-            let read_mbytes = fs::read_to_string(statistics.join("read_mbytes"))
-                .map_err(|error| error.to_string())?
-                .trim()
-                .parse::<u64>()
-                .map_err(|error| error.to_string())?;
-            let write_mbytes = fs::read_to_string(statistics.join("write_mbytes"))
-                .map_err(|error| error.to_string())?
-                .trim()
-                .parse::<u64>()
-                .map_err(|error| error.to_string())?;
-            return Ok(DirectionalCounters {
+    fn read_lio_target(&self, target: &str) -> Option<LioSample> {
+        crate::validation::validate_iqn(target).ok()?;
+        // Normal and Super sessions both export the boot disk at LUN 0.
+        let lun = self
+            .target_root
+            .join("iscsi")
+            .join(target)
+            .join("tpgt_1/lun/lun_0");
+        let mut links = fs::read_dir(lun).ok()?.filter_map(|entry| {
+            let entry = entry.ok()?;
+            entry.file_type().ok()?.is_symlink().then(|| entry.path())
+        });
+        let backstore = fs::canonicalize(links.next()?).ok()?;
+        if links.next().is_some() || !backstore.starts_with(self.target_root.join("core")) {
+            return None;
+        }
+        let statistics = backstore.join("statistics/scsi_lu");
+        let read_mbytes: u64 = fs::read_to_string(statistics.join("read_mbytes"))
+            .ok()?
+            .trim()
+            .parse()
+            .ok()?;
+        let write_mbytes: u64 = fs::read_to_string(statistics.join("write_mbytes"))
+            .ok()?
+            .trim()
+            .parse()
+            .ok()?;
+        Some(LioSample {
+            backstore,
+            counters: DirectionalCounters {
                 from_client_bytes: write_mbytes.saturating_mul(1024 * 1024),
                 to_client_bytes: read_mbytes.saturating_mul(1024 * 1024),
-            });
-        }
-        Err(format!(
-            "LIO backstore statistics not found for {backstore}"
-        ))
+            },
+        })
     }
 
     fn read(&self, clients: &[IpAddr], iscsi_port: u16) -> RawCounters {
@@ -268,11 +276,16 @@ impl LinuxMetricsReader {
     }
 }
 
+struct LioSample {
+    backstore: PathBuf,
+    counters: DirectionalCounters,
+}
+
 /// Stateful delta calculator used by all metrics transports.
 pub struct MetricsCollector {
     reader: LinuxMetricsReader,
     previous: Mutex<Option<(Instant, RawCounters)>>,
-    previous_lio: Mutex<Option<(Instant, HashMap<String, DirectionalCounters>)>>,
+    previous_lio: Mutex<Option<(Instant, HashMap<String, LioSample>)>>,
     /// One fleet-wide snapshot shared by every dashboard tab.
     cached_update: std::sync::RwLock<Option<(Instant, MetricsUpdate)>>,
     /// Ensures concurrent cache misses perform a single collection.
@@ -344,16 +357,15 @@ impl MetricsCollector {
         Self::finish_sample_with_previous(client_ips, raw, &mut previous)
     }
 
-    /// Collect per-client iSCSI traffic from LIO's authoritative backstore counters.
+    /// Collect per-client iSCSI traffic from each target's boot LUN.
     pub fn collect_lio(&self, clients: &[(String, String)]) -> HashMap<String, Throughput> {
         let now = Instant::now();
         let current = clients
             .iter()
-            .filter_map(|(ip, backstore)| {
+            .filter_map(|(ip, target)| {
                 self.reader
-                    .read_lio_backstore(backstore)
-                    .ok()
-                    .map(|counters| (ip.clone(), counters))
+                    .read_lio_target(target)
+                    .map(|sample| (ip.clone(), sample))
             })
             .collect::<HashMap<_, _>>();
         let mut previous = self
@@ -362,15 +374,20 @@ impl MetricsCollector {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let rates = current
             .iter()
-            .map(|(ip, counters)| {
+            .map(|(ip, sample)| {
                 let rate = previous
                     .as_ref()
                     .and_then(|(time, old)| {
-                        old.get(ip).map(|old| {
-                            throughput(*counters, *old, now.duration_since(*time).as_secs_f64())
-                        })
+                        let old = old
+                            .get(ip)
+                            .filter(|old| old.backstore == sample.backstore)?;
+                        Some(throughput(
+                            sample.counters,
+                            old.counters,
+                            now.duration_since(*time).as_secs_f64(),
+                        ))
                     })
-                    .unwrap_or_else(|| throughput(*counters, *counters, 1.0));
+                    .unwrap_or_else(|| throughput(sample.counters, sample.counters, 1.0));
                 (ip.clone(), rate)
             })
             .collect();
@@ -602,6 +619,7 @@ mod tests {
         parse_conntrack_counters, parse_zfs_kstat, ClientCounters, LinuxMetricsReader,
         MetricsCollector, RawCounters, StorageTrafficMetrics, ZfsCounters,
     };
+    use std::fs;
     use std::net::IpAddr;
     use std::time::Duration;
 
@@ -694,39 +712,58 @@ mod tests {
     }
 
     #[test]
-    fn reads_lio_backstore_counters_with_client_directions() {
-        let root =
-            std::env::temp_dir().join(format!("diskless-lio-metrics-{}", uuid::Uuid::new_v4()));
-        let statistics = root.join("core/iblock_0/block_pc001/statistics/scsi_lu");
-        std::fs::create_dir_all(&statistics).unwrap();
-        std::fs::write(statistics.join("read_mbytes"), "12\n").unwrap();
-        std::fs::write(statistics.join("write_mbytes"), "3\n").unwrap();
-        let reader = LinuxMetricsReader {
-            proc_root: root.join("proc"),
-            zfs_kstat_root: root.join("zfs"),
-            target_core_root: root.join("core"),
-        };
-
-        let counters = reader.read_lio_backstore("block_pc001").unwrap();
-
-        assert_eq!(counters.to_client_bytes, 12 * 1024 * 1024);
-        assert_eq!(counters.from_client_bytes, 3 * 1024 * 1024);
+    fn follows_boot_lun_to_super_backstore_and_resets_rates_on_switch() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path();
+        let normal = path.join("core/iblock_0/block_pc001");
+        let working = path.join("core/iblock_0/super_super-session");
+        let installer = path.join("core/fileio_0/installer_pc001");
+        for (backstore, read, write) in [
+            (&normal, "12", "3"),
+            (&working, "24", "8"),
+            (&installer, "200", "0"),
+        ] {
+            let statistics = backstore.join("statistics/scsi_lu");
+            fs::create_dir_all(&statistics).unwrap();
+            fs::write(statistics.join("read_mbytes"), read).unwrap();
+            fs::write(statistics.join("write_mbytes"), write).unwrap();
+        }
+        let ip = "192.0.2.1";
+        let target = "iqn.2025-04.local.diskless:client.pc001";
+        let luns = path.join("iscsi").join(target).join("tpgt_1/lun");
+        for number in [0, 2] {
+            fs::create_dir_all(luns.join(format!("lun_{number}"))).unwrap();
+        }
+        let boot_link = luns.join("lun_0/boot");
+        std::os::unix::fs::symlink(&normal, &boot_link).unwrap();
+        std::os::unix::fs::symlink(&installer, luns.join("lun_2/installer")).unwrap();
         let collector = MetricsCollector {
-            reader,
-            previous: std::sync::Mutex::new(None),
-            previous_lio: std::sync::Mutex::new(None),
-            cached_update: std::sync::RwLock::new(None),
-            refresh: tokio::sync::Mutex::new(()),
+            reader: LinuxMetricsReader {
+                proc_root: path.join("proc"),
+                zfs_kstat_root: path.join("zfs"),
+                target_root: path.to_owned(),
+            },
+            ..MetricsCollector::default()
         };
-        let first = collector.collect_lio(&[("192.168.1.101".into(), "block_pc001".into())]);
-        assert_eq!(first["192.168.1.101"].total_read_bytes, 12_582_912);
-        assert_eq!(first["192.168.1.101"].total_write_bytes, 3_145_728);
-        assert_eq!(first["192.168.1.101"].read_speed_mbps, 0.0);
-        std::fs::write(statistics.join("read_mbytes"), "1\n").unwrap();
-        let reset = collector.collect_lio(&[("192.168.1.101".into(), "block_pc001".into())]);
-        assert_eq!(reset["192.168.1.101"].total_read_bytes, 1_048_576);
-        assert_eq!(reset["192.168.1.101"].read_speed_mbps, 0.0);
-        let _ = std::fs::remove_dir_all(root);
+        let clients = [(ip.to_owned(), target.to_owned())];
+        let first = collector.collect_lio(&clients);
+        assert_eq!(first[ip].total_read_bytes, 12 * 1024 * 1024);
+        assert_eq!(first[ip].total_write_bytes, 3 * 1024 * 1024);
+        assert_eq!(first[ip].read_speed_mbps, 0.0);
+
+        fs::remove_file(&boot_link).unwrap();
+        std::os::unix::fs::symlink(&working, &boot_link).unwrap();
+        let switched = collector.collect_lio(&clients);
+        assert_eq!(switched[ip].total_read_bytes, 24 * 1024 * 1024);
+        assert_eq!(switched[ip].total_write_bytes, 8 * 1024 * 1024);
+        assert_eq!(switched[ip].read_speed_mbps, 0.0);
+        assert_eq!(switched[ip].write_speed_mbps, 0.0);
+
+        fs::write(working.join("statistics/scsi_lu/read_mbytes"), "25").unwrap();
+        fs::write(working.join("statistics/scsi_lu/write_mbytes"), "9").unwrap();
+        let sampled = collector.collect_lio(&clients);
+        assert!(sampled[ip].read_speed_mbps > 0.0);
+        assert!(sampled[ip].write_speed_mbps > 0.0);
     }
 
     #[test]

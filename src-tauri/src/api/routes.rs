@@ -44,7 +44,7 @@ use crate::api::handlers::{
     },
     license::{activate_license_handler, get_license_info_handler},
     linux_image_builder::{build as build_linux_image, preflight as preflight_linux_image},
-    logs::{clear_logs, get_logs},
+    logs::{clear_all_logs, clear_logs, get_logs, list_log_dates},
     network_drivers::{
         import as import_network_driver, list as list_network_drivers,
         rebuild as rebuild_network_drivers, remove as remove_network_driver,
@@ -570,6 +570,8 @@ fn system_routes() -> Router<AppState> {
             get(get_client_io_metrics),
         )
         .route("/api/logs", get(get_logs).delete(clear_logs))
+        .route("/api/logs/dates", get(list_log_dates))
+        .route("/api/logs/all", delete(clear_all_logs))
         .route("/api/license/activate", post(activate_license_handler))
         .route("/api/users", get(list_users).post(create_user))
         .route(

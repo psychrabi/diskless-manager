@@ -65,7 +65,7 @@ const RemoteDesktopModal = ({ client, isOpen, onClose, onSuccess }) => {
 
       success(
         "Remote Desktop",
-        response?.message || "Remote desktop connection initiated"
+        response?.message || "FreeRDP startup requested on the server"
       );
 
       reset();
@@ -99,7 +99,7 @@ const RemoteDesktopModal = ({ client, isOpen, onClose, onSuccess }) => {
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Remote Desktop Credentials</DialogTitle>
-          <DialogDescription>Connect to {client?.name} using RDP. Remote Desktop must be enabled on the client.</DialogDescription>
+          <DialogDescription>Open {client?.name} in FreeRDP on the Diskless Manager server’s desktop. Remote Desktop must be enabled on the client.</DialogDescription>
         </DialogHeader>
 
         <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">

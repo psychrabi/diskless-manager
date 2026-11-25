@@ -485,7 +485,7 @@ fn report_flow(config: ReporterConfig, log: &ClientLog) -> Result<()> {
             "-NoProfile",
             "-NonInteractive",
             "-Command",
-            "$targets = @(Get-IscsiSession | Where-Object { $_.IsConnected } | Select-Object -ExpandProperty TargetNodeAddress -Unique); if ($targets.Count -ne 1) { throw 'Expected one connected iSCSI target IQN' }; $targetSessions = @(Get-IscsiSession | Where-Object { $_.IsConnected -and $_.TargetNodeAddress -eq $targets[0] }); if ($targetSessions.Count -ne 1) { throw 'Expected one connected iSCSI boot session' }; $connections = @(Get-IscsiConnection -IscsiSession $targetSessions[0]); $sessions = @($connections | Select-Object -ExpandProperty InitiatorAddress -Unique); if ($sessions.Count -ne 1) { throw 'Expected one iSCSI boot source address' }; $ips = @(Get-NetIPAddress -IPAddress $sessions[0] -ErrorAction Stop); if ($ips.Count -ne 1) { throw 'Could not uniquely resolve iSCSI boot interface' }; $a = @(Get-NetAdapter -InterfaceIndex $ips[0].InterfaceIndex -Physical); if ($a.Count -ne 1) { throw 'Could not uniquely resolve iSCSI boot adapter' }; $d = Get-PnpDevice -InstanceId $a[0].PnPDeviceID -ErrorAction Stop; $ids = @((Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_HardwareIds' -ErrorAction Stop).Data); $signed = @(Get-CimInstance Win32_PnPSignedDriver | Where-Object { $_.DeviceID -eq $d.InstanceId } | Select-Object -ExpandProperty InfName -Unique); if ($signed.Count -gt 1) { throw 'Could not uniquely resolve Boot NIC published INF' }; $inf = if ($signed.Count -eq 1) { $signed[0] } else { '' }; $o = [pscustomobject]@{Name=$a[0].Name;MacAddress=$a[0].MacAddress;InterfaceDescription=$a[0].InterfaceDescription;Status=$a[0].Status;ServiceName=[string]$a[0].ServiceName;PnPDeviceID=$d.InstanceId;HardwareIds=([string[]]$ids);PublishedInf=$inf;TargetIqn=$targets[0]}; $o | ConvertTo-Json -Depth 3 -Compress",
+            include_str!("../assets/report-inventory.ps1"),
         ],
     )?;
     let mut adapters = parse_net_adapters(&inventory_json)?;
@@ -1013,8 +1013,13 @@ mod tests {
 
     #[test]
     fn client_inventory_resolves_the_nic_from_its_selected_iscsi_session() {
-        let source = include_str!("windows_client_report.rs");
-        assert!(source.contains("Get-IscsiConnection -IscsiSession $targetSessions[0]"));
+        let script = include_str!("../assets/report-inventory.ps1");
+        assert!(script.contains("Get-IscsiConnection -IscsiSession $targetSessions[0]"));
+        // The boot session is chosen by following the Windows system disk, not by
+        // assuming the client has exactly one connected iSCSI target.
+        assert!(script.contains("Get-Partition -DriveLetter $env:SystemDrive"));
+        assert!(script.contains("$_.Number -eq $systemDisk[0].Number"));
+        assert!(!script.contains("Expected one connected iSCSI target IQN"));
     }
 
     #[test]

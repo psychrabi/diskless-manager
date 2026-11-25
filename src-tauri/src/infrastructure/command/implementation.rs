@@ -436,7 +436,48 @@ const MAX_LOG_TAIL_BYTES: u64 = 256 * 1024;
 /// The log file is append-only and unbounded between rotations; reading the
 /// whole file into a response would copy its full history into memory.
 pub fn read_logs() -> String {
-    read_log_tail(&log_file_path(), MAX_LOG_TAIL_BYTES).unwrap_or_default()
+    read_logs_for_date(None)
+}
+
+pub fn read_logs_for_date(date: Option<&str>) -> String {
+    let path = match date {
+        Some(date) if !date.is_empty() => log_file_path()
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .join(format!("diskless-manager.log.{date}")),
+        _ => log_file_path(),
+    };
+    read_log_tail(&path, MAX_LOG_TAIL_BYTES).unwrap_or_default()
+}
+
+pub fn list_log_dates() -> Vec<String> {
+    let path = log_file_path();
+    let dir = path.parent().unwrap_or(std::path::Path::new("."));
+    let mut dates = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if let Some(date) = name.strip_prefix("diskless-manager.log.") {
+                dates.push(date.to_string());
+            }
+        }
+    }
+    dates.sort();
+    dates
+}
+
+pub fn clear_all_logs() -> Result<(), AppError> {
+    let path = log_file_path();
+    let dir = path.parent().unwrap_or(std::path::Path::new("."));
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with("diskless-manager.log.") {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+    Ok(())
 }
 
 fn read_log_tail(path: &std::path::Path, max_bytes: u64) -> std::io::Result<String> {

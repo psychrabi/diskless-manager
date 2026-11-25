@@ -8,8 +8,7 @@ use log::error;
 fn init_logging() {
     let log_path = app_lib::log_file_path();
     let parent = log_path.parent().unwrap_or(std::path::Path::new("."));
-    let name = log_path.file_name().unwrap_or_default();
-    let file_appender = tracing_appender::rolling::never(parent, name);
+    let file_appender = tracing_appender::rolling::daily(parent, "diskless-manager.log");
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
     tracing_subscriber::fmt()
         .with_writer(non_blocking)

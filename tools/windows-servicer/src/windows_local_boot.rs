@@ -218,6 +218,7 @@ mod tests {
             msiscsi_image_path: None,
             wfp_lwf_start: Some(3),
             enum_pci_devices: vec![],
+            enum_pci_services: Default::default(),
             critical_device_database: vec![],
         };
         (adapter, inventory)

@@ -6,6 +6,7 @@ $ExpectedIqn = '@@IQN@@'
 $ExpectedBytes = [UInt64]'@@BYTES@@'
 $AdaptExisting = @@ADAPT_EXISTING@@
 $Disk = $null
+$ImagePath = $null
 $TemporaryMounts = @()
 function Report([string]$State, [int]$Progress, [string]$Message) {
     Invoke-RestMethod -Uri "$Base/report" -Method Post -ContentType 'application/json' -Body (@{state=$State;progress=$Progress;message=$Message} | ConvertTo-Json -Compress) | Out-Null
@@ -13,6 +14,24 @@ function Report([string]$State, [int]$Progress, [string]$Message) {
 function Run([string]$File, [string[]]$Arguments) {
     & $File @Arguments
     if ($LASTEXITCODE -ne 0) { throw "$File failed with exit code $LASTEXITCODE" }
+}
+function Get-TargetDisks($Session) {
+    $Disks = @($Session | Get-Disk -ErrorAction SilentlyContinue)
+    if ($Disks.Count -gt 0) { return $Disks }
+    # A disk with no iSCSI session makes the association query terminate, and
+    # WinPE can omit the association for an iBFT disk entirely, so identity is
+    # checked in order: session association, then the server-issued LUN size.
+    $Candidates = @(Get-Disk -ErrorAction SilentlyContinue | Where-Object {
+        $_.BusType -eq 'iSCSI' -and $_.Size -eq $ExpectedBytes
+    })
+    $Disks = @($Candidates | Where-Object {
+        @($_ | Get-IscsiSession -ErrorAction SilentlyContinue | Where-Object {
+            $_.IsConnected -and $_.TargetNodeAddress -eq $ExpectedIqn -and
+            $_.SessionIdentifier -eq $Session.SessionIdentifier
+        }).Count -eq 1
+    })
+    if ($Disks.Count -gt 0) { return $Disks }
+    $Candidates
 }
 try {
     if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') { throw 'Windows unattended installation requires amd64 WinPE' }
@@ -39,11 +58,18 @@ try {
     $NicIds = @(@($BootDevices[0].HardwareID) + @($BootDevices[0].CompatibleID) | Where-Object { $_ } | Select-Object -Unique)
     if (-not $NicIds) { throw 'The iSCSI boot adapter has no PnP hardware or compatible IDs' }
     $NicMac = $BootAdapters[0].MACAddress
-    $SessionDisks = @($Sessions[0] | Get-Disk)
+    $SessionDisks = @(Get-TargetDisks $Sessions[0])
     $Disks = @($SessionDisks | Where-Object { $_.BusType -eq 'iSCSI' -and $_.Size -eq $ExpectedBytes })
-    for ($Attempt = 0; $Disks.Count -ne 1 -and $Attempt -lt 30; $Attempt++) {
-        Start-Sleep -Seconds 1
-        $SessionDisks = @($Sessions[0] | Get-Disk)
+    for ($Attempt = 0; $Disks.Count -eq 0 -and $Attempt -lt 18; $Attempt++) {
+        Start-Sleep -Seconds 5
+        Update-HostStorageCache
+        $Sessions = @(Get-IscsiSession | Where-Object TargetNodeAddress -EQ $ExpectedIqn)
+        if ($Sessions.Count -gt 1) { throw 'Expected exactly one assigned iSCSI target session' }
+        if ($Sessions.Count -eq 0) {
+            $SessionDisks = @()
+            continue
+        }
+        $SessionDisks = @(Get-TargetDisks $Sessions[0])
         $Disks = @($SessionDisks | Where-Object { $_.BusType -eq 'iSCSI' -and $_.Size -eq $ExpectedBytes })
     }
     if ($Disks.Count -ne 1) {
@@ -80,22 +106,40 @@ try {
         if ($Candidates.Count -ne 1) { throw 'Expected exactly one existing Windows partition on the private clone' }
         $WindowsRoot = $Candidates[0]
     } else {
-    Invoke-WebRequest -UseBasicParsing -Uri "$Base/install.wim" -OutFile 'X:\install.wim'
-    # Download completes before the first destructive instruction; a missing source leaves the disk untouched.
-    $Again = @($Sessions[0] | Get-Disk | Where-Object { $_.Number -eq $Disk.Number -and $_.BusType -eq 'iSCSI' -and $_.Size -eq $ExpectedBytes })
+    # Confirm the image is served before the first destructive instruction. The
+    # image itself cannot be staged on X: because WinPE's RAM disk is sized from
+    # boot.wim and has far less free space than a Windows image, so it is
+    # downloaded to the new Windows volume that was just sized for it.
+    try { $Available = Invoke-WebRequest -UseBasicParsing -Method Head -Uri "$Base/install.wim" }
+    catch { throw "install.wim is unavailable, refusing to repartition the target: $($_.Exception.Message)" }
+    if ($Available.StatusCode -ne 200) { throw "install.wim is unavailable, refusing to repartition the target ($($Available.StatusCode))" }
+    $Again = @(Get-TargetDisks $Sessions[0] | Where-Object { $_.Number -eq $Disk.Number -and $_.BusType -eq 'iSCSI' -and $_.Size -eq $ExpectedBytes })
     if ($Again.Count -ne 1 -or $Again[0].IsBoot -or $Again[0].IsSystem) { throw 'Target identity changed before partition' }
     $Disk | Set-Disk -IsOffline $false
     $Disk | Set-Disk -IsReadOnly $false
-    $Disk | Clear-Disk -RemoveData -RemoveOEM -Confirm:$false
+    # A freshly provisioned draft arrives without a partition table, and
+    # Clear-Disk fails on an uninitialized disk.
+    if ((Get-Disk -Number $Disk.Number).PartitionStyle -ne 'RAW') {
+        $Disk | Clear-Disk -RemoveData -RemoveOEM -Confirm:$false
+    }
     $Disk | Initialize-Disk -PartitionStyle GPT
     $Esp = New-Partition -DiskNumber $Disk.Number -Size 260MB -GptType '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' -AssignDriveLetter
     $Esp | Format-Volume -FileSystem FAT32 -Confirm:$false | Out-Null
     New-Partition -DiskNumber $Disk.Number -Size 16MB -GptType '{e3c9e316-0b5c-4db8-817d-f92df00215ae}' | Out-Null
     $Windows = New-Partition -DiskNumber $Disk.Number -UseMaximumSize -AssignDriveLetter
     $Windows | Format-Volume -FileSystem NTFS -Confirm:$false | Out-Null
-    Report 'installing' 35 'Assigned target partitioned; applying Windows image index 1'
+    Report 'installing' 35 'Assigned target partitioned; downloading and applying Windows image index 1'
     $WindowsRoot = "$($Windows.DriveLetter):\"
-    Run 'dism.exe' @('/Apply-Image','/ImageFile:X:\install.wim','/Index:1',"/ApplyDir:$WindowsRoot")
+    $ImagePath = Join-Path $WindowsRoot 'install.wim'
+    $Scratch = Join-Path $WindowsRoot 'dism-scratch'
+    New-Item -ItemType Directory -Path $Scratch -Force | Out-Null
+    # WebClient streams straight to disk; Invoke-WebRequest buffers the whole image in memory.
+    $Client = New-Object System.Net.WebClient
+    try { $Client.DownloadFile("$Base/install.wim", $ImagePath) } finally { $Client.Dispose() }
+    Run 'dism.exe' @('/Apply-Image',"/ImageFile:$ImagePath",'/Index:1',"/ApplyDir:$WindowsRoot","/ScratchDir:$Scratch")
+    # The staged image and DISM scratch are not part of the installed system.
+    Remove-Item $ImagePath -Force
+    Remove-Item $Scratch -Recurse -Force
     # Keep the iBFT boot-start storage path enabled in the deployed operating system.
     Run 'reg.exe' @('load','HKLM\DM_INSTALL_SYSTEM',"${WindowsRoot}Windows\System32\config\SYSTEM")
     try {
@@ -163,6 +207,9 @@ try {
     }
     if ($Disk) {
         try { $Disk | Set-Disk -IsOffline $true } catch { Write-Warning 'Could not offline the private target disk' }
+    }
+    if ($ImagePath -and (Test-Path $ImagePath)) {
+        try { Remove-Item $ImagePath -Force } catch { Write-Warning 'Could not remove the downloaded image from the private target' }
     }
     # Diagnostics deliberately avoid command arguments, CHAP credentials and token URLs.
     $Detail = $_.Exception.Message
