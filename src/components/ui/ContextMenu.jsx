@@ -24,14 +24,14 @@ const MenuItem = ({
   disabled = false,
 }) => {
   const variants = {
-    default: "hover:bg-accent hover:text-accent-foreground",
-    success: "hover:bg-accent hover:text-accent-foreground",
-    warning: "hover:bg-accent hover:text-accent-foreground",
-    error: "hover:bg-accent hover:text-accent-foreground",
-    info: "hover:bg-accent hover:text-accent-foreground",
-    secondary: "hover:bg-accent hover:text-accent-foreground",
+    default: "enabled:hover:bg-accent enabled:hover:text-accent-foreground",
+    success: "enabled:hover:bg-accent enabled:hover:text-accent-foreground",
+    warning: "enabled:hover:bg-accent enabled:hover:text-accent-foreground",
+    error: "enabled:hover:bg-accent enabled:hover:text-accent-foreground",
+    info: "enabled:hover:bg-accent enabled:hover:text-accent-foreground",
+    secondary: "enabled:hover:bg-accent enabled:hover:text-accent-foreground",
     destructive:
-      "text-destructive hover:bg-destructive hover:text-destructive-foreground",
+      "text-destructive enabled:hover:bg-destructive enabled:hover:text-destructive-foreground",
   };
 
   const handleKeyDown = (e) => {
@@ -49,7 +49,7 @@ const MenuItem = ({
         onClick={onClick}
         onKeyDown={handleKeyDown}
         className={cn(
-          "flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors duration-150",
+          "flex w-full cursor-pointer items-center gap-3 rounded-md px-3 py-2 text-sm outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50",
           variants[variant],
           className
         )}
@@ -85,14 +85,22 @@ export const ContextMenu = ({
   const { user } = useAuth();
   useOnClickOutside(menuRef, onClose);
 
+  // Keep the menu anchored to the pointer that opened it. The menu is rendered
+  // with `position: fixed`, so client coordinates are the right frame of
+  // reference. Re-sync whenever the pointer position or open state changes so
+  // a re-opened menu never keeps a stale position.
   useLayoutEffect(() => {
-    if (isOpen && menuRef.current) {
-      const { width, height } = menuRef.current.getBoundingClientRect();
-      setCoords({
-        x: Math.min(xPos, window.innerWidth - width - 10),
-        y: Math.min(yPos, window.innerHeight - height - 10),
-      });
+    if (!isOpen) return;
+    const node = menuRef.current;
+    if (!node) {
+      setCoords({ x: xPos, y: yPos });
+      return;
     }
+    const { width, height } = node.getBoundingClientRect();
+    setCoords({
+      x: Math.min(Math.max(0, xPos), Math.max(0, window.innerWidth - width)),
+      y: Math.min(Math.max(0, yPos), Math.max(0, window.innerHeight - height)),
+    });
   }, [isOpen, xPos, yPos]);
 
   if (!isOpen || !targetClient) return null;

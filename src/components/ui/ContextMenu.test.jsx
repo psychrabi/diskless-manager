@@ -117,6 +117,36 @@ it("keeps Save and Discard disabled while the client is online", () => {
   expect(screen.getByRole("button", { name: "Discard Super Changes" })).toBeDisabled();
 });
 
+it("shows a pointer for enabled items and a not-allowed cursor for disabled items", () => {
+  const client = { id: "c1", name: "PC001", ip: "192.0.2.1", mac: "02:00:00:00:00:01", status: "Offline", master: "tank/image/windows" };
+  show(client, {
+    superStatus: { session: { state: "active", verification_only: true } },
+  });
+
+  const save = screen.getByRole("button", { name: "Save unavailable (verification only)" });
+  const discard = screen.getByRole("button", { name: "Discard Super Changes" });
+
+  expect(save).toBeDisabled();
+  expect(save).toHaveClass("disabled:cursor-not-allowed");
+  expect(save).toHaveClass("disabled:opacity-50");
+  expect(discard).toBeEnabled();
+  expect(discard).toHaveClass("cursor-pointer");
+});
+
+it("runs Save and Discard for an active offline Super session", () => {
+  vi.mocked(actions.saveSuper).mockClear();
+  vi.mocked(actions.discardSuper).mockClear();
+  const client = { id: "c1", name: "PC001", ip: "192.0.2.1", mac: "02:00:00:00:00:01", status: "Offline", master: "tank/image/windows" };
+  const superStatus = { session: { state: "active", verification_only: false } };
+  show(client, { superStatus });
+
+  fireEvent.click(screen.getByRole("button", { name: "Save Super Changes" }));
+  expect(actions.saveSuper).toHaveBeenCalledWith(client, superStatus);
+
+  fireEvent.click(screen.getByRole("button", { name: "Discard Super Changes" }));
+  expect(actions.discardSuper).toHaveBeenCalledWith(client, superStatus);
+});
+
 it("blocks controls for storage recovery but ignores boot-failure recovery rows", () => {
   const client = { id: "c1", name: "PC001", ip: "192.0.2.1", mac: "02:00:00:00:00:01", status: "Offline", master: "tank/image/windows", snapshot: "tank/image/windows@clean", pxe_mode: "uefi" };
   show(client, {
