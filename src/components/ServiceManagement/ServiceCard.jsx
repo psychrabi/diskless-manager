@@ -10,8 +10,10 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
-import { Button, Card, Input, Modal, StatusBadge } from "@/components/ui";
+import { Button, Card, Input, Modal } from "@/components/ui";
 import { getServiceIcon } from "@/constants/serviceIcons";
+
+const serviceNames = { dhcp: "DHCP", tftp: "TFTP", http: "HTTP", iscsi: "iSCSI", nfs: "NFS", samba: "Samba" };
 
 const serviceDescriptions = {
   dhcp: "Provides IP addresses and PXE boot parameters to network boot clients.",
@@ -42,13 +44,13 @@ export default function ServiceCard({
     const labels = { start: "started", stop: "stopped", restart: "restarted" };
     try {
       await fn(service.name);
-      success(`${service.display_name} ${labels[action] || action} successfully`);
+      success(`${displayName} ${labels[action] || action} successfully`);
     } catch (e) {
       if (e.status === 403) {
         setElevation({ action, fn });
         return;
       }
-      showError(`Failed to ${action} ${service.display_name}: ${e.message || e}`);
+      showError(`Failed to ${action} ${displayName}: ${e.message || e}`);
     } finally {
       setLoadingAction(null);
     }
@@ -62,7 +64,7 @@ export default function ServiceCard({
       if (response.user?.role !== "admin") throw new Error("Administrator account required");
       await elevation.fn(service.name, response.token);
       const labels = { start: "started", stop: "stopped", restart: "restarted" };
-      success(`${service.display_name} ${labels[elevation.action]} successfully`);
+      success(`${displayName} ${labels[elevation.action]} successfully`);
       setElevation(null);
       setAdminPassword("");
     } catch (e) {
@@ -81,20 +83,21 @@ export default function ServiceCard({
     setLoadingAction(action);
     try {
       await fn(service.name);
-      success(`${service.display_name} ${label}`);
+      success(`${displayName} ${label}`);
     } catch (e) {
-      showError(`Failed to change boot setting for ${service.display_name}: ${e.message || e}`);
+      showError(`Failed to change boot setting for ${displayName}: ${e.message || e}`);
     } finally {
       setLoadingAction(null);
     }
   };
 
   const Icon = getServiceIcon(service.name);
+  const displayName = service.display_name || serviceNames[service.name] || service.name;
 
   return (
     <Card
       icon={Icon}
-      title={service.display_name}
+      title={displayName}
       subtitle={service.name}
       actions={
         <Badge variant={service.running ? "success" : "destructive"} className="gap-1.5">
@@ -107,25 +110,14 @@ export default function ServiceCard({
         {serviceDescriptions[service.name] || "System service"}
       </p>
 
-      <div className="flex items-center justify-between px-3 py-2 bg-muted/50 rounded-lg mb-4 text-sm">
-        <span className="text-muted-foreground">
-          PID: <span className=" text-muted-foreground">{service.pid ?? "\u2014"}</span>
-        </span>
-        <StatusBadge
-          status={service.starts_on_boot ? "success" : "neutral"}
-          size="sm"
-          showIcon={false}
-        >
-          {service.starts_on_boot ? "Starts on boot" : "Manual start"}
-        </StatusBadge>
-      </div>
+      {service.pid != null && <p className="mb-3 text-xs text-muted-foreground">Process ID: {service.pid}</p>}
 
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         {service.running ? (
           <>
             <Button
               icon={RefreshCcw}
-              variant="warning"
+              variant="outline"
               className="flex-1"
               loading={loadingAction === "restart"}
               onClick={() => handleAction("restart", restartService)}
@@ -155,9 +147,9 @@ export default function ServiceCard({
         )}
         <Button
           icon={Eye}
-          variant="info"
+          variant="ghost"
           className="flex-1"
-          onClick={() => onViewConfig(service.name, service.display_name)}
+          onClick={() => onViewConfig(service.name, displayName)}
         >
           View Config
         </Button>
@@ -170,7 +162,7 @@ export default function ServiceCard({
         onClick={handleBootToggle}
         title={service.starts_on_boot ? "Stop starting on boot" : "Start on boot"}
       >
-        {service.starts_on_boot ? "On boot: on" : "On boot: off"}
+        {service.starts_on_boot ? "Starts on boot" : "Manual start only"}
       </Button>
       <Modal isOpen={!!elevation} onClose={() => setElevation(null)} title="Administrator authorization" size="sm">
         <form onSubmit={authorizeAndRetry} className="space-y-4">

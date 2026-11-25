@@ -59,6 +59,12 @@ const SettingsManagement = () => {
         title="System Settings"
         description="Network, storage, and boot services. Changes apply to the server, not to individual clients."
       />
+      <details className="rounded-xl border border-border bg-card p-4 xl:hidden">
+        <summary className="cursor-pointer text-sm font-medium">Jump to a section</summary>
+        <nav aria-label="Settings sections" className="mt-3 grid grid-cols-2 gap-2">
+          {NAV.map((item) => <a key={item.id} href={`#${item.id}`} className="flex min-h-11 items-center rounded-lg px-3 py-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring">{item.label}</a>)}
+        </nav>
+      </details>
       <div className="grid gap-6 xl:grid-cols-[210px_minmax(0,1fr)]">
         <aside className="hidden xl:block">
           <nav aria-label="Settings sections" className="sticky top-2 flex flex-col gap-0.5 rounded-2xl border border-border/80 bg-card p-2 shadow-[0_1px_2px_rgb(0_0_0/0.03)]">

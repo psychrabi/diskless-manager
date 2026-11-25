@@ -32,16 +32,18 @@ export default function MetricsCard() {
   const servicePct = serviceCount > 0 ? (runningServices / serviceCount) * 100 : 0;
 
   return (
-    <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-border bg-border xl:grid-cols-4">
+    <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
       <StatCard
+        className="p-3 sm:p-5"
         icon={Laptop2}
         label="Clients online"
         value={online}
-        hint={`of ${totalClients} registered client${totalClients === 1 ? "" : "s"}`}
+        hint={`of ${totalClients} registered`}
         tone="success"
         progress={clientPct}
       />
       <StatCard
+        className="p-3 sm:p-5"
         icon={Disc3}
         label="Images available"
         value={images}
@@ -49,6 +51,7 @@ export default function MetricsCard() {
         tone="info"
       />
       <StatCard
+        className="p-3 sm:p-5"
         icon={MemoryStick}
         label="Memory"
         value={`${Number(memory).toFixed(1)}%`}
@@ -57,10 +60,11 @@ export default function MetricsCard() {
         progress={memory}
       />
       <StatCard
+        className="p-3 sm:p-5"
         icon={Activity}
         label="Services"
         value={serviceCount > 0 ? runningServices : "—"}
-        hint={serviceCount > 0 ? `of ${serviceCount} services running` : "waiting for service data"}
+        hint={serviceCount > 0 ? `of ${serviceCount} services running` : "No service data"}
         tone={serviceCount > 0 && runningServices === serviceCount ? "success" : "warning"}
         progress={servicePct}
       />

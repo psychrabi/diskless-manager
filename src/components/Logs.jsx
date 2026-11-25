@@ -29,6 +29,7 @@ const Logs = () => {
   const logOptions = (
     <div className="flex items-center gap-2 rounded-xl border border-border/80 bg-card p-1 shadow-[0_1px_2px_rgb(0_0_0/0.03)]">
       <Select
+        aria-label="Log source"
         id="log-unit"
         value={logUnit}
         onChange={(e) => setLogUnit(e.target.value)}
@@ -45,13 +46,13 @@ const Logs = () => {
           <NativeSelectOption disabled>No services available</NativeSelectOption>
         )}
       </Select>
-      <Button
+      {logUnit !== "app_log" && <Button
         variant="ghost"
         size="icon-sm"
         onClick={() => fetchLogs(logUnit)}
         title="Refresh Logs"
         icon={RefreshCw}
-      />
+      />}
     </div>
   );
 
@@ -64,7 +65,7 @@ const Logs = () => {
       />
       <Activity mode={logUnit !== "app_log" ? "visible" : "hidden"}>
         <Card title={`${logUnit} Logs`}>
-          <LogViewer content={logs} emptyText="" />
+          <LogViewer content={logs} />
         </Card>
       </Activity>
       <Activity mode={logUnit === "app_log" ? "visible" : "hidden"}>

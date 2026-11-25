@@ -99,6 +99,7 @@ export const useAppStore = create()(
         dependencies: [],
         services_status: {},
         zpoolStats: null,
+        zpoolStatsFetchedAt: null,
         zpools: [],
         ramUsage: null,
         arcStat: null,
@@ -317,6 +318,7 @@ export const useAppStore = create()(
             ]);
             set({
               zpoolStats: Array.isArray(zpoolStatsRes) ? zpoolStatsRes[0] : null,
+              zpoolStatsFetchedAt: Date.now(),
               zpools: zpoolsRes || [],
             });
           } catch (err) {

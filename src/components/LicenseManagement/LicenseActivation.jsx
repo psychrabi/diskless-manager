@@ -36,7 +36,7 @@ export default function LicenseActivation() {
     <Card title="License Activation" icon={File} className="h-full">
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         <Input
-          label="License"
+          label="License key"
           type="text"
           register={register("license_key")}
           placeholder="Enter license key"
@@ -59,9 +59,9 @@ export default function LicenseActivation() {
               reset();
               info("License activation form has been reset.");
             }}
-            disabled={loading}
+            disabled={loading || !!licenseInfo?.license_key}
           >
-            Reset
+            Clear field
           </Button>
         </div>
       </form>

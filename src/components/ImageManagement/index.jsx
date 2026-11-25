@@ -77,7 +77,7 @@ const ImageManagement = () => {
         title="Images"
         description="Boot images, snapshots, and the drivers that make them portable."
         actions={
-          <div data-testid="image-page-actions" className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center">
+          <div data-testid="image-page-actions" className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center">
             {user?.role === "admin" && (
               <Button
                 className="w-full sm:w-auto"
@@ -129,7 +129,7 @@ const ImageManagement = () => {
             )}
           </div>
         }/>
-      <div className="space-y-5 min-h-[50vh]">
+      <div className="space-y-5">
         {mastersError && (
           <div role="alert" className="flex items-center justify-between gap-4 rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm">
             <span>{mastersError}</span>

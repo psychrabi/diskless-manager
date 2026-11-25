@@ -21,7 +21,7 @@ export default function Header() {
       : "border-border text-muted-foreground";
 
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border bg-background px-3 sm:px-4 md:px-6">
+    <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border bg-card px-4 sm:px-7 lg:px-10">
       <div className="flex min-w-0 items-center gap-3">
         <SidebarTrigger className="-ml-1 text-muted-foreground hover:text-foreground" aria-label="Toggle navigation" />
         <Separator orientation="vertical" className="data-vertical:h-4 data-vertical:self-auto" />
@@ -30,7 +30,7 @@ export default function Header() {
             <BreadcrumbItem className="hidden sm:flex">
               <BreadcrumbLink
                 render={<Link to="/" />}
-                className="text-[10px] font-semibold tracking-[0.16em] uppercase text-muted-foreground hover:text-foreground"
+                className="text-xs font-medium text-muted-foreground hover:text-foreground"
               >
                 {current.section}
               </BreadcrumbLink>
@@ -44,7 +44,7 @@ export default function Header() {
       </div>
       <div className="flex items-center gap-2">
         <div
-          className={`hidden items-center gap-1.5 rounded border px-2 py-1 sm:flex ${statusTone}`}
+          className={`hidden items-center gap-2 rounded-full border px-2.5 py-1 sm:flex ${statusTone}`}
           role="status"
           aria-live="polite"
           title={isConnected ? "Live telemetry connected" : error ? "Telemetry disconnected" : "Connecting to telemetry"}
@@ -53,7 +53,7 @@ export default function Header() {
             className={`size-1.5 rounded-full ${isConnected ? "bg-success" : "bg-muted-foreground/60"}`}
             aria-hidden="true"
           />
-          <span className="text-[10px] font-semibold tracking-[0.12em] uppercase">{statusLabel}</span>
+          <span className="text-xs font-medium">{statusLabel}</span>
         </div>
         <ThemeToggle />
       </div>

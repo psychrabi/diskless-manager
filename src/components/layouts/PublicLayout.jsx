@@ -27,7 +27,7 @@ const PublicLayout = () => {
   }
 
   return (
-    <div className="app-canvas flex min-h-svh flex-col bg-background text-foreground">
+    <div className="flex min-h-svh flex-col bg-background text-foreground">
       <header className="flex h-14 shrink-0 items-center justify-between border-b border-border px-4 sm:px-6 md:px-10">
         {isSetup ? <Brand titleClassName="text-sm" /> : <span className="text-eyebrow">Boot server workspace</span>}
         <ThemeToggle />

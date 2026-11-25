@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Link } from "react-router-dom";
+import { Badge } from "@/components/ui/badge";
 import { Button, Input, PageHeader } from "@/components/ui";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Progress } from "@/components/ui/progress";
 import { useConfirm } from "@/contexts/confirmDialog";
 import { useToastStore } from "@/store/useToastStore";
@@ -17,6 +20,7 @@ const mediaTypes = [
 
 function formatBytes(value) {
   if (!Number.isFinite(value)) return "Unknown";
+  if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(1)} GiB`;
   if (value < 1024 ** 2) return `${value} bytes`;
   return `${(value / 1024 ** 2).toFixed(1)} MiB`;
 }
@@ -119,13 +123,20 @@ export default function InstallerMedia() {
           <CardDescription>Installer ISOs are structurally checked and checksummed before they enter the catalog.</CardDescription>
         </CardHeader>
         <CardContent>
-          <p className="mb-4 text-sm text-muted-foreground">Configured maximum upload size: {maxBytes == null ? "Loading…" : formatBytes(maxBytes)}</p>
+          <div className="mb-4 flex flex-wrap items-center gap-2 text-sm text-muted-foreground" aria-live="polite">
+            <span>Maximum upload size</span>
+            {loading ? <Skeleton className="h-5 w-20" aria-label="Loading upload limit" /> : <span className="font-medium text-foreground">{maxBytes == null ? "Unavailable" : formatBytes(maxBytes)}</span>}
+          </div>
+          {!loading && !maxBytes && <div role="status" className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-warning/25 bg-warning/8 px-3 py-2 text-sm">
+            <span>The server’s upload limit could not be loaded.</span>
+            <Button variant="outline" size="sm" onClick={load}>Retry</Button>
+          </div>}
           <form className="grid gap-4 md:grid-cols-2" onSubmit={handleUpload}>
             <label className="grid gap-1 text-sm">Display name
               <Input value={displayName} onChange={(event) => setDisplayName(event.target.value)} required maxLength={120} disabled={uploadActive} />
             </label>
             <label className="grid gap-1 text-sm">Media type
-              <select className="h-9 rounded-lg border border-input bg-background px-3" value={mediaType} onChange={(event) => setMediaType(event.target.value)} disabled={uploadActive}>
+              <select className="h-11 rounded-lg border border-input bg-background px-3" value={mediaType} onChange={(event) => setMediaType(event.target.value)} disabled={uploadActive}>
                 {mediaTypes.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}
               </select>
             </label>
@@ -160,6 +171,7 @@ export default function InstallerMedia() {
               </div>
             )}
             <div className="md:col-span-2">
+              <p className="mb-3 text-sm text-muted-foreground">{!loading && !maxBytes ? "Upload is unavailable until the server returns its upload limit." : "Enter a display name and choose an ISO file before uploading."}</p>
               <Button disabled={uploadActive || busy || loading || !maxBytes} onClick={handleUpload}>Upload and validate</Button>
             </div>
           </form>
@@ -167,16 +179,22 @@ export default function InstallerMedia() {
       </Card>
 
       <Card>
-        <CardHeader><CardTitle>Installer ISO catalog</CardTitle><CardDescription>Validated installer images available for client assignment.</CardDescription></CardHeader>
+        <CardHeader><CardTitle>Installer ISO catalog</CardTitle><CardDescription>Choose an ISO for a client in <Link to="/client-provisioning" className="font-medium text-primary underline underline-offset-4">Image factory</Link>.</CardDescription></CardHeader>
         <CardContent className="space-y-4">
           {loading ? <p role="status">Loading installer media…</p> : media.length === 0 ? <p>No installer ISOs have been uploaded.</p> : media.map((item) => (
             <article key={item.id} className="rounded-lg border p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0">
                   <h3 className="font-semibold">{item.display_name}</h3>
-                  <p className="text-sm text-muted-foreground">{mediaTypes.find((type) => type.value === item.media_type)?.label || item.media_type} · {formatBytes(item.byte_size)} · Validation: {item.validation_state}</p>
-                  <p className="break-all text-xs text-muted-foreground">SHA-256: {item.checksum}</p>
-                  <p className="mt-2 text-sm">Default: {item.is_default ? "Yes" : "No"}</p>
+                  <p className="text-sm text-muted-foreground">{mediaTypes.find((type) => type.value === item.media_type)?.label || item.media_type} · {formatBytes(item.byte_size)}</p>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <Badge variant={item.validation_state === "valid" ? "success" : "secondary"}>{item.validation_state === "valid" ? "Validated" : item.validation_state}</Badge>
+                    <Badge variant="outline">Default: {item.is_default ? "Yes" : "No"}</Badge>
+                  </div>
+                  <details className="mt-2 text-xs text-muted-foreground">
+                    <summary className="cursor-pointer">SHA-256 checksum</summary>
+                    <code className="mt-1 block break-all">{item.checksum}</code>
+                  </details>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {!item.is_default && <Button variant="outline" disabled={busy} onClick={() => runAction(() => setDefaultInstallerMedia(item.id), `${item.display_name} is now the default installer ISO.`)}>Set as default</Button>}

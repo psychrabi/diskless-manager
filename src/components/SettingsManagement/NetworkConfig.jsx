@@ -59,7 +59,6 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
     handleSubmit,
     setValue,
     watch,
-    getValues,
     formState: { errors, isSubmitting },
     reset,
   } = useForm({
@@ -162,7 +161,7 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
   };
 
   const handleApplyStatic = async () => {
-    const payload = toServerPayload(getValues());
+    const payload = toServerPayload(formatServerSettingsForForm(appConfig?.settings?.server));
     const approved = await confirmApply(payload);
     if (!approved) return;
     await applyNetworkSettings();
@@ -219,7 +218,7 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
           </div>
 
           <div className="xl:col-span-2">
-            <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <Label className="flex items-center gap-2 text-sm font-semibold text-foreground">
                 <Shield size={14} /> Addressing (Static IP)
               </Label>
@@ -229,7 +228,7 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
                 size="sm"
                 onClick={onAutoPopulate}
                 icon={RefreshCcw}
-                className="w-full whitespace-nowrap transition-colors hover:bg-primary/20 hover:text-primary sm:w-auto"
+                className="whitespace-nowrap hover:bg-primary/10 hover:text-primary"
                 title="Fill from system defaults"
               >
                 Auto-Detect
@@ -272,24 +271,22 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
               />
             </div>
 
-            <Alert className="mt-3 rounded-xl border-none bg-warning/10 px-4 py-3 text-xs leading-relaxed text-warning shadow-sm">
+            <Alert className="mt-3 rounded-xl border-none bg-warning/10 px-4 py-3 text-sm leading-relaxed text-warning">
               <div className="flex items-start gap-3">
                 <TriangleAlert size={18} className="shrink-0" />
                 <span>
-                  <strong>Caution:</strong> Applying static IP settings will
-                  rewrite the server network configuration
-                  (<code>/etc/netplan/99-diskless-manager.yaml</code> on
-                  Debian/Ubuntu, a NetworkManager profile on Fedora/RHEL and
-                  Arch Linux) and apply changes immediately. Ensure the
-                  settings are correct to avoid losing server connectivity.
-                  You will be asked to confirm the target interface and
-                  address before anything is applied.
+                  <strong>Applying settings can disconnect this server.</strong>
+                  <span className="mt-1 block">Changes rewrite the host network configuration and take effect immediately. Check the interface and address carefully. You will confirm both before applying.</span>
                 </span>
               </div>
             </Alert>
           </div>
         </div>
 
+        <p className="text-sm leading-relaxed text-muted-foreground">
+          {applyOnSave ? "Save & Apply saves these values, then asks you to confirm before applying. " : "Save Configuration stores these values without changing the network. "}
+          Apply saved settings uses the last saved configuration.
+        </p>
         <div data-testid="network-actions" className="flex flex-nowrap items-center justify-end gap-1 pt-4 sm:gap-2">
           <Button
             className="min-w-0 flex-1 shrink px-1 text-center text-xs leading-tight whitespace-normal sm:px-2 sm:text-sm sm:whitespace-nowrap"
@@ -301,13 +298,13 @@ export default function NetworkConfig({ applyOnSave = true, onSaved }) {
             Reset
           </Button>
           <Button
-            className="min-w-0 flex-1 shrink px-1 text-center text-xs leading-tight whitespace-normal sm:px-2 sm:text-sm sm:whitespace-nowrap"
-            variant="destructive"
+            variant="outline"
+            className="min-w-0 flex-1 shrink px-1 text-center text-xs leading-tight text-destructive whitespace-normal sm:px-2 sm:text-sm sm:whitespace-nowrap"
             type="button"
             onClick={handleApplyStatic}
             disabled={isSubmitting}
           >
-            Apply as Static IP
+            Apply saved settings
           </Button>
 
           <Button

@@ -9,7 +9,7 @@ import { getErrorMessage, reloadApplication, returnToHome } from "@/lib/error-re
 // Does not depend on the router, authentication, theme, or toast providers.
 export default function ErrorFallback({
   error, componentStack, onRetry, onHome = returnToHome, fullPage = true,
-  title, description, showDetails = import.meta.env.DEV,
+  title, description, homePrimary = false, showDetails = import.meta.env.DEV,
 }) {
   const heading = useRef(null);
   const headingId = useId();
@@ -20,7 +20,7 @@ export default function ErrorFallback({
   return (
     <section aria-labelledby={headingId} className={cn("flex w-full items-center justify-center p-4 sm:p-6", fullPage ? "min-h-svh bg-muted/40" : "min-h-[24rem]")}>
       <Card className="w-full max-w-lg shadow-sm">
-        <CardHeader className="items-center gap-3 px-6 pt-3 text-center">
+        <CardHeader className="items-center justify-items-center gap-3 px-6 pt-3 text-center">
           <div className="flex size-12 items-center justify-center rounded-xl bg-destructive/10 text-destructive"><AlertTriangle className="size-6" /></div>
           <h1 id={headingId} ref={heading} tabIndex={-1} className="text-2xl font-semibold tracking-tight outline-none">
             {title || (isModuleError ? "This page could not load" : "Something went wrong")}
@@ -34,8 +34,9 @@ export default function ErrorFallback({
         <CardContent className="space-y-5 px-6 pb-3">
           <div className="flex flex-wrap items-center justify-center gap-2">
             {onRetry && !isModuleError && <Button onClick={onRetry}><RotateCcw />Try again</Button>}
-            <Button variant={isModuleError || !onRetry ? "default" : "outline"} onClick={reloadApplication}><RefreshCw />Reload application</Button>
-            <Button variant="ghost" onClick={onHome}><Home />Go to dashboard</Button>
+            {homePrimary && <Button onClick={onHome}><Home />Go to dashboard</Button>}
+            {!homePrimary && <Button variant={isModuleError || !onRetry ? "default" : "outline"} onClick={reloadApplication}><RefreshCw />Reload application</Button>}
+            {!homePrimary && <Button variant="ghost" onClick={onHome}><Home />Go to dashboard</Button>}
           </div>
           {showDetails && error != null && (
             <Collapsible className="rounded-lg border bg-muted/30">

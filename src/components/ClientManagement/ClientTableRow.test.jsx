@@ -12,19 +12,18 @@ it("aligns client metrics with headers and keeps internal paths out of table cel
   expect(cells).toHaveLength(headers.length);
   expect(headers.map((h) => h.textContent)).toEqual([
     "Name",
-    "MAC Address",
-    "IP Address",
-    "I/O (MB/s)",
-    "I/O (Total)",
+    "Network",
+    "I/O (MB/s)Read / write",
+    "I/O (Total)Read / written",
     "Image",
     "Mode",
     "Uptime",
     "Actions",
   ]);
-  const throughput = within(cells[3]);
+  const throughput = within(cells[2]);
   expect(throughput.getByText("12.00")).toBeInTheDocument();
   expect(throughput.getByText("3.00")).toBeInTheDocument();
-  const totals = within(cells[4]);
+  const totals = within(cells[3]);
   expect(totals.getByText("1.5 GB")).toBeInTheDocument();
   expect(totals.getByText("1.0 MB")).toBeInTheDocument();
   expect(screen.getAllByText("PC001")).toHaveLength(2);
@@ -38,11 +37,11 @@ it("keeps write and uptime icons visible and centers the uptime content", () => 
   const client = { id: "c1", name: "PC001", mac: "00:11:22:33:44:55", ip: "192.168.1.101", status: "Online", master: "Windows", snapshot: "pool/windows@ready" };
   render(<table><tbody><tr><ClientTableRow client={client} clientMetrics={{ iscsi: { write_speed_mbps: 3 }, uptime_seconds: 60 }} /></tr></tbody></table>);
   const cells = screen.getAllByRole("cell").filter((cell) => cell.classList.contains("xl:table-cell"));
-  const writeIcon = cells[3].querySelector('[title="Write speed (MB/s)"] svg');
-  const uptimeIcon = cells[7].querySelector("svg");
+  const writeIcon = cells[2].querySelector('[title="Write speed (MB/s)"] svg');
+  const uptimeIcon = cells[6].querySelector("svg");
   expect(writeIcon.className.baseVal).toContain("text-muted-foreground");
   expect(uptimeIcon.className.baseVal).toContain("text-muted-foreground");
-  expect(cells[7].firstElementChild.className).toContain("justify-center");
+  expect(cells[6].firstElementChild.className).toContain("justify-center");
 });
 
 it("distinguishes legacy Super and recovery-required clients from managed Super", () => {
@@ -61,7 +60,7 @@ it("renders key client details and actions in the narrow-screen card", () => {
   expect(within(mobileCard).getByText("PC001")).toBeInTheDocument();
   expect(within(mobileCard).getByText("00:11:22:33:44:55")).toBeInTheDocument();
   expect(within(mobileCard).getByText("192.168.1.101")).toBeInTheDocument();
-  expect(within(mobileCard).getByTitle("Reboot client")).toBeInTheDocument();
-  fireEvent.click(within(mobileCard).getByRole("button", { name: "More actions" }));
+  expect(within(mobileCard).getByRole("button", { name: "Controls for PC001" })).toBeInTheDocument();
+  fireEvent.click(within(mobileCard).getByRole("button", { name: "Manage client" }));
   expect(onMoreActions).toHaveBeenCalledWith(expect.anything(), client);
 });

@@ -167,7 +167,7 @@ const SshTester = () => {
               </Label>
               <TextInput
                 type="text"
-                placeholder="192.168.1.100"
+                placeholder="e.g. 192.0.2.10"
                 id="connectionForm-host"
                 value={connectionForm.host}
                 onChange={(e) =>
@@ -182,7 +182,7 @@ const SshTester = () => {
               </Label>
               <TextInput
                 type="text"
-                placeholder={DEFAULT_USERNAME}
+                placeholder="e.g. Administrator"
                 id="connectionForm-username"
                 value={connectionForm.username}
                 onChange={(e) =>
@@ -200,8 +200,9 @@ const SshTester = () => {
               </Label>
               <TextInput
                 type="password"
-                placeholder="Leave blank for key auth"
+                placeholder="Optional"
                 id="connectionForm-password"
+                aria-describedby="connection-password-help"
                 value={connectionForm.password}
                 onChange={(e) =>
                   setConnectionForm({
@@ -210,6 +211,7 @@ const SshTester = () => {
                   })
                 }
               />
+              <p id="connection-password-help" className="text-sm text-muted-foreground">Leave blank to use SSH key authentication.</p>
             </div>
 
             <div className="flex flex-col gap-1.5">
@@ -231,6 +233,8 @@ const SshTester = () => {
             </div>
           </div>
 
+          {!connectionForm.host && <p className="text-sm text-muted-foreground">Enter the host address to test the connection or get system information.</p>}
+          {connectionForm.host && !connectionForm.username && <p className="text-sm text-muted-foreground">Enter the SSH username.</p>}
           <div className="flex flex-wrap gap-2 justify-end">
             <Button
               variant="primary"
@@ -305,8 +309,9 @@ const SshTester = () => {
 
       <Card
         title="Execute SSH Command"
-        subtitle="Run a command on a remote client"
+        subtitle="Edit the command destination or reuse the credentials from the connection test."
         icon={Terminal}
+        actions={<Button variant="outline" disabled={!canUseConnectionActions} onClick={() => setCommandForm({ ...commandForm, host: connectionForm.host, username: connectionForm.username, password: connectionForm.password })}>Reuse credentials</Button>}
       >
         <div className="flex flex-col gap-4">
 
@@ -317,7 +322,7 @@ const SshTester = () => {
               </Label>
               <TextInput
                 type="text"
-                placeholder="192.168.1.100"
+                placeholder="e.g. 192.0.2.10"
                 id="commandForm-host"
                 value={commandForm.host}
                 onChange={(e) =>
@@ -332,7 +337,7 @@ const SshTester = () => {
               </Label>
               <TextInput
                 type="text"
-                placeholder={DEFAULT_USERNAME}
+                placeholder="e.g. Administrator"
                 id="commandForm-username"
                 value={commandForm.username}
                 onChange={(e) =>
@@ -350,8 +355,9 @@ const SshTester = () => {
               </Label>
               <TextInput
                 type="password"
-                placeholder="Leave blank for key auth"
+                placeholder="Optional"
                 id="commandForm-password"
+                aria-describedby="command-password-help"
                 value={commandForm.password}
                 onChange={(e) =>
                   setCommandForm({
@@ -360,6 +366,7 @@ const SshTester = () => {
                   })
                 }
               />
+              <p id="command-password-help" className="text-sm text-muted-foreground">Leave blank to use SSH key authentication.</p>
             </div>
           </div>
 
@@ -383,7 +390,9 @@ const SshTester = () => {
             </div>
           </div>
 
-          <div className="flex flex-wrap gap-2 justify-end">
+          {(!commandForm.host || !commandForm.username || !commandForm.command) && <p className="text-sm text-muted-foreground">Enter a host address, username, and command, or reuse the connection details above.</p>}
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-3">
+            <p className="min-w-0 break-all text-sm text-muted-foreground">Destination: {commandForm.host || "No host selected"} · Port 22</p>
             <Button
               variant="primary"
               loading={loading}

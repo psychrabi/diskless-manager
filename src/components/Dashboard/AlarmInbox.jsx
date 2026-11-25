@@ -195,10 +195,7 @@ const AlarmInbox = () => {
           Alarms
           {activeCount > 0 && <Badge variant="destructive">{activeCount}</Badge>}
         </CardTitle>
-        <CardDescription>
-          Boot failures, storage recovery, service outages, pool health, and prewarmed
-          writebacks. Dismissing an alarm hides it — it does not fix the fault.
-        </CardDescription>
+        {activeCount > 0 && <CardDescription>Review active boot, service, and storage faults.</CardDescription>}
         <CardAction>
           <Button
             variant="ghost"
@@ -234,12 +231,11 @@ const AlarmInbox = () => {
         )}
 
         {activeCount === 0 && alarms.length === 0 ? (
-          <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border/80 bg-muted/15 px-6 py-10 text-center">
-            <span className="flex size-10 items-center justify-center rounded-full border border-success/20 bg-success/10">
-              <CheckCircle2 className="size-5 text-success" aria-hidden="true" />
+          <div className="flex items-center gap-3 rounded-xl bg-muted/35 px-4 py-3">
+            <span className="flex size-8 items-center justify-center rounded-full bg-card text-muted-foreground">
+              <CheckCircle2 className="size-4" aria-hidden="true" />
             </span>
-            <p className="mt-3 text-sm font-medium text-foreground">No active alarms.</p>
-            <p className="mt-1 text-xs text-muted-foreground">Every watched subsystem is quiet.</p>
+            <p className="text-sm font-medium text-foreground">No alarms reported</p>
           </div>
         ) : (
           <>

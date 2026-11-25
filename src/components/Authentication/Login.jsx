@@ -79,7 +79,7 @@ const Login = () => {
             <span className="size-1.5 rounded-full bg-[#b9a5ff]" />
             Diskless boot control plane
           </span>
-          <h2 className="mt-6 text-[clamp(2.5rem,4.4vw,4rem)] leading-[1.02] font-semibold tracking-[-0.055em]">
+          <h2 className="mt-6 text-[clamp(2.25rem,3.7vw,3.5rem)] leading-[1.02] font-semibold tracking-[-0.055em]">
             One image.
             <br />
             Every machine.
@@ -98,7 +98,7 @@ const Login = () => {
                 <span className="size-1.5 rounded-full bg-[#b9a5ff]/80" />
               </div>
               <span className="font-mono-data text-[10px] tracking-[0.14em] text-white/55 uppercase">
-                boot sequence
+                example boot sequence
               </span>
             </div>
             <div className="divide-y divide-white/6 px-4">

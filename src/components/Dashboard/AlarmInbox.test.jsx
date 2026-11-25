@@ -123,7 +123,7 @@ it("shows a retry when loading fails", async () => {
   });
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 
-  expect(await screen.findByText("No active alarms.")).toBeInTheDocument();
+  expect(await screen.findByText("No alarms reported")).toBeInTheDocument();
   expect(mocks.listAlarms).toHaveBeenCalledTimes(2);
 });
 
@@ -136,5 +136,5 @@ it("shows an empty state when nothing is wrong", async () => {
   });
   renderInbox();
 
-  expect(await screen.findByText("No active alarms.")).toBeInTheDocument();
+  expect(await screen.findByText("No alarms reported")).toBeInTheDocument();
 });

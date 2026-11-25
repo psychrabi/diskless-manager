@@ -14,12 +14,14 @@ import { useToastStore } from '@/store/useToastStore';
 import { Key, Pencil, Plus, Trash2, Users } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 
+import { useAuth } from "@/contexts/auth";
 import { useConfirm } from "@/contexts/confirmDialog";
 import ChangePasswordModal from './ChangePasswordModal';
 import CreateUserModal from './CreateUserModal';
 import EditUserModal from './EditUserModal';
 
 export default function UserManagement() {
+  const { user: currentUser } = useAuth();
   const [users, setUsers] = useState([]);
   const [selectedUser, setSelectedUser] = useState(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -61,6 +63,7 @@ export default function UserManagement() {
   };
 
   const handleDeleteUser = async (user) => {
+    if (user.username === currentUser?.username) return;
     const confirmed = await confirm({
       title: "Delete User",
       description: `Are you sure you want to delete user "${user.username}"? This action cannot be undone.`,
@@ -111,13 +114,13 @@ export default function UserManagement() {
           {loading && users.length === 0 ? <div className="flex justify-center py-8"><Spinner /></div> : users.length === 0 ? <p className="py-8 text-center text-muted-foreground">No users found</p> : users.map((user) => (
             <article key={user.id} data-testid="user-mobile-card" className="rounded-lg border bg-background p-4">
               <div className="flex items-center justify-between gap-3">
-                <h2 className="min-w-0 truncate font-medium">{user.username}</h2>
+                <h2 className="min-w-0 truncate font-medium">{user.username}{user.username === currentUser?.username && <span className="ml-2 text-xs font-normal text-muted-foreground">(you)</span>}</h2>
                 <Badge variant={user.role === "admin" ? "default" : "secondary"}>{user.role}</Badge>
               </div>
               <div className="mt-3 flex flex-wrap gap-2 border-t pt-3">
                 <Button variant="outline" size="sm" onClick={() => handleEditUser(user)} icon={Pencil}>Edit</Button>
                 <Button variant="outline" size="sm" onClick={() => handleChangePassword(user)} icon={Key}>Change password</Button>
-                <Button variant="ghost" size="sm" onClick={() => handleDeleteUser(user)} icon={Trash2} className="text-destructive hover:bg-destructive/10">Delete</Button>
+                <Button variant="ghost" size="sm" onClick={() => handleDeleteUser(user)} disabled={user.username === currentUser?.username} icon={Trash2} className="text-destructive hover:bg-destructive/10">Delete</Button>
               </div>
             </article>
           ))}
@@ -148,7 +151,7 @@ export default function UserManagement() {
                 users.map((user) => (
                   <TableRow key={user.id}>
                     <TableCell>
-                      <div className="font-medium">{user.username}</div>
+                      <div className="font-medium">{user.username}{user.username === currentUser?.username && <span className="ml-2 text-xs font-normal text-muted-foreground">(you)</span>}</div>
                     </TableCell>
                     <TableCell>
                       <Badge variant={user.role === "admin" ? "default" : "secondary"}>
@@ -163,22 +166,23 @@ export default function UserManagement() {
                           onClick={() => handleEditUser(user)}
                           icon={Pencil}
                           title="Edit user"
-                        />
+                        >Edit</Button>
                         <Button
                           variant="ghost"
                           size="sm"
                           onClick={() => handleChangePassword(user)}
                           icon={Key}
                           title="Change password"
-                        />
+                        >Change password</Button>
                         <Button
                           variant="ghost"
                           size="sm"
                           onClick={() => handleDeleteUser(user)}
                           icon={Trash2}
-                          title="Delete user"
+                          disabled={user.username === currentUser?.username}
+                          title={user.username === currentUser?.username ? "You cannot delete your own account" : "Delete user"}
                           className="text-destructive hover:bg-destructive/10"
-                        />
+                        >Delete</Button>
                       </div>
                     </TableCell>
                   </TableRow>
